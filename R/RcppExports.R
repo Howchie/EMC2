@@ -209,6 +209,18 @@ pbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L,
     .Call(`_EMC2_pbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out, delta)
 }
 
+btawl_local_race_separate_log_surv_vec <- function(t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch = 1L, posdrift = TRUE, delta_S = 0.0, delta_T = 0.0) {
+    .Call(`_EMC2_btawl_local_race_separate_log_surv_vec`, t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch, posdrift, delta_S, delta_T)
+}
+
+dbtawl_local_race_separate <- function(t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch = 1L, posdrift = TRUE, log_out = FALSE, delta_S = 0.0, delta_T = 0.0) {
+    .Call(`_EMC2_dbtawl_local_race_separate`, t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch, posdrift, log_out, delta_S, delta_T)
+}
+
+pbtawl_local_race_separate <- function(t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch = 1L, posdrift = TRUE, log_out = FALSE, delta_S = 0.0, delta_T = 0.0) {
+    .Call(`_EMC2_pbtawl_local_race_separate`, t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t, launch, posdrift, log_out, delta_S, delta_T)
+}
+
 btawl_tmax_vec <- function(k, tau) {
     .Call(`_EMC2_btawl_tmax_vec`, k, tau)
 }
@@ -463,6 +475,10 @@ rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global, laun
 
 rbta_wl_cpp <- function(pars, lR_levels, ok, mode, posdrift, launch) {
     .Call(`_EMC2_rbta_wl_cpp`, pars, lR_levels, ok, mode, posdrift, launch)
+}
+
+rbta_wl_separate_cpp <- function(pars, lR_levels, ok, posdrift, launch) {
+    .Call(`_EMC2_rbta_wl_separate_cpp`, pars, lR_levels, ok, posdrift, launch)
 }
 
 rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {

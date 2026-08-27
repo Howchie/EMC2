@@ -8,6 +8,19 @@ The overarching constraints are absolute:
 3. **Modular separation**: Model implementations must be strictly decoupled from likelihood orchestration engines. Analytic cores live in `.cpp` files; model geometry and public declarations live in model headers; kernel column contracts live in `col_registry.h`; shared contracts live in `race_contract.h`.
 4. **Minimalist comments**: Comments should describe specific functionality, never documenting development history, alternative past attempts, or rationale logs. This is particularly true for user-facing roxygen comments — never use comments as a train of thought or changelog under any circumstances.
 
+# Repository requirements
+
+- Every model constructor in this package (including race, diffusion,
+  discrete-choice, signal-detection, and MRI models) MUST use a compiled C++
+  simulator by default. A pure-R generator may exist only as an explicit
+  opt-out/reference path (`options(emc2.cpp_rfun = FALSE)`).
+- Adding or changing a model requires an exported C++ simulator entry point,
+  its Rcpp binding, and a regression test that exercises the default path.
+- Keep comments short and local; do not duplicate implementation details in
+  prose when the code and tests already make the behavior clear.
+- All models must document their parameter table in the Details section in a consistent fashion;
+  when adding new models ensure the documentation is updated and made consistent with existing models.
+
 ---
 
 ## 2. Compiler-Level Optimisation (C++ / Rcpp)

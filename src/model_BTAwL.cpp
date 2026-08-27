@@ -1283,6 +1283,97 @@ double btawl_local_race_pdf_log(double t, double A, double b, double p1, double 
   return p > 0.0 ? std::log(p) : R_NegInf;
 }
 
+double btawl_local_race_separate_cdf(double t, double A, double b,
+                                     double p1_S, double p2_S,
+                                     double p1_T, double p2_T,
+                                     double k, double tau_s, double tau_t,
+                                     int launch, bool posdrift,
+                                     double delta_S, double delta_T) {
+  const double F_T = btawl_cdf(t, A, b, p1_T, p2_T, k, tau_t,
+                               launch, posdrift, delta_T);
+  const double F_S = btawl_sustained_cdf(t, A, b, p1_S, p2_S, k, tau_s,
+                                         launch, posdrift, delta_S);
+  const double out = 1.0 - (1.0 - F_T) * (1.0 - F_S);
+  return (out >= 0.0) ? ((out <= 1.0) ? out : 1.0) : 0.0;
+}
+
+double btawl_local_race_separate_pdf(double t, double A, double b,
+                                     double p1_S, double p2_S,
+                                     double p1_T, double p2_T,
+                                     double k, double tau_s, double tau_t,
+                                     int launch, bool posdrift,
+                                     double delta_S, double delta_T) {
+  const double F_T = btawl_cdf(t, A, b, p1_T, p2_T, k, tau_t,
+                               launch, posdrift, delta_T);
+  const double F_S = btawl_sustained_cdf(t, A, b, p1_S, p2_S, k, tau_s,
+                                         launch, posdrift, delta_S);
+  const double f_T = btawl_pdf(t, A, b, p1_T, p2_T, k, tau_t,
+                               launch, posdrift, delta_T);
+  const double f_S = btawl_sustained_pdf(t, A, b, p1_S, p2_S, k, tau_s,
+                                         launch, posdrift, delta_S);
+  const double out = f_T * (1.0 - F_S) + f_S * (1.0 - F_T);
+  return (out >= 0.0 && emc2_isfinite(out)) ? out : 0.0;
+}
+
+double btawl_local_race_separate_cdf_log(double t, double A, double b,
+                                         double p1_S, double p2_S,
+                                         double p1_T, double p2_T,
+                                         double k, double tau_s, double tau_t,
+                                         int launch, bool posdrift,
+                                         double delta_S, double delta_T) {
+  const double p = btawl_local_race_separate_cdf(t, A, b, p1_S, p2_S,
+                                                 p1_T, p2_T, k, tau_s, tau_t,
+                                                 launch, posdrift, delta_S,
+                                                 delta_T);
+  return p > 0.0 ? std::log(p) : R_NegInf;
+}
+
+double btawl_local_race_separate_pdf_log(double t, double A, double b,
+                                         double p1_S, double p2_S,
+                                         double p1_T, double p2_T,
+                                         double k, double tau_s, double tau_t,
+                                         int launch, bool posdrift,
+                                         double delta_S, double delta_T) {
+  // Evaluate each existing component kernel once.  The previous hybrid
+  // implementation first formed four natural-space values (two CDFs and two
+  // PDFs), then repeated all four in log space whenever a tail was detected.
+  // The component log kernels already take their own natural-space fast path
+  // and fall back stably, so combine their terms here and only exponentiate
+  // the final two-term mixture when that is safe.
+  const double lp_T = btawl_log_pdf(t, A, b, p1_T, p2_T, k, tau_t,
+                                    launch, posdrift, delta_T);
+  const double lp_S = btawl_sustained_log_pdf(t, A, b, p1_S, p2_S, k, tau_s,
+                                              launch, posdrift, delta_S);
+  const double ls_T = btawl_log_surv(t, A, b, p1_T, p2_T, k, tau_t,
+                                     launch, posdrift, delta_T);
+  const double ls_S = btawl_sustained_log_surv(t, A, b, p1_S, p2_S, k, tau_s,
+                                               launch, posdrift, delta_S);
+  const double term_T = lp_T + ls_S;
+  const double term_S = lp_S + ls_T;
+  const double mx = std::fmax(term_T, term_S);
+  if (emc2_isfinite(mx) && mx > -745.0 && mx < 700.0) {
+    const double p = std::exp(term_T) + std::exp(term_S);
+    if (p > 0.0 && emc2_isfinite(p)) return std::log(p);
+  }
+  const double out = log_sum_exp(term_T, term_S);
+  return (out == R_NegInf || emc2_isfinite(out)) ? out : R_NegInf;
+}
+
+double btawl_local_race_separate_log_surv(double t, double A, double b,
+                                          double p1_S, double p2_S,
+                                          double p1_T, double p2_T,
+                                          double k, double tau_s, double tau_t,
+                                          int launch, bool posdrift,
+                                          double delta_S, double delta_T) {
+  const double ls_S = btawl_sustained_log_surv(t, A, b, p1_S, p2_S, k, tau_s,
+                                               launch, posdrift, delta_S);
+  const double ls_T = btawl_log_surv(t, A, b, p1_T, p2_T, k, tau_t,
+                                     launch, posdrift, delta_T);
+  if (ls_S == R_NegInf || ls_T == R_NegInf) return R_NegInf;
+  const double out = ls_S + ls_T;
+  return emc2_isfinite(out) ? out : R_NegInf;
+}
+
 double btawl_sustained_log_surv(double t, double A, double b, double p1, double p2,
                                 double k, double tau_s, int launch, bool posdrift,
                                 double delta) {
@@ -1422,6 +1513,109 @@ namespace {
 
 inline int btawl_launch_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->btawl_launch : BTAWL_LAUNCH_NORMAL;
+}
+
+struct BtawlSeparateIndices {
+  int p1s, p2s, p1t, p2t, iB, iA, it0, ik, its, itt, idS, idT;
+};
+
+inline BtawlSeparateIndices btawl_separate_indices(int launch) {
+  if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
+    return {int(emc2col::btawlsplit_local_race_separate::mu_S),
+            int(emc2col::btawlsplit_local_race_separate::sigma_S),
+            int(emc2col::btawlsplit_local_race_separate::mu_T),
+            int(emc2col::btawlsplit_local_race_separate::sigma_T),
+            int(emc2col::btawlsplit_local_race_separate::B),
+            int(emc2col::btawlsplit_local_race_separate::A),
+            int(emc2col::btawlsplit_local_race_separate::t0),
+            int(emc2col::btawlsplit_local_race_separate::k),
+            int(emc2col::btawlsplit_local_race_separate::tau_s),
+            int(emc2col::btawlsplit_local_race_separate::tau_t),
+            int(emc2col::btawlsplit_local_race_separate::delta_S),
+            int(emc2col::btawlsplit_local_race_separate::delta_T)};
+  }
+  if (launch == BTAWL_LAUNCH_WEIBULL) {
+    return {int(emc2col::btawl_local_race_separate_weib::shape_S),
+            int(emc2col::btawl_local_race_separate_weib::scale_S),
+            int(emc2col::btawl_local_race_separate_weib::shape_T),
+            int(emc2col::btawl_local_race_separate_weib::scale_T),
+            int(emc2col::btawl_local_race_separate_weib::B),
+            int(emc2col::btawl_local_race_separate_weib::A),
+            int(emc2col::btawl_local_race_separate_weib::t0),
+            int(emc2col::btawl_local_race_separate_weib::k),
+            int(emc2col::btawl_local_race_separate_weib::tau_s),
+            int(emc2col::btawl_local_race_separate_weib::tau_t), -1, -1};
+  }
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    return {int(emc2col::btawl_local_race_separate_logn::mu_S),
+            int(emc2col::btawl_local_race_separate_logn::sigma_S),
+            int(emc2col::btawl_local_race_separate_logn::mu_T),
+            int(emc2col::btawl_local_race_separate_logn::sigma_T),
+            int(emc2col::btawl_local_race_separate_logn::B),
+            int(emc2col::btawl_local_race_separate_logn::A),
+            int(emc2col::btawl_local_race_separate_logn::t0),
+            int(emc2col::btawl_local_race_separate_logn::k),
+            int(emc2col::btawl_local_race_separate_logn::tau_s),
+            int(emc2col::btawl_local_race_separate_logn::tau_t), -1, -1};
+  }
+  return {int(emc2col::btawl_local_race_separate::v_S),
+          int(emc2col::btawl_local_race_separate::sv_S),
+          int(emc2col::btawl_local_race_separate::v_T),
+          int(emc2col::btawl_local_race_separate::sv_T),
+          int(emc2col::btawl_local_race_separate::B),
+          int(emc2col::btawl_local_race_separate::A),
+          int(emc2col::btawl_local_race_separate::t0),
+          int(emc2col::btawl_local_race_separate::k),
+          int(emc2col::btawl_local_race_separate::tau_s),
+          int(emc2col::btawl_local_race_separate::tau_t), -1, -1};
+}
+
+inline double btawl_separate_mix_log(double lp_T, double lp_S,
+                                     double ls_T, double ls_S) {
+  const double term_T = lp_T + ls_S;
+  const double term_S = lp_S + ls_T;
+  const double mx = std::fmax(term_T, term_S);
+  if (emc2_isfinite(mx) && mx > -745.0 && mx < 700.0) {
+    const double p = std::exp(term_T) + std::exp(term_S);
+    if (p > 0.0 && emc2_isfinite(p)) return std::log(p);
+  }
+  const double out = log_sum_exp(term_T, term_S);
+  return (out == R_NegInf || emc2_isfinite(out)) ? out : R_NegInf;
+}
+
+// Raw likelihood calls evaluate many rows for one particle.  Keep the
+// transient geometry in the per-particle cache and reuse it for both its
+// density and survivor; the public scalar adapter cannot carry that cache.
+inline double btawl_local_race_separate_pdf_log_cached(
+    double t, double A, double b,
+    double p1_S, double p2_S, double p1_T, double p2_T,
+    double k, double tau_s, double tau_t, int launch, bool posdrift,
+    double delta_S, double delta_T, ContextForRaceModels* ctx) {
+  const BtawlGeom gT = btawl_geometry_cached(ctx, A, b, k, tau_t);
+  const double lp_T = btawl_log_pdf_from_geom(t, gT, p1_T, p2_T,
+                                              launch, posdrift, delta_T);
+  const double ls_T = btawl_log_surv_cached(ctx, t, gT, tau_t, p1_T, p2_T,
+                                            launch, posdrift, delta_T);
+  const double lp_S = btawl_sustained_log_pdf(t, A, b, p1_S, p2_S, k, tau_s,
+                                              launch, posdrift, delta_S);
+  const double ls_S = btawl_sustained_log_surv(t, A, b, p1_S, p2_S, k, tau_s,
+                                               launch, posdrift, delta_S);
+  return btawl_separate_mix_log(lp_T, lp_S, ls_T, ls_S);
+}
+
+inline double btawl_local_race_separate_log_surv_cached(
+    double t, double A, double b,
+    double p1_S, double p2_S, double p1_T, double p2_T,
+    double k, double tau_s, double tau_t, int launch, bool posdrift,
+    double delta_S, double delta_T, ContextForRaceModels* ctx) {
+  const BtawlGeom gT = btawl_geometry_cached(ctx, A, b, k, tau_t);
+  const double ls_T = btawl_log_surv_cached(ctx, t, gT, tau_t, p1_T, p2_T,
+                                            launch, posdrift, delta_T);
+  const double ls_S = btawl_sustained_log_surv(t, A, b, p1_S, p2_S, k, tau_s,
+                                               launch, posdrift, delta_S);
+  if (ls_S == R_NegInf || ls_T == R_NegInf) return R_NegInf;
+  const double out = ls_S + ls_T;
+  return emc2_isfinite(out) ? out : R_NegInf;
 }
 
 } // namespace
@@ -1594,6 +1788,18 @@ void btawl_transient_logS_at_t(double t, const double* const* cols,
 double dbtawl_local_race_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = btawl_launch_of(ctx);
+  if (ctx && ctx->btawl_separate) {
+    const BtawlSeparateIndices ix = btawl_separate_indices(launch);
+    if (R_IsNA(par[ix.p1s]) || R_IsNA(par[ix.p1t])) return 0.0;
+    const double tt = t - par[ix.it0];
+    if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+    const double lp = btawl_local_race_separate_pdf_log(
+      tt, par[ix.iA], par[ix.iB] + par[ix.iA],
+      par[ix.p1s], par[ix.p2s], par[ix.p1t], par[ix.p2t], par[ix.ik],
+      par[ix.its], par[ix.itt], launch, ctx->use_posdrift,
+      ix.idS >= 0 ? par[ix.idS] : 0.0, ix.idT >= 0 ? par[ix.idT] : 0.0);
+    return (lp > R_NegInf && lp < 709.0) ? std::exp(lp) : 0.0;
+  }
   const bool split = launch == BTAWL_LAUNCH_SPLITLOGNORMAL;
   const int iv = split ? int(emc2col::btawlsplit_local_race::mu) : int(emc2col::btawl_local_race::v);
   const int isv = split ? int(emc2col::btawlsplit_local_race::sigma) : int(emc2col::btawl_local_race::sv);
@@ -1636,6 +1842,17 @@ double dbtawl_local_race_scalar(double t, const double* par, void* ctx_) {
 double pbtawl_local_race_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = btawl_launch_of(ctx);
+  if (ctx && ctx->btawl_separate) {
+    const BtawlSeparateIndices ix = btawl_separate_indices(launch);
+    if (R_IsNA(par[ix.p1s]) || R_IsNA(par[ix.p1t])) return 0.0;
+    const double tt = t - par[ix.it0];
+    if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+    return btawl_local_race_separate_cdf(
+      tt, par[ix.iA], par[ix.iB] + par[ix.iA],
+      par[ix.p1s], par[ix.p2s], par[ix.p1t], par[ix.p2t], par[ix.ik],
+      par[ix.its], par[ix.itt], launch, ctx->use_posdrift,
+      ix.idS >= 0 ? par[ix.idS] : 0.0, ix.idT >= 0 ? par[ix.idT] : 0.0);
+  }
   const bool split = launch == BTAWL_LAUNCH_SPLITLOGNORMAL;
   const int iv = split ? int(emc2col::btawlsplit_local_race::mu) : int(emc2col::btawl_local_race::v);
   const int isv = split ? int(emc2col::btawlsplit_local_race::sigma) : int(emc2col::btawl_local_race::sv);
@@ -1672,6 +1889,33 @@ void dbtawl_local_race_raw(const double* rt, const double* const* cols, int n_ro
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  if (ctx && ctx->btawl_separate) {
+    const BtawlSeparateIndices ix = btawl_separate_indices(launch);
+    const double* p1s = cols[ix.p1s]; const double* p2s = cols[ix.p2s];
+    const double* p1t = cols[ix.p1t]; const double* p2t = cols[ix.p2t];
+    const double* B = cols[ix.iB]; const double* A = cols[ix.iA];
+    const double* t0 = cols[ix.it0]; const double* k = cols[ix.ik];
+    const double* ts = cols[ix.its]; const double* tt = cols[ix.itt];
+    const double* dS = ix.idS >= 0 ? cols[ix.idS] : nullptr;
+    const double* dT = ix.idT >= 0 ? cols[ix.idT] : nullptr;
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (!isok[i] || R_IsNA(p1s[i]) || R_IsNA(p1t[i])) {
+        out[i] = raw_log_zero(min_ll, floor_raw); continue;
+      }
+      const double u = rt[i] - t0[i];
+      if (!(rt[i] > 0.0) || !(u > 0.0)) {
+        out[i] = raw_log_zero(min_ll, floor_raw); continue;
+      }
+      const double lp = btawl_local_race_separate_pdf_log_cached(
+        u, A[i], B[i] + A[i], p1s[i], p2s[i], p1t[i], p2t[i], k[i],
+        ts[i], tt[i], launch, pd, dS ? dS[i] : 0.0, dT ? dT[i] : 0.0, ctx);
+      out[i] = (lp > R_NegInf && emc2_isfinite(lp))
+        ? raw_log_value(lp, min_ll, floor_raw)
+        : raw_log_zero(min_ll, floor_raw);
+    }
+    return;
+  }
   const bool split = launch == BTAWL_LAUNCH_SPLITLOGNORMAL;
   const double* p1 = cols[split ? int(emc2col::btawlsplit_local_race::mu) : int(emc2col::btawl_local_race::v)];
   const double* p2 = cols[split ? int(emc2col::btawlsplit_local_race::sigma) : int(emc2col::btawl_local_race::sv)];
@@ -1710,6 +1954,28 @@ void pbtawl_local_race_raw(const double* rt, const double* const* cols, int n_ro
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  if (ctx && ctx->btawl_separate) {
+    const BtawlSeparateIndices ix = btawl_separate_indices(launch);
+    const double* p1s = cols[ix.p1s]; const double* p2s = cols[ix.p2s];
+    const double* p1t = cols[ix.p1t]; const double* p2t = cols[ix.p2t];
+    const double* B = cols[ix.iB]; const double* A = cols[ix.iA];
+    const double* t0 = cols[ix.it0]; const double* k = cols[ix.ik];
+    const double* ts = cols[ix.its]; const double* tt = cols[ix.itt];
+    const double* dS = ix.idS >= 0 ? cols[ix.idS] : nullptr;
+    const double* dT = ix.idT >= 0 ? cols[ix.idT] : nullptr;
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (!isok[i] || R_IsNA(p1s[i]) || R_IsNA(p1t[i])) { out[i] = 0.0; continue; }
+      const double u = rt[i] - t0[i];
+      if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = 0.0; continue; }
+      const double ls = btawl_local_race_separate_log_surv_cached(
+        u, A[i], B[i] + A[i], p1s[i], p2s[i], p1t[i], p2t[i], k[i],
+        ts[i], tt[i], launch, pd, dS ? dS[i] : 0.0, dT ? dT[i] : 0.0, ctx);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
+    return;
+  }
   const bool split = launch == BTAWL_LAUNCH_SPLITLOGNORMAL;
   const double* p1 = cols[split ? int(emc2col::btawlsplit_local_race::mu) : int(emc2col::btawl_local_race::v)];
   const double* p2 = cols[split ? int(emc2col::btawlsplit_local_race::sigma) : int(emc2col::btawl_local_race::sv)];
@@ -1770,6 +2036,34 @@ void btawl_local_race_logS_at_t(double t, const double* const* cols,
                                 const int* isok_all, void* ctx_, double* out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  if (ctx && ctx->btawl_separate) {
+    const BtawlSeparateIndices ix = btawl_separate_indices(launch);
+    const double* p1s = cols[ix.p1s]; const double* p2s = cols[ix.p2s];
+    const double* p1t = cols[ix.p1t]; const double* p2t = cols[ix.p2t];
+    const double* B = cols[ix.iB]; const double* A = cols[ix.iA];
+    const double* t0 = cols[ix.it0]; const double* k = cols[ix.ik];
+    const double* ts = cols[ix.its]; const double* tt = cols[ix.itt];
+    const double* dS = ix.idS >= 0 ? cols[ix.idS] : nullptr;
+    const double* dT = ix.idT >= 0 ? cols[ix.idT] : nullptr;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      if (!trunc_mask[j]) continue;
+      double ls = 0.0; bool bad = false;
+      for (int kk = 0; kk < n_lR; ++kk) {
+        const int r = j * n_lR + kk;
+        if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1s[r]) || R_IsNA(p1t[r])) {
+          bad = true; break;
+        }
+        const double u = t - t0[r]; if (!(u > 0.0)) continue;
+        const double lsr = btawl_local_race_separate_log_surv_cached(
+          u, A[r], B[r] + A[r], p1s[r], p2s[r], p1t[r], p2t[r], k[r],
+          ts[r], tt[r], launch, pd, dS ? dS[r] : 0.0, dT ? dT[r] : 0.0, ctx);
+        if (!(lsr > R_NegInf) || ISNAN(lsr)) { bad = true; break; }
+        ls += lsr;
+      }
+      out[j] = bad ? R_NegInf : ls;
+    }
+    return;
+  }
   const bool split = launch == BTAWL_LAUNCH_SPLITLOGNORMAL;
   const double* p1 = cols[split ? int(emc2col::btawlsplit_local_race::mu) : int(emc2col::btawl_local_race::v)];
   const double* p2 = cols[split ? int(emc2col::btawlsplit_local_race::sigma) : int(emc2col::btawl_local_race::sv)];
@@ -2072,6 +2366,67 @@ NumericVector pbtawl_local_race(NumericVector t, NumericVector A, NumericVector 
     const double lp = btawl_local_race_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
                                                pick(k,i), pick(tau_s,i), pick(tau_t,i), pick(pi,i),
                                                launch, posdrift, pick(delta, i));
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_local_race_separate_log_surv_vec(
+    NumericVector t, NumericVector A, NumericVector b,
+    NumericVector p1_S, NumericVector p2_S,
+    NumericVector p1_T, NumericVector p2_T, NumericVector k,
+    NumericVector tau_s, NumericVector tau_t, int launch = 1,
+    bool posdrift = true, NumericVector delta_S = 0.0,
+    NumericVector delta_T = 0.0) {
+  const int n = std::max({t.size(), A.size(), b.size(), p1_S.size(), p2_S.size(),
+                          p1_T.size(), p2_T.size(), k.size(), tau_s.size(),
+                          tau_t.size(), delta_S.size(), delta_T.size()});
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i)
+    out[i] = btawl_local_race_separate_log_surv(
+      pick(t, i), pick(A, i), pick(b, i), pick(p1_S, i), pick(p2_S, i),
+      pick(p1_T, i), pick(p2_T, i), pick(k, i), pick(tau_s, i), pick(tau_t, i),
+      launch, posdrift, pick(delta_S, i), pick(delta_T, i));
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector dbtawl_local_race_separate(
+    NumericVector t, NumericVector A, NumericVector b,
+    NumericVector p1_S, NumericVector p2_S,
+    NumericVector p1_T, NumericVector p2_T, NumericVector k,
+    NumericVector tau_s, NumericVector tau_t, int launch = 1,
+    bool posdrift = true, bool log_out = false,
+    NumericVector delta_S = 0.0, NumericVector delta_T = 0.0) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_local_race_separate_pdf_log(
+      t[i], pick(A, i), pick(b, i), pick(p1_S, i), pick(p2_S, i),
+      pick(p1_T, i), pick(p2_T, i), pick(k, i), pick(tau_s, i), pick(tau_t, i),
+      launch, posdrift, pick(delta_S, i), pick(delta_T, i));
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbtawl_local_race_separate(
+    NumericVector t, NumericVector A, NumericVector b,
+    NumericVector p1_S, NumericVector p2_S,
+    NumericVector p1_T, NumericVector p2_T, NumericVector k,
+    NumericVector tau_s, NumericVector tau_t, int launch = 1,
+    bool posdrift = true, bool log_out = false,
+    NumericVector delta_S = 0.0, NumericVector delta_T = 0.0) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_local_race_separate_cdf_log(
+      t[i], pick(A, i), pick(b, i), pick(p1_S, i), pick(p2_S, i),
+      pick(p1_T, i), pick(p2_T, i), pick(k, i), pick(tau_s, i), pick(tau_t, i),
+      launch, posdrift, pick(delta_S, i), pick(delta_T, i));
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
   }
   return out;

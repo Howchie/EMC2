@@ -228,7 +228,8 @@ test_that("BTAwL constructors dispatch their default rfun to C++", {
   cases <- list(
     BTAwLTransient(drift_distribution = "normal"),
     BTAwLSustained(drift_distribution = "normal"),
-    BTAwL(drift_distribution = "normal")
+    BTAwL(drift_distribution = "normal"),
+    BTAwLSeparate(drift_distribution = "normal")
   )
   raw <- list(
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
@@ -236,7 +237,10 @@ test_that("BTAwL constructors dispatch their default rfun to C++", {
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
           t0 = .1, k = .5, tau_s = .9),
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
-          t0 = .1, k = .5, tau_s = .9, tau_t = .8, pi = .4)
+          t0 = .1, k = .5, tau_s = .9, tau_t = .8, pi = .4),
+    cbind(v_S = rep(c(3, 2.5), 80), sv_S = .35,
+          v_T = rep(c(3.2, 2.7), 80), sv_T = .4,
+          B = 1.0, A = .2, t0 = .1, k = .5, tau_s = .9, tau_t = .8)
   )
 
   for (i in seq_along(cases)) {
@@ -251,6 +255,26 @@ test_that("BTAwL constructors dispatch their default rfun to C++", {
   pars <- cases[[3]]$Ttransform(raw[[3]], NULL)
   out <- EMC2:::rBTAwL(lR, pars, ok = rep(TRUE, nrow(pars)), launch = 0L)
   expect_equal(nrow(out), 80L)
+
+  for (d in c("lognormal", "splitlognormal", "weibull")) {
+    m <- BTAwLSeparate(drift_distribution = d)
+    raw <- if (d == "weibull") {
+      cbind(shape_S = rep(c(2, 1.8), 80), scale_S = 1.2,
+            shape_T = rep(c(2.2, 2), 80), scale_T = 1.1)
+    } else {
+      cbind(mu_S = rep(c(log(3), log(2.5)), 80), sigma_S = .25,
+            mu_T = rep(c(log(3.2), log(2.7)), 80), sigma_T = .3)
+    }
+    if (d == "splitlognormal") raw <- cbind(mu_S = raw[, "mu_S"], sigma_S = raw[, "sigma_S"],
+                                             delta_S = .2, mu_T = raw[, "mu_T"],
+                                             sigma_T = raw[, "sigma_T"], delta_T = -.1)
+    raw <- cbind(raw, B = 1, A = .2, t0 = .1, k = .5, tau_s = .9, tau_t = .8)
+    pars <- m$Ttransform(raw, NULL)
+    attr(pars, "ok") <- rep(TRUE, nrow(pars))
+    out <- m$rfun(list(lR = lR), pars)
+    expect_equal(nrow(out), 80L)
+    expect_true(any(is.finite(out$rt)))
+  }
 })
 
 test_that("BTAwL C++ draws match the R reference distributions", {

@@ -263,6 +263,48 @@ double btawl_local_race_log_surv(double t, double A, double b, double p1,
                                  double tau_t, double pi, int launch,
                                  bool posdrift, double delta = 0.0);
 
+// Independent channel launches.  Unlike the legacy shared-pi form, each
+// channel carries its own launch distribution parameters.
+double btawl_local_race_separate_cdf(double t, double A, double b,
+                                     double p1_S, double p2_S,
+                                     double p1_T, double p2_T,
+                                     double k, double tau_s, double tau_t,
+                                     int launch, bool posdrift,
+                                     double delta_S = 0.0,
+                                     double delta_T = 0.0);
+
+double btawl_local_race_separate_pdf(double t, double A, double b,
+                                     double p1_S, double p2_S,
+                                     double p1_T, double p2_T,
+                                     double k, double tau_s, double tau_t,
+                                     int launch, bool posdrift,
+                                     double delta_S = 0.0,
+                                     double delta_T = 0.0);
+
+double btawl_local_race_separate_cdf_log(double t, double A, double b,
+                                         double p1_S, double p2_S,
+                                         double p1_T, double p2_T,
+                                         double k, double tau_s, double tau_t,
+                                         int launch, bool posdrift,
+                                         double delta_S = 0.0,
+                                         double delta_T = 0.0);
+
+double btawl_local_race_separate_pdf_log(double t, double A, double b,
+                                         double p1_S, double p2_S,
+                                         double p1_T, double p2_T,
+                                         double k, double tau_s, double tau_t,
+                                         int launch, bool posdrift,
+                                         double delta_S = 0.0,
+                                         double delta_T = 0.0);
+
+double btawl_local_race_separate_log_surv(double t, double A, double b,
+                                          double p1_S, double p2_S,
+                                          double p1_T, double p2_T,
+                                          double k, double tau_s, double tau_t,
+                                          int launch, bool posdrift,
+                                          double delta_S = 0.0,
+                                          double delta_T = 0.0);
+
 // BTAwL adapter entry points used by particle_ll.cpp.
 double dbtawl_transient_scalar(double t, const double* par, void* ctx_);
 double pbtawl_transient_scalar(double t, const double* par, void* ctx_);

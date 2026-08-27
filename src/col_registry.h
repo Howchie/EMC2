@@ -297,6 +297,38 @@ namespace btawlsplit_local_race {
 }
 namespace btawl_local_race_split = btawlsplit_local_race;
 
+// BTAwL local race with independent launch distributions for the sustained
+// and transient channels.  Channel-specific columns replace the legacy pi.
+namespace btawl_local_race_separate {
+  enum : int { v_S = 0, sv_S, v_T, sv_T, B, A, t0, k, tau_s, tau_t, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v_S", "sv_S", "v_T", "sv_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
+    return {n, N_REQ, "BTAwL_SEPARATE_RATE"};
+  }
+}
+namespace btawl_local_race_separate_logn {
+  enum : int { mu_S = 0, sigma_S, mu_T, sigma_T, B, A, t0, k, tau_s, tau_t, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu_S", "sigma_S", "mu_T", "sigma_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
+    return {n, N_REQ, "BTAwL_SEPARATE_LOGN_RATE"};
+  }
+}
+namespace btawl_local_race_separate_weib {
+  enum : int { shape_S = 0, scale_S, shape_T, scale_T, B, A, t0, k, tau_s, tau_t, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape_S", "scale_S", "shape_T", "scale_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
+    return {n, N_REQ, "BTAwL_SEPARATE_WEIB_RATE"};
+  }
+}
+namespace btawlsplit_local_race_separate {
+  enum : int { mu_S = 0, sigma_S, delta_S, mu_T, sigma_T, delta_T,
+               B, A, t0, k, tau_s, tau_t, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu_S", "sigma_S", "delta_S", "mu_T", "sigma_T", "delta_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
+    return {n, N_REQ, "BTAwL_SEPARATE_LOGN_SPLIT_RATE"};
+  }
+}
+
 // Pure sustained BTAwL wrapper.  The full BTAwL local race uses the nine-column
 // contract above; this seven-column contract is only for the pi = 1 wrapper.
 namespace btawl_sustained {

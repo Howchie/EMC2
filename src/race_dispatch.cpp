@@ -238,6 +238,33 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
     // no parameter setting that removes this, so the flag is unconditional.
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("BTAwL_SEPARATE") != std::string::npos) {
+    out.pdf1_ptr       = &dbtawl_local_race_scalar;
+    out.cdf1_ptr       = &pbtawl_local_race_scalar;
+    out.model_dfun_raw = &dbtawl_local_race_raw;
+    out.model_pfun_raw = &pbtawl_local_race_raw;
+    out.logS_at_t_ptr  = &btawl_local_race_logS_at_t;
+    const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
+    const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
+    const bool btawl_weib = (type_std.find("_WEIB") != std::string::npos);
+    out.col_spec = btawl_split
+      ? emc2col::btawlsplit_local_race_separate::spec()
+      : (btawl_weib ? emc2col::btawl_local_race_separate_weib::spec()
+                    : (btawl_logn ? emc2col::btawl_local_race_separate_logn::spec()
+                                  : emc2col::btawl_local_race_separate::spec()));
+    out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_local_race_separate::t0)
+                                   : (btawl_weib ? int(emc2col::btawl_local_race_separate_weib::t0)
+                                                 : (btawl_logn ? int(emc2col::btawl_local_race_separate_logn::t0)
+                                                               : int(emc2col::btawl_local_race_separate::t0)));
+    out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
+                         : (btawl_weib ? BTAWL_LAUNCH_WEIBULL
+                                       : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                                     : BTAWL_LAUNCH_NORMAL));
+    out.ctx.btawl_separate = true;
+    out.ctx.defective_upper_tail = true;
+    if (!btawl_logn && type_std.find("_IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;
   } else if (type_std.find("BTAwL_SUSTAINED") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_sustained_scalar;
     out.cdf1_ptr       = &pbtawl_sustained_scalar;

@@ -717,6 +717,69 @@ test_that("within-accumulator race CDF and PDF match pure member composition", {
   }
 })
 
+test_that("separate channel launches reproduce the shared-pi family", {
+  tt <- c(0.3, 0.7, 1.2, 2.0)
+  for (launch in c(0L, 1L, 3L)) {
+    if (launch == 1L) {
+      shared <- data.frame(mu = .2, sigma = .5)
+      separate <- data.frame(mu_S = .2 + log(.4), sigma_S = .5,
+                             mu_T = .2 + log(.6), sigma_T = .5)
+    } else if (launch == 3L) {
+      shared <- data.frame(shape = 2, scale = 1.5)
+      separate <- data.frame(shape_S = 2, scale_S = 1.5 * .4,
+                             shape_T = 2, scale_T = 1.5 * .6)
+    } else {
+      shared <- data.frame(v = 1.2, sv = .5)
+      separate <- data.frame(v_S = 1.2 * .4, sv_S = .5 * .4,
+                             v_T = 1.2 * .6, sv_T = .5 * .6)
+    }
+    shared <- cbind(shared, B = .9, A = .25, b = 1.15, t0 = 0, k = .8,
+                    tau_s = 1.5, tau_t = .6, pi = .4)
+    separate <- cbind(separate, B = .9, A = .25, b = 1.15, t0 = 0, k = .8,
+                      tau_s = 1.5, tau_t = .6)
+    expect_equal(EMC2:::pBTAwLSeparate(tt, separate, launch = launch),
+                 EMC2:::pBTAwL(tt, shared, launch = launch), tolerance = 1e-11)
+    expect_equal(EMC2:::dBTAwLSeparate(tt, separate, launch = launch),
+                 EMC2:::dBTAwL(tt, shared, launch = launch), tolerance = 1e-11)
+  }
+})
+
+test_that("separate race log-density uses log-space in the underflow tail", {
+  # Both member densities are below the natural double range here, while the
+  # sustained member still contributes a perfectly valid log-density.  The
+  # race log-density must therefore be assembled from the member log kernels.
+  t <- 0.005
+  A <- 0.3; b <- 1.3
+  p1_S <- -4; p2_S <- 0.1
+  p1_T <- -4; p2_T <- 0.1
+  k <- 0.5; tau_s <- 0.2; tau_t <- 0.3
+
+  got <- EMC2:::dbtawl_local_race_separate(
+    t, A, b, p1_S, p2_S, p1_T, p2_T, k, tau_s, tau_t,
+    launch = 1L, log_out = TRUE
+  )
+  lp_T <- EMC2:::dbtawl_transient(
+    t, A, b, p1_T, p2_T, k, tau_t,
+    launch = 1L, log_out = TRUE
+  )
+  lp_S <- EMC2:::dbtawl_local_race(
+    t, A, b, p1_S, p2_S, k, tau_s, tau_s, pi = 1,
+    launch = 1L, log_out = TRUE
+  )
+  ls_T <- EMC2:::btawl_transient_log_surv_vec(
+    t, A, b, p1_T, p2_T, k, tau_t, launch = 1L
+  )
+  ls_S <- EMC2:::btawl_local_race_log_surv_vec(
+    t, A, b, p1_S, p2_S, k, tau_s, tau_s, pi = 1, launch = 1L
+  )
+  terms <- c(lp_T + ls_S, lp_S + ls_T)
+  m <- max(terms)
+  expected <- m + log(sum(exp(terms - m)))
+
+  expect_true(is.finite(got))
+  expect_equal(got, expected, tolerance = 1e-10)
+})
+
 test_that("integrate(dBTAwL) matches pBTAwL for within-accumulator race", {
   for (launch in 0:1) {
     p_local <- btawl_local_race_rows(1, launch = launch, pi = 0.4, k = 0.5)

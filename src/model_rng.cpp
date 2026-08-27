@@ -696,18 +696,18 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                         launch);
 }
 
-// [[Rcpp::export]]
-Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
-                       Rcpp::LogicalVector ok, int mode, bool posdrift,
-                       int launch) {
+Rcpp::List rbta_wl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                            Rcpp::LogicalVector ok, int mode, bool posdrift,
+                            int launch, bool separate) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
     Rcpp::stop("rbta_wl_cpp: invalid accumulator/parameter dimensions.");
   if (ok.size() != n_rows)
     Rcpp::stop("rbta_wl_cpp: ok has the wrong length.");
-  if (mode < 0 || mode > 2)
+  if (!separate && (mode < 0 || mode > 2))
     Rcpp::stop("rbta_wl_cpp: mode must be 0 (transient), 1 (sustained), or 2 (full).");
+  if (separate) mode = 2;
   if (launch < BTAWL_LAUNCH_NORMAL || launch > BTAWL_LAUNCH_WEIBULL)
     Rcpp::stop("rbta_wl_cpp: invalid launch distribution.");
 
@@ -719,21 +719,34 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
   const bool split = (launch == BTAWL_LAUNCH_SPLITLOGNORMAL);
   const char* p1_name = weib ? "shape" : (logn ? "mu" : "v");
   const char* p2_name = weib ? "scale" : (logn ? "sigma" : "sv");
-  if (!ci.count(p1_name) || !ci.count(p2_name))
+  if (!separate && (!ci.count(p1_name) || !ci.count(p2_name)))
     Rcpp::stop("rbta_wl_cpp: missing launch columns '%s' and/or '%s'.", p1_name, p2_name);
-  if (split && !ci.count("delta"))
+  if (separate && (!ci.count(weib ? "shape_S" : (logn ? "mu_S" : "v_S")) ||
+                   !ci.count(weib ? "scale_S" : (logn ? "sigma_S" : "sv_S")) ||
+                   !ci.count(weib ? "shape_T" : (logn ? "mu_T" : "v_T")) ||
+                   !ci.count(weib ? "scale_T" : (logn ? "sigma_T" : "sv_T"))))
+    Rcpp::stop("rbta_wl_separate_cpp: missing sustained/transient launch columns.");
+  if (split && (!separate && !ci.count("delta")))
     Rcpp::stop("rbta_wl_cpp: the split-lognormal launch requires a 'delta' column.");
+  if (split && separate && (!ci.count("delta_S") || !ci.count("delta_T")))
+    Rcpp::stop("rbta_wl_separate_cpp: split-lognormal launch requires 'delta_S' and 'delta_T'.");
   for (const char* nm : {"A", "t0", "k"})
     if (!ci.count(nm)) Rcpp::stop("rbta_wl_cpp: missing parameter column '%s'.", nm);
   if (!ci.count("b") && !ci.count("B"))
     Rcpp::stop("rbta_wl_cpp: missing threshold column 'b' (or upper-bound column 'B').");
   if (mode == 1 || mode == 2)
     if (!ci.count("tau_s")) Rcpp::stop("rbta_wl_cpp: sustained mode requires 'tau_s'.");
-  if (mode == 2 && !ci.count("pi"))
+  if (mode == 2 && !separate && !ci.count("pi"))
     Rcpp::stop("rbta_wl_cpp: full local-race mode requires 'pi'.");
 
-  const int ip1 = ci.at(p1_name), ip2 = ci.at(p2_name);
-  const int idelta = split ? ci.at("delta") : -1;
+  const int ip1 = separate ? -1 : ci.at(p1_name);
+  const int ip2 = separate ? -1 : ci.at(p2_name);
+  const int ip1s = separate ? ci.at(weib ? "shape_S" : (logn ? "mu_S" : "v_S")) : -1;
+  const int ip2s = separate ? ci.at(weib ? "scale_S" : (logn ? "sigma_S" : "sv_S")) : -1;
+  const int ip1t = separate ? ci.at(weib ? "shape_T" : (logn ? "mu_T" : "v_T")) : -1;
+  const int ip2t = separate ? ci.at(weib ? "scale_T" : (logn ? "sigma_T" : "sv_T")) : -1;
+  const int idelta = split ? ci.at(separate ? "delta_S" : "delta") : -1;
+  const int idelta_t = (split && separate) ? ci.at("delta_T") : -1;
   const int iA = ci.at("A"), it0 = ci.at("t0"), ik = ci.at("k");
   const bool has_b = ci.count("b") != 0;
   const int ib = has_b ? ci.at("b") : ci.at("B");
@@ -760,7 +773,7 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
     const double b = pars(r, ib) + (has_b ? 0.0 : A);
     const double k = pars(r, ik);
     const double t0 = pars(r, it0);
-    const double delta = split ? pars(r, idelta) : 0.0;
+    const double delta = split && !separate ? pars(r, idelta) : 0.0;
     if (!R_FINITE(A) || !R_FINITE(b) || !R_FINITE(k) || k < 0.0 || !R_FINITE(t0)) continue;
 
     if (mode == 0) {
@@ -779,6 +792,24 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
       const double z = A * R::unif_rand();
       const double hit = btawl_hit_time_sustained_cpp(
         V, z, b, k, pars(r, itau_s));
+      dt[static_cast<size_t>(r)] =
+        R_FINITE(hit) ? emc2tw::inv(hit, ieta >= 0 ? pars(r, ieta) : 0.0) + t0
+                      : R_PosInf;
+      continue;
+    }
+
+    if (separate) {
+      const double delta_S = split ? pars(r, idelta) : 0.0;
+      const double delta_T = split ? pars(r, idelta_t) : 0.0;
+      const double V_T = draw_launch(pars(r, ip1t), pars(r, ip2t), delta_T);
+      const double V_S = draw_launch(pars(r, ip1s), pars(r, ip2s), delta_S);
+      const double z_T = A * R::unif_rand();
+      const double z_S = A * R::unif_rand();
+      const double t_T = btawl_hit_time_transient_cpp(
+        V_T, z_T, b, k, btawl_tau_for_row(pars, ci, r));
+      const double t_S = btawl_hit_time_sustained_cpp(
+        V_S, z_S, b, k, pars(r, itau_s));
+      const double hit = std::fmin(t_T, t_S);
       dt[static_cast<size_t>(r)] =
         R_FINITE(hit) ? emc2tw::inv(hit, ieta >= 0 ? pars(r, ieta) : 0.0) + t0
                       : R_PosInf;
@@ -832,6 +863,21 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// [[Rcpp::export]]
+Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                       Rcpp::LogicalVector ok, int mode, bool posdrift,
+                       int launch) {
+  return rbta_wl_cpp_impl(pars, lR_levels, ok, mode, posdrift, launch, false);
+}
+
+// [[Rcpp::export]]
+Rcpp::List rbta_wl_separate_cpp(Rcpp::NumericMatrix pars,
+                                Rcpp::CharacterVector lR_levels,
+                                Rcpp::LogicalVector ok, bool posdrift,
+                                int launch) {
+  return rbta_wl_cpp_impl(pars, lR_levels, ok, 2, posdrift, launch, true);
 }
 
 // Correlated BAwL simulator.  The low-level entry point receives signed

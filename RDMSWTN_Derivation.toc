@@ -1,0 +1,38 @@
+\contentsline {section}{\numberline {1}Theory Map and Reading Guide}{3}{section.1}%
+\contentsline {section}{\numberline {2}Time Domains and Basic Wald Law}{4}{section.2}%
+\contentsline {section}{\numberline {3}Gaussian Drift Variability}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Full-Gaussian Drift Law}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Positive-Truncated Drift Law}{7}{subsection.3.2}%
+\contentsline {section}{\numberline {4}Uniform Start-Point and Drift Variability}{8}{section.4}%
+\contentsline {section}{\numberline {5}Ornstein--Uhlenbeck and Related Models}{9}{section.5}%
+\contentsline {section}{\numberline {6}Time-Transformed Wald (RDMSWTN\_TT)}{11}{section.6}%
+\contentsline {section}{\numberline {7}Gaussian Copula for Correlated Race Finishing Times}{11}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Sklar's Theorem and Probit Rank Transformation}{12}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Bivariate Copula Pair and Winning Subdensities}{12}{subsection.7.2}%
+\contentsline {subsubsection}{\numberline {7.2.1}Subdensity when a Correlated Accumulator Wins}{12}{subsubsection.7.2.1}%
+\contentsline {subsubsection}{\numberline {7.2.2}Subdensity when an Independent Accumulator Wins}{13}{subsubsection.7.2.2}%
+\contentsline {subsubsection}{\numberline {7.2.3}Joint Race Survival}{13}{subsubsection.7.2.3}%
+\contentsline {subsection}{\numberline {7.3}Defective Marginals and Intrinsic Non-Finishing}{13}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Non-Parametric Rank Correlation Metrics}{14}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}Finishing-Time Copula vs. Between-Trial Drift Correlation}{14}{subsection.7.5}%
+\contentsline {section}{\numberline {8}Timing Clocks and Outcome Conventions}{15}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Hybrid Erlang Mixture}{16}{subsection.8.1}%
+\contentsline {section}{\numberline {9}Laplace Transforms and Wald Tilting}{16}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Finite-Window Tilted Moments}{17}{subsection.9.1}%
+\contentsline {section}{\numberline {10}Local Kill Clock}{18}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Equivalence to Bernoulli Contaminant Misses}{18}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}Exponential Kill}{19}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Erlang-2 Kill}{19}{subsection.10.3}%
+\contentsline {subsection}{\numberline {10.4}Hybrid Kill}{20}{subsection.10.4}%
+\contentsline {section}{\numberline {11}Local Guess Clock}{20}{section.11}%
+\contentsline {subsection}{\numberline {11.1}Exponential Guess}{21}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}Erlang-2 Guess}{21}{subsection.11.2}%
+\contentsline {subsection}{\numberline {11.3}Hybrid Guess}{21}{subsection.11.3}%
+\contentsline {section}{\numberline {12}Combined Local Guess--Kill Clocks}{22}{section.12}%
+\contentsline {subsection}{\numberline {12.1}Exponential Guess and Kill}{22}{subsection.12.1}%
+\contentsline {subsection}{\numberline {12.2}Erlang-2 Guess and Kill}{22}{subsection.12.2}%
+\contentsline {subsection}{\numberline {12.3}Hybrid Guess--Kill}{23}{subsection.12.3}%
+\contentsline {section}{\numberline {13}Why the Contaminant View Does Not Remove the $s_v>0$ Quadrature}{23}{section.13}%
+\contentsline {section}{\numberline {14}Closed-Form Boundary}{26}{section.14}%
+\contentsline {section}{\numberline {15}Practical Checklist}{27}{section.15}%
+\contentsline {section}{\numberline {16}Further Reading}{28}{section.16}%

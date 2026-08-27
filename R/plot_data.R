@@ -2,7 +2,17 @@ create_group_key <- function(df, factors) {
   if (length(factors) == 0) return(rep("All Data", nrow(df)))
   formatted_cols <- lapply(factors, function(f) paste(f, df[[f]], sep = "="))
   key <- do.call(paste, c(formatted_cols, sep = " "))
-  levs <- lapply(df[,factors],levels)
+  # Use the declared factor levels when building the panel-key levels.
+  levs <- lapply(factors, function(f) {
+    values <- df[[f]]
+    if (is.factor(values)) {
+      levels(values)
+    } else if (is.numeric(values)) {
+      as.character(sort(unique(values[!is.na(values)])))
+    } else {
+      sort(unique(as.character(values[!is.na(values)])))
+    }
+  })
   for (i in 1:length(factors)) levs[[i]] <- paste(factors[i],levs[[i]],sep="=")
   lev <- levs[[1]]
   if (length(factors)>1) {
@@ -10,6 +20,40 @@ create_group_key <- function(df, factors) {
     lev <- as.vector(aperm(lev,length(factors):1))
   }
   factor(key,levels=lev)
+}
+
+
+plot_reference_data <- function(data_sources, sources) {
+  available <- !vapply(data_sources, is.null, logical(1))
+  data_idx <- which(as.character(sources) == "data" & available)
+  if (!length(data_idx)) data_idx <- which(available)
+  if (!length(data_idx)) return(NULL)
+  data_sources[[data_idx[1L]]]
+}
+
+
+plot_group_keys <- function(data_sources, sources) {
+  data <- plot_reference_data(data_sources, sources)
+  if (is.null(data) || !"group_key" %in% names(data)) return(character(0))
+  key <- data$group_key
+  if (is.factor(key)) {
+    levels(key)
+  } else {
+    sort(unique(as.character(key[!is.na(key)])))
+  }
+}
+
+
+plot_factor_levels <- function(data_sources, sources, factor_name) {
+  data <- plot_reference_data(data_sources, sources)
+  if (is.null(data) || is.null(factor_name) ||
+      !factor_name %in% names(data)) return(character(0))
+  values <- data[[factor_name]]
+  if (is.factor(values)) {
+    levels(values)
+  } else {
+    sort(unique(as.character(values[!is.na(values)])))
+  }
 }
 
 
@@ -404,9 +448,9 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
   }
 
   # Second big loop - Plotting loop
-  first_data <- data_sources[[1]]
+  first_data <- plot_reference_data(data_sources, sources)
   if (is.null(first_data)) return(invisible(NULL))
-  unique_group_keys <- unique(first_data$group_key)
+  unique_group_keys <- plot_group_keys(data_sources, sources)
   if(!is.null(layout)){
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
@@ -572,8 +616,7 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
   dots <- add_defaults(dots, col = c("black",  "#A9A9A9", "#666666"))
   posterior_args <- add_defaults(posterior_args, col = c("darkgreen",  "#0000FF", "#008B8B"))
   prior_args <- add_defaults(prior_args, col = c("red", "#800080", "#CC00FF"))
-  data <- data_sources[[which(sources == "data")[1]]]
-  defective_levels <- if (!is.null(data)) levels(factor(data[[defective_factor]])) else character(0)
+  defective_levels <- plot_factor_levels(data_sources, sources, defective_factor)
   dots$defective_levels <- defective_levels
   posterior_args$defective_levels <- defective_levels
   prior_args$defective_levels <- defective_levels
@@ -681,14 +724,13 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
     oldpar <- par(no.readonly = TRUE)
     on.exit(par(oldpar))
   }
-  # figure out group keys from whichever data source is not null
-  # pick the first in data_sources
-  first_data <- data_sources[[1]]
+  # Use the observed data source to define panel order.
+  first_data <- plot_reference_data(data_sources, sources)
   if (is.null(first_data)) {
     # If there's absolutely no data, just return
     return(invisible(NULL))
   }
-  unique_group_keys <- names(splitted)
+  unique_group_keys <- plot_group_keys(data_sources, sources)
   if (any(is.na(layout))) {
     par(mfrow = coda_setmfrow(Nchains = 1, Nparms = length(unique_group_keys), nplots = 1))
   } else {
@@ -868,11 +910,16 @@ get_def_cdf <- function(x, defective_factor, dots)
 {
   probs      <- c(seq(0.01, 0.99, by = 0.01), 1)
   resp       <- x[[defective_factor]]
-  resp_levels <- unique(resp[!is.na(resp)])
+  resp_levels <- dots$defective_levels
+  if (is.null(resp_levels) || !length(resp_levels)) {
+    resp_levels <- if (is.factor(resp)) levels(resp) else
+      sort(unique(as.character(resp[!is.na(resp)])))
+  }
   ctx        <- detect_context_cols(x, defective_factor)
 
   out <- lapply(resp_levels, function(lev) {
     inp <- x[!is.na(resp) & resp == lev, , drop = FALSE]
+    if (!nrow(inp)) return(NULL)
     if (length(ctx) == 0L) {
       n_context <- nrow(x)
       p_finite  <- if ("p_finite_rt" %in% names(x)) x$p_finite_rt[1L] else 1.0
@@ -976,8 +1023,8 @@ plot_cdf <- function(input,
   posterior_args <- add_defaults(posterior_args, col = c("darkgreen",  "#0000FF", "#008B8B"))
   prior_args <- add_defaults(prior_args, col = c("red", "#800080", "#CC00FF"))
 
-  defective_levels <- levels(factor(data_sources[[1]][[defective_factor]]))
-  unique_group_keys <- levels(factor(data_sources[[1]]$group_key))
+  defective_levels <- plot_factor_levels(data_sources, sources, defective_factor)
+  unique_group_keys <- plot_group_keys(data_sources, sources)
 
   if (is.null(defective_levels) || length(defective_levels) == 0) {
     defective_levels <- "Level1"  # fallback
@@ -1089,7 +1136,12 @@ plot_cdf <- function(input,
         for (grp_name in names(cdf_list[[sname]])) {
           cdf_grp <- cdf_list[[sname]][[grp_name]]
           if (!is.null(cdf_grp)) {
-            max_val <- max(max_val, unlist(lapply(cdf_grp, function(m) max(m[,"y"]))), na.rm=TRUE)
+            cdf_grp <- Filter(Negate(is.null), cdf_grp)
+            if (length(cdf_grp)) {
+              max_val <- max(max_val,
+                             unlist(lapply(cdf_grp, function(m) max(m[, "y"]))),
+                             na.rm = TRUE)
+            }
           }
         }
         y_max <- max(y_max, max_val)
@@ -1618,8 +1670,8 @@ plot_caf <- function(input,
   posterior_args <- add_defaults(posterior_args, col = c("darkgreen",  "#0000FF", "#008B8B"))
   prior_args <- add_defaults(prior_args, col = c("red", "#800080", "#CC00FF"))
 
-  defective_levels <- levels(factor(data_sources[[1]][[caf_factor]]))
-  unique_group_keys <- levels(factor(data_sources[[1]]$group_key))
+  defective_levels <- plot_factor_levels(data_sources, sources, caf_factor)
+  unique_group_keys <- plot_group_keys(data_sources, sources)
 
   if (is.null(defective_levels) || length(defective_levels) == 0) {
     defective_levels <- "Level1"  # fallback

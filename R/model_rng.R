@@ -92,9 +92,16 @@
 }
 
 .rfun_BTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
-                        launch = 0L, mode = c("full", "transient", "sustained")) {
+                        launch = 0L, mode = c("full", "transient", "sustained", "separate"),
+                        separate = FALSE) {
   mode <- match.arg(mode)
   if (.use_cpp_rfun()) {
+    if (isTRUE(separate) || identical(mode, "separate")) {
+      pars_cpp <- if (is.data.frame(pars)) as.matrix(pars) else pars
+      res <- rbta_wl_separate_cpp(pars_cpp, levels(lR), ok, posdrift,
+                                  as.integer(launch))
+      return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
+    }
     mode_code <- switch(mode, transient = 0L, sustained = 1L, full = 2L)
     pars_cpp <- if (is.data.frame(pars)) as.matrix(pars) else pars
     res <- rbta_wl_cpp(pars_cpp, levels(lR), ok, mode_code, posdrift,
@@ -106,6 +113,8 @@
                                         launch = launch),
          sustained = .rBTAwLSustained_R(lR, pars, ok = ok, posdrift = posdrift,
                                         launch = launch),
+         separate = .rBTAwLSeparate_R(lR, pars, ok = ok, posdrift = posdrift,
+                                      launch = launch),
          full = .rBTAwL_R(lR, pars, ok = ok, posdrift = posdrift, launch = launch))
 }
 
@@ -125,6 +134,12 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                    p_types = NULL, posdrift = TRUE, launch = 0L) {
   .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
               mode = "full")
+}
+
+rBTAwLSeparate <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                           p_types = NULL, posdrift = TRUE, launch = 0L) {
+  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
+              mode = "separate", separate = TRUE)
 }
 
 # `launch` must come from the same .bawd_launch_code() call that produced the

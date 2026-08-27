@@ -178,6 +178,8 @@ struct ContextForRaceModels {
     // BAwD field because both models can be selected by one process and their
     // adapters may coexist in diagnostics/tests.
     int btawl_launch = emc2race_contract::kBtawlLaunchNormal;
+    // Independent sustained/transient launch columns (BTAwLSeparate).
+    bool btawl_separate = false;
     // Geometry/tangency cache for replicated BTAwL likelihood rows.  The
     // concrete type lives in model_BTAwL.h; keeping it behind shared_ptr here
     // avoids coupling the common race contract to the analytic implementation.
