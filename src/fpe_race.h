@@ -62,6 +62,25 @@ template <> struct OUSimd<8> {
   static inline Vec fnmadd(Vec a, Vec b, Vec c) {
     return _mm512_fnmadd_pd(a, b, c);
   }
+  static inline Vec add(Vec a, Vec b) { return _mm512_add_pd(a, b); }
+  static inline Vec sub(Vec a, Vec b) { return _mm512_sub_pd(a, b); }
+  static inline Vec abs(Vec a) {
+    return _mm512_castsi512_pd(_mm512_and_epi64(
+        _mm512_castpd_si512(a), _mm512_set1_epi64(0x7fffffffffffffffLL)));
+  }
+  using Mask = __mmask8;
+  static inline Mask gt(Vec a, Vec b) {
+    return _mm512_cmp_pd_mask(a, b, _CMP_GT_OQ);
+  }
+  static inline Mask lt(Vec a, Vec b) {
+    return _mm512_cmp_pd_mask(a, b, _CMP_LT_OQ);
+  }
+  // blend(m, if_false, if_true)
+  static inline Vec blend(Mask m, Vec f, Vec t) {
+    return _mm512_mask_blend_pd(m, f, t);
+  }
+  static constexpr unsigned FULL = 0xFFu;
+  static inline unsigned mask_bits(Mask m) { return static_cast<unsigned>(m); }
 };
 template <> struct OUSimd<4> {
   using Vec = __m256d;
@@ -75,6 +94,26 @@ template <> struct OUSimd<4> {
   }
   static inline Vec fnmadd(Vec a, Vec b, Vec c) {
     return _mm256_fnmadd_pd(a, b, c);
+  }
+  static inline Vec add(Vec a, Vec b) { return _mm256_add_pd(a, b); }
+  static inline Vec sub(Vec a, Vec b) { return _mm256_sub_pd(a, b); }
+  static inline Vec abs(Vec a) {
+    return _mm256_andnot_pd(_mm256_set1_pd(-0.0), a);
+  }
+  using Mask = __m256d;
+  static inline Mask gt(Vec a, Vec b) {
+    return _mm256_cmp_pd(a, b, _CMP_GT_OQ);
+  }
+  static inline Mask lt(Vec a, Vec b) {
+    return _mm256_cmp_pd(a, b, _CMP_LT_OQ);
+  }
+  // blend(m, if_false, if_true)
+  static inline Vec blend(Mask m, Vec f, Vec t) {
+    return _mm256_blendv_pd(f, t, m);
+  }
+  static constexpr unsigned FULL = 0x0Fu;
+  static inline unsigned mask_bits(Mask m) {
+    return static_cast<unsigned>(_mm256_movemask_pd(m));
   }
 };
 #elif defined(__AVX2__) && defined(__FMA__)
@@ -93,6 +132,26 @@ template <> struct OUSimd<4> {
   static inline Vec fnmadd(Vec a, Vec b, Vec c) {
     return _mm256_fnmadd_pd(a, b, c);
   }
+  static inline Vec add(Vec a, Vec b) { return _mm256_add_pd(a, b); }
+  static inline Vec sub(Vec a, Vec b) { return _mm256_sub_pd(a, b); }
+  static inline Vec abs(Vec a) {
+    return _mm256_andnot_pd(_mm256_set1_pd(-0.0), a);
+  }
+  using Mask = __m256d;
+  static inline Mask gt(Vec a, Vec b) {
+    return _mm256_cmp_pd(a, b, _CMP_GT_OQ);
+  }
+  static inline Mask lt(Vec a, Vec b) {
+    return _mm256_cmp_pd(a, b, _CMP_LT_OQ);
+  }
+  // blend(m, if_false, if_true)
+  static inline Vec blend(Mask m, Vec f, Vec t) {
+    return _mm256_blendv_pd(f, t, m);
+  }
+  static constexpr unsigned FULL = 0x0Fu;
+  static inline unsigned mask_bits(Mask m) {
+    return static_cast<unsigned>(_mm256_movemask_pd(m));
+  }
 };
 #else
 // Keep cache chunking bounded on non-x86 and baseline x86 builds. The solver
@@ -110,6 +169,313 @@ constexpr double LOG_FLOOR = -700.0;
 inline double safe_log(double x) {
   return (x > 0.0 && std::isfinite(x)) ? std::max(std::log(x), LOG_FLOOR)
                                        : LOG_FLOOR;
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Lane-batched operator assembly.
+//
+// WHY THIS EXISTS.  fpe::build_op() is called ONCE for a fixed-boundary march
+// (ROU): the operator is time-invariant, so its cost vanishes against the time
+// loop.  ROUp's pulse drift makes the operator time-VARYING, so it is rebuilt
+// at every step of every lane, and it then dominates everything else -- measured
+// at 5.3 us per lane-step against 11.4 us for a whole eight-lane time step, i.e.
+// 75% of a ROUp batch solve (nx = 512, nt = 500, AVX-512).  The same will be
+// true of any future time-dependent race model.
+//
+// What makes build_op() slow is not arithmetic, it is that its per-face
+// Scharfetter-Gummel weight is a scalar libm expm1() behind two sign branches,
+// evaluated M times per lane per step.  The march around it is already SoA and
+// vectorised across lanes; this brings the operator into the same layout, so a
+// face row costs ONE vector transcendental instead of LANES scalar ones.
+//
+// Three things make that possible:
+//
+//   1. The face weights come in the pair (bern(P), bern(-P)), and bern_pair()
+//      below computes both from a single e^{-|P|} with no sign branch.
+//   2. exp_nonpos() only ever sees arguments <= 0 here, so it needs no overflow
+//      handling -- one range reduction, one polynomial, one exponent scale.
+//   3. Every lane shares the mesh, so pu[j] / pv[j] / rdc[j] broadcast and the
+//      per-lane state is just the three scalars (a0/D, a1/D, D).
+//
+// The result is bit-comparable to fpe::build_op() to ~1e-14 relative and about
+// six times faster on the eight-lane path; it is NOT an approximation of the
+// scheme, only a different evaluation order for the same coefficients.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Below this |P| the Bernoulli SERIES is used instead of the exponential form.
+//
+// The threshold is 1 rather than the "just avoid the 1 - e^{-|P|} cancellation"
+// value of ~0.1, because at production resolution the exponential branch is
+// essentially dead code: over 200 draws from a realistic (v_S, v_T, tau_S,
+// tau_T, k, B, A) box, 3.3e7 faces on the shipped (nx = 512, grade = 8) mesh,
+// the LARGEST |P| seen was 0.84 -- 78% of faces were below 0.1 and 99.4% below
+// 0.5.  That is structural, not luck: P_j = Atil * dc_j / D, and 512 cells make
+// dc_j small everywhere the density is not already negligible.  So widening the
+// series to cover [0, 1) lets build_op_lanes() skip the vector exponential on
+// (nearly) every face, and lets the scalar fpe::bern() skip expm1().
+//
+// Truncating at z^16 costs one extra FMA over z^14 and holds 1.4e-14 relative
+// error across the whole |z| <= 1 window (5.7e-13 at z^14, 8.9e-10 at z^10) --
+// four orders below the ~1e-10 nats/trial at which two evaluation orders of the
+// SAME scheme start to disagree, and ten below the O(h^2) discretisation error
+// the grid is actually carrying.  Coarser grids DO push |P| past 1 (max 1.66 at
+// nx = 256), which is exactly why the exponential branch stays.
+constexpr double BERN_SERIES_THR = 1.0;
+
+// Bernoulli series coefficients B_n/n! for even n, z^2 .. z^16.
+constexpr double BERN_C2  =  1.0 / 12.0;
+constexpr double BERN_C4  = -1.0 / 720.0;
+constexpr double BERN_C6  =  1.0 / 30240.0;
+constexpr double BERN_C8  = -1.0 / 1209600.0;
+constexpr double BERN_C10 =  1.0 / 47900160.0;
+constexpr double BERN_C12 = -691.0 / 1307674368000.0;
+constexpr double BERN_C14 =  1.0 / 74724249600.0;
+constexpr double BERN_C16 = -3617.0 / 10670622842880000.0;
+
+// The SG face weights as a PAIR: wp = bern(P) multiplies q[j], wm = bern(-P)
+// multiplies q[j-1].
+//
+// fpe::bern() branches on the sign of its argument so that exp() cannot
+// overflow.  Writing both weights in terms of a = |P| and t = e^{-a} removes
+// the branch -- t never overflows -- and reveals that the two weights are the
+// SAME pair of numbers with the roles swapped:
+//
+//   u = a / (1 - t) = bern(-a),   w = u * t = bern(a)
+//
+// so P > 0 gives (wp, wm) = (w, u) and P < 0 gives (u, w).  One transcendental
+// covers both faces of the stencil, and the sign is a select rather than a
+// branch -- which is what lets the SIMD form below exist at all.
+inline void bern_pair(double P, double& wp, double& wm) {
+  const double a = std::fabs(P);
+  if (a < BERN_SERIES_THR) {
+    const double w = P * P;
+    double s = BERN_C16;
+    s = s * w + BERN_C14;
+    s = s * w + BERN_C12;
+    s = s * w + BERN_C10;
+    s = s * w + BERN_C8;
+    s = s * w + BERN_C6;
+    s = s * w + BERN_C4;
+    s = s * w + BERN_C2;
+    wp = 1.0 - 0.5 * P + w * s;
+    wm = wp + P;
+    return;
+  }
+  const double t = std::exp(-a);
+  const double u = a / (1.0 - t);
+  const double w = u * t;
+  if (P > 0.0) { wp = w; wm = u; } else { wp = u; wm = w; }
+}
+
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+// exp(x) for x <= 0 only.  Cephes-style: x = n*ln2 + r with |r| <= ln2/2, a
+// degree-13 Taylor polynomial on r (truncation ~4e-18 there), then scale by
+// 2^n through the exponent field.  Arguments below -708 flush to zero, which is
+// where fpe::bern()'s own +/-700 branches land as well.
+//
+// Only AVX-512F / AVX2 instructions are used -- no AVX512DQ -- so this compiles
+// wherever the surrounding lane march does.
+#if defined(__AVX512F__)
+inline __m512d exp_nonpos_v(__m512d x) {
+  const __m512d lim = _mm512_set1_pd(-708.0);
+  const __mmask8 flush = _mm512_cmp_pd_mask(x, lim, _CMP_LT_OQ);
+  x = _mm512_max_pd(x, lim);
+  const __m512d n =
+      _mm512_roundscale_pd(_mm512_mul_pd(x, _mm512_set1_pd(1.4426950408889634074)), 0x08);
+  __m512d r = _mm512_fnmadd_pd(n, _mm512_set1_pd(6.93147180559945286227e-01), x);
+  r = _mm512_fnmadd_pd(n, _mm512_set1_pd(2.31904681384629956e-17), r);
+  __m512d p = _mm512_set1_pd(1.6059043836821613e-10);   // 1/13!
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.0876756987868099e-09));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.5052108385441718e-08));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-07));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-06));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.4801587301587302e-05));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.9841269841269841e-04));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.3888888888888889e-03));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(8.3333333333333333e-03));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(4.1666666666666667e-02));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.6666666666666667e-01));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(5.0e-01));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+  const __m512i ni = _mm512_cvtepi32_epi64(_mm512_cvttpd_epi32(n));
+  const __m512d s = _mm512_castsi512_pd(
+      _mm512_slli_epi64(_mm512_add_epi64(ni, _mm512_set1_epi64(1023)), 52));
+  return _mm512_mask_blend_pd(flush, _mm512_mul_pd(p, s), _mm512_setzero_pd());
+}
+#endif
+inline __m256d exp_nonpos_v(__m256d x) {
+  const __m256d lim = _mm256_set1_pd(-708.0);
+  const __m256d keep = _mm256_cmp_pd(x, lim, _CMP_GE_OQ);
+  x = _mm256_max_pd(x, lim);
+  const __m256d n = _mm256_round_pd(
+      _mm256_mul_pd(x, _mm256_set1_pd(1.4426950408889634074)),
+      _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  __m256d r = _mm256_fnmadd_pd(n, _mm256_set1_pd(6.93147180559945286227e-01), x);
+  r = _mm256_fnmadd_pd(n, _mm256_set1_pd(2.31904681384629956e-17), r);
+  __m256d p = _mm256_set1_pd(1.6059043836821613e-10);
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.0876756987868099e-09));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.5052108385441718e-08));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-07));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-06));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.4801587301587302e-05));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.9841269841269841e-04));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.3888888888888889e-03));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(8.3333333333333333e-03));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(4.1666666666666667e-02));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.6666666666666667e-01));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(5.0e-01));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
+  const __m256i ni = _mm256_cvtepi32_epi64(_mm256_cvttpd_epi32(n));
+  const __m256d s = _mm256_castsi256_pd(
+      _mm256_slli_epi64(_mm256_add_epi64(ni, _mm256_set1_epi64x(1023)), 52));
+  return _mm256_and_pd(keep, _mm256_mul_pd(p, s));
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Build the spatial operator for LANES models at once, straight into the SoA
+// buffers the lane march already owns.  `t_lane[l]` is lane l's own clock: the
+// lanes of a batch run independent time schedules, so they do NOT share a t.
+//
+// Same finite-volume stencil, same Scharfetter-Gummel weights and same
+// absorbing-face closures as fpe::build_op(); see there for the derivation.
+// The only structural difference is that the uniform-mesh exp() recurrence is
+// gone -- it saved a transcendental per face on a scalar build, and here a face
+// row costs one vector transcendental for all LANES whether the mesh is graded
+// or not.
+// ---------------------------------------------------------------------------
+template <class Model, size_t LANES>
+inline void build_op_lanes(const Model* models, const double* t_lane,
+                           const fpe::FPE_Mesh& g, double* SUB, double* DIAG,
+                           double* SUP, double* opD) {
+  const int M = g.M;
+  alignas(64) double alpha[LANES], beta[LANES], Dl[LANES];
+  for (size_t l = 0; l < LANES; ++l) {
+    const double Lb = models[l].length(t_lane[l]);
+    const double Lp = models[l].length_prime(t_lane[l]);
+    const double Bt = models[l].B() / Lb;
+    const double D = 0.5 * Bt * Bt;
+    double a0, a1;
+    models[l].atil_affine(t_lane[l], Lb, Lp, a0, a1);
+    // P_j = (a0*pu[j] + a1*pv[j]) / D, so the lane carries a0/D and a1/D and
+    // the mesh supplies the rest.
+    const double invD = 1.0 / D;
+    Dl[l] = D;
+    opD[l] = D;
+    alpha[l] = a0 * invD;
+    beta[l] = a1 * invD;
+  }
+
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+  using Simd = OUSimd<LANES>;
+  using Vec = typename Simd::Vec;
+  const Vec va = Simd::load(alpha);
+  const Vec vb = Simd::load(beta);
+  const Vec vD = Simd::load(Dl);
+  const Vec zero = Simd::set1(0.0);
+  const Vec one = Simd::set1(1.0);
+  Vec wm_prev = zero, wp_prev = zero, gf_prev = zero;
+
+  for (int i = 0; i < M; ++i) {
+    const Vec rdx = Simd::set1(g.rdx[i]);
+    const size_t o = static_cast<size_t>(i) * LANES;
+    Vec sub, dia, sup;
+    if (i > 0) {
+      // Inflow face F_i, computed on the previous iteration.
+      sub = Simd::mul(Simd::mul(gf_prev, wm_prev), rdx);
+      dia = Simd::fnmadd(Simd::mul(gf_prev, wp_prev), rdx, zero);
+      sup = zero;
+    } else if constexpr (Model::lower_absorbing) {
+      sub = zero;
+      dia = Simd::fnmadd(Simd::mul(vD, Simd::set1(g.cL_A)), rdx, zero);
+      sup = Simd::mul(Simd::mul(vD, Simd::set1(g.cL_B)), rdx);
+    } else {
+      sub = zero; dia = zero; sup = zero;   // F_0 = 0, no-flux far field
+    }
+
+    if (i < M - 1) {
+      const int j = i + 1;
+      const Vec P = Simd::fmadd(va, Simd::set1(g.pu[j]),
+                                Simd::mul(vb, Simd::set1(g.pv[j])));
+      // bern_pair(), vectorised.  See the scalar version above for the algebra.
+      const Vec a = Simd::abs(P);
+      const Vec ww = Simd::mul(P, P);
+      Vec s = Simd::set1(BERN_C16);
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C14));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C12));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C10));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C8));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C6));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C4));
+      s = Simd::fmadd(s, ww, Simd::set1(BERN_C2));
+      const Vec ser = Simd::fnmadd(Simd::set1(0.5), P, Simd::fmadd(ww, s, one));
+      const auto small = Simd::lt(a, Simd::set1(BERN_SERIES_THR));
+      Vec wp, wm;
+      // The exponential branch is skipped whenever EVERY lane is in series
+      // range, which at production resolution is every face of every step (see
+      // BERN_SERIES_THR).  One predictable branch replaces ~20 vector ops
+      // including a divide; the blend below still handles a mixed vector, so a
+      // coarse grid or a wild burn-in draw degrades in accuracy nowhere.
+      if (Simd::mask_bits(small) == Simd::FULL) {
+        wp = ser;
+        wm = Simd::add(ser, P);
+      } else {
+        const Vec t = exp_nonpos_v(Simd::sub(zero, a));
+        const Vec u = Simd::div(a, Simd::sub(one, t));
+        const Vec w = Simd::mul(u, t);
+        const auto pos = Simd::gt(P, zero);
+        wp = Simd::blend(small, Simd::blend(pos, u, w), ser);  // P > 0 ? w : u
+        wm = Simd::blend(small, Simd::blend(pos, w, u),        // P > 0 ? u : w
+                         Simd::add(ser, P));
+      }
+      const Vec gf = Simd::mul(vD, Simd::set1(g.rdc[j]));
+      dia = Simd::fnmadd(Simd::mul(gf, wm), rdx, dia);
+      sup = Simd::fmadd(Simd::mul(gf, wp), rdx, sup);
+      wm_prev = wm; wp_prev = wp; gf_prev = gf;
+    } else {
+      // Absorbing face at xi = 1: q(1) = 0, so the flux is purely diffusive.
+      dia = Simd::fnmadd(Simd::mul(vD, Simd::set1(g.cA)), rdx, dia);
+      sub = Simd::fmadd(Simd::mul(vD, Simd::set1(g.cB)), rdx, sub);
+    }
+    Simd::store(SUB + o, sub);
+    Simd::store(DIAG + o, dia);
+    Simd::store(SUP + o, sup);
+  }
+#else
+  alignas(64) double wm_prev[LANES] = {}, wp_prev[LANES] = {}, gf_prev[LANES] = {};
+  for (int i = 0; i < M; ++i) {
+    const double rdx = g.rdx[i];
+    const size_t o = static_cast<size_t>(i) * LANES;
+    for (size_t l = 0; l < LANES; ++l) {
+      double a_sub = 0.0, a_dia = 0.0, a_sup = 0.0;
+      if (i > 0) {
+        a_sub = gf_prev[l] * wm_prev[l] * rdx;
+        a_dia = -gf_prev[l] * wp_prev[l] * rdx;
+      } else if constexpr (Model::lower_absorbing) {
+        a_dia = -Dl[l] * g.cL_A * rdx;
+        a_sup = Dl[l] * g.cL_B * rdx;
+      }
+      if (i < M - 1) {
+        const int j = i + 1;
+        const double P = alpha[l] * g.pu[j] + beta[l] * g.pv[j];
+        double wp, wm;
+        bern_pair(P, wp, wm);
+        const double gf = Dl[l] * g.rdc[j];
+        a_dia -= gf * wm * rdx;
+        a_sup += gf * wp * rdx;
+        wm_prev[l] = wm; wp_prev[l] = wp; gf_prev[l] = gf;
+      } else {
+        a_dia -= Dl[l] * g.cA * rdx;
+        a_sub += Dl[l] * g.cB * rdx;
+      }
+      SUB[o + l] = a_sub;
+      DIAG[o + l] = a_dia;
+      SUP[o + l] = a_sup;
+    }
+  }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -897,6 +1263,46 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
     query_results->assign(num_models, OUQueryResult());
   if (num_models == 0) return results;
 
+  // Every lane-indexed buffer below is exactly LANES wide, so more models than
+  // lanes would run off the end of them (is_moving[], lane_time[], rhs_c[], ...).
+  // cache_get_batch() chunks by OU_BATCH_LANES and so never does that, but the
+  // entry point is callable directly and a silent overrun is not an acceptable
+  // failure mode for one -- so oversized batches are split here rather than
+  // rejected, which keeps the function total in its own arguments.
+  if (num_models > LANES) {
+    for (size_t b = 0; b < num_models; b += LANES) {
+      const size_t nb = std::min(LANES, num_models - b);
+      const std::vector<Model> sub_models(models.begin() + b,
+                                          models.begin() + b + nb);
+      const std::vector<std::vector<double>> sub_q0(q0_vec.begin() + b,
+                                                    q0_vec.begin() + b + nb);
+      const std::vector<double> sub_t0(t0_vec.begin() + b,
+                                       t0_vec.begin() + b + nb);
+      const std::vector<double> sub_tmax(t_max_vec.begin() + b,
+                                         t_max_vec.begin() + b + nb);
+      std::vector<int> sub_nt;
+      if (nt_vec.size() >= num_models) {
+        sub_nt.assign(nt_vec.begin() + b, nt_vec.begin() + b + nb);
+      } else {
+        sub_nt = nt_vec;
+      }
+      std::vector<std::vector<double>> sub_q;
+      std::vector<OUQueryResult> sub_qr;
+      if (query_times != nullptr)
+        sub_q.assign(query_times->begin() + b, query_times->begin() + b + nb);
+      std::vector<fpe::FPE_Result> part = fpe_solve_batch_ou_lanes<Model, LANES,
+                                                                   SPARSE>(
+          sub_models, sub_q0, sub_t0, sub_tmax, sub_nt, g, tgrade,
+          (query_times != nullptr) ? &sub_q : nullptr,
+          SPARSE ? &sub_qr : nullptr);
+      for (size_t l = 0; l < nb; ++l) {
+        results[b + l] = std::move(part[l]);
+        if constexpr (SPARSE) (*query_results)[b + l] = std::move(sub_qr[l]);
+      }
+    }
+    return results;
+  }
+
   struct Action {
     double step;
     double lhs_c;
@@ -1034,6 +1440,13 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
     is_moving[l] = !models[l].static_op();
   }
 
+  // build_op_lanes() reads LANES models; pad the tail with the last real one so
+  // the vector build never reads past the batch.  Padding lanes are inactive
+  // throughout, so what they produce is discarded.
+  std::vector<Model> lane_models(LANES);
+  for (size_t l = 0; l < LANES; ++l)
+    lane_models[l] = models[(l < num_models) ? l : (num_models - 1)];
+
   for (size_t aidx = 0; aidx < max_actions; ++aidx) {
     alignas(64) double rhs_c[LANES] = {};
     bool active[LANES] = {};
@@ -1096,16 +1509,21 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       // tridiagonals together; the Thomas dependency is only along i, so the
       // independent lanes are safe to vectorise here as well as in the solve.
       alignas(64) double lhs_vec[LANES] = {};
+      alignas(64) double t_new[LANES] = {};
       for (size_t l = 0; l < LANES; ++l) {
+        // Lanes that have finished (or are padding) rebuild at their own frozen
+        // clock, which reproduces the operator they already hold.  Their
+        // lhs_vec stays 0, so the factorisation below hands them the identity
+        // and their rhs_c is 0 -- nothing they carry reaches an output.
+        t_new[l] = lane_time[l];
         if (active[l]) {
           const Action& a = actions[l][aidx];
           lhs_vec[l] = a.lhs_c;
-          const double t_new = lane_time[l] + a.step;
-          fpe::FPE_OpView op(&OP_SUB[l], &OP_DIAG[l], &OP_SUP[l], LANES);
-          fpe::build_op(models[l], t_new, g, op);
-          op_D[l] = op.D;
+          t_new[l] = lane_time[l] + a.step;
         }
       }
+      build_op_lanes<Model, LANES>(lane_models.data(), t_new, g, OP_SUB.data(),
+                                   OP_DIAG.data(), OP_SUP.data(), op_D);
 #if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
       using Simd = OUSimd<LANES>;
       using Vec = typename Simd::Vec;
@@ -1148,16 +1566,42 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       // the operator at the new time in the implicit solve. Update moving lanes
       // only after the RHS has been assembled so the batched solver follows the
       // scalar solver's time-centred discretisation.
-      for (size_t l = 0; l < LANES; ++l) {
-        if (!active[l] || !is_moving[l]) continue;
-        const Action& a = actions[l][aidx];
-        const double t_new = lane_time[l] + a.step;
-        fpe::FPE_OpView op(&OP_SUB[l], &OP_DIAG[l], &OP_SUP[l], LANES);
-        fpe::build_op(models[l], t_new, g, op);
-        op_D[l] = op.D;
-        set_lane_factor(static_cast<int>(l), a.lhs_c);
-        last_lhs[l] = a.lhs_c;
-        factor_live[l] = true;
+      // A collapsing boundary makes every lane of the batch moving in
+      // practice (the collapse spec is a property of the model, not of the
+      // design cell), so the whole row can go through the lane-batched build.
+      // A mixed batch -- one key whose Binf happens to equal its b0 -- falls
+      // back to the scalar build, which leaves the static lanes' operators
+      // exactly as their one-time factorisation saw them.
+      bool all_moving = true;
+      for (size_t l = 0; l < LANES; ++l)
+        if (active[l] && !is_moving[l]) all_moving = false;
+      if (all_moving) {
+        alignas(64) double t_new[LANES] = {};
+        for (size_t l = 0; l < LANES; ++l)
+          t_new[l] = active[l] ? (lane_time[l] + actions[l][aidx].step)
+                               : lane_time[l];
+        build_op_lanes<Model, LANES>(lane_models.data(), t_new, g,
+                                     OP_SUB.data(), OP_DIAG.data(),
+                                     OP_SUP.data(), op_D);
+        for (size_t l = 0; l < LANES; ++l) {
+          if (!active[l]) continue;
+          const Action& a = actions[l][aidx];
+          set_lane_factor(static_cast<int>(l), a.lhs_c);
+          last_lhs[l] = a.lhs_c;
+          factor_live[l] = true;
+        }
+      } else {
+        for (size_t l = 0; l < LANES; ++l) {
+          if (!active[l] || !is_moving[l]) continue;
+          const Action& a = actions[l][aidx];
+          const double t_new = lane_time[l] + a.step;
+          fpe::FPE_OpView op(&OP_SUB[l], &OP_DIAG[l], &OP_SUP[l], LANES);
+          fpe::build_op(models[l], t_new, g, op);
+          op_D[l] = op.D;
+          set_lane_factor(static_cast<int>(l), a.lhs_c);
+          last_lhs[l] = a.lhs_c;
+          factor_live[l] = true;
+        }
       }
     }
 
@@ -1423,14 +1867,19 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
     double t_need = horizons[i];
     if (!(t_need > 0.0)) t_need = 1e-3;
 
+    // C.index holds one entry per key (both insertion sites maintain it), so
+    // the hash lookup answers what the old linear scan over C.n_entries did --
+    // at O(1) instead of O(keys * entries), which on a design with hundreds of
+    // distinct parameter tuples was a quadratic sweep over 15-double keys.
     int found = -1;
-    for (size_t j = 0; j < C.n_entries; ++j) {
-      if (C.e[j].key == p && C.e[j].t_max >= t_need &&
+    auto hit = C.index.find(p);
+    if (hit != C.index.end()) {
+      const size_t j = static_cast<size_t>(hit->second);
+      if (j < C.n_entries && C.e[j].t_max >= t_need &&
           (C.e[j].complete_grid ||
            (query_times != nullptr &&
             entry_has_queries(C.e[j], (*query_times)[i])))) {
         found = static_cast<int>(j);
-        break;
       }
     }
     if (found >= 0) {

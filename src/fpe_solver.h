@@ -38,8 +38,27 @@
 namespace fpe {
 
 // Bernoulli function Bern(z) = z / (exp(z) - 1), with Bern(0) = 1.
+//
+// The z^16 Bernoulli series holds 1.4e-14 relative error across the whole
+// |z| < 1 window, and on the graded meshes this solver ships |z| < 1 is where
+// essentially every face lands -- see BERN_SERIES_THR in fpe_race.h for the
+// measured distribution.  So the common case costs eight FMAs rather than a
+// libm expm1(), which is what build_op() spends most of its time in whenever
+// the operator has to be rebuilt per time step.  It also subsumes the old
+// |z| < 1e-8 guard against the 0/0 at the origin.
 inline double bern(double z) {
-  if (std::abs(z) < 1e-8) return 1.0 - 0.5 * z;   // series, avoids 0/0
+  if (std::abs(z) < 1.0) {
+    const double w = z * z;
+    double s = -3617.0 / 10670622842880000.0;     // z^16
+    s = s * w + 1.0 / 74724249600.0;              // z^14
+    s = s * w - 691.0 / 1307674368000.0;          // z^12
+    s = s * w + 1.0 / 47900160.0;                 // z^10
+    s = s * w - 1.0 / 1209600.0;                  // z^8
+    s = s * w + 1.0 / 30240.0;                    // z^6
+    s = s * w - 1.0 / 720.0;                      // z^4
+    s = s * w + 1.0 / 12.0;                       // z^2
+    return 1.0 - 0.5 * z + w * s;
+  }
   if (z > 700.0)  return 0.0;                     // exp overflows; limit is 0
   if (z < -700.0) return -z;                      // expm1(z) -> -1
   return z / std::expm1(z);
