@@ -279,7 +279,7 @@ test_that("make_data works with ROUp designs", {
 test_that("ROUp simulator matches analytical CDF within sampling error", {
   skip_on_cran()
   set.seed(42)
-  N <- 1000
+  N <- 20000
   p <- roup_pars(seq_len(N), v_S = 1.0, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
                  k = 0.5, B = 2.0, A = 0, t0 = 0.2, s = 1.0)
   rts <- EMC2:::rROUp(lR = factor(rep("A", N)), pars = p, ok = rep(TRUE, N))

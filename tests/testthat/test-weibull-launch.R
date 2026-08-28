@@ -141,3 +141,33 @@ test_that("Weibull kernels handle extreme time limits gracefully", {
   expect_true(is.finite(p_bawd[2]) && p_bawd[2] > 0 && p_bawd[2] <= 1)
   expect_equal(p_bawd[2], p_bawd[3], tolerance = 1e-10)
 })
+
+test_that("Weibull incomplete-gamma primitives hold accuracy across the shape range", {
+  skip_model_validation()
+  # Every shape here evaluates the incomplete gamma through the series /
+  # continued-fraction pair rather than R's pgamma, so the start-point
+  # integral is the reference for it and for the log-gamma memo the launch
+  # scale is read from.  Two hundred distinct shapes in one vectorised call
+  # also force the memo past its slot count: a stale slot would move the
+  # scale and surface here as a wrong CDF.
+  cdf_ref <- function(shape, mean, A, b, t, k) {
+    scale <- mean / gamma(1 + 1 / shape)
+    f <- function(z) {
+      e <- exp(-k * t)
+      w <- if (k > 0) k * (b - z * e) / (1 - e) else (b - z) / t
+      ifelse(w > 0, pweibull(w, shape, scale, lower.tail = FALSE), 1)
+    }
+    if (A <= 0) return(f(0))
+    integrate(f, 0, A, rel.tol = 1e-12)$value / A
+  }
+  shape <- seq(.3, 15, length.out = 200)
+  g <- expand.grid(i = seq_along(shape), A = c(0, .35, 1.1), t = c(.5, 1.6),
+                   k = c(0, .5))
+  g$shape <- shape[g$i]
+  got <- with(g, EMC2:::pleakyba(t, A, 1.4, shape, 2.4, k, TRUE, 3L))
+  ref <- with(g, mapply(cdf_ref, shape, 2.4, A, 1.4, t, k))
+  keep <- ref > 1e-4
+  expect_gt(sum(keep), 1000)
+  expect_lt(max(abs(got[keep] - ref[keep]) / ref[keep]), 1e-11)
+  expect_lt(max(abs(got[!keep] - ref[!keep])), 1e-12)
+})

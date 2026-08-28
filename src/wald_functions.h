@@ -3,6 +3,8 @@
 
 #define _USE_MATH_DEFINES
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include "utility_functions.h"
 #include "composite_functions.h"
 #include "gl_quad.h"
@@ -426,6 +428,135 @@ inline double log_lognormal_logratio_stoploss(double v, double mu,
 }
 
 // --------------------------------------------------------------------------
+// Cached log-gamma and fast regularized incomplete gamma.
+//
+// Both are Weibull-launch hot-path primitives.  Every Weibull form needs
+// log Gamma at an order fixed by the launch shape (1 + 1/shape for the scale
+// and the first moment, 1/shape for the stop-loss), so the call is a per-row
+// constant that R::lgammafn otherwise recomputes at ~45 ns a row; memoise it
+// on that key, as model_BAwD.cpp does for the saturation solve.  Constant
+// initialisation keeps the thread_local free of a guard variable, and key 0
+// is never queried because the orders are positive.
+// --------------------------------------------------------------------------
+inline double lgammafn_cached(double a) {
+  if (!(a > 0.0) || !emc2_isfinite(a)) return R::lgammafn(a);
+  static constexpr int SLOTS = 128;  // power of two: the hash masks
+  struct Slot { double key; double val; };
+  static thread_local Slot tab[SLOTS] = {};
+  std::uint64_t h;
+  std::memcpy(&h, &a, sizeof(h));
+  // murmur3 finalizer: orders separated only in low mantissa bits must not
+  // land in one slot, which the raw bit pattern does not guarantee.
+  h ^= h >> 33; h *= 0xff51afd7ed558ccdull;
+  h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull;
+  h ^= h >> 33;
+  Slot& s = tab[h & (SLOTS - 1)];
+  if (s.key == a) return s.val;
+  s.key = a;
+  s.val = R::lgammafn(a);
+  return s.val;
+}
+
+// P(a,z) and Q(a,z), the regularized lower and upper incomplete gamma.
+// R::pgamma's Didonato-Morris path costs ~190 ns and dominated the Weibull
+// launch the way R::pnorm once dominated the truncated LBA; the classical
+// series/continued-fraction pair below holds ~3e-11 relative accuracy over
+// a in [A_MIN, A_MAX] and the whole representable z range at ~50 ns.  The
+// band is where that pair is both accurate and cheap: below it 1 - P eats
+// the upper tail, above it the expansions need hundreds of terms near
+// z = a.  Outside, R::pgamma is called, carrying the uniform asymptotics
+// that extreme orders need.
+//
+// log z is an argument because every call site already holds it: z is always
+// (v / scale)^shape and is formed in log space, so passing it in removes the
+// only std::log an evaluation would otherwise need.
+namespace inc_gamma {
+
+constexpr int MAX_ITER = 400;
+constexpr double REL_EPS = 1e-16;
+// The continued fraction converges on |del - 1|, so its tolerance must stay
+// clear of one ulp of 1.0 or the loop runs to MAX_ITER instead of stopping.
+constexpr double CF_EPS = 1e-15;
+constexpr double TINY = 1e-300;
+constexpr double A_MIN = 1e-4;
+constexpr double A_MAX = 1e3;
+
+inline bool in_band(double a, double z) {
+  return a >= A_MIN && a <= A_MAX && z > 0.0 && emc2_isfinite(z);
+}
+
+// log of the exp(-z) z^a / Gamma(a) factor shared by both expansions.  It is
+// maximised at z = a, where Stirling makes it negative, so exp() cannot
+// overflow.
+inline double log_prefactor(double a, double z, double log_z) {
+  return a * log_z - z - lgammafn_cached(a);
+}
+
+// P(a,z) = exp(log_prefactor) * lower_series(a,z), for z < a + 1.
+inline double lower_series(double a, double z) {
+  double ap = a, del = 1.0 / a, sum = del;
+  for (int n = 0; n < MAX_ITER; ++n) {
+    ap += 1.0;
+    del *= z / ap;
+    sum += del;
+    if (std::fabs(del) <= std::fabs(sum) * REL_EPS) break;
+  }
+  return sum;
+}
+
+// Q(a,z) = exp(log_prefactor) * upper_cf(a,z), for z >= a + 1.  Modified
+// Lentz evaluation of the Legendre continued fraction.
+inline double upper_cf(double a, double z) {
+  double b = z + 1.0 - a, c = 1.0 / TINY, d = 1.0 / b, h = d;
+  for (int i = 1; i < MAX_ITER; ++i) {
+    const double an = -i * (i - a);
+    b += 2.0;
+    d = an * d + b;  if (std::fabs(d) < TINY) d = TINY;
+    c = b + an / c;  if (std::fabs(c) < TINY) c = TINY;
+    d = 1.0 / d;
+    const double del = d * c;
+    h *= del;
+    if (std::fabs(del - 1.0) <= CF_EPS) break;
+  }
+  return h;
+}
+
+}  // namespace inc_gamma
+
+// Regularized lower incomplete gamma on the natural scale.
+inline double gamma_p_fast(double a, double z, double log_z) {
+  if (!inc_gamma::in_band(a, z)) return R::pgamma(z, a, 1.0, true, false);
+  const double pref = std::exp(inc_gamma::log_prefactor(a, z, log_z));
+  if (z < a + 1.0)
+    return std::fmin(pref * inc_gamma::lower_series(a, z), 1.0);
+  return std::fmax(1.0 - pref * inc_gamma::upper_cf(a, z), 0.0);
+}
+
+// log P(a,z) and log Q(a,z); either pointer may be null.  Each tail is taken
+// from the expansion that computes it directly, so the complement is only
+// ever formed on the side that keeps its digits.
+inline void gamma_log_pq_fast(double a, double z, double log_z,
+                              double* log_p, double* log_q) {
+  if (!inc_gamma::in_band(a, z)) {
+    if (log_p) *log_p = R::pgamma(z, a, 1.0, true, true);
+    if (log_q) *log_q = R::pgamma(z, a, 1.0, false, true);
+    return;
+  }
+  const double lpref = inc_gamma::log_prefactor(a, z, log_z);
+  if (z < a + 1.0) {
+    const double lp =
+      std::fmin(lpref + std::log(inc_gamma::lower_series(a, z)), 0.0);
+    if (log_p) *log_p = lp;
+    if (log_q) *log_q = log1m_exp(lp);
+    return;
+  }
+  const double lq =
+    std::fmin(lpref + std::log(inc_gamma::upper_cf(a, z)), 0.0);
+  if (log_q) *log_q = lq;
+  if (log_p) *log_p = log1m_exp(lq);
+}
+
+// --------------------------------------------------------------------------
 // Weibull launch primitives.  V ~ Weibull(shape, mean), V >= 0.  The
 // corresponding conventional scale is mean / Gamma(1 + 1 / shape).
 // The incomplete-gamma forms are kept in log space because all ballistic
@@ -438,7 +569,7 @@ inline bool weibull_valid(double shape, double mean) {
 
 inline double weibull_log_scale(double shape, double mean) {
   if (!weibull_valid(shape, mean)) return R_NaN;
-  return std::log(mean) - R::lgammafn(1.0 + 1.0 / shape);
+  return std::log(mean) - lgammafn_cached(1.0 + 1.0 / shape);
 }
 
 inline double weibull_scale_from_mean(double shape, double mean) {
@@ -492,13 +623,14 @@ inline double log_weibull_density(double v, double shape, double mean) {
 }
 
 // log Gamma(s,z), upper incomplete gamma, for arbitrary real s and z > 0.
-// R's pgamma is used directly for s > 0; the recurrence extends it to the
+// The regularized tail covers s > 0; the recurrence extends it to the
 // negative orders needed by the power-stoploss terms.
-inline double log_weibull_upper_gamma(double s, double z) {
+inline double log_weibull_upper_gamma(double s, double z, double log_z) {
   if (!(z > 0.0) || !emc2_isfinite(s)) return R_NegInf;
   if (s > 0.0) {
-    const double lq = R::pgamma(z, s, 1.0, false, true);
-    return (lq > R_NegInf) ? R::lgammafn(s) + lq : R_NegInf;
+    double lq;
+    gamma_log_pq_fast(s, z, log_z, nullptr, &lq);
+    return (lq > R_NegInf) ? lgammafn_cached(s) + lq : R_NegInf;
   }
   if (std::fabs(s) < 1e-12) {
     // E1(z) = Gamma(0,z).  Power series for z < 1 and a continued fraction
@@ -511,7 +643,7 @@ inline double log_weibull_upper_gamma(double s, double z) {
         sum += add;
         if (std::fabs(add) <= 2e-16 * std::fmax(1.0, std::fabs(sum))) break;
       }
-      const double e1 = -0.5772156649015328606 - std::log(z) - sum;
+      const double e1 = -0.5772156649015328606 - log_z - sum;
       return (e1 > 0.0) ? std::log(e1) : R_NegInf;
     }
     double b = z + 1.0, c = 1e300, d = 1.0 / b, h = d;
@@ -530,14 +662,14 @@ inline double log_weibull_upper_gamma(double s, double z) {
   }
   const int nshift = static_cast<int>(std::floor(-s)) + 1;
   const double q = s + nshift;
-  double log_g = log_weibull_upper_gamma(q, z);
+  double log_g = log_weibull_upper_gamma(q, z, log_z);
   for (int j = nshift - 1; j >= 0; --j) {
     const double r = s + j;
     if (std::fabs(r) < 1e-12) {
-      log_g = log_weibull_upper_gamma(0.0, z);
+      log_g = log_weibull_upper_gamma(0.0, z, log_z);
       continue;
     }
-    const double log_term = r * std::log(z) - z;
+    const double log_term = r * log_z - z;
     const signed_log num = signed_log_sub(make_signed_log(log_g, 1),
                                           make_signed_log(log_term, 1));
     if (num.sign == 0) return R_NegInf;
@@ -563,7 +695,7 @@ inline double log_weibull_stoploss(double v, double shape, double mean) {
   const double z = std::exp(lz);
   if (!emc2_isfinite(z)) return R_NegInf;
   return log_scale - std::log(shape) +
-    log_weibull_upper_gamma(1.0 / shape, z);
+    log_weibull_upper_gamma(1.0 / shape, z, lz);
 }
 
 inline double log_weibull_put(double v, double shape, double mean) {
@@ -609,9 +741,10 @@ inline double log_weibull_put(double v, double shape, double mean) {
   }
   const double x = v;
   const double log_f = log_weibull_cdf(v, shape, mean);
-  const double log_m = log_scale +
-    (R::lgammafn(1.0 + 1.0 / shape) +
-     R::pgamma(z, 1.0 + 1.0 / shape, 1.0, true, true));
+  const double a_shape = 1.0 + 1.0 / shape;
+  double log_pl;
+  gamma_log_pq_fast(a_shape, z, lz, &log_pl, nullptr);
+  const double log_m = log_scale + (lgammafn_cached(a_shape) + log_pl);
   const signed_log out = signed_log_sub(
     make_signed_log(std::log(x) + log_f, 1), make_signed_log(log_m, 1));
   return out.sign > 0 ? out.log_abs : R_NegInf;
@@ -633,29 +766,31 @@ inline double log_weibull_mass_interval(double lo, double hi,
   return -zlo + log1m_exp(-(zhi - zlo));
 }
 
-inline double log_weibull_gamma_interval(double s, double zlo, double zhi) {
+inline double log_weibull_gamma_interval(double s, double zlo, double zhi,
+                                         double log_zlo, double log_zhi) {
   if (!(s > 0.0) || !(zhi > zlo)) return R_NegInf;
   if (zhi < 1e-8) {
-    const double a = s * std::log(zhi);
-    const double b = (zlo > 0.0) ? s * std::log(zlo) : R_NegInf;
+    const double a = s * log_zhi;
+    const double b = (zlo > 0.0) ? s * log_zlo : R_NegInf;
     if (a > b) return log_diff_exp(a, b) - std::log(s);
   }
-  const double lp_lo = R::pgamma(zlo, s, 1.0, true, true);
-  const double lp_hi = R::pgamma(zhi, s, 1.0, true, true);
-  const double lq_lo = R::pgamma(zlo, s, 1.0, false, true);
-  const double lq_hi = R::pgamma(zhi, s, 1.0, false, true);
+  double lp_lo, lq_lo, lp_hi, lq_hi;
+  gamma_log_pq_fast(s, zlo, log_zlo, &lp_lo, &lq_lo);
+  gamma_log_pq_fast(s, zhi, log_zhi, &lp_hi, &lq_hi);
   const double lower = (lp_hi > lp_lo) ? log_diff_exp(lp_hi, lp_lo) : R_NegInf;
   const double upper = (lq_lo > lq_hi) ? log_diff_exp(lq_lo, lq_hi) : R_NegInf;
-  return R::lgammafn(s) + std::fmax(lower, upper);
+  return lgammafn_cached(s) + std::fmax(lower, upper);
 }
 
 inline double log_weibull_first_interval(double lo, double hi,
                                          double shape, double mean) {
   if (!(hi > lo) || !(lo >= 0.0) || !weibull_valid(shape, mean)) return R_NegInf;
-  const double zlo = (lo > 0.0) ? std::exp(weibull_log_z(lo, shape, mean)) : 0.0;
-  const double zhi = std::exp(weibull_log_z(hi, shape, mean));
-  return weibull_log_scale(shape, mean) + log_weibull_gamma_interval(1.0 + 1.0 / shape,
-                                                       zlo, zhi);
+  const double lzlo = (lo > 0.0) ? weibull_log_z(lo, shape, mean) : R_NegInf;
+  const double lzhi = weibull_log_z(hi, shape, mean);
+  const double zlo = (lzlo > R_NegInf) ? std::exp(lzlo) : 0.0;
+  const double zhi = std::exp(lzhi);
+  return weibull_log_scale(shape, mean) +
+    log_weibull_gamma_interval(1.0 + 1.0 / shape, zlo, zhi, lzlo, lzhi);
 }
 
 inline double log_weibull_power_stoploss(double v, double shape, double mean,
@@ -666,7 +801,7 @@ inline double log_weibull_power_stoploss(double v, double shape, double mean,
   if (lz < -36.0) {
     const double s = -m / shape;
     if (s > 1e-12)
-      return -m * log_scale - std::log(shape) + R::lgammafn(s);
+      return -m * log_scale - std::log(shape) + lgammafn_cached(s);
     if (std::fabs(s) <= 1e-12)
       return -m * log_scale - std::log(shape) + std::log(-lz);
     // Gamma(s,z) ~ -z^s / s for s < 0 as z -> 0.
@@ -675,7 +810,7 @@ inline double log_weibull_power_stoploss(double v, double shape, double mean,
   const double z = std::exp(lz);
   if (!(z > 0.0) || !emc2_isfinite(z)) return R_NegInf;
   return -m * log_scale - std::log(shape) +
-    log_weibull_upper_gamma(-m / shape, z);
+    log_weibull_upper_gamma(-m / shape, z, lz);
 }
 
 // Integral of log(w / ell) times the Weibull survivor.  A short numerical

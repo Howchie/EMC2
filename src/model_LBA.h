@@ -920,8 +920,8 @@ inline bool bawl_natural_cdf_weib(double t, double A, double b, double shape,
     const double z_hi = std::exp(lz_hi);
     if (!(z_hi > z_lo)) return false;
     const double a_shape = 1.0 + 1.0 / shape;
-    const double P_lo = R::pgamma(z_lo, a_shape, 1.0, true, false);
-    const double P_hi = R::pgamma(z_hi, a_shape, 1.0, true, false);
+    const double P_lo = gamma_p_fast(a_shape, z_lo, lz_lo);
+    const double P_hi = gamma_p_fast(a_shape, z_hi, lz_hi);
     const double E_lo = std::exp(-z_lo);
     const double E_hi = std::exp(-z_hi);
     const double diff_C = mean * (P_hi - P_lo) + g.w_hi * E_hi - g.w_lo * E_lo;
@@ -979,8 +979,8 @@ inline bool bawl_natural_pdf_weib(double t, double A, double b, double shape,
     const double z_hi = std::exp(lz_hi);
     if (!(z_hi > z_lo)) return false;
     const double a_shape = 1.0 + 1.0 / shape;
-    const double P_lo = R::pgamma(z_lo, a_shape, 1.0, true, false);
-    const double P_hi = R::pgamma(z_hi, a_shape, 1.0, true, false);
+    const double P_lo = gamma_p_fast(a_shape, z_lo, lz_lo);
+    const double P_hi = gamma_p_fast(a_shape, z_hi, lz_hi);
     const double E_lo = std::exp(-z_lo);
     const double E_hi = std::exp(-z_hi);
     const double term1 = mean * (P_hi - P_lo);

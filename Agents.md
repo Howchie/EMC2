@@ -74,6 +74,10 @@ These delegate to Rinternals macros that are unconditionally correct under `-ffa
 
 **Policy**: All model headers and likelihood helpers must use `pnorm_std` / `dnorm_std` / `plnorm_std` / `dlnorm_std`. Direct calls to `R::pnorm`, `R::dnorm`, `R::plnorm`, `R::dlnorm` in inner loops are a red flag in code review.
 
+The Weibull launch primitives have the same pairing in `src/wald_functions.h`:
+- `gamma_p_fast(a, z, log_z)` and `gamma_log_pq_fast(a, z, log_z, log_p, log_q)`: regularized incomplete gamma by series (`z < a + 1`) or continued fraction, ~4x faster than `R::pgamma` and accurate to ~3e-11 relative; outside `a` in [1e-4, 1e3] they defer to `R::pgamma`, which carries the uniform asymptotics extreme orders need. Callers pass `log z` because it is already in hand.
+- `lgammafn_cached(a)`: `R::lgammafn` memoised on its argument, for orders such as `1 + 1/shape` that are constant across the trials of a design cell.
+
 ### 3.2 Cancellation-Safe Arithmetic (`src/composite_functions.h`)
 
 Use dedicated numerically stable functions when handling probabilities and logs:
