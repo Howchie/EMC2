@@ -20,6 +20,8 @@ The overarching constraints are absolute:
   prose when the code and tests already make the behavior clear.
 - All models must document their parameter table in the Details section in a consistent fashion;
   when adding new models ensure the documentation is updated and made consistent with existing models.
+- ALl new likelihoods must operate in natural space wherever safe (for speed) with a log-space fallback to
+  safely handle numerical precision issues. Do not solely use logspace as it is usually much slower (up to 4x).
 
 ---
 

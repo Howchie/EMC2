@@ -859,6 +859,151 @@ inline bool bawl_natural_pdf_logn(double t, double A, double b, double mu,
   return true;
 }
 
+inline bool bawl_natural_cdf_weib(double t, double A, double b, double shape,
+                                  double mean, double k, int accept_mode,
+                                  double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+  if (!weibull_valid(shape, mean)) return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) {
+    cdf = 0.0;
+    return lenient;
+  }
+  const double log_scale = weibull_log_scale(shape, mean);
+  if (ISNAN(log_scale)) return false;
+
+  if (g.frozen) {
+    if (k <= BAWL_K_EPS) {
+      cdf = 1.0;
+      return accept_mode == BA_ACCEPT_CLAMP;
+    }
+    const double lz = shape * (std::log(g.w_hi) - log_scale);
+    if (lz >= 700.0) {
+      cdf = 0.0;
+      return lenient;
+    }
+    if (lz <= -36.0) {
+      cdf = 1.0;
+      return accept_mode == BA_ACCEPT_CLAMP;
+    }
+    const double z = std::exp(lz);
+    cdf = std::exp(-z);
+    return accept(cdf);
+  }
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    if (!(w > 0.0)) return false;
+    const double lz = shape * (std::log(w) - log_scale);
+    if (lz >= 700.0) {
+      cdf = 0.0;
+      return lenient;
+    }
+    if (lz <= -36.0) {
+      cdf = 1.0;
+      return accept_mode == BA_ACCEPT_CLAMP;
+    }
+    const double z = std::exp(lz);
+    cdf = std::exp(-z);
+  } else {
+    if (!(g.w_lo > 0.0)) return false;
+    const double lz_lo = shape * (std::log(g.w_lo) - log_scale);
+    const double lz_hi = shape * (std::log(g.w_hi) - log_scale);
+    if (lz_hi >= 700.0 || lz_lo <= -36.0) return false;
+    const double z_lo = std::exp(lz_lo);
+    const double z_hi = std::exp(lz_hi);
+    if (!(z_hi > z_lo)) return false;
+    const double a_shape = 1.0 + 1.0 / shape;
+    const double P_lo = R::pgamma(z_lo, a_shape, 1.0, true, false);
+    const double P_hi = R::pgamma(z_hi, a_shape, 1.0, true, false);
+    const double E_lo = std::exp(-z_lo);
+    const double E_hi = std::exp(-z_hi);
+    const double diff_C = mean * (P_hi - P_lo) + g.w_hi * E_hi - g.w_lo * E_lo;
+    if (!(diff_C > 0.0)) {
+      if (!lenient) return false;
+      cdf = 0.0;
+      return true;
+    }
+    const double scale = mean * (P_hi + P_lo) + g.w_hi * E_hi + g.w_lo * E_lo;
+    if (!lenient && diff_C <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale))
+      return false;
+    cdf = (g.s / A) * diff_C;
+  }
+
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
+}
+
+inline bool bawl_natural_pdf_weib(double t, double A, double b, double shape,
+                                  double mean, double k, int accept_mode,
+                                  double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (!weibull_valid(shape, mean) || t == R_PosInf) return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) {
+    pdf = 0.0;
+    return lenient;
+  }
+  const double log_scale = weibull_log_scale(shape, mean);
+  if (ISNAN(log_scale)) return false;
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    const double eff_b = (A <= BAWL_A_EPS) ? b : b - 0.5 * A;
+    if (!(w > 0.0)) return false;
+    const double lz = shape * (std::log(w) - log_scale);
+    if (lz >= 700.0 || lz <= -36.0) return false;
+    const double z = std::exp(lz);
+    const double dens = (shape / w) * z * std::exp(-z);
+    if (!emc2_isfinite(dens) || dens <= 0.0) return false;
+    const double jac = (g.s > 0.0 && g.E > 0.0) ? 1.0 / (g.s * g.s * g.E) : 0.0;
+    if (!(jac > 0.0)) return false;
+    pdf = jac * eff_b * dens;
+  } else {
+    if (!(g.E > 0.0) || !(g.w_lo > 0.0)) return false;
+    const double lz_lo = shape * (std::log(g.w_lo) - log_scale);
+    const double lz_hi = shape * (std::log(g.w_hi) - log_scale);
+    if (lz_hi >= 700.0 || lz_lo <= -36.0) return false;
+    const double z_lo = std::exp(lz_lo);
+    const double z_hi = std::exp(lz_hi);
+    if (!(z_hi > z_lo)) return false;
+    const double a_shape = 1.0 + 1.0 / shape;
+    const double P_lo = R::pgamma(z_lo, a_shape, 1.0, true, false);
+    const double P_hi = R::pgamma(z_hi, a_shape, 1.0, true, false);
+    const double E_lo = std::exp(-z_lo);
+    const double E_hi = std::exp(-z_hi);
+    const double term1 = mean * (P_hi - P_lo);
+    const double term2 = k * b * (E_lo - E_hi);
+    const double num = term1 - term2;
+    if (!(num > 0.0)) {
+      if (!lenient) return false;
+      pdf = 0.0;
+      return true;
+    }
+    const double scale = std::fabs(term1) + std::fabs(term2);
+    if (num <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
+    pdf = num / (A * g.E);
+  }
+
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
+}
+
 // Launch-distribution dispatch.  `p1`/`p2` are (v, sv) for the normal launch
 // and (mu, sigma) for the lognormal one; they occupy the same kernel columns,
 // exactly as in BAwD.  posdrift and the normalizer floor are meaningless for
@@ -871,7 +1016,8 @@ inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return bawl_natural_cdf_logn(t, A, b, p1, p2, k, accept_mode, cdf, delta);
-  if (launch == BAWL_LAUNCH_WEIBULL) return false;
+  if (launch == BAWL_LAUNCH_WEIBULL)
+    return bawl_natural_cdf_weib(t, A, b, p1, p2, k, accept_mode, cdf);
   return ba_natural_cdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, cdf);
 }
@@ -884,7 +1030,8 @@ inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return bawl_natural_pdf_logn(t, A, b, p1, p2, k, accept_mode, pdf, delta);
-  if (launch == BAWL_LAUNCH_WEIBULL) return false;
+  if (launch == BAWL_LAUNCH_WEIBULL)
+    return bawl_natural_pdf_weib(t, A, b, p1, p2, k, accept_mode, pdf);
   return ba_natural_pdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, pdf);
 }
