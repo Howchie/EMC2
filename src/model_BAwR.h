@@ -146,7 +146,7 @@ double bawr_log_frozen_normal(const BawrGeom& g, double s_lo,
 double bawr_log_frozen_logn(const BawrGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma, double delta = 0.0);
 double bawr_log_frozen_weib(const BawrGeom& g, double s_lo, double s_hi,
-                                   double shape, double scale);
+                                   double shape, double mean);
 
 // --------------------------------------------------------------------------
 // log CDF

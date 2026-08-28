@@ -426,32 +426,53 @@ inline double log_lognormal_logratio_stoploss(double v, double mu,
 }
 
 // --------------------------------------------------------------------------
-// Weibull launch primitives.  V ~ Weibull(shape, scale), V >= 0.
+// Weibull launch primitives.  V ~ Weibull(shape, mean), V >= 0.  The
+// corresponding conventional scale is mean / Gamma(1 + 1 / shape).
 // The incomplete-gamma forms are kept in log space because all ballistic
 // kernels consume stop-loss, put, and partial-moment differences.
 // --------------------------------------------------------------------------
-inline bool weibull_valid(double shape, double scale) {
-  return shape > 0.0 && scale > 0.0 && emc2_isfinite(shape) &&
-    emc2_isfinite(scale);
+inline bool weibull_valid(double shape, double mean) {
+  return shape > 0.0 && mean > 0.0 && emc2_isfinite(shape) &&
+    emc2_isfinite(mean);
 }
 
-inline double weibull_log_z(double v, double shape, double scale) {
+inline double weibull_log_scale(double shape, double mean) {
+  if (!weibull_valid(shape, mean)) return R_NaN;
+  return std::log(mean) - R::lgammafn(1.0 + 1.0 / shape);
+}
+
+inline double weibull_scale_from_mean(double shape, double mean) {
+  const double ls = weibull_log_scale(shape, mean);
+  if (ISNAN(ls)) return R_NaN;
+  return ls == R_NegInf ? 0.0 : (ls == R_PosInf ? R_PosInf : std::exp(ls));
+}
+
+inline double rweibull_mean(double shape, double mean) {
+  if (!weibull_valid(shape, mean)) return R_NaN;
+  const double u = R::unif_rand();
+  const double log_x = weibull_log_scale(shape, mean) +
+    std::log(-std::log1p(-u)) / shape;
+  return std::exp(log_x);
+}
+
+inline double weibull_log_z(double v, double shape, double mean) {
   if (!(v > 0.0)) return (v == 0.0) ? R_NegInf : R_NaN;
-  if (!weibull_valid(shape, scale)) return R_NaN;
-  const double lz = shape * (std::log(v) - std::log(scale));
+  const double log_scale = weibull_log_scale(shape, mean);
+  if (ISNAN(log_scale)) return R_NaN;
+  const double lz = shape * (std::log(v) - log_scale);
   return lz;
 }
 
-inline double log_weibull_survivor(double v, double shape, double scale) {
-  if (!weibull_valid(shape, scale)) return R_NegInf;
+inline double log_weibull_survivor(double v, double shape, double mean) {
+  if (!weibull_valid(shape, mean)) return R_NegInf;
   if (!(v > 0.0)) return 0.0;
-  const double lz = weibull_log_z(v, shape, scale);
+  const double lz = weibull_log_z(v, shape, mean);
   return (lz == R_PosInf) ? R_NegInf : -std::exp(lz);
 }
 
-inline double log_weibull_cdf(double v, double shape, double scale) {
-  if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
-  const double lz = weibull_log_z(v, shape, scale);
+inline double log_weibull_cdf(double v, double shape, double mean) {
+  if (!weibull_valid(shape, mean) || !(v > 0.0)) return R_NegInf;
+  const double lz = weibull_log_z(v, shape, mean);
   if (lz == R_PosInf) return 0.0;
   // In the extreme lower tail z may underflow even though log F is still a
   // perfectly representable number.  log(1 - exp(-z)) ~ log z there.
@@ -461,12 +482,13 @@ inline double log_weibull_cdf(double v, double shape, double scale) {
   return std::log(-std::expm1(-z));
 }
 
-inline double log_weibull_density(double v, double shape, double scale) {
-  if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
-  const double lz = weibull_log_z(v, shape, scale);
+inline double log_weibull_density(double v, double shape, double mean) {
+  if (!weibull_valid(shape, mean) || !(v > 0.0)) return R_NegInf;
+  const double log_scale = weibull_log_scale(shape, mean);
+  const double lz = weibull_log_z(v, shape, mean);
   if (lz == R_PosInf) return R_NegInf;
-  return std::log(shape) - std::log(scale) +
-    (shape - 1.0) * (std::log(v) - std::log(scale)) - std::exp(lz);
+  return std::log(shape) - log_scale +
+    (shape - 1.0) * (std::log(v) - log_scale) - std::exp(lz);
 }
 
 // log Gamma(s,z), upper incomplete gamma, for arbitrary real s and z > 0.
@@ -524,13 +546,12 @@ inline double log_weibull_upper_gamma(double s, double z) {
   return log_g;
 }
 
-inline double log_weibull_stoploss(double v, double shape, double scale) {
-  if (!weibull_valid(shape, scale)) return R_NegInf;
-  const double log_mean = std::log(scale) - std::log(shape) +
-    R::lgammafn(1.0 / shape);
-  if (!(v > 0.0)) return std::log(scale) - std::log(shape) +
-    R::lgammafn(1.0 / shape);
-  const double lz = weibull_log_z(v, shape, scale);
+inline double log_weibull_stoploss(double v, double shape, double mean) {
+  if (!weibull_valid(shape, mean)) return R_NegInf;
+  const double log_mean = std::log(mean);
+  const double log_scale = weibull_log_scale(shape, mean);
+  if (!(v > 0.0)) return log_mean;
+  const double lz = weibull_log_z(v, shape, mean);
   if (lz < -36.0) {
     // C(v) = E[V] - v + E[(v - V)_+].  The put term is negligible in this
     // tail, but retaining -v avoids a visible bias for large shape values.
@@ -541,18 +562,18 @@ inline double log_weibull_stoploss(double v, double shape, double scale) {
   }
   const double z = std::exp(lz);
   if (!emc2_isfinite(z)) return R_NegInf;
-  return std::log(scale) - std::log(shape) +
+  return log_scale - std::log(shape) +
     log_weibull_upper_gamma(1.0 / shape, z);
 }
 
-inline double log_weibull_put(double v, double shape, double scale) {
-  if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
-  const double log_mean = std::log(scale) - std::log(shape) +
-    R::lgammafn(1.0 / shape);
+inline double log_weibull_put(double v, double shape, double mean) {
+  if (!weibull_valid(shape, mean) || !(v > 0.0)) return R_NegInf;
+  const double log_mean = std::log(mean);
+  const double log_scale = weibull_log_scale(shape, mean);
   // The put primitive is E[(v - V)_+], so it grows as v - E[V] in the
   // upper tail.  Handle the endpoint before forming log(v) - log_mean.
   if (v == R_PosInf) return R_PosInf;
-  const double lz = weibull_log_z(v, shape, scale);
+  const double lz = weibull_log_z(v, shape, mean);
   if (lz == R_PosInf || lz >= 700.0) {
     const double log_v = std::log(v);
     return (log_v > log_mean)
@@ -560,7 +581,7 @@ inline double log_weibull_put(double v, double shape, double scale) {
       : log_v;
   }
   if (lz < -36.0)
-    return std::log(scale) + (1.0 + 1.0 / shape) * lz - std::log(shape + 1.0);
+    return log_scale + (1.0 + 1.0 / shape) * lz - std::log(shape + 1.0);
   const double z = std::exp(lz);
   // For small z, integrate the CDF series directly; x F(x) minus a lower
   // incomplete gamma loses all digits when shape is large.
@@ -575,7 +596,7 @@ inline double log_weibull_put(double v, double shape, double scale) {
       if (std::fabs(term) <= 2e-16 * std::fmax(1.0, std::fabs(sum))) break;
     }
     if (sum > 0.0 && emc2_isfinite(sum))
-      return std::log(scale) + std::log(sum);
+      return log_scale + std::log(sum);
     double direct = 0.0, powz = std::exp((r + 1.0) * std::log(z));
     for (int n = 1; n < 200; ++n) {
       const double add = ((n & 1) ? 1.0 : -1.0) * powz /
@@ -584,11 +605,11 @@ inline double log_weibull_put(double v, double shape, double scale) {
       powz *= z;
       if (std::fabs(add) <= 2e-16 * std::fmax(1.0, std::fabs(direct))) break;
     }
-    return direct > 0.0 ? std::log(scale) + std::log(direct) : R_NegInf;
+    return direct > 0.0 ? log_scale + std::log(direct) : R_NegInf;
   }
   const double x = v;
-  const double log_f = log_weibull_cdf(v, shape, scale);
-  const double log_m = std::log(scale) +
+  const double log_f = log_weibull_cdf(v, shape, mean);
+  const double log_m = log_scale +
     (R::lgammafn(1.0 + 1.0 / shape) +
      R::pgamma(z, 1.0 + 1.0 / shape, 1.0, true, true));
   const signed_log out = signed_log_sub(
@@ -597,10 +618,10 @@ inline double log_weibull_put(double v, double shape, double scale) {
 }
 
 inline double log_weibull_mass_interval(double lo, double hi,
-                                        double shape, double scale) {
-  if (!(hi > lo) || !(lo >= 0.0) || !weibull_valid(shape, scale)) return R_NegInf;
-  const double lzlo = (lo > 0.0) ? weibull_log_z(lo, shape, scale) : R_NegInf;
-  const double lzhi = weibull_log_z(hi, shape, scale);
+                                        double shape, double mean) {
+  if (!(hi > lo) || !(lo >= 0.0) || !weibull_valid(shape, mean)) return R_NegInf;
+  const double lzlo = (lo > 0.0) ? weibull_log_z(lo, shape, mean) : R_NegInf;
+  const double lzhi = weibull_log_z(hi, shape, mean);
   if (!(lzhi > lzlo)) return R_NegInf;
   // If both z endpoints are tiny, differencing exp(-z) would erase the mass;
   // the leading term is z_hi - z_lo and is evaluated directly in log space.
@@ -629,30 +650,31 @@ inline double log_weibull_gamma_interval(double s, double zlo, double zhi) {
 }
 
 inline double log_weibull_first_interval(double lo, double hi,
-                                         double shape, double scale) {
-  if (!(hi > lo) || !(lo >= 0.0) || !weibull_valid(shape, scale)) return R_NegInf;
-  const double zlo = (lo > 0.0) ? std::exp(weibull_log_z(lo, shape, scale)) : 0.0;
-  const double zhi = std::exp(weibull_log_z(hi, shape, scale));
-  return std::log(scale) + log_weibull_gamma_interval(1.0 + 1.0 / shape,
+                                         double shape, double mean) {
+  if (!(hi > lo) || !(lo >= 0.0) || !weibull_valid(shape, mean)) return R_NegInf;
+  const double zlo = (lo > 0.0) ? std::exp(weibull_log_z(lo, shape, mean)) : 0.0;
+  const double zhi = std::exp(weibull_log_z(hi, shape, mean));
+  return weibull_log_scale(shape, mean) + log_weibull_gamma_interval(1.0 + 1.0 / shape,
                                                        zlo, zhi);
 }
 
-inline double log_weibull_power_stoploss(double v, double shape, double scale,
+inline double log_weibull_power_stoploss(double v, double shape, double mean,
                                          double m) {
-  if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
-  const double lz = weibull_log_z(v, shape, scale);
+  if (!weibull_valid(shape, mean) || !(v > 0.0)) return R_NegInf;
+  const double log_scale = weibull_log_scale(shape, mean);
+  const double lz = weibull_log_z(v, shape, mean);
   if (lz < -36.0) {
     const double s = -m / shape;
     if (s > 1e-12)
-      return -m * std::log(scale) - std::log(shape) + R::lgammafn(s);
+      return -m * log_scale - std::log(shape) + R::lgammafn(s);
     if (std::fabs(s) <= 1e-12)
-      return -m * std::log(scale) - std::log(shape) + std::log(-lz);
+      return -m * log_scale - std::log(shape) + std::log(-lz);
     // Gamma(s,z) ~ -z^s / s for s < 0 as z -> 0.
-    return -m * std::log(scale) - std::log(shape) + s * lz - std::log(-s);
+    return -m * log_scale - std::log(shape) + s * lz - std::log(-s);
   }
   const double z = std::exp(lz);
   if (!(z > 0.0) || !emc2_isfinite(z)) return R_NegInf;
-  return -m * std::log(scale) - std::log(shape) +
+  return -m * log_scale - std::log(shape) +
     log_weibull_upper_gamma(-m / shape, z);
 }
 
@@ -660,12 +682,12 @@ inline double log_weibull_power_stoploss(double v, double shape, double scale,
 // derivative of the same incomplete-gamma primitive is stable over the range
 // used by the rho = 1 BAwD member and avoids a second special-function stack.
 inline double log_weibull_logratio_stoploss(double v, double shape,
-                                            double scale, double log_ell) {
-  if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
+                                            double mean, double log_ell) {
+  if (!weibull_valid(shape, mean) || !(v > 0.0)) return R_NegInf;
   const double h = 1e-5;
-  const double lm = log_weibull_power_stoploss(v, shape, scale, -1.0 - h);
-  const double lp = log_weibull_power_stoploss(v, shape, scale, -1.0 + h);
-  const double l0 = log_weibull_power_stoploss(v, shape, scale, -1.0);
+  const double lm = log_weibull_power_stoploss(v, shape, mean, -1.0 - h);
+  const double lp = log_weibull_power_stoploss(v, shape, mean, -1.0 + h);
+  const double l0 = log_weibull_power_stoploss(v, shape, mean, -1.0);
   if (!(lm > R_NegInf) || !(lp > R_NegInf) || !(l0 > R_NegInf)) return R_NegInf;
   const double deriv = (lp - lm) / (2.0 * h);
   const double coeff = -deriv - log_ell;

@@ -62,13 +62,14 @@ log-width ratio and \code{mu} is the median of \code{Y}; the split point \code{c
 from these parameters so that \code{P(Y <= mu) = 1/2} exactly.  Setting \code{delta = 0}
 reduces exactly to the ordinary lognormal launch.
 With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} on the
-positive launch scale. The Weibull BAwD likelihood is closed form, including
+positive launch scale, parameterised by arithmetic \code{mean}; the
+conventional scale is derived internally. The Weibull BAwD likelihood is closed form, including
 its finite-\code{Tmax} frozen branch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean width of log launch. \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
-   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -86,8 +87,8 @@ For \code{drift_distribution = "normal"}, use the \code{v} and \code{sv} rows in
 \code{mu} and \code{sigma}; the normal launch is truncated at zero by default. The
 split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-For \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{scale}
-(both use log/exp transforms).
+For \code{drift_distribution = "weibull"}, use positive \code{shape} and arithmetic
+\code{mean} (both use log/exp transforms).
 
 \strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
 transform, default \code{0}, unbounded on the natural scale) and is excluded from

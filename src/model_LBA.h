@@ -551,59 +551,59 @@ inline double log_bawl_surv_logn(double t, double A, double b, double mu,
 }
 
 inline double log_bawl_surv_weib(double t, double A, double b, double shape,
-                                 double scale, double k);
+                                 double mean, double k);
 
 inline double log_bawl_cdf_weib(double t, double A, double b, double shape,
-                                double scale, double k) {
-  if (!(shape > 0.0) || !(scale > 0.0)) return R_NegInf;
+                                double mean, double k) {
+  if (!weibull_valid(shape, mean)) return R_NegInf;
   const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
   if (!g.ok) return R_NegInf;
   // Near one, compute the CDF as the complement of the stable survivor.
-  const double lsurv = log_bawl_surv_weib(t, A, b, shape, scale, k);
+  const double lsurv = log_bawl_surv_weib(t, A, b, shape, mean, k);
   if (lsurv < 0.0 && emc2_isfinite(lsurv))
     return std::log(-std::expm1(lsurv));
   if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
     return std::fmin(log_weibull_survivor(g.frozen ? k * b : g.w_hi,
-                                          shape, scale), 0.0);
-  const double lc_lo = log_weibull_stoploss(g.w_lo, shape, scale);
-  const double lc_hi = log_weibull_stoploss(g.w_hi, shape, scale);
+                                          shape, mean), 0.0);
+  const double lc_lo = log_weibull_stoploss(g.w_lo, shape, mean);
+  const double lc_hi = log_weibull_stoploss(g.w_hi, shape, mean);
   if (lc_lo - lc_hi > BAWL_WEIB_MIN_SPAN) {
     const double ld = log_diff_exp(lc_lo, lc_hi);
     if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
   }
-  return std::fmin(log_weibull_survivor(0.5 * (g.w_lo + g.w_hi), shape, scale), 0.0);
+  return std::fmin(log_weibull_survivor(0.5 * (g.w_lo + g.w_hi), shape, mean), 0.0);
 }
 
 inline double log_bawl_surv_weib(double t, double A, double b, double shape,
-                                 double scale, double k) {
-  if (!(shape > 0.0) || !(scale > 0.0)) return R_NegInf;
+                                 double mean, double k) {
+  if (!weibull_valid(shape, mean)) return R_NegInf;
   const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
   if (!g.ok) return R_NegInf;
   if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
-    return std::fmin(log_weibull_cdf(g.frozen ? k * b : g.w_hi, shape, scale), 0.0);
-  const double lp_hi = log_weibull_put(g.w_hi, shape, scale);
-  const double lp_lo = log_weibull_put(g.w_lo, shape, scale);
+    return std::fmin(log_weibull_cdf(g.frozen ? k * b : g.w_hi, shape, mean), 0.0);
+  const double lp_hi = log_weibull_put(g.w_hi, shape, mean);
+  const double lp_lo = log_weibull_put(g.w_lo, shape, mean);
   if (lp_hi - lp_lo > BAWL_WEIB_MIN_SPAN) {
     const double ld = log_diff_exp(lp_hi, lp_lo);
     if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
   }
-  return std::fmin(log_weibull_cdf(0.5 * (g.w_lo + g.w_hi), shape, scale), 0.0);
+  return std::fmin(log_weibull_cdf(0.5 * (g.w_lo + g.w_hi), shape, mean), 0.0);
 }
 
 inline double log_bawl_pdf_weib(double t, double A, double b, double shape,
-                                double scale, double k) {
-  if (!(shape > 0.0) || !(scale > 0.0) || t == R_PosInf) return R_NegInf;
+                                double mean, double k) {
+  if (!weibull_valid(shape, mean) || t == R_PosInf) return R_NegInf;
   const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
   if (!g.ok || g.frozen) return R_NegInf;
   const double log_jac = bawl_geom_log_jacobian(g);
   if (A <= BAWL_A_EPS || !(g.width > 0.0)) {
-    const double ld = log_weibull_density(g.w_hi, shape, scale);
+    const double ld = log_weibull_density(g.w_hi, shape, mean);
     return ld > R_NegInf ? log_jac + std::log(b) + ld : R_NegInf;
   }
-  const double lm = log_weibull_mass_interval(g.w_lo, g.w_hi, shape, scale);
-  const double l1 = log_weibull_first_interval(g.w_lo, g.w_hi, shape, scale);
+  const double lm = log_weibull_mass_interval(g.w_lo, g.w_hi, shape, mean);
+  const double l1 = log_weibull_first_interval(g.w_lo, g.w_hi, shape, mean);
   if (!(lm > R_NegInf) || !(l1 > R_NegInf)) {
-    const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, scale);
+    const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, mean);
     return ld > R_NegInf ? log_jac + std::log(b - 0.5 * A) + ld : R_NegInf;
   }
   const signed_log br = (k > BAWL_K_EPS)
@@ -612,7 +612,7 @@ inline double log_bawl_pdf_weib(double t, double A, double b, double shape,
     : make_signed_log(l1, 1);
   if (br.sign > 0 && br.log_abs > R_NegInf)
     return br.log_abs - std::log(A) - g.log_E;
-  const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, scale);
+  const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, mean);
   return ld > R_NegInf ? log_jac + std::log(b - 0.5 * A) + ld : R_NegInf;
 }
 

@@ -33,7 +33,8 @@ split-normal \verb{log V} with widths
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)}.
 In the split variant \code{mu} is the exact median and \code{delta} is unbounded;
 \code{delta = 0} is exactly the lognormal launch. \code{"weibull"} uses
-\code{V ~ Weibull(shape, scale)} on the positive launch scale.}
+\code{V ~ Weibull(shape, scale)} on the positive launch scale, with the
+public arithmetic mean supplied instead of the conventional scale.}
 }
 \value{
 A model list defining the BAwL race model.
@@ -98,7 +99,8 @@ positive by construction, so \code{posdrift} does not apply.  The \code{correlat
 one-factor path — which decomposes the \emph{Gaussian} drift vector — is not
 available for either lognormal variant.
 With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} with
-positive shape and scale. Weibull launches are also incompatible with the
+positive shape and arithmetic mean. The conventional scale is derived as
+\code{mean / Gamma(1 + 1 / shape)}. Weibull launches are also incompatible with the
 Gaussian \code{correlated} path.
 
 \strong{Fixing the evidence scale.} The evidence axis is defined only up to a

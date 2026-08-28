@@ -65,13 +65,14 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)};
 \code{mu} is the exact median, the split point is derived from that condition,
 and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.
-With \code{"weibull"}, \code{V ~ Weibull(shape, scale)}; both parameters are positive
+With \code{"weibull"}, \code{V ~ Weibull(shape, scale)}; the public parameters are
+positive \code{shape} and arithmetic \code{mean} (the conventional scale is derived internally)
 and the BAwF likelihood remains closed form, including its frozen branch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median/mean log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
-   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
@@ -86,7 +87,7 @@ For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of 
 lognormal launch rows; the normal launch is truncated at zero by default.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-For \code{drift_distribution = "weibull"}, use \code{shape} and \code{scale} instead of
+For \code{drift_distribution = "weibull"}, use \code{shape} and \code{mean} instead of
 the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.

@@ -571,7 +571,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawl_cpp: the split-lognormal launch requires a 'delta' column.");
   const int iv = ci.at(weib ? "shape" : (logn ? "mu" : "v")),
-            isv = ci.at(weib ? "scale" : (logn ? "sigma" : "sv")),
+            isv = ci.at(weib ? "mean" : (logn ? "sigma" : "sv")),
             ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
   const int ieta = ci.count("eta") ? ci.at("eta") : -1;
@@ -609,7 +609,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
     const double lo = posdrift ? 0.0 : R_NegInf;
     const double drift = drift_override
       ? (*drift_override)[static_cast<size_t>(r)]
-      : (weib ? R::rweibull(pars(r, iv), pars(r, isv))
+      : (weib ? rweibull_mean(pars(r, iv), pars(r, isv))
                : (split ? rsplit_lognormal_r(pars(r, iv), pars(r, isv), pars(r, idelta))
                : (logn ? R::rlnorm(pars(r, iv), pars(r, isv))
                        : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo))));
@@ -686,7 +686,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
 }
 
 // pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega), or
-// mu, sigma / shape, scale in place of v, sv for lognormal / Weibull launches.
+// mu, sigma / shape, mean in place of v, sv for lognormal / Weibull launches.
 // Matches R's rBAwL (model_LBA.R:347-479).
 // [[Rcpp::export]]
 Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
@@ -718,13 +718,13 @@ Rcpp::List rbta_wl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_l
   const bool weib = (launch == BTAWL_LAUNCH_WEIBULL);
   const bool split = (launch == BTAWL_LAUNCH_SPLITLOGNORMAL);
   const char* p1_name = weib ? "shape" : (logn ? "mu" : "v");
-  const char* p2_name = weib ? "scale" : (logn ? "sigma" : "sv");
+  const char* p2_name = weib ? "mean" : (logn ? "sigma" : "sv");
   if (!separate && (!ci.count(p1_name) || !ci.count(p2_name)))
     Rcpp::stop("rbta_wl_cpp: missing launch columns '%s' and/or '%s'.", p1_name, p2_name);
   if (separate && (!ci.count(weib ? "shape_S" : (logn ? "mu_S" : "v_S")) ||
-                   !ci.count(weib ? "scale_S" : (logn ? "sigma_S" : "sv_S")) ||
+                   !ci.count(weib ? "mean_S" : (logn ? "sigma_S" : "sv_S")) ||
                    !ci.count(weib ? "shape_T" : (logn ? "mu_T" : "v_T")) ||
-                   !ci.count(weib ? "scale_T" : (logn ? "sigma_T" : "sv_T"))))
+                   !ci.count(weib ? "mean_T" : (logn ? "sigma_T" : "sv_T"))))
     Rcpp::stop("rbta_wl_separate_cpp: missing sustained/transient launch columns.");
   if (split && (!separate && !ci.count("delta")))
     Rcpp::stop("rbta_wl_cpp: the split-lognormal launch requires a 'delta' column.");
@@ -742,9 +742,9 @@ Rcpp::List rbta_wl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_l
   const int ip1 = separate ? -1 : ci.at(p1_name);
   const int ip2 = separate ? -1 : ci.at(p2_name);
   const int ip1s = separate ? ci.at(weib ? "shape_S" : (logn ? "mu_S" : "v_S")) : -1;
-  const int ip2s = separate ? ci.at(weib ? "scale_S" : (logn ? "sigma_S" : "sv_S")) : -1;
+  const int ip2s = separate ? ci.at(weib ? "mean_S" : (logn ? "sigma_S" : "sv_S")) : -1;
   const int ip1t = separate ? ci.at(weib ? "shape_T" : (logn ? "mu_T" : "v_T")) : -1;
-  const int ip2t = separate ? ci.at(weib ? "scale_T" : (logn ? "sigma_T" : "sv_T")) : -1;
+  const int ip2t = separate ? ci.at(weib ? "mean_T" : (logn ? "sigma_T" : "sv_T")) : -1;
   const int idelta = split ? ci.at(separate ? "delta_S" : "delta") : -1;
   const int idelta_t = (split && separate) ? ci.at("delta_T") : -1;
   const int iA = ci.at("A"), it0 = ci.at("t0"), ik = ci.at("k");
@@ -755,7 +755,7 @@ Rcpp::List rbta_wl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_l
   const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   auto draw_launch = [&](double p1, double p2, double delta) {
-    if (weib) return R::rweibull(p1, p2);
+    if (weib) return rweibull_mean(p1, p2);
     if (launch == BTAWL_LAUNCH_LOGNORMAL)
       return R::rlnorm(p1, p2);
     if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
@@ -909,7 +909,7 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
 
 // BAwD simulator.  pars columns: b, A, t0, k, ell plus the launch pair, named
 // (v, sv) for launch = 0 (truncated normal), (mu, sigma) for launch = 1
-// (lognormal), or (shape, scale) for launch = 3 (Weibull). `launch` must be
+// (lognormal), or (shape, mean) for launch = 3 (Weibull). `launch` must be
 // the value BAwD() derived from its
 // drift_distribution argument -- the same one that reaches the likelihood as
 // ctx->bawd_launch -- or simulation and estimation describe different models.
@@ -932,8 +932,8 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawd_cpp: the split-lognormal launch requires a 'delta' column.");
-  if (weib && !(ci.count("shape") && ci.count("scale")))
-    Rcpp::stop("rbawd_cpp: the Weibull launch requires columns 'shape' and 'scale'.");
+  if (weib && !(ci.count("shape") && ci.count("mean")))
+    Rcpp::stop("rbawd_cpp: the Weibull launch requires columns 'shape' and 'mean'.");
   if (!logn && !weib && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawd_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -941,7 +941,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (const char* nm : {"b", "A", "t0", "k", "ell"})
     if (!ci.count(nm)) Rcpp::stop("rbawd_cpp: missing parameter column '%s'.", nm);
   const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("scale") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), iell = ci.at("ell");
@@ -955,7 +955,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
     const double V = weib
-      ? R::rweibull(pars(r, ip1), pars(r, ip2))
+      ? rweibull_mean(pars(r, ip1), pars(r, ip2))
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
@@ -975,9 +975,84 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// BAwDD simulator.  This is the no-clearance BAwD geometry: alpha = 1/rho is
+// a sampled non-negative row parameter, with alpha = 0 selecting the
+// exponential clock.
+// [[Rcpp::export]]
+Rcpp::List rbawdd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                      Rcpp::LogicalVector ok, int launch, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbawdd_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rbawdd_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool weib = (launch == 3);
+  const bool split = (launch == 2);
+  if (logn && !(ci.count("mu") && ci.count("sigma")))
+    Rcpp::stop("rbawdd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawdd_cpp: the split-lognormal launch requires a 'delta' column.");
+  if (weib && !(ci.count("shape") && ci.count("mean")))
+    Rcpp::stop("rbawdd_cpp: the Weibull launch requires columns 'shape' and 'mean'.");
+  if (!logn && !weib && !(ci.count("v") && ci.count("sv")))
+    Rcpp::stop("rbawdd_cpp: the normal launch requires columns 'v' and 'sv'.");
+  for (const char* nm : {"b", "A", "t0", "k", "ell", "alpha"})
+    if (!ci.count(nm)) Rcpp::stop("rbawdd_cpp: missing parameter column '%s'.", nm);
+  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
+  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int idelta = split ? ci.at("delta") : -1;
+  const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
+            ik = ci.at("k"), iell = ci.at("ell"), ialpha = ci.at("alpha");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const double V = weib
+      ? rweibull_mean(pars(r, ip1), pars(r, ip2))
+      : (split
+      ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
+      : (logn
+          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          : rtnorm_lower_r(pars(r, ip1), pars(r, ip2),
+                           posdrift ? 0.0 : R_NegInf)));
+    const double z = pars(r, iA) * R::unif_rand();
+
+    double rho_core;
+    double k_core = pars(r, ik);
+    const double ai = pars(r, ialpha);
+    if (ai == 0.0) {
+      rho_core = R_PosInf;
+    } else if (ai > 0.0 && !R_FINITE(ai)) {
+      rho_core = R_PosInf;
+      k_core = 0.0;
+    } else {
+      rho_core = 1.0 / ai;
+    }
+
+    const double u = bawd_hit_time_r(V, pars(r, ib) - z, k_core,
+                                      pars(r, iell), 0.0, rho_core);
+    dt[r] = (R_FINITE(u) && u >= 0.0)
+      ? emc2tw::inv(u, ieta >= 0 ? pars(r, ieta) : 0.0)
+      : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
 // BAwF simulator.  pars columns: b, A, t0, k plus the launch pair, named
 // (v, sv) for launch = 0 (truncated normal), (mu, sigma) for launch = 1
-// (lognormal), or (shape, scale) for launch = 3 (Weibull). There is no
+// (lognormal), or (shape, mean) for launch = 3 (Weibull). There is no
 // clearance column: the fading rate k is the only
 // dynamic parameter.  `launch` must be the value BAwF() derived from its
 // drift_distribution argument -- the same one that reaches the likelihood as
@@ -1001,8 +1076,8 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawf_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawf_cpp: the split-lognormal launch requires a 'delta' column.");
-  if (weib && !(ci.count("shape") && ci.count("scale")))
-    Rcpp::stop("rbawf_cpp: the Weibull launch requires columns 'shape' and 'scale'.");
+  if (weib && !(ci.count("shape") && ci.count("mean")))
+    Rcpp::stop("rbawf_cpp: the Weibull launch requires columns 'shape' and 'mean'.");
   if (!logn && !weib && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawf_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -1010,7 +1085,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (const char* nm : {"b", "A", "t0", "k"})
     if (!ci.count(nm)) Rcpp::stop("rbawf_cpp: missing parameter column '%s'.", nm);
   const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("scale") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k");
@@ -1024,7 +1099,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
     const double V = weib
-      ? R::rweibull(pars(r, ip1), pars(r, ip2))
+      ? rweibull_mean(pars(r, ip1), pars(r, ip2))
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
@@ -1045,7 +1120,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 }
 
 // BAwR simulator. The launch pair is (v, sv) for launch = 0, (mu, sigma) for
-// launch = 1, or (shape, scale) for launch = 3. Decay is in physical time only,
+// launch = 1, or (shape, mean) for launch = 3. Decay is in physical time only,
 // so the crossing needs the
 // distance b - z rather than b and z separately (contrast rbawf_cpp).
 // [[Rcpp::export]]
@@ -1065,8 +1140,8 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawr_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawr_cpp: the split-lognormal launch requires a 'delta' column.");
-  if (weib && !(ci.count("shape") && ci.count("scale")))
-    Rcpp::stop("rbawr_cpp: the Weibull launch requires columns 'shape' and 'scale'.");
+  if (weib && !(ci.count("shape") && ci.count("mean")))
+    Rcpp::stop("rbawr_cpp: the Weibull launch requires columns 'shape' and 'mean'.");
   if (!logn && !weib && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawr_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -1074,7 +1149,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (const char* nm : {"b", "A", "t0", "kappa", "p"})
     if (!ci.count(nm)) Rcpp::stop("rbawr_cpp: missing parameter column '%s'.", nm);
   const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("scale") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ika = ci.at("kappa"), ipw = ci.at("p");
@@ -1088,7 +1163,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
     const double V = weib
-      ? R::rweibull(pars(r, ip1), pars(r, ip2))
+      ? rweibull_mean(pars(r, ip1), pars(r, ip2))
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
@@ -1109,7 +1184,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 }
 
 // BAwDp simulator. The launch pair is (v, sv) for launch = 0, (mu, sigma) for
-// launch = 1, or (shape, scale) for launch = 3. The internal clock is monotone until its
+// launch = 1, or (shape, mean) for launch = 3. The internal clock is monotone until its
 // universal freeze time; the sampled LBA crossing is inverted on that clock.
 // [[Rcpp::export]]
 Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
@@ -1128,14 +1203,14 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawdp_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawdp_cpp: the split-lognormal launch requires a 'delta' column.");
-  if (weib && !(ci.count("shape") && ci.count("scale")))
-    Rcpp::stop("rbawdp_cpp: the Weibull launch requires columns 'shape' and 'scale'.");
+  if (weib && !(ci.count("shape") && ci.count("mean")))
+    Rcpp::stop("rbawdp_cpp: the Weibull launch requires columns 'shape' and 'mean'.");
   if (!logn && !weib && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawdp_cpp: the normal launch requires columns 'v' and 'sv'.");
   for (const char* nm : {"b", "A", "t0", "k", "lambda"})
     if (!ci.count(nm)) Rcpp::stop("rbawdp_cpp: missing parameter column '%s'.", nm);
   const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("scale") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
   const int ik = ci.at("k"), ilambda = ci.at("lambda");
@@ -1149,7 +1224,7 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
     const double V = weib
-      ? R::rweibull(pars(r, ip1), pars(r, ip2))
+      ? rweibull_mean(pars(r, ip1), pars(r, ip2))
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn

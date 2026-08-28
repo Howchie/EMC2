@@ -14,7 +14,7 @@ BTAwLTransient(
 
 \item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"}, or
 \code{"splitlognormal"} (continuous median-parameterised split-lognormal), or
-\code{"weibull"} (\code{V ~ Weibull(shape, scale)}).}
+\code{"weibull"} (\code{V ~ Weibull(shape, scale)} with public arithmetic \code{mean}).}
 }
 \value{
 A transient-only BTAwL race-model specification.
@@ -28,7 +28,7 @@ The transient wrapper uses the following parameter matrix:
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
-   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
@@ -48,7 +48,7 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 derived from the median condition, and \code{delta = 0} is exactly lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-With \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{scale}
+With \code{drift_distribution = "weibull"}, use positive \code{shape} and arithmetic \code{mean}
 instead of the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.

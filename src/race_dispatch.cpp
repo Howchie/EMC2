@@ -436,6 +436,34 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     if (!bawdp_logn && !bawdp_weib && type_std.find("IO") != std::string::npos)
       out.ctx.use_posdrift = false;
     out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
+  } else if (type_std.find("BAwDD") != std::string::npos) {
+    // BAwDD is BAwD at gamma = 0 with alpha = 1/rho sampled per row. Keep it
+    // ahead of the generic BAwD branch because its name contains "BAwD".
+    out.pdf1_ptr       = &dbawdd_scalar;
+    out.cdf1_ptr       = &pbawdd_scalar;
+    out.model_dfun_raw = &dbawdd_raw;
+    out.model_pfun_raw = &pbawdd_raw;
+    out.logS_at_t_ptr  = &bawdd_logS_at_t;
+    const bool bawdd_split = (type_std.find("_SPLIT") != std::string::npos);
+    const bool bawdd_logn = (type_std.find("_LOGN") != std::string::npos);
+    const bool bawdd_weib = (type_std.find("_WEIB") != std::string::npos);
+    out.col_spec = bawdd_split ? emc2col::bawddsplit::spec()
+                  : (bawdd_weib ? emc2col::bawdd_weib::spec()
+                                : (bawdd_logn ? emc2col::bawdd_logn::spec()
+                                              : emc2col::bawdd::spec()));
+    out.ctx.t0_index = bawdd_split ? int(emc2col::bawddsplit::t0)
+                                   : int(emc2col::bawdd::t0);
+    out.ctx.bawd_launch = bawdd_split ? BAWD_LAUNCH_SPLITLOGNORMAL
+                        : (bawdd_weib ? BAWD_LAUNCH_WEIBULL
+                                      : (bawdd_logn ? BAWD_LAUNCH_LOGNORMAL
+                                                    : BAWD_LAUNCH_NORMAL));
+    // The total drive clock is finite for some alpha values, so retain the
+    // defective-tail contract; for proper parameter rows the +Inf mass is
+    // exactly zero and the scalar survivor path handles that limit.
+    out.ctx.defective_upper_tail = true;
+    if (!bawdd_logn && !bawdd_weib && type_std.find("IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;   // operational-time warp
   } else if (type_std.find("BAwD") != std::string::npos) {
     // Dispatch is by substring, and "BAwD" is a substring of nothing here and
     // contains neither "BAwL" nor "LBA", so placement relative to those is

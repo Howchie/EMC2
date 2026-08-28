@@ -37,9 +37,9 @@ upper end of the start-point range to the threshold, so the kernel receives
    \emph{delta_S} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Sustained split-lognormal shape parameter (split-lognormal launch only). \cr
    \emph{delta_T} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Transient split-lognormal shape parameter (split-lognormal launch only). \cr
    \emph{shape_S} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape for the sustained channel (Weibull launch only). \cr
-   \emph{scale_S} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale for the sustained channel (Weibull launch only). \cr
+   \emph{mean_S} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean for the sustained channel (Weibull launch only). \cr
    \emph{shape_T} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape for the transient channel (Weibull launch only). \cr
-   \emph{scale_T} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale for the transient channel (Weibull launch only). \cr
+   \emph{mean_T} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean for the transient channel (Weibull launch only). \cr
    \emph{v_S} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength for the sustained channel (normal launch only). \cr
    \emph{sv_S} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength for the sustained channel (normal launch only). \cr
    \emph{v_T} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength for the transient channel (normal launch only). \cr
@@ -59,7 +59,7 @@ With \code{drift_distribution = "normal"}, use \code{v_S}, \code{sv_S}, \code{v_
 With \code{"lognormal"}, use the \code{mu_S}, \code{sigma_S}, \code{mu_T}, and \code{sigma_T} rows.
 With \code{"splitlognormal"}, each channel has its own \code{delta} parameter;
 \code{delta = 0} reduces that channel exactly to the lognormal launch.  With
-\code{drift_distribution = "weibull"}, use the positive \code{shape} and \code{scale}
+\code{drift_distribution = "weibull"}, use the positive \code{shape} and arithmetic \code{mean}
 rows.  Optional fitting parameters are \code{pContaminant} (omission
 probability) and \code{pGuess} (uniform-outlier probability).
 

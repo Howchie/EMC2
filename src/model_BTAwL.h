@@ -159,13 +159,13 @@ double log_btawl_cdf_normal(double t, const BtawlGeom& g, double v,
 double log_btawl_cdf_logn(double t, const BtawlGeom& g, double mu,
                                  double sigma, double delta = 0.0);
 double log_btawl_cdf_weib(double t, const BtawlGeom& g, double shape,
-                                  double scale);
+                                  double mean);
 double log_btawl_surv_normal(double t, const BtawlGeom& g, double v,
                                     double sv, bool posdrift);
 double log_btawl_surv_logn(double t, const BtawlGeom& g, double mu,
                                   double sigma, double delta = 0.0);
 double log_btawl_surv_weib(double t, const BtawlGeom& g, double shape,
-                                   double scale);
+                                   double mean);
 
 double btawl_cdf(double t, double A, double b, double p1, double p2,
                         double k, double tau, int launch, bool posdrift,

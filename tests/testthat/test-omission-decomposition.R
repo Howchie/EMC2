@@ -10,7 +10,7 @@ omx_test_values <- function(model) {
       k = log(.5), ell = log(.1), kappa = log(.5), p = log(1),
       lambda = qnorm(.5), tau = log(1), tau_s = log(1), tau_t = log(1),
       pi = qnorm(.5), mG = log(1), mK = log(1),
-      shape = log(1), scale = log(1), delta = 0,
+      shape = log(1), mean = log(1), delta = 0,
       eta = .2, s = log(1), alpha = qnorm(.7), beta = log(1),
       h = qnorm(.95),
       pContaminant = qnorm(.01), pGuess = qnorm(0),
@@ -54,6 +54,23 @@ test_that("decomposition retains newer BAwD options and finite UT", {
   expect_true("asymptotic_subthreshold" %in% out$summary$component)
   audit <- omission_mechanisms(emc)
   expect_true(isTRUE(audit$live[audit$mechanism == "censor_slow"]))
+})
+
+test_that("BAwD splits dead launches from the turnaround residual", {
+  emc <- omx_test_emc(function() BAwD("normal", gamma = .5, rho = 2),
+                       list(UC = Inf, UT = Inf))
+  out <- decompose_omissions(emc, stat = "mean")
+  expect_true(all(c("dead_launch", "asymptotic_subthreshold") %in%
+                  as.character(out$summary$component)))
+  expect_gt(out$draws$dead_launch, 0)
+  expect_gt(out$draws$asymptotic_subthreshold, 0)
+
+  prep <- EMC2:::.omx_prep(emc)
+  mech <- EMC2:::.omx_mechanisms(prep$model_list, prep$pars_ref)
+  split <- EMC2:::.omx_split_inf(prep$model_list, mech, prep$pars_ref,
+                                 nrow(prep$trial), prep$n_acc)
+  expect_equal(split$dead_launch + split$asymptotic_subthreshold,
+               split$residual, tolerance = 1e-12)
 })
 
 test_that("IO clock and leak mechanisms are separated", {

@@ -14,7 +14,7 @@
 
 # 0 = truncated normal launch (v, sv); 1 = lognormal launch (mu, sigma);
 # 2 = median-parameterised continuous split-lognormal launch (mu, sigma,
-# delta); 3 = Weibull launch (shape, scale).  Must match BAWD_LAUNCH_* in src/model_BAwD.h and the values the
+# delta); 3 = Weibull launch (shape, mean).  Must match BAWD_LAUNCH_* in src/model_BAwD.h and the values the
 # adapter puts in ctx->bawd_launch from the c_name suffix.
 
 # Split-normal geometry in log V.  The two half-normal widths have geometric
@@ -312,7 +312,7 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
     V <- if (launch == 3L) {
-      rweibull(nrow(p), p[, "shape"], p[, "scale"])
+      .rweibull_mean(nrow(p), p[, "shape"], p[, "mean"])
     } else if (launch == 1L) {
       rlnorm(nrow(p), p[, "mu"], p[, "sigma"])
     } else if (launch == 2L) {
@@ -388,7 +388,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
     V <- if (launch == 3L) {
-      rweibull(nrow(p), p[, nm[1]], p[, nm[2]])
+      .rweibull_mean(nrow(p), p[, nm[1]], p[, nm[2]])
     } else if (launch == 1L) {
       rlnorm(nrow(p), p[, nm[1]], p[, nm[2]])
     } else if (launch == 2L) {
@@ -450,7 +450,9 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' from these parameters so that `P(Y <= mu) = 1/2` exactly.  Setting `delta = 0`
 #' reduces exactly to the ordinary lognormal launch.
 #' With `drift_distribution = "weibull"`, `V ~ Weibull(shape, scale)` on the
-#' positive launch scale. The Weibull BAwD likelihood is closed form, including
+#' positive launch scale, parameterised publicly by its arithmetic `mean` and
+#' shape. The conventional scale is `mean / Gamma(1 + 1 / shape)`. The Weibull
+#' BAwD likelihood is closed form, including
 #' its finite-`Tmax` frozen branch.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
@@ -458,7 +460,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
 #' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean width of log launch. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
@@ -474,8 +476,8 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' `mu` and `sigma`; the normal launch is truncated at zero by default. The
 #' split-lognormal option adds the optional identity-scale `delta` parameter
 #' (default `0`).
-#' For `drift_distribution = "weibull"`, use positive `shape` and `scale`
-#' (both use log/exp transforms).
+#' For `drift_distribution = "weibull"`, use positive `shape` and arithmetic
+#' `mean` (both use log/exp transforms).
 #'
 #' **Operational-time warp.** `eta` is a trailing free parameter (identity
 #' transform, default `0`, unbounded on the natural scale) and is excluded from
@@ -528,9 +530,9 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   }
 
   if (weibull) {
-    p_types <- c("shape" = log(1), "scale" = log(1))
-    transform <- c(shape = "exp", scale = "exp")
-    minmax <- cbind(shape = c(1e-4, Inf), scale = c(1e-4, Inf))
+    p_types <- c("shape" = log(1), "mean" = log(1))
+    transform <- c(shape = "exp", mean = "exp")
+    minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
   } else if (lognormal) {
     p_types <- c("mu" = 0, "sigma" = log(1))
     transform <- c(mu = "identity", sigma = "exp")
@@ -634,15 +636,16 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
 #' \verb{sigma_R = sigma exp(-delta/2)}; `mu` is its exact median and `delta`
 #' is an unbounded log-width ratio.  The derived split point is chosen so that
 #' `P(Y <= mu) = 1/2`.  `delta = 0` is exactly the ordinary lognormal launch.
-#' With `drift_distribution = "weibull"`, `V ~ Weibull(shape, scale)`; the
-#' closed-form BAwDp likelihood uses positive `shape` and `scale` directly.
+#' With `drift_distribution = "weibull"`, `V ~ Weibull(shape, scale)` with
+#' public arithmetic `mean`; the conventional scale is derived internally and
+#' the closed-form BAwDp likelihood uses positive `shape` and `mean` directly.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
 #' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
@@ -654,7 +657,7 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
 #' lognormal launch rows; the normal launch is truncated at zero by default.
 #' The split-lognormal option adds the optional identity-scale `delta` parameter
 #' (default `0`).
-#' For `drift_distribution = "weibull"`, use `shape` and `scale` instead of
+#' For `drift_distribution = "weibull"`, use `shape` and `mean` instead of
 #' the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
@@ -692,9 +695,9 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"
   }
 
   if (weibull) {
-    p_types <- c(shape = log(1), scale = log(1))
-    transform <- c(shape = "exp", scale = "exp")
-    minmax <- cbind(shape = c(1e-4, Inf), scale = c(1e-4, Inf))
+    p_types <- c(shape = log(1), mean = log(1))
+    transform <- c(shape = "exp", mean = "exp")
+    minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
   } else if (lognormal) {
     p_types <- c(mu = 0, sigma = log(1))
     transform <- c(mu = "identity", sigma = "exp")

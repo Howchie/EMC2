@@ -4,12 +4,13 @@
       str(design_data, give.attr = FALSE)
     Output
       List of 15
-       $ Flist                  :List of 7
+       $ Flist                  :List of 8
         ..$ :Class 'formula'  language v ~ lM
         ..$ :Class 'formula'  language sv ~ lM
         ..$ :Class 'formula'  language B ~ E + lR
         ..$ :Class 'formula'  language t0 ~ E2 + CO
         ..$ :Class 'formula'  language A ~ 1
+        ..$ :Class 'formula'  language eta ~ 1
         ..$ :Class 'formula'  language pContaminant ~ 1
         ..$ :Class 'formula'  language pGuess ~ 1
        $ Ffactors               :List of 3
@@ -21,7 +22,7 @@
         ..$ v:List of 1
         .. ..$ lM: num [1:2, 1] -0.5 0.5
        $ matchfun               :function (d)  
-       $ constants              : Named num [1:4] 0 -Inf -Inf -Inf
+       $ constants              : Named num [1:5] 0 -Inf 0 -Inf -Inf
        $ Fcovariates            : chr "CO"
        $ Ffunctions             :List of 1
         ..$ E2:function (d)  

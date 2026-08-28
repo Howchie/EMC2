@@ -4,6 +4,7 @@ test_that("Weibull launch constructors expose a common positive parameterisation
   models <- list(
     BAwL = EMC2::BAwL(drift_distribution = "weibull"),
     BAwD = EMC2::BAwD(drift_distribution = "weibull"),
+    BAwDD = EMC2::BAwDD(drift_distribution = "weibull"),
     BAwDp = EMC2::BAwDp(drift_distribution = "weibull"),
     BAwF = EMC2::BAwF(drift_distribution = "weibull"),
     BAwR = EMC2::BAwR(drift_distribution = "weibull"),
@@ -13,7 +14,7 @@ test_that("Weibull launch constructors expose a common positive parameterisation
   )
   expect_true(all(vapply(models, function(m) grepl("_WEIB", m$c_name), logical(1))))
   expect_true(all(vapply(models, function(m)
-    identical(unname(m$p_types_canonical[1:2]), c("shape", "scale")), logical(1))))
+    identical(unname(m$p_types_canonical[1:2]), c("shape", "mean")), logical(1))))
   expect_true(all(vapply(models, function(m)
     identical(unname(m$transform$func[1:2]), c("exp", "exp")), logical(1))))
   expect_error(EMC2::BAwD(drift_distribution = "weibull", posdrift = FALSE), "posdrift")
@@ -30,13 +31,24 @@ test_that("Weibull launch constructors expose a common positive parameterisation
   expect_identical(EMC2::BTAwL()$drift_distribution, "lognormal")
 })
 
+test_that("Weibull launch mean is the arithmetic mean", {
+  shape <- 1.7
+  target_mean <- 2.4
+  scale <- target_mean / gamma(1 + 1 / shape)
+  expect_equal(EMC2:::.weibull_scale_from_mean(shape, target_mean), scale,
+               tolerance = 1e-14)
+  set.seed(20260828)
+  draws <- EMC2:::.rweibull_mean(100000L, shape, target_mean)
+  expect_equal(base::mean(draws), target_mean, tolerance = 0.02)
+})
+
 test_that("all Weibull ballistic simulators use the compiled default path", {
   skip_model_validation()
   n_trial <- 40L
   lR <- factor(rep(c("left", "right"), n_trial), levels = c("left", "right"))
   ok <- rep(TRUE, length(lR))
   make_common <- function(n = length(lR))
-    cbind(shape = rep(2, n), scale = rep(3, n), b = 1.2, A = .2,
+    cbind(shape = rep(2, n), mean = rep(3, n), b = 1.2, A = .2,
           t0 = .1, k = .2)
 
   cases <- list(
@@ -78,7 +90,8 @@ test_that("all Weibull ballistic simulators use the compiled default path", {
 
 test_that("Weibull BAwL closed form agrees with an independent start-point integral", {
   skip_model_validation()
-  shape <- 1.7; scale <- 2.4; A <- .35; b <- 1.4; k <- .3
+  shape <- 1.7; mean <- 2.4; A <- .35; b <- 1.4; k <- .3
+  scale <- mean / gamma(1 + 1 / shape)
   cdf_ref <- function(t) {
     integrate(function(z) {
       e <- exp(-k * t)
@@ -87,10 +100,10 @@ test_that("Weibull BAwL closed form agrees with an independent start-point integ
     }, 0, A, rel.tol = 1e-11)$value / A
   }
   tt <- c(.35, .6, .9)
-  got <- EMC2:::pleakyba(tt, A, b, shape, scale, k, TRUE, 3L)
+  got <- EMC2:::pleakyba(tt, A, b, shape, mean, k, TRUE, 3L)
   expect_equal(got, vapply(tt, cdf_ref, numeric(1)), tolerance = 2e-7)
   expect_true(all(diff(got) >= -1e-10))
-  expect_true(all(EMC2:::dleakyba(tt, A, b, shape, scale, k, TRUE, 3L) >= 0))
+  expect_true(all(EMC2:::dleakyba(tt, A, b, shape, mean, k, TRUE, 3L) >= 0))
 })
 
 test_that("Weibull CDF/PDF kernels are finite and monotone across ballistic families", {
@@ -102,10 +115,10 @@ test_that("Weibull CDF/PDF kernels are finite and monotone across ballistic fami
     BAwF = EMC2:::pbawf(tt, .5, 2, 2, 3, .2, 3L, TRUE, FALSE, Inf),
     BAwR = EMC2:::pbawr(tt, .5, 2, 2, 3, .2, 1.4, 3L, TRUE, FALSE),
     BTAwLTransient = EMC2:::pBTAwLTransient(
-      tt, data.frame(shape = rep(2, length(tt)), scale = 3, b = 2, A = .5,
+      tt, data.frame(shape = rep(2, length(tt)), mean = 3, b = 2, A = .5,
                      t0 = 0, k = .2, tau = .9), launch = 3L),
     BTAwLSustained = EMC2:::pBTAwLSustained(
-      tt, data.frame(shape = rep(2, length(tt)), scale = 3, b = 2, A = .5,
+      tt, data.frame(shape = rep(2, length(tt)), mean = 3, b = 2, A = .5,
                      t0 = 0, k = .2, tau_s = .9), launch = 3L)
   )
   for (x in p) {

@@ -1,5 +1,8 @@
 #include "model_BAwD.h"
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <utility>
 #include "race_contract.h"
 #include "utility_functions.h"
 #include "col_registry.h"
@@ -103,16 +106,93 @@ double bawd_newton_s(double c, const BawdGeom& g) {
   return s;
 }
 
+namespace {
+
+// Locating the saturation boundary -- the start point whose trajectory just
+// peaks at threshold -- is the only iterative step in the whole BAwD geometry:
+// psi(x) = c is transcendental (a generalised Lambert equation at gamma = 0),
+// so y_0 and y_A come from a safeguarded Newton solve.  It is also where the
+// time goes once ell > 0, because bawd_geometry() is rebuilt for every dadm
+// row while rows inside a design cell share (A, b, k, ell, rho) and so
+// re-solve the identical equation trial after trial.  The solve reads nothing
+// from the geometry but rho and gamma, so it is a pure function of
+// (c, rho, gamma) and can be memoised on exactly that key.
+//
+// Set-associative rather than a scanned list so that the miss path stays O(1):
+// a trend on any geometry parameter makes every row a distinct key, and that
+// case must not pay for the cache it cannot use.  Two ways per set under plain
+// LRU (way 0 is the most recent), which is what keeps the y_0/y_A pair of a
+// single cell resident even when the two hash into the same set.
+// thread_local for the same reason as the GL rule cache in gl_quad.h.
+class BawdSaturationCache {
+ public:
+  double get(double c, const BawdGeom& g) {
+    // g.rho is R_PosInf whenever g.rho_inf, so rho alone separates the finite
+    // kernel from the exponential one.  Keys are compared as exact bit
+    // patterns, which the infinite endpoints round-trip through unchanged;
+    // NaN never compares equal and so simply misses.
+    Entry* set = e_[index(c, g.rho, g.gamma)];
+    if (set[0].matches(c, g)) return set[0].x;
+    if (set[1].matches(c, g)) {
+      std::swap(set[0], set[1]);
+      return set[0].x;
+    }
+    const double x = bawd_newton_s(c, g);
+    set[1] = set[0];
+    set[0] = Entry{c, g.rho, g.gamma, x};
+    return x;
+  }
+
+ private:
+  struct Entry {
+    double c = R_NaN, rho = R_NaN, gamma = R_NaN, x = R_NaN;
+    bool matches(double cc, const BawdGeom& g) const {
+      return c == cc && rho == g.rho && gamma == g.gamma;
+    }
+  };
+  static constexpr int SETS = 128;  // power of two: index() masks
+  static constexpr int WAYS = 2;
+
+  // FNV-1a over the three key words, then the murmur3 finalizer.  The
+  // finalizer is not optional: the parameters that separate two cells often
+  // differ in low mantissa bits only, and raw FNV leaves those unmixed -- with
+  // it dropped, 7 of the 16 keys from an 8-cell design collide into one set.
+  static int index(double c, double rho, double gamma) {
+    const double key[3] = {c, rho, gamma};
+    std::uint64_t h = 1469598103934665603ull;
+    for (int i = 0; i < 3; ++i) {
+      std::uint64_t bits;
+      std::memcpy(&bits, &key[i], sizeof(bits));
+      h = (h ^ bits) * 1099511628211ull;
+    }
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return static_cast<int>(h & (SETS - 1));
+  }
+
+  Entry e_[SETS][WAYS];
+};
+
+double bawd_saturation_x(double c, const BawdGeom& g) {
+  static thread_local BawdSaturationCache cache;
+  return cache.get(c, g);
+}
+
+}  // namespace
+
 bool bawd_shape_flags(BawdGeom& g, double gamma, double rho) {
   if (!emc2_isfinite(gamma) || gamma < 0.0 || gamma > 1.0) return false;
   if (ISNAN(rho)) return false;
   g.rho_inf = (rho == 0.0) || (rho > 0.0 && !R_FINITE(rho));
   if (!g.rho_inf) {
-    if (!(rho >= 1.0)) return false;
+    if (!(rho > 0.0)) return false;
     g.rho = rho;
     g.rho_one = std::fabs(rho - 1.0) <= 1e-12;
     g.m_shape = rho * (1.0 - gamma);
-    g.kq_inf = g.rho_one ? R_PosInf : rho / (rho - 1.0);
+    // Treat the numerical rho=1 neighbourhood as the logarithmic branch,
+    // including values just above one; rho<1 also has an unbounded clock.
+    g.kq_inf = (g.rho_one || rho < 1.0) ? R_PosInf : rho / (rho - 1.0);
   } else {
     g.rho = R_PosInf;
     g.m_shape = R_PosInf;
@@ -147,9 +227,16 @@ BawdGeom bawd_geometry(double A, double b, double k, double ell,
   g.ok = true; g.b = b; g.A = A; g.k = k; g.ell = ell;
   g.k_zero = (k <= BAWD_K_EPS);
   g.ell_zero = (ell <= BAWD_ELL_EPS);
+  // rho < 1 needs no special case.  psi is strictly increasing in x with
+  // dpsi/dL = rho^2 omega (e^{rho omega L} - e^{(1 - rho gamma) L}) / (rho - 1)
+  // > 0 for every rho > 0, and for gamma < 1 the clearance term e^{(1 - rho
+  // gamma) L} always outruns the drive term e^{(1 - rho) L}, so psi is
+  // unbounded and T_max stays finite on both sides of rho = 1.  The frozen
+  // closed forms carry the sign of rho - 1 explicitly (see
+  // bawd_log_frozen_logn / bawd_log_frozen_weib).
   if (g.k_zero || g.ell_zero || g.gamma_one) return g;
-  g.y_0 = bawd_newton_s(k * b / ell, g);
-  g.y_A = (b > A) ? bawd_newton_s(k * (b - A) / ell, g) : 0.0;
+  g.y_0 = bawd_saturation_x(k * b / ell, g);
+  g.y_A = (b > A) ? bawd_saturation_x(k * (b - A) / ell, g) : 0.0;
   g.T_max = g.y_0 / k;
   g.T_sat_A = g.y_A / k;
   g.V_c0 = !g.rho_inf
@@ -356,21 +443,32 @@ double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
       }
       return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
     }
+    // In w = ell exp(rho omega L) coordinates the frozen mass is
+    //   (rho / (k (rho - 1))) int_{w_a}^{w_b} [1 - (ell/w)^beta] Gbar(w) dw,
+    // beta = frozen_alpha = (rho - 1)/(rho omega).  beta and rho - 1 change
+    // sign together at rho = 1, so the product is positive on both sides; only
+    // which of L0 and L1 is the larger term flips.  L0 is the plain survivor
+    // integral, L1 the beta-weighted one.
     const double lc_a = log_lognormal_stoploss(w_a, mu, sigma);
     const double lc_b = log_lognormal_stoploss(w_b, mu, sigma);
     if (lc_a - lc_b > BAWD_MIN_LOG_GAP) {
       const double L0 = log_diff_exp(lc_a, lc_b);
       const double lam_a = log_lognormal_power_stoploss(w_a, mu, sigma, g.frozen_m);
       const double lam_b = log_lognormal_power_stoploss(w_b, mu, sigma, g.frozen_m);
-      const double L1 = g.frozen_alpha * log_ell + log_diff_exp(lam_a, lam_b);
-      if (emc2_isfinite(L0)) {
-        const double d = L1 - L0;
+      const double lam_d = (lam_a - lam_b > BAWD_MIN_LOG_GAP)
+        ? log_diff_exp(lam_a, lam_b) : R_NegInf;
+      const double L1 = ISNAN(lam_d) ? R_NaN : g.frozen_alpha * log_ell + lam_d;
+      const bool hi_is_L0 = g.rho > 1.0;
+      const double Lhi = hi_is_L0 ? L0 : L1;
+      const double Llo = hi_is_L0 ? L1 : L0;
+      const double log_pref = std::log(g.rho) - std::log(g.k) -
+        std::log(std::fabs(g.rho - 1.0));
+      if (emc2_isfinite(Lhi) && !ISNAN(Llo)) {
+        const double d = Llo - Lhi;
         if (d < 0.0 && -std::expm1(d) > 1e-6)
-          return std::log(g.rho) - std::log(g.k) -
-            std::log(g.rho - 1.0) + L0 + log1m_exp(d);
-        if (!(L1 > R_NegInf))
-          return std::log(g.rho) - std::log(g.k) -
-            std::log(g.rho - 1.0) + L0;
+          return log_pref + Lhi + log1m_exp(d);
+        if (!(Llo > R_NegInf))
+          return log_pref + Lhi;
       }
     }
     return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
@@ -412,65 +510,69 @@ double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
 }
 
 double bawd_log_frozen_weib_quad(const BawdGeom& g, double s_lo, double s_hi,
-                                 double shape, double scale, bool survivor) {
-  if (!(s_hi > s_lo) || !weibull_valid(shape, scale)) return R_NegInf;
+                                 double shape, double mean, bool survivor) {
+  if (!(s_hi > s_lo) || !weibull_valid(shape, mean)) return R_NegInf;
+  const double log_scale = weibull_log_scale(shape, mean);
   const auto lf = [&](double x) -> double {
     const double w = bawd_critical_launch(g, x);
-    const double lp = survivor ? log_weibull_survivor(w, shape, scale)
-                               : log_weibull_cdf(w, shape, scale);
+    const double lp = survivor ? log_weibull_survivor(w, shape, mean)
+                               : log_weibull_cdf(w, shape, mean);
     if (!(lp > R_NegInf)) return R_NegInf;
     if (!g.rho_inf)
       return bawd_log_psi_prime(g, x) + lp;
     const double e1 = std::expm1(x);
     return (e1 > 0.0) ? std::log(e1) - g.gamma * x + lp : R_NegInf;
   };
-  const double mid = (scale > 0.0 && g.ell > 0.0)
-    ? std::log(scale / g.ell) : s_lo;
+  const double mid = (g.ell > 0.0 && emc2_isfinite(log_scale))
+    ? log_scale - std::log(g.ell) : s_lo;
   const double out = bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES);
   return out + (g.rho_inf ? std::log1p(-g.gamma) : 0.0) +
     std::log(g.ell) - std::log(g.k);
 }
 
 double bawd_log_frozen_weib(const BawdGeom& g, double s_lo, double s_hi,
-                            double shape, double scale) {
-  if (!(s_hi > s_lo) || !weibull_valid(shape, scale)) return R_NegInf;
+                            double shape, double mean) {
+  if (!(s_hi > s_lo) || !weibull_valid(shape, mean)) return R_NegInf;
   const double wa = bawd_critical_launch(g, s_lo);
   const double wb = bawd_critical_launch(g, s_hi);
   if (!(wb > wa) || !emc2_isfinite(wb) || !(g.k > 0.0) || !(g.ell > 0.0))
-    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, mean, true);
   const double log_ell = std::log(g.ell);
   if (g.rho_one) {
-    const double ta = log_weibull_logratio_stoploss(wa, shape, scale, log_ell);
-    const double tb = log_weibull_logratio_stoploss(wb, shape, scale, log_ell);
+    const double ta = log_weibull_logratio_stoploss(wa, shape, mean, log_ell);
+    const double tb = log_weibull_logratio_stoploss(wb, shape, mean, log_ell);
     if (ta - tb > BAWD_MIN_LOG_GAP) {
       const double td = log_diff_exp(ta, tb);
       if (td > R_NegInf)
         return -std::log(g.k) - std::log1p(-g.gamma) + td;
     }
-    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, mean, true);
   }
-  const double lca = log_weibull_stoploss(wa, shape, scale);
-  const double lcb = log_weibull_stoploss(wb, shape, scale);
+  // Same bracket as the lognormal branch: beta = frozen_alpha and rho - 1
+  // share a sign, so rho < 1 only swaps which of L0 and L1 leads.
+  const double lca = log_weibull_stoploss(wa, shape, mean);
+  const double lcb = log_weibull_stoploss(wb, shape, mean);
   if (lca - lcb > BAWD_MIN_LOG_GAP) {
     const double L0 = log_diff_exp(lca, lcb);
-    const double la = log_weibull_power_stoploss(wa, shape, scale, g.frozen_m);
-    const double lb = log_weibull_power_stoploss(wb, shape, scale, g.frozen_m);
+    const double la = log_weibull_power_stoploss(wa, shape, mean, g.frozen_m);
+    const double lb = log_weibull_power_stoploss(wb, shape, mean, g.frozen_m);
     const double dl = (la - lb > BAWD_MIN_LOG_GAP) ? log_diff_exp(la, lb) : R_NegInf;
-    const double L1 = g.frozen_alpha * log_ell + dl;
-    if (L0 > R_NegInf) {
-      const double d = L1 - L0;
+    const double L1 = ISNAN(dl) ? R_NaN : g.frozen_alpha * log_ell + dl;
+    const bool hi_is_L0 = g.rho_inf || g.rho > 1.0;
+    const double Lhi = hi_is_L0 ? L0 : L1;
+    const double Llo = hi_is_L0 ? L1 : L0;
+    const double log_pref = g.rho_inf
+      ? -std::log(g.k)
+      : std::log(g.rho) - std::log(g.k) - std::log(std::fabs(g.rho - 1.0));
+    if (Lhi > R_NegInf && !ISNAN(Lhi) && !ISNAN(Llo)) {
+      const double d = Llo - Lhi;
       if (d < 0.0 && -std::expm1(d) > 1e-6)
-        return (g.rho_inf
-          ? -std::log(g.k)
-          : std::log(g.rho) - std::log(g.k) - std::log(g.rho - 1.0)) +
-          L0 + log1m_exp(d);
-      if (!(L1 > R_NegInf))
-        return (g.rho_inf
-          ? -std::log(g.k)
-          : std::log(g.rho) - std::log(g.k) - std::log(g.rho - 1.0)) + L0;
+        return log_pref + Lhi + log1m_exp(d);
+      if (!(Llo > R_NegInf))
+        return log_pref + Lhi;
     }
   }
-  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, mean, true);
 }
 
 double log_bawd_cdf_normal(double u, const BawdGeom& g, double v,
@@ -549,24 +651,24 @@ double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu,
 }
 
 double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape,
-                         double scale) {
-  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0)) return R_NegInf;
+                         double mean) {
+  if (!g.ok || !weibull_valid(shape, mean) || !(u > 0.0)) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok) return R_NegInf;
   // Avoid cancellation when the CDF is close to one.
-  const double lsurv = log_bawd_surv_weib(u, g, shape, scale);
+  const double lsurv = log_bawd_surv_weib(u, g, shape, mean);
   if (lsurv < 0.0 && emc2_isfinite(lsurv))
     return std::log(-std::expm1(lsurv));
-  const auto lg = [&](double w) { return log_weibull_survivor(w, shape, scale); };
+  const auto lg = [&](double w) { return log_weibull_survivor(w, shape, mean); };
   if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
   double live = R_NegInf;
   if (s.Z > 0.0) {
-    const double a = log_weibull_stoploss(s.w_lo, shape, scale);
-    const double b = log_weibull_stoploss(s.w_hi, shape, scale);
+    const double a = log_weibull_stoploss(s.w_lo, shape, mean);
+    const double b = log_weibull_stoploss(s.w_hi, shape, mean);
     if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
     if (!(live > R_NegInf)) live = std::log(s.Z) + lg(0.5 * (s.w_lo + s.w_hi));
   }
-  const double frozen = s.partial ? bawd_log_frozen_weib(g, s.s_lo, s.s_hi, shape, scale) : R_NegInf;
+  const double frozen = s.partial ? bawd_log_frozen_weib(g, s.s_lo, s.s_hi, shape, mean) : R_NegInf;
   const double out = log_sum_exp(live, frozen) - std::log(g.A);
   return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
@@ -694,27 +796,27 @@ double log_bawd_surv_logn(double u, const BawdGeom& g, double mu,
 }
 
 double bawd_log_frozen_surv_weib(const BawdGeom& g, double s_lo, double s_hi,
-                                 double shape, double scale) {
-  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, false);
+                                 double shape, double mean) {
+  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, mean, false);
 }
 
 double log_bawd_surv_weib(double u, const BawdGeom& g, double shape,
-                          double scale) {
-  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0)) return R_NegInf;
+                          double mean) {
+  if (!g.ok || !weibull_valid(shape, mean) || !(u > 0.0)) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok) return R_NegInf;
-  const auto lg = [&](double w) { return log_weibull_cdf(w, shape, scale); };
+  const auto lg = [&](double w) { return log_weibull_cdf(w, shape, mean); };
   if (u == R_PosInf && g.k_zero) return std::fmin(lg(s.w_hi), 0.0);
   if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
   double live = R_NegInf;
   if (s.Z > 0.0) {
-    const double a = log_weibull_put(s.w_hi, shape, scale);
-    const double b = log_weibull_put(s.w_lo, shape, scale);
+    const double a = log_weibull_put(s.w_hi, shape, mean);
+    const double b = log_weibull_put(s.w_lo, shape, mean);
     if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
     if (!(live > R_NegInf)) live = std::log(s.Z) + lg(0.5 * (s.w_hi + s.w_lo));
   }
   const double frozen = (s.partial && !g.gamma_one)
-    ? bawd_log_frozen_surv_weib(g, s.s_lo, s.s_hi, shape, scale) : R_NegInf;
+    ? bawd_log_frozen_surv_weib(g, s.s_lo, s.s_hi, shape, mean) : R_NegInf;
   const double out = log_sum_exp(live, frozen) - std::log(g.A);
   return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
@@ -859,18 +961,18 @@ double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
 }
 
 double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape,
-                         double scale) {
-  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
+                         double mean) {
+  if (!g.ok || !weibull_valid(shape, mean) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok || s.saturated) return R_NegInf;
   if (g.A <= BAWD_A_EPS) {
     const double wgt = g.ell_zero ? s.E_g * (s.w_hi * s.E_rel)
       : s.E_g * (s.w_hi * s.E_rel - g.ell);
-    const double ld = log_weibull_density(s.w_hi, shape, scale);
+    const double ld = log_weibull_density(s.w_hi, shape, mean);
     return (wgt > 0.0 && ld > R_NegInf) ? ld + std::log(wgt) - std::log(s.q) : R_NegInf;
   }
-  const double lm = log_weibull_mass_interval(s.w_lo, s.w_hi, shape, scale);
-  const double l1 = log_weibull_first_interval(s.w_lo, s.w_hi, shape, scale);
+  const double lm = log_weibull_mass_interval(s.w_lo, s.w_hi, shape, mean);
+  const double l1 = log_weibull_first_interval(s.w_lo, s.w_hi, shape, mean);
   if (!(lm > R_NegInf) || !(l1 > R_NegInf)) return R_NegInf;
   const signed_log t1 = signed_log_product(s.E_rel, l1);
   const signed_log t2 = signed_log_product(g.ell, lm);
@@ -1332,6 +1434,62 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
   return out;
 }
 
+// BAwDD is the gamma = 0 member of the BAwD geometry with alpha = 1/rho
+// sampled on the natural scale: alpha = 0 is the exponential limit, and
+// every positive alpha -- above as well as below 1 -- maps to the shared
+// BAwD power-law kernel.
+// [[Rcpp::export]]
+NumericVector dbawdd(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector ell, NumericVector alpha,
+                     int launch = 1, bool posdrift = true,
+                     bool log_out = false, NumericVector delta = 0.0) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const double ai = pick(alpha, i);
+    const bool alpha_inf = ai > 0.0 && !emc2_isfinite(ai);
+    const bool alpha_bad = ISNAN(ai) || ai < 0.0;
+    const double ki = alpha_inf ? 0.0 : pick(k, i);
+    const double rcore = alpha_bad ? R_NaN
+      : ((ai == 0.0 || alpha_inf) ? R_PosInf : 1.0 / ai);
+    out[i] = bawd_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                           pick(p2, i), ki, pick(ell, i), launch, posdrift, log_out,
+                           0.0, rcore, BAWD_DENOM_FLOOR,
+                           pick(delta, i));
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbawdd(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector ell, NumericVector alpha,
+                     int launch = 1, bool posdrift = true,
+                     bool log_out = false, NumericVector delta = 0.0) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const double ai = pick(alpha, i);
+    const bool alpha_inf = ai > 0.0 && !emc2_isfinite(ai);
+    const bool alpha_bad = ISNAN(ai) || ai < 0.0;
+    const double ki = alpha_inf ? 0.0 : pick(k, i);
+    const double rcore = alpha_bad ? R_NaN
+      : ((ai == 0.0 || alpha_inf) ? R_PosInf : 1.0 / ai);
+    out[i] = bawd_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                           pick(p2, i), ki, pick(ell, i), launch, posdrift, log_out,
+                           0.0, rcore, BAWD_DENOM_FLOOR,
+                           pick(delta, i));
+  }
+  return out;
+}
+
 // [[Rcpp::export]]
 double dbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
@@ -1568,6 +1726,242 @@ void bawd_logS_at_t(double t, const double* const* cols,
     logS_out[j] = bad ? R_NegInf : logS;
   }
 }
+
+// --------------------------------------------------------------------------
+// BAwDD (BAwD at gamma = 0 with row-wise alpha = 1/rho, ell sampled)
+// --------------------------------------------------------------------------
+
+namespace {
+
+inline void bawdd_core_args(double k, double alpha, double& k_core,
+                            double& rho_core) {
+  // alpha = 0 is the exponential limit (rho = Inf).  Infinite alpha is an
+  // optional no-decay endpoint; represent it with k = 0 in shared geometry.
+  if (ISNAN(alpha) || alpha < 0.0) {
+    k_core = k;
+    rho_core = R_NaN;
+    return;
+  }
+  const bool alpha_inf = alpha > 0.0 && !emc2_isfinite(alpha);
+  if (alpha == 0.0) {
+    k_core = k;
+    rho_core = R_PosInf;
+  } else if (alpha_inf) {
+    k_core = 0.0;
+    rho_core = R_PosInf;
+  } else {
+    k_core = k;
+    rho_core = 1.0 / alpha;
+  }
+}
+
+inline int bawdd_launch_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_launch : BAWD_LAUNCH_LOGNORMAL;
+}
+
+inline void bawdd_indices(int launch, int& ip1, int& ip2, int& iB, int& iA,
+                          int& it0, int& ik, int& iell, int& ialpha, int& idelta) {
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const bool weib = launch == BAWD_LAUNCH_WEIBULL;
+  if (split) {
+    ip1 = emc2col::bawddsplit::mu;
+    ip2 = emc2col::bawddsplit::sigma;
+    iB = emc2col::bawddsplit::B;
+    iA = emc2col::bawddsplit::A;
+    it0 = emc2col::bawddsplit::t0;
+    ik = emc2col::bawddsplit::k;
+    iell = emc2col::bawddsplit::ell;
+    ialpha = emc2col::bawddsplit::alpha;
+    idelta = emc2col::bawddsplit::delta;
+  } else if (weib) {
+    ip1 = emc2col::bawdd_weib::shape;
+    ip2 = emc2col::bawdd_weib::mean;
+    iB = emc2col::bawdd_weib::B;
+    iA = emc2col::bawdd_weib::A;
+    it0 = emc2col::bawdd_weib::t0;
+    ik = emc2col::bawdd_weib::k;
+    iell = emc2col::bawdd_weib::ell;
+    ialpha = emc2col::bawdd_weib::alpha;
+    idelta = -1;
+  } else if (launch == BAWD_LAUNCH_LOGNORMAL) {
+    ip1 = emc2col::bawdd_logn::mu;
+    ip2 = emc2col::bawdd_logn::sigma;
+    iB = emc2col::bawdd_logn::B;
+    iA = emc2col::bawdd_logn::A;
+    it0 = emc2col::bawdd_logn::t0;
+    ik = emc2col::bawdd_logn::k;
+    iell = emc2col::bawdd_logn::ell;
+    ialpha = emc2col::bawdd_logn::alpha;
+    idelta = -1;
+  } else {
+    ip1 = emc2col::bawdd::v;
+    ip2 = emc2col::bawdd::sv;
+    iB = emc2col::bawdd::B;
+    iA = emc2col::bawdd::A;
+    it0 = emc2col::bawdd::t0;
+    ik = emc2col::bawdd::k;
+    iell = emc2col::bawdd::ell;
+    ialpha = emc2col::bawdd::alpha;
+    idelta = -1;
+  }
+}
+
+}  // namespace
+
+double dbawdd_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = bawdd_launch_of(ctx);
+  int ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta;
+  bawdd_indices(launch, ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta);
+  if (R_IsNA(par[ip1])) return 0.0;
+  const double tt = t - par[it0];
+  if (t <= 0.0 || !(tt > 0.0)) return 0.0;
+  double k_core, rho_core;
+  bawdd_core_args(par[ik], par[ialpha], k_core, rho_core);
+  const double delta = (idelta >= 0) ? par[idelta] : 0.0;
+  return bawd_pdf_scalar_natural(
+    tt, par[iA], par[iB] + par[iA], par[ip1], par[ip2], k_core, par[iell],
+    launch, ctx ? ctx->use_posdrift : true, 0.0, rho_core, delta);
+}
+
+double pbawdd_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = bawdd_launch_of(ctx);
+  int ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta;
+  bawdd_indices(launch, ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta);
+  if (R_IsNA(par[ip1])) return 0.0;
+  const double tt = t - par[it0];
+  if (t <= 0.0 || !(tt > 0.0)) return 0.0;
+  double k_core, rho_core;
+  bawdd_core_args(par[ik], par[ialpha], k_core, rho_core);
+  const double delta = (idelta >= 0) ? par[idelta] : 0.0;
+  return bawd_cdf_scalar_natural(
+    tt, par[iA], par[iB] + par[iA], par[ip1], par[ip2], k_core, par[iell],
+    launch, ctx ? ctx->use_posdrift : true, 0.0, rho_core, delta);
+}
+
+void dbawdd_raw(const double* rt, const double* const* cols, int n_rows,
+                const int* mask, const int* isok,
+                double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawdd_launch_of(ctx);
+  int ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta;
+  bawdd_indices(launch, ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta);
+  const double* p1 = cols[ip1];
+  const double* p2 = cols[ip2];
+  const double* B = cols[iB];
+  const double* A = cols[iA];
+  const double* t0 = cols[it0];
+  const double* k = cols[ik];
+  const double* ell = cols[iell];
+  const double* alpha = cols[ialpha];
+  const double* delta = idelta >= 0 ? cols[idelta] : nullptr;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1[i]) || !isok[i]) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double tt = rt[i] - t0[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    double k_core, rho_core;
+    bawdd_core_args(k[i], alpha[i], k_core, rho_core);
+    const double lp = bawd_log_pdf(
+      tt, A[i], B[i] + A[i], p1[i], p2[i], k_core, ell[i], launch, pd,
+      0.0, rho_core, BAWD_DENOM_FLOOR, delta ? delta[i] : 0.0);
+    out[i] = (lp > R_NegInf && emc2_isfinite(lp))
+      ? raw_log_value(lp, min_ll, floor_raw)
+      : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+void pbawdd_raw(const double* rt, const double* const* cols, int n_rows,
+                const int* mask, const int* isok,
+                double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawdd_launch_of(ctx);
+  int ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta;
+  bawdd_indices(launch, ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta);
+  const double* p1 = cols[ip1];
+  const double* p2 = cols[ip2];
+  const double* B = cols[iB];
+  const double* A = cols[iA];
+  const double* t0 = cols[it0];
+  const double* k = cols[ik];
+  const double* ell = cols[iell];
+  const double* alpha = cols[ialpha];
+  const double* delta = idelta >= 0 ? cols[idelta] : nullptr;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
+    double k_core, rho_core;
+    bawdd_core_args(k[i], alpha[i], k_core, rho_core);
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawd(
+          tt, A[i], B[i] + A[i], p1[i], p2[i], k_core, ell[i], launch,
+          pd, 0.0, rho_core, BAWD_DENOM_FLOOR, BA_ACCEPT_RAW, cdf,
+          delta ? delta[i] : 0.0)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = bawd_log_surv(
+        tt, A[i], B[i] + A[i], p1[i], p2[i], k_core, ell[i], launch, pd,
+        0.0, rho_core, BAWD_DENOM_FLOOR, delta ? delta[i] : 0.0);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
+  }
+}
+
+void bawdd_logS_at_t(double t, const double* const* cols,
+                     int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                     const int* trunc_mask, int n_unique_trials,
+                     const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawdd_launch_of(ctx);
+  int ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta;
+  bawdd_indices(launch, ip1, ip2, iB, iA, it0, ik, iell, ialpha, idelta);
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int a = 0; a < n_lR && !bad; ++a) {
+      const int r = start + a;
+      if (!isok_all[r] || R_IsNA(cols[ip1][r])) { bad = true; break; }
+      const double tt = t - cols[it0][r];
+      if (!(tt > 0.0)) continue;
+      double k_core, rho_core;
+      bawdd_core_args(cols[ik][r], cols[ialpha][r], k_core, rho_core);
+      const double delta = idelta >= 0 ? cols[idelta][r] : 0.0;
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawd(
+            tt, cols[iA][r], cols[iB][r] + cols[iA][r], cols[ip1][r],
+            cols[ip2][r], k_core, cols[iell][r], launch, pd, 0.0, rho_core,
+            BAWD_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, delta)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double ls = bawd_log_surv(
+          tt, cols[iA][r], cols[iB][r] + cols[iA][r], cols[ip1][r],
+          cols[ip2][r], k_core, cols[iell][r], launch, pd, 0.0, rho_core,
+          BAWD_DENOM_FLOOR, delta);
+        if (!(ls > R_NegInf) || ISNAN(ls)) { bad = true; break; }
+        logS += ls;
+      }
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
 // ============================================================
 // BAwDp (proportional-clearance drive clock)
 // ============================================================

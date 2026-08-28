@@ -459,6 +459,18 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
 .ba_par_names <- function(launch) {
   if (launch == 1L) c("mu", "sigma")
   else if (launch == 2L) c("mu", "sigma", "delta")
-  else if (launch == 3L) c("shape", "scale")
+  else if (launch == 3L) c("shape", "mean")
   else c("v", "sv")
+}
+
+# Weibull launch parameters use the shape and arithmetic mean.  R's
+# `rweibull()` and the C++ kernels use the usual scale internally, so keep the
+# conversion in one place.  Working on the log scale avoids overflowing the
+# gamma function for the small shapes allowed by the model bounds.
+.weibull_scale_from_mean <- function(shape, mean) {
+  exp(log(mean) - lgamma(1 + 1 / shape))
+}
+
+.rweibull_mean <- function(n, shape, mean) {
+  rweibull(n, shape, .weibull_scale_from_mean(shape, mean))
 }

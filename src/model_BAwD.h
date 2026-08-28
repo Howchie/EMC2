@@ -124,7 +124,7 @@ double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo, double s_hi,
 double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
                             double mu, double sigma, double delta = 0.0);
 double bawd_log_frozen_weib(const BawdGeom& g, double s_lo, double s_hi,
-                            double shape, double scale);
+                            double shape, double mean);
 double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu, double sigma,
                          double delta = 0.0);
 double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo, double s_hi,
@@ -140,9 +140,9 @@ double log_bawd_pdf_normal(double u, const BawdGeom& g, double v, double sv,
                            bool posdrift, double denom_floor);
 double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu, double sigma,
                          double delta = 0.0);
-double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape, double scale);
-double log_bawd_surv_weib(double u, const BawdGeom& g, double shape, double scale);
-double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape, double scale);
+double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape, double mean);
+double log_bawd_surv_weib(double u, const BawdGeom& g, double shape, double mean);
+double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape, double mean);
 bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v, double sv,
                              bool posdrift, double denom_floor, int accept_mode,
                              double &cdf);
@@ -205,6 +205,23 @@ void bawd_logS_at_t(double t, const double* const* cols,
                     int n_rows_total, int n_lR, int n_par,
                     const int* trunc_mask, int n_unique_trials,
                     const int* isok_all, void* ctx_, double* logS_out);
+
+// BAwDD race-model adapter entry points.  BAwDD is the gamma = 0 member of
+// the same geometry, with alpha = 1/rho read from the final required parameter
+// column and no upper bound on alpha.
+double dbawdd_scalar(double t, const double* par, void* ctx_);
+double pbawdd_scalar(double t, const double* par, void* ctx_);
+void dbawdd_raw(const double* rt, const double* const* cols, int n_rows,
+                const int* mask, const int* isok,
+                double* out, double min_ll, void* ctx_);
+void pbawdd_raw(const double* rt, const double* const* cols, int n_rows,
+                const int* mask, const int* isok,
+                double* out, double min_ll, void* ctx_);
+void bawdd_logS_at_t(double t, const double* const* cols,
+                     int n_rows_total, int n_lR, int n_par,
+                     const int* trunc_mask, int n_unique_trials,
+                     const int* isok_all, void* ctx_, double* logS_out);
+
 // BAwDp race-model adapter entry points.
 // Definitions live in model_BAwD.cpp so utils.h remains a
 // declaration-only integration point for these adapters.

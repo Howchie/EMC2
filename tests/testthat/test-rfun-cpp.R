@@ -259,8 +259,8 @@ test_that("BTAwL constructors dispatch their default rfun to C++", {
   for (d in c("lognormal", "splitlognormal", "weibull")) {
     m <- BTAwLSeparate(drift_distribution = d)
     raw <- if (d == "weibull") {
-      cbind(shape_S = rep(c(2, 1.8), 80), scale_S = 1.2,
-            shape_T = rep(c(2.2, 2), 80), scale_T = 1.1)
+      cbind(shape_S = rep(c(2, 1.8), 80), mean_S = 1.2,
+            shape_T = rep(c(2.2, 2), 80), mean_T = 1.1)
     } else {
       cbind(mu_S = rep(c(log(3), log(2.5)), 80), sigma_S = .25,
             mu_T = rep(c(log(3.2), log(2.7)), 80), sigma_T = .3)

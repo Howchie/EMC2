@@ -597,8 +597,8 @@ double log_btawl_cdf_logn(double t, const BtawlGeom& g, double mu,
 }
 
 double log_btawl_cdf_weib(double t, const BtawlGeom& g, double shape,
-                          double scale) {
-  return btawl_log_eval(false, t, g, shape, scale,
+                          double mean) {
+  return btawl_log_eval(false, t, g, shape, mean,
                         BTAWL_LAUNCH_WEIBULL, false, 0.0);
 }
 
@@ -615,8 +615,8 @@ double log_btawl_surv_logn(double t, const BtawlGeom& g, double mu,
 }
 
 double log_btawl_surv_weib(double t, const BtawlGeom& g, double shape,
-                           double scale) {
-  return btawl_log_eval(true, t, g, shape, scale,
+                           double mean) {
+  return btawl_log_eval(true, t, g, shape, mean,
                         BTAWL_LAUNCH_WEIBULL, false, 0.0);
 }
 
@@ -1536,9 +1536,9 @@ inline BtawlSeparateIndices btawl_separate_indices(int launch) {
   }
   if (launch == BTAWL_LAUNCH_WEIBULL) {
     return {int(emc2col::btawl_local_race_separate_weib::shape_S),
-            int(emc2col::btawl_local_race_separate_weib::scale_S),
+            int(emc2col::btawl_local_race_separate_weib::mean_S),
             int(emc2col::btawl_local_race_separate_weib::shape_T),
-            int(emc2col::btawl_local_race_separate_weib::scale_T),
+            int(emc2col::btawl_local_race_separate_weib::mean_T),
             int(emc2col::btawl_local_race_separate_weib::B),
             int(emc2col::btawl_local_race_separate_weib::A),
             int(emc2col::btawl_local_race_separate_weib::t0),

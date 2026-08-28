@@ -112,9 +112,9 @@ namespace bawl_logn {
   }
 }
 namespace bawl_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
+  enum : int { shape = 0, mean, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwL_WEIB"};
   }
 }
@@ -147,9 +147,9 @@ namespace bawd_logn {
   }
 }
 namespace bawd_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, ell, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, ell, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "ell"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_WEIB"};
   }
 }
@@ -158,6 +158,38 @@ namespace bawdsplit {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN_SPLIT"};
+  }
+}
+
+// R/model_BAwDD.R — BAwDD (BAwD with a sampled alpha).  These
+// layouts mirror BAwD with the added alpha column; alpha is
+// the reciprocal power-law shape and alpha = 0 is the exponential limit.
+namespace bawdd {
+  enum : int { v = 0, sv, B, A, t0, k, ell, alpha, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "ell", "alpha"};
+    return {n, N_REQ, "BAwDD"};
+  }
+}
+namespace bawdd_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, ell, alpha, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell", "alpha"};
+    return {n, N_REQ, "BAwDD_LOGN"};
+  }
+}
+namespace bawdd_weib {
+  enum : int { shape = 0, mean, B, A, t0, k, ell, alpha, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "ell", "alpha"};
+    return {n, N_REQ, "BAwDD_WEIB"};
+  }
+}
+namespace bawddsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, ell, alpha, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "ell", "alpha"};
+    return {n, N_REQ, "BAwDD_LOGN_SPLIT"};
   }
 }
 
@@ -183,9 +215,9 @@ namespace bawf_logn {
   }
 }
 namespace bawf_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwF_WEIB"};
   }
 }
@@ -218,9 +250,9 @@ namespace bawr_logn {
   }
 }
 namespace bawr_weib {
-  enum : int { shape = 0, scale, B, A, t0, kappa, p, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, kappa, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "kappa", "p"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR_WEIB"};
   }
 }
@@ -249,9 +281,9 @@ namespace btawl_transient_logn {
   }
 }
 namespace btawl_transient_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, tau, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, tau, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_WEIB_RATE"};
   }
 }
@@ -281,9 +313,9 @@ namespace btawl_local_race_logn {
   }
 }
 namespace btawl_local_race_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
     return {n, N_REQ, "BTAwL_WEIB_RATE"};
   }
 }
@@ -314,9 +346,9 @@ namespace btawl_local_race_separate_logn {
   }
 }
 namespace btawl_local_race_separate_weib {
-  enum : int { shape_S = 0, scale_S, shape_T, scale_T, B, A, t0, k, tau_s, tau_t, N_REQ };
+  enum : int { shape_S = 0, mean_S, shape_T, mean_T, B, A, t0, k, tau_s, tau_t, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape_S", "scale_S", "shape_T", "scale_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
+    static const char* n[] = {"shape_S", "mean_S", "shape_T", "mean_T", "B", "A", "t0", "k", "tau_s", "tau_t"};
     return {n, N_REQ, "BTAwL_SEPARATE_WEIB_RATE"};
   }
 }
@@ -346,9 +378,9 @@ namespace btawl_sustained_logn {
   }
 }
 namespace btawl_sustained_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, tau_s, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, tau_s, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "tau_s"};
     return {n, N_REQ, "BTAwL_SUSTAINED_WEIB"};
   }
 }
@@ -379,9 +411,9 @@ namespace bawdp_logn {
   }
 }
 namespace bawdp_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, lambda, N_REQ };
+  enum : int { shape = 0, mean, B, A, t0, k, lambda, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "lambda"};
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "lambda"};
     return {n, N_REQ, "BAwDp_WEIB"};
   }
 }

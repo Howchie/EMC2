@@ -54,7 +54,7 @@ truncated correlation is therefore not equal to \code{rho} in general.\tabular{l
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength. \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength. \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
-   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr

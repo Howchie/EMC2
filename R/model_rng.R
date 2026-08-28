@@ -159,6 +159,16 @@ rBTAwLSeparate <- function(lR, pars, ok = rep(TRUE, length(lR)),
         rho = rho)
 }
 
+.rfun_BAwDD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                        posdrift = TRUE) {
+  if (.use_cpp_rfun()) {
+    res <- rbawdd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rBAwDD(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
+}
+
 .rfun_BAwF <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
                        posdrift = TRUE, rho = Inf) {
   rho <- .bawf_check_rho(rho)

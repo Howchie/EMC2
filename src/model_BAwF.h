@@ -158,7 +158,7 @@ double bawf_log_frozen_logn(const BawfGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma,
                                    double delta = 0.0);
 double bawf_log_frozen_weib(const BawfGeom& g, double s_lo, double s_hi,
-                                   double shape, double scale);
+                                   double shape, double mean);
 
 // --------------------------------------------------------------------------
 // log CDF

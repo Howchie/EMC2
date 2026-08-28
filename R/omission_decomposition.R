@@ -42,6 +42,7 @@
 .omx_family <- function(c_name) {
   if (grepl("^BAwL", c_name)) "BAwL"
   else if (grepl("^BAwDp", c_name)) "BAwDp"
+  else if (grepl("^BAwDD", c_name)) "BAwDD"
   else if (grepl("^BAwD", c_name)) "BAwD"
   else if (grepl("^BAwF", c_name)) "BAwF"
   else if (grepl("^BAwR", c_name)) "BAwR"
@@ -77,6 +78,27 @@
         null = .omx_setcol("k", 0))
   }
 
+  # BAwD has two distinct sources of defective (never-finish) mass whenever
+  # clearance is present.  Launches with V < ell never have positive
+  # accumulation (the k = 0 limit), while launches with V > ell can rise but
+  # still miss the threshold when the decaying drive turns around.  Mark the
+  # residual for a direct split: the decomposition evaluates the k = 0 limit
+  # and subtracts it from the full defective mass, rather than treating the
+  # difference as a Shapley attribution.  Other ballistic families do not have
+  # an independent ell clearance scale, so this split is specific to BAwD.
+  if (identical(family, "BAwD")) {
+    if (live("ell")) {
+      attr(m, "split") <- list(
+        name = "dead_launch",
+        desc = "launch strength below clearance ell: never rises"
+      )
+      attr(m, "residual") <- c(
+        name = "asymptotic_subthreshold",
+        desc = "launch exceeds clearance but the turnaround remains below threshold"
+      )
+    }
+  }
+
   # The IO constructors expose an untruncated normal drift.  Re-evaluating
   # their own pfun with positive drifts isolates negative accumulation.
   current_pos <- .omx_pfun(model_list, NULL)
@@ -92,10 +114,12 @@
   # This residual is deliberately named: it covers finite-peak, finite-drive,
   # reservoir, or other model-specific sub-threshold mass without an opaque
   # residual bucket.
-  attr(m, "residual") <- c(
-    name = "asymptotic_subthreshold",
-    desc = "accumulation remains below threshold without a registered switch"
-  )
+  if (is.null(attr(m, "residual"))) {
+    attr(m, "residual") <- c(
+      name = "asymptotic_subthreshold",
+      desc = "accumulation remains below threshold without a registered switch"
+    )
+  }
   m
 }
 
@@ -313,25 +337,53 @@
   pmin(pmax(out, 0), 1)
 }
 
-.omx_Vfun <- function(model_list, mech, pars, n_trial, n_acc) {
+.omx_off_state <- function(model_list, mech, pars) {
+  p <- pars
+  f <- model_list$pfun
+  if (length(mech)) for (nm in names(mech)) {
+    mm <- mech[[nm]]
+    p <- mm$null(p)
+    if (isTRUE(mm$posdrift)) {
+      f2 <- .omx_pfun(model_list, TRUE)
+      if (!is.null(f2)) f <- f2
+    }
+  }
+  list(pars = p, pfun = f)
+}
+
+.omx_survivor_inf <- function(model_list, pars, pfun, n_trial, n_acc) {
   global_kill <- .omx_global_kill(model_list)
   erlang_shape <- .omx_erlang_shape(model_list)
+  if (global_kill)
+    .omx_S_global_kill(rep(Inf, n_trial), pars, pfun, n_acc, erlang_shape)
+  else
+    .omx_S(rep(Inf, n_trial), pars, pfun, n_acc)
+}
+
+.omx_Vfun <- function(model_list, mech, pars, n_trial, n_acc) {
   function(set) {
-    p <- pars
-    f <- model_list$pfun
-    for (nm in setdiff(names(mech), set)) {
-      mm <- mech[[nm]]
-      p <- mm$null(p)
-      if (isTRUE(mm$posdrift)) {
-        f2 <- .omx_pfun(model_list, TRUE)
-        if (!is.null(f2)) f <- f2
-      }
-    }
-    if (global_kill)
-      .omx_S_global_kill(rep(Inf, n_trial), p, f, n_acc, erlang_shape)
-    else
-      .omx_S(rep(Inf, n_trial), p, f, n_acc)
+    off <- .omx_off_state(model_list, mech[setdiff(names(mech), set)], pars)
+    .omx_survivor_inf(model_list, off$pars, off$pfun, n_trial, n_acc)
   }
+}
+
+# For BAwD, split the residual never-finish mass after all registered
+# mechanisms have been ablated.  At k = 0, a trial can finish iff at least one
+# launch exceeds ell, so the survivor is precisely the all-accumulator
+# V < ell ("dead launch") event.  The difference from the full k survivor is
+# the V > ell turnaround-asymptote event.
+.omx_split_inf <- function(model_list, mech, pars, n_trial, n_acc) {
+  split <- attr(mech, "split")
+  if (is.null(split)) return(NULL)
+  off <- .omx_off_state(model_list, mech, pars)
+  s_none <- .omx_survivor_inf(model_list, off$pars, off$pfun,
+                              n_trial, n_acc)
+  p_dead <- .omx_setcol("k", 0)(off$pars)
+  s_dead <- .omx_survivor_inf(model_list, p_dead, off$pfun,
+                              n_trial, n_acc)
+  list(dead_launch = pmin(pmax(s_dead, 0), 1),
+       asymptotic_subthreshold = pmin(pmax(s_none - s_dead, 0), 1),
+       residual = s_none)
 }
 
 .omx_shapley <- function(mech, Vfun) {
@@ -380,11 +432,27 @@ omission_mechanisms <- function(emc, data = NULL) {
     mechanism = mm$name, live = TRUE, description = mm$desc
   )
   residual <- attr(mech, "residual")
-  rows[[length(rows) + 1L]] <- data.frame(
-    mechanism = residual[["name"]],
-    live = any(.omx_ablate_all(prep, mech) > 1e-10, na.rm = TRUE),
-    description = residual[["desc"]]
-  )
+  split <- attr(mech, "split")
+  if (is.null(split)) {
+    rows[[length(rows) + 1L]] <- data.frame(
+      mechanism = residual[["name"]],
+      live = any(.omx_ablate_all(prep, mech) > 1e-10, na.rm = TRUE),
+      description = residual[["desc"]]
+    )
+  } else {
+    split_ref <- .omx_split_inf(prep$model_list, mech, prep$pars_ref,
+                                nrow(prep$trial), prep$n_acc)
+    rows[[length(rows) + 1L]] <- data.frame(
+      mechanism = split$name,
+      live = any(split_ref$dead_launch > 1e-10, na.rm = TRUE),
+      description = split$desc
+    )
+    rows[[length(rows) + 1L]] <- data.frame(
+      mechanism = residual[["name"]],
+      live = any(split_ref$asymptotic_subthreshold > 1e-10, na.rm = TRUE),
+      description = residual[["desc"]]
+    )
+  }
   rows[[length(rows) + 1L]] <- data.frame(
     mechanism = "censor_slow",
     live = any(!prep$UCresp & is.finite(prep$UC) & prep$UC <= prep$UT,
@@ -400,7 +468,10 @@ omission_mechanisms <- function(emc, data = NULL) {
 #'
 #' The returned probabilities are conditional on a trial being retained after
 #' lower/upper truncation.  `censor_slow` is an upper-censor omission; the
-#' intrinsic residual is named `asymptotic_subthreshold`.
+#' intrinsic residual is named `asymptotic_subthreshold`.  For BAwD with
+#' positive clearance, that residual is split into `dead_launch` (all launches
+#' below clearance, `V < ell`) and the turnaround-asymptote remainder
+#' (`V > ell` but still never reaching threshold).
 #'
 #' @param emc A fitted single-design race-model emc object.
 #' @param factors Character data columns used to form cells, or NULL.
@@ -477,7 +548,19 @@ decompose_omissions <- function(emc, factors = NULL, n_post = 50,
     comp <- list(contaminant = pC)
     if (length(sh$phi)) for (nm in names(sh$phi))
       comp[[nm]] <- sh$phi[[nm]]
-    comp[[residual_name]] <- sh$V_none
+    split_values <- .omx_split_inf(model_list, mech, pars,
+                                    nrow(prep$trial), n_acc)
+    if (is.null(split_values)) {
+      comp[[residual_name]] <- sh$V_none
+    } else {
+      # The Shapley game allocates only the mechanisms registered in `mech`;
+      # split the remaining intrinsic mass into dead launches and the
+      # turnaround asymptote.  This keeps the two entries additive and avoids
+      # attributing their nested relationship as an interaction.
+      split_name <- attr(mech, "split")[["name"]]
+      comp[[split_name]] <- split_values$dead_launch
+      comp[[residual_name]] <- split_values$asymptotic_subthreshold
+    }
     comp$censor_slow <- censor
 
     # The race process is truncated and normalised first; pContaminant is a

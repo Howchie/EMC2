@@ -273,17 +273,20 @@ inline double bawd_hit_time_r(double V, double d, double k, double ell,
     return u;
   }
 
-  // Finite rho >= 1 (bawd_geometry already rejects rho in (-Inf, 1) and
-  // NaN before this is reached from the likelihood side; guard here too
-  // since the simulator can be called directly).
-  if (!(rho >= 1.0)) return R_PosInf;
+  // Finite rho > 0.  rho < 1 is a legitimate member (BAwDD samples
+  // alpha = 1/rho without an upper bound): the drive clock kQ_rho is then
+  // unbounded, and for gamma < 1 clearance still outruns it, so the
+  // trajectory keeps a finite peak.  Only rho <= 0 and NaN are outside the
+  // family.
+  if (ISNAN(rho) || !(rho > 0.0)) return R_PosInf;
   const bool rho_one = std::fabs(rho - 1.0) <= 1e-12;
   if (k <= 1e-10)
     return (V > ell) ? d / (V - ell) : R_PosInf;
 
   if (ell <= 1e-12) {
-    // With no clearance the finite-rho clock is V*kQ(x)/k.  Its
-    // rho=1 member is unbounded; rho>1 has a finite total clock.
+    // With no clearance the finite-rho clock is V*kQ(x)/k.  Only rho > 1
+    // has a finite total clock; rho <= 1 is unbounded, and there S < 0 keeps
+    // the same inversion valid with base = 1 - S > 1.
     if (rho_one) {
       return std::expm1(k * d / V) / k;
     }
@@ -315,7 +318,11 @@ inline double bawd_hit_time_r(double V, double d, double k, double ell,
   const double L_p = bawd_pk_log_tau(rho, x_p);
   const double height =
     (V * bawd_pk_kq(rho, L_p) - ell * bawd_pk_kr(rho, gamma, L_p)) / k;
-  if (height < d) return R_PosInf;
+  // A large V/ell can push the peak phase past the representable range, where
+  // the two clock terms both overflow and cancel to NaN.  The peak height is
+  // ell psi(x_p)/k with psi increasing and unbounded, so an unrepresentable
+  // peak is an arbitrarily tall trajectory: treat it as reachable.
+  if (R_FINITE(height) && height < d) return R_PosInf;
 
   const double u_p = x_p / k;
   double u = d / (V - ell);
@@ -335,6 +342,38 @@ inline double bawd_hit_time_r(double V, double d, double k, double ell,
     if (done) break;
   }
   return u;
+}
+
+// BAwDD first passage: the no-clearance clock is V Q_alpha(u) = d, where
+// alpha = 1/rho.  alpha = 0 is the exponential limit; finite positive alpha
+// uses the power-law clock, and alpha = Inf is the no-decay limit.
+inline double bawdd_hit_time_r(double V, double d, double k, double alpha) {
+  if (!(d > 0.0)) return 0.0;
+  if (ISNAN(V) || !(V > 0.0)) return R_PosInf;
+  if (ISNAN(k) || !(k >= 0.0) || ISNAN(alpha) || !(alpha >= 0.0))
+    return R_PosInf;
+  if (alpha > 0.0 && !R_FINITE(alpha)) return d / V;
+  if (k <= 1e-10) return d / V;
+  const double c = k * d / V;
+  if (alpha == 0.0) {
+    if (!(c < 1.0)) return R_PosInf;
+    return -std::log1p(-c) / k;
+  }
+  const double rho = 1.0 / alpha;
+  // A tiny positive alpha can overflow its reciprocal.  Treat that
+  // representable limit as the exponential member, just as the likelihood
+  // adapter does when it maps alpha to the shared BAwD kernel.
+  if (!R_FINITE(rho)) {
+    if (!(c < 1.0)) return R_PosInf;
+    return -std::log1p(-c) / k;
+  }
+  if (std::fabs(rho - 1.0) <= 1e-12)
+    return std::expm1(c) / k;
+  const double s = c * (rho - 1.0) / rho;
+  const double base = 1.0 - s;
+  if (!(base > 0.0) || (rho > 1.0 && !(s < 1.0))) return R_PosInf;
+  const double x = rho * std::expm1(std::log(base) / (1.0 - rho));
+  return (x >= 0.0 && R_FINITE(x)) ? x / k : R_PosInf;
 }
 
 // BAwDp first passage.  The evidence trajectory is monotone only up to the

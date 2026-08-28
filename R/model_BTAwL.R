@@ -123,7 +123,7 @@ pBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
          `0` = c("v_S", "sv_S", "v_T", "sv_T"),
          `1` = c("mu_S", "sigma_S", "mu_T", "sigma_T"),
          `2` = c("mu_S", "sigma_S", "delta_S", "mu_T", "sigma_T", "delta_T"),
-         `3` = c("shape_S", "scale_S", "shape_T", "scale_T"),
+         `3` = c("shape_S", "mean_S", "shape_T", "mean_T"),
          stop("invalid BTAwL launch code"))
 }
 
@@ -302,7 +302,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   tau_all <- .btawl_tau_col(pars_all)
   eta_all <- .tw_eta(pars_all)
   V <- if (launch == 3L) {
-    rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    .rweibull_mean(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 1L) {
     rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 2L) {
@@ -354,7 +354,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   eta_all <- .tw_eta(pars_all)
   dt <- matrix(Inf, nr, n_trials)
   draw_launch <- function(p1, p2, delta = 0) {
-    if (launch == 3L) return(rweibull(1, p1, p2))
+    if (launch == 3L) return(.rweibull_mean(1, p1, p2))
     if (launch == 1L) return(rlnorm(1, p1, p2))
     if (launch == 2L) return(.bawd_split_rlnorm(p1, p2, delta))
     if (posdrift) msm::rtnorm(1, mean = p1, sd = p2, lower = 0) else
@@ -434,7 +434,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   eta_all <- .tw_eta(pars_all)
   dt <- matrix(Inf, nr, n_trials)
   draw_launch <- function(p1, p2, delta = 0) {
-    if (launch == 3L) return(rweibull(1, p1, p2))
+    if (launch == 3L) return(.rweibull_mean(1, p1, p2))
     if (launch == 1L) return(rlnorm(1, p1, p2))
     if (launch == 2L) return(.bawd_split_rlnorm(p1, p2, delta))
     if (posdrift) msm::rtnorm(1, mean = p1, sd = p2, lower = 0) else
@@ -448,8 +448,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
       iS <- c("mu_S", "sigma_S", "delta_S")
       iT <- c("mu_T", "sigma_T", "delta_T")
     } else if (launch == 3L) {
-      iS <- c("shape_S", "scale_S")
-      iT <- c("shape_T", "scale_T")
+      iS <- c("shape_S", "mean_S")
+      iT <- c("shape_T", "mean_T")
     } else if (launch == 1L) {
       iS <- c("mu_S", "sigma_S")
       iT <- c("mu_T", "sigma_T")
@@ -494,7 +494,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   ok_idx <- which(ok)
   eta_vec <- .tw_eta(pars)
   V <- if (launch == 3L) {
-    rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    .rweibull_mean(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 1L) {
     rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 2L) {
@@ -538,9 +538,9 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   if ((lognormal || weibull) && !isTRUE(posdrift))
     stop("BTAwL: posdrift only applies to drift_distribution = \"normal\".")
   if (weibull) {
-    p_types <- c(shape = log(1), scale = log(1))
-    transform <- c(shape = "exp", scale = "exp")
-    minmax <- cbind(shape = c(1e-4, Inf), scale = c(1e-4, Inf))
+    p_types <- c(shape = log(1), mean = log(1))
+    transform <- c(shape = "exp", mean = "exp")
+    minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
   } else if (lognormal) {
     p_types <- c(mu = 0, sigma = log(1))
     transform <- c(mu = "identity", sigma = "exp")
@@ -558,13 +558,13 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   launch_pars <- .ba_par_names(launch)
   if (mode == "separate") {
     if (weibull) {
-      p_types <- c(shape_S = log(1), scale_S = log(1),
-                   shape_T = log(1), scale_T = log(1))
-      transform <- c(shape_S = "exp", scale_S = "exp",
-                     shape_T = "exp", scale_T = "exp")
-      minmax <- cbind(shape_S = c(1e-4, Inf), scale_S = c(1e-4, Inf),
-                      shape_T = c(1e-4, Inf), scale_T = c(1e-4, Inf))
-      launch_pars <- c("shape_S", "scale_S", "shape_T", "scale_T")
+      p_types <- c(shape_S = log(1), mean_S = log(1),
+                   shape_T = log(1), mean_T = log(1))
+      transform <- c(shape_S = "exp", mean_S = "exp",
+                     shape_T = "exp", mean_T = "exp")
+      minmax <- cbind(shape_S = c(1e-4, Inf), mean_S = c(1e-4, Inf),
+                      shape_T = c(1e-4, Inf), mean_T = c(1e-4, Inf))
+      launch_pars <- c("shape_S", "mean_S", "shape_T", "mean_T")
     } else if (lognormal) {
       if (splitlognormal) {
         p_types <- c(mu_S = 0, sigma_S = log(1), delta_S = 0,
@@ -804,7 +804,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' transient processes.  `pi` allocates one base launch distribution between
 #' those processes; it is not a shared trialwise launch draw.  Normal launches
 #' scale both location and spread, lognormal launches shift the log location,
-#' and Weibull launches use `V ~ Weibull(shape, scale)`.
+#' and Weibull launches use `V ~ Weibull(shape, scale)` with the arithmetic
+#' mean supplied publicly (the conventional scale is derived internally).
 #'
 #' The model uses the following parameter matrix.  `B` is the distance from the
 #' upper end of the start-point range to the threshold, so the kernel receives
@@ -815,7 +816,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location for a lognormal launch. |
 #' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
 #' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
@@ -835,9 +836,9 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' and `delta` is unbounded.  `delta = 0` reduces exactly to lognormal.
 #' The split-lognormal option adds the optional identity-scale `delta` parameter
 #' (default `0`).
-#' With `drift_distribution = "weibull"`, `shape` and `scale` are positive;
-#' for the local race, `pi` multiplies the scale of the sustained channel and
-#' `1 - pi` multiplies the scale of the transient channel.
+#' With `drift_distribution = "weibull"`, `shape` and arithmetic `mean` are
+#' positive; for the local race, `pi` multiplies the mean of the sustained
+#' channel and `1 - pi` multiplies the mean of the transient channel.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
 #'
@@ -898,7 +899,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
-#'   `"weibull"` (`V ~ Weibull(shape, scale)`).
+#'   `"weibull"` (`V ~ Weibull(shape, scale)` with public arithmetic `mean`).
 #' @return A BTAwL race-model specification.
 #' @seealso [BTAwLTransient()], [BTAwLSustained()]
 #' @export
@@ -927,9 +928,9 @@ BTAwL <- function(posdrift = TRUE,
 #' | *delta_S* | identity | \[-Inf, Inf\] | 0 | | Sustained split-lognormal shape parameter (split-lognormal launch only). |
 #' | *delta_T* | identity | \[-Inf, Inf\] | 0 | | Transient split-lognormal shape parameter (split-lognormal launch only). |
 #' | *shape_S* | log | \[0, Inf\] | log(1) | | Weibull shape for the sustained channel (Weibull launch only). |
-#' | *scale_S* | log | \[0, Inf\] | log(1) | | Weibull scale for the sustained channel (Weibull launch only). |
+#' | *mean_S* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean for the sustained channel (Weibull launch only). |
 #' | *shape_T* | log | \[0, Inf\] | log(1) | | Weibull shape for the transient channel (Weibull launch only). |
-#' | *scale_T* | log | \[0, Inf\] | log(1) | | Weibull scale for the transient channel (Weibull launch only). |
+#' | *mean_T* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean for the transient channel (Weibull launch only). |
 #' | *v_S* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength for the sustained channel (normal launch only). |
 #' | *sv_S* | log | \[0, Inf\] | log(1) | | SD of normal launch strength for the sustained channel (normal launch only). |
 #' | *v_T* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength for the transient channel (normal launch only). |
@@ -947,7 +948,7 @@ BTAwL <- function(posdrift = TRUE,
 #' With `"lognormal"`, use the `mu_S`, `sigma_S`, `mu_T`, and `sigma_T` rows.
 #' With `"splitlognormal"`, each channel has its own `delta` parameter;
 #' `delta = 0` reduces that channel exactly to the lognormal launch.  With
-#' `drift_distribution = "weibull"`, use the positive `shape` and `scale`
+#' `drift_distribution = "weibull"`, use the positive `shape` and `mean`
 #' rows.  Optional fitting parameters are `pContaminant` (omission
 #' probability) and `pGuess` (uniform-outlier probability).
 #'
@@ -983,7 +984,7 @@ BTAwLSeparate <- function(posdrift = TRUE,
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
 #' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
 #' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
@@ -1001,7 +1002,7 @@ BTAwLSeparate <- function(posdrift = TRUE,
 #' derived from the median condition, and `delta = 0` is exactly lognormal.
 #' The split-lognormal option adds the optional identity-scale `delta` parameter
 #' (default `0`).
-#' With `drift_distribution = "weibull"`, use positive `shape` and `scale`
+#' With `drift_distribution = "weibull"`, use positive `shape` and `mean`
 #' instead of the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
@@ -1024,7 +1025,7 @@ BTAwLSeparate <- function(posdrift = TRUE,
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
-#'   `"weibull"` (`V ~ Weibull(shape, scale)`).
+#'   `"weibull"` (`V ~ Weibull(shape, scale)` with public arithmetic `mean`).
 #' @return A transient-only BTAwL race-model specification.
 #' @export
 BTAwLTransient <- function(posdrift = TRUE,
@@ -1040,7 +1041,7 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
 #' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
 #' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
@@ -1058,7 +1059,7 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' derived from the median condition, and `delta = 0` is exactly lognormal.
 #' The split-lognormal option adds the optional identity-scale `delta` parameter
 #' (default `0`).
-#' With `drift_distribution = "weibull"`, use positive `shape` and `scale`
+#' With `drift_distribution = "weibull"`, use positive `shape` and `mean`
 #' instead of the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
@@ -1081,7 +1082,7 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
-#'   `"weibull"` (`V ~ Weibull(shape, scale)`).
+#'   `"weibull"` (`V ~ Weibull(shape, scale)` with public arithmetic `mean`).
 #' @return A sustained-only BTAwL race-model specification.
 #' @export
 BTAwLSustained <- function(posdrift = TRUE,

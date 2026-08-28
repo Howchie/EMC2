@@ -725,9 +725,9 @@ test_that("separate channel launches reproduce the shared-pi family", {
       separate <- data.frame(mu_S = .2 + log(.4), sigma_S = .5,
                              mu_T = .2 + log(.6), sigma_T = .5)
     } else if (launch == 3L) {
-      shared <- data.frame(shape = 2, scale = 1.5)
-      separate <- data.frame(shape_S = 2, scale_S = 1.5 * .4,
-                             shape_T = 2, scale_T = 1.5 * .6)
+      shared <- data.frame(shape = 2, mean = 1.5)
+      separate <- data.frame(shape_S = 2, mean_S = 1.5 * .4,
+                             shape_T = 2, mean_T = 1.5 * .6)
     } else {
       shared <- data.frame(v = 1.2, sv = .5)
       separate <- data.frame(v_S = 1.2 * .4, sv_S = .5 * .4,

@@ -358,7 +358,7 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
 
 # 0 = normal launch strength (v, sv); 1 = lognormal launch strength
 # (mu, sigma); 2 = median-parameterised continuous split-lognormal launch
-# (mu, sigma, delta); 3 = Weibull launch (shape, scale). Must match
+# (mu, sigma, delta); 3 = Weibull launch (shape, mean). Must match
 # BAWL_LAUNCH_* in src/model_LBA.h, the
 # `launch` argument of the compiled kernels, and the value the adapter derives
 # from the `_LOGN`/`_SPLIT` c_name suffix.  Deliberately the same convention as
@@ -499,7 +499,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     # A lognormal launch strength is positive by construction, so posdrift
     # never applies to it.
     drifts <- if (launch == 3L) {
-      rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+      .rweibull_mean(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 1L) {
       rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 2L) {
@@ -717,7 +717,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' one-factor path — which decomposes the *Gaussian* drift vector — is not
 #' available for either lognormal variant.
 #' With `drift_distribution = "weibull"`, `V ~ Weibull(shape, scale)` with
-#' positive shape and scale. Weibull launches are also incompatible with the
+#' positive shape and arithmetic `mean`. The conventional Weibull scale is derived as
+#' `mean / Gamma(1 + 1 / shape)`. Weibull launches are also incompatible with the
 #' Gaussian `correlated` path.
 #'
 #' **Fixing the evidence scale.** The evidence axis is defined only up to a
@@ -795,7 +796,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`.
 #'   In the split variant `mu` is the exact median and `delta` is unbounded;
 #'   `delta = 0` is exactly the lognormal launch. `"weibull"` uses
-#'   `V ~ Weibull(shape, scale)` on the positive launch scale.
+#'   `V ~ Weibull(shape, scale)` on the positive launch scale; the public
+#'   parameters are `shape` and its arithmetic `mean`.
 #' @return A model list defining the BAwL race model.
 #' @examples
 #' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
@@ -850,9 +852,9 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 
   # The launch pair occupies the leading two kernel columns either way; only
   if (weibull) {
-    p_types <- c(shape = log(1), scale = log(1))
-    transform <- c(shape = "exp", scale = "exp")
-    minmax <- cbind(shape = c(1e-4, Inf), scale = c(1e-4, Inf))
+    p_types <- c(shape = log(1), mean = log(1))
+    transform <- c(shape = "exp", mean = "exp")
+    minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
   } else if (lognormal) {
     p_types <- c("mu" = 0, "sigma" = log(1))
     transform <- c(mu = "identity", sigma = "exp")
@@ -1030,7 +1032,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength. |
 #' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength. |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
-#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
