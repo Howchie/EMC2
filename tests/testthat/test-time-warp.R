@@ -22,13 +22,13 @@ tw_nat_pars <- function(name, eta = 0, n = 1L) {
     LBA = c(v = 2, sv = .35, B = 1, A = .2, b = 1.2, t0 = .1),
     BAwL = c(v = 2, sv = .35, B = 1, A = .2, b = 1.2, t0 = .1,
              k = .45, lambda_g = 0, lambda_k = 0),
-    BAwD = c(mu = .25, sigma = .35, B = 1, A = .2, b = 1.2, t0 = .1,
+    BAwD = c(mean = .25, cv = .35, B = 1, A = .2, b = 1.2, t0 = .1,
              k = .55, ell = .75),
-    BAwDp = c(mu = .25, sigma = .35, B = 1, A = .2, b = 1.2, t0 = .1,
+    BAwDp = c(mean = .25, cv = .35, B = 1, A = .2, b = 1.2, t0 = .1,
               k = .8, lambda = .35),
-    BAwF = c(mu = .25, sigma = .35, B = 1, A = .2, b = 1.2, t0 = .1,
+    BAwF = c(mean = .25, cv = .35, B = 1, A = .2, b = 1.2, t0 = .1,
              k = .55),
-    BAwR = c(mu = .25, sigma = .35, B = 1, A = .2, b = 1.2, t0 = .1,
+    BAwR = c(mean = .25, cv = .35, B = 1, A = .2, b = 1.2, t0 = .1,
              kappa = .25, p = 1),
     BTAwL_T = c(mu = .25, sigma = .35, B = 1, A = .2, b = 1.2, t0 = .1,
                 k = .55, tau = 1.1),
@@ -189,7 +189,7 @@ test_that("a common warp preserves the race winner but changes physical time", {
 # ---------------------------------------------------------------------------
 
 tw_bawr_context <- function(dat, include_eta = TRUE) {
-  form <- list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1,
+  form <- list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1,
                kappa ~ 1, p ~ 1)
   if (include_eta) form <- c(form, list(eta ~ 1))
   des <- design(data = dat, Rlevels = levels(dat$R), model = BAwR,
@@ -228,14 +228,14 @@ tw_ref_bawr_ll <- function(dadm, pars, min_ll = log(1e-12)) {
       w <- idx[which(dadm$winner[idx])[1L]]
       u <- rt - pars[w, "t0"]
       s <- EMC2:::.tw_fwd(u, pars[w, "eta"])
-      term <- EMC2:::dbawr(s, pars[w, "A"], pars[w, "b"], pars[w, "mu"],
-                           pars[w, "sigma"], pars[w, "kappa"], pars[w, "p"],
+      term <- EMC2:::dbawr(s, pars[w, "A"], pars[w, "b"], pars[w, "mean"],
+                           pars[w, "cv"], pars[w, "kappa"], pars[w, "p"],
                            launch = 1L) * EMC2:::.tw_jac(u, pars[w, "eta"])
       for (i in setdiff(idx, w)) {
         ui <- rt - pars[i, "t0"]
         si <- EMC2:::.tw_fwd(ui, pars[i, "eta"])
         term <- term * (1 - EMC2:::pbawr(si, pars[i, "A"], pars[i, "b"],
-                                         pars[i, "mu"], pars[i, "sigma"],
+                                         pars[i, "mean"], pars[i, "cv"],
                                          pars[i, "kappa"], pars[i, "p"],
                                          launch = 1L))
       }
@@ -243,8 +243,8 @@ tw_ref_bawr_ll <- function(dadm, pars, min_ll = log(1e-12)) {
       term <- prod(vapply(idx, function(i) {
         ui <- Inf - pars[i, "t0"]
         si <- EMC2:::.tw_fwd(ui, pars[i, "eta"])
-        1 - EMC2:::pbawr(si, pars[i, "A"], pars[i, "b"], pars[i, "mu"],
-                         pars[i, "sigma"], pars[i, "kappa"], pars[i, "p"],
+        1 - EMC2:::pbawr(si, pars[i, "A"], pars[i, "b"], pars[i, "mean"],
+                         pars[i, "cv"], pars[i, "kappa"], pars[i, "p"],
                          launch = 1L)
       }, numeric(1)))
     }
@@ -261,7 +261,7 @@ test_that("compiled BAwR likelihood equals its warped exported-kernel reference"
   )
   ctx <- tw_bawr_context(dat, include_eta = TRUE)
   p <- sampled_pars(ctx$design, doMap = FALSE)
-  p[c("mu", "sigma", "B", "A", "t0", "kappa", "p", "eta")] <-
+  p[c("mean", "cv", "B", "A", "t0", "kappa", "p", "eta")] <-
     c(.25, log(.35), log(1), log(.2), log(.1), log(.25), log(1), .45)
   dadm <- ctx$emc[[1]]$data[[1]]
   pars <- EMC2:::get_pars_matrix_oo(p, dadm, ctx$emc[[1]]$model())
@@ -281,7 +281,7 @@ test_that("eta = 0 recovers the parent design and simulator exactly", {
   )
   no_eta <- tw_bawr_context(dat, include_eta = FALSE)
   with_eta <- tw_bawr_context(dat, include_eta = TRUE)
-  base <- c(mu = .25, sigma = log(.35), B = log(1), A = log(.2),
+  base <- c(mean = .25, cv = log(.35), B = log(1), A = log(.2),
             t0 = log(.1), kappa = log(.25), p = log(1))
   p0 <- sampled_pars(no_eta$design, doMap = FALSE)
   p1 <- sampled_pars(with_eta$design, doMap = FALSE)
@@ -307,15 +307,15 @@ test_that("upper censoring uses the warped survivor and truncation normalises it
   )
   uc <- tw_bawr_context(dat_uc, include_eta = TRUE)
   p <- sampled_pars(uc$design, doMap = FALSE)
-  p[c("mu", "sigma", "B", "A", "t0", "kappa", "p", "eta")] <-
+  p[c("mean", "cv", "B", "A", "t0", "kappa", "p", "eta")] <-
     c(.25, log(.35), log(1), log(.2), log(.1), log(.25), log(1), -.5)
   dadm <- uc$emc[[1]]$data[[1]]
   pars <- EMC2:::get_pars_matrix_oo(p, dadm, uc$emc[[1]]$model())
   u <- dat_uc$UC - pars[, "t0"]
   s <- EMC2:::.tw_fwd(u, pars[, "eta"])
   ref_uc <- sum(log1p(-vapply(seq_len(nrow(pars)), function(i)
-    EMC2:::pbawr(s[i], pars[i, "A"], pars[i, "b"], pars[i, "mu"],
-                 pars[i, "sigma"], pars[i, "kappa"], pars[i, "p"], launch = 1L),
+    EMC2:::pbawr(s[i], pars[i, "A"], pars[i, "b"], pars[i, "mean"],
+                 pars[i, "cv"], pars[i, "kappa"], pars[i, "p"], launch = 1L),
     numeric(1))))
   expect_equal(tw_calc_ll(uc, p), ref_uc, tolerance = 1e-9)
 
@@ -328,26 +328,26 @@ test_that("upper censoring uses the warped survivor and truncation normalises it
   )
   tr <- tw_bawr_context(dat_tr, include_eta = TRUE)
   p_tr <- sampled_pars(tr$design, doMap = FALSE)
-  p_tr[c("mu", "sigma", "B", "A", "t0", "kappa", "p", "eta")] <-
+  p_tr[c("mean", "cv", "B", "A", "t0", "kappa", "p", "eta")] <-
     c(.25, log(.35), log(1), log(.2), log(.1), log(.25), log(1), .45)
   pars_tr <- EMC2:::get_pars_matrix_oo(
     p_tr, tr$emc[[1]]$data[[1]], tr$emc[[1]]$model())[1, ]
   tt <- c(dat_tr$rt, dat_tr$LT, dat_tr$UT)
   ss <- EMC2:::.tw_fwd(tt - pars_tr["t0"], pars_tr["eta"])
-  f <- EMC2:::dbawr(ss[1], pars_tr["A"], pars_tr["b"], pars_tr["mu"],
-                    pars_tr["sigma"], pars_tr["kappa"], pars_tr["p"],
+  f <- EMC2:::dbawr(ss[1], pars_tr["A"], pars_tr["b"], pars_tr["mean"],
+                    pars_tr["cv"], pars_tr["kappa"], pars_tr["p"],
                     launch = 1L) * EMC2:::.tw_jac(
                       tt[1] - pars_tr["t0"], pars_tr["eta"])
-  z <- EMC2:::pbawr(ss[3], pars_tr["A"], pars_tr["b"], pars_tr["mu"],
-                    pars_tr["sigma"], pars_tr["kappa"], pars_tr["p"],
+  z <- EMC2:::pbawr(ss[3], pars_tr["A"], pars_tr["b"], pars_tr["mean"],
+                    pars_tr["cv"], pars_tr["kappa"], pars_tr["p"],
                     launch = 1L) -
-    EMC2:::pbawr(ss[2], pars_tr["A"], pars_tr["b"], pars_tr["mu"],
-                 pars_tr["sigma"], pars_tr["kappa"], pars_tr["p"],
+    EMC2:::pbawr(ss[2], pars_tr["A"], pars_tr["b"], pars_tr["mean"],
+                 pars_tr["cv"], pars_tr["kappa"], pars_tr["p"],
                  launch = 1L)
   # BAwR is defective: finite upper truncation retains the intrinsic +Inf
   # atom, so it belongs in the conditional normaliser alongside [LT, UT].
-  defect <- 1 - EMC2:::pbawr(Inf, pars_tr["A"], pars_tr["b"], pars_tr["mu"],
-                             pars_tr["sigma"], pars_tr["kappa"], pars_tr["p"],
+  defect <- 1 - EMC2:::pbawr(Inf, pars_tr["A"], pars_tr["b"], pars_tr["mean"],
+                             pars_tr["cv"], pars_tr["kappa"], pars_tr["p"],
                              launch = 1L)
   expect_equal(tw_calc_ll(tr, p_tr), log(f) - log(z + defect),
                tolerance = 1e-09)

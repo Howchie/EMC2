@@ -1,6 +1,13 @@
 skip_model_validation()
 
 # Regression coverage for fixed clearance fading in BAwD.
+# The oracles in this file work in (mu, sigma).  The compiled lognormal launch
+# (launch = 1L) is sampled as the natural-scale mean and CV, so the kernel
+# wrappers below convert at the boundary.
+ln_meancv <- function(p1, p2, launch) {
+  if (as.integer(launch) != 1L) return(c(unname(p1), unname(p2)))
+  c(unname(exp(p1 + p2^2 / 2)), unname(sqrt(expm1(p2^2))))
+}
 # All gamma_ref_* helpers below are independent trajectory/quadrature oracles.
 
 gamma_ref_q <- function(u, k) if (k < 1e-12) u else -expm1(-k * u) / k
@@ -97,12 +104,16 @@ gamma_ref_f <- function(u, p1, p2, b, A, k, ell, launch, gamma,
   integrate(function(z) vapply(z, one, numeric(1)), 0, A,
             rel.tol = 2e-8, subdivisions = 120L)$value / A
 }
-gamma_cpp_p <- function(u, p1, p2, b, A, k, ell, launch, gamma) EMC2:::pbawd(
-  t = u, A = A, b = b, p1 = p1, p2 = p2, k = k, ell = ell,
-  launch = as.integer(launch), posdrift = TRUE, gamma = gamma)
-gamma_cpp_d <- function(u, p1, p2, b, A, k, ell, launch, gamma) EMC2:::dbawd(
-  t = u, A = A, b = b, p1 = p1, p2 = p2, k = k, ell = ell,
-  launch = as.integer(launch), posdrift = TRUE, gamma = gamma)
+gamma_cpp_p <- function(u, p1, p2, b, A, k, ell, launch, gamma) {
+  q <- ln_meancv(p1, p2, launch)
+  EMC2:::pbawd(t = u, A = A, b = b, p1 = q[1], p2 = q[2], k = k, ell = ell,
+               launch = as.integer(launch), posdrift = TRUE, gamma = gamma)
+}
+gamma_cpp_d <- function(u, p1, p2, b, A, k, ell, launch, gamma) {
+  q <- ln_meancv(p1, p2, launch)
+  EMC2:::dbawd(t = u, A = A, b = b, p1 = q[1], p2 = q[2], k = k, ell = ell,
+               launch = as.integer(launch), posdrift = TRUE, gamma = gamma)
+}
 
 test_that("gamma half wall has an independent quadratic oracle", {
   pars <- expand.grid(b = c(.4, 1.1, 2), k = c(.5, .8, 1.7), ell = c(.7, 1, 1.8))
@@ -119,7 +130,8 @@ test_that("fading increases omission mass at a common wall", {
                                   c(.05, 10))$root
   bs <- vapply(c(0, .5, 2 / 3, .75), solve_b, numeric(1))
   vc <- vapply(seq_along(bs), function(i) {
-    f <- EMC2:::pbawd(Inf, A = 0, b = bs[i], p1 = 0, p2 = 1, k = 1, ell = 1,
+    q <- ln_meancv(0, 1, 1L)   # the anchors are quoted for mu = 0, sigma = 1
+    f <- EMC2:::pbawd(Inf, A = 0, b = bs[i], p1 = q[1], p2 = q[2], k = 1, ell = 1,
                        launch = 1L, posdrift = TRUE, gamma = c(0, .5, 2 / 3, .75)[i])
     exp(-qnorm(f))
   }, numeric(1))
@@ -180,10 +192,11 @@ test_that("gamma one has co-decay structure and positive density", {
   for (u in c(.2, 1, 3, 10)) {
     q <- gamma_ref_q(u, .8)
     want <- pnorm((.9 - log(1.1 / q + 1)) / .6)
-    expect_equal(EMC2:::pbawd(t = u, A = 0, b = 1.1, p1 = .9, p2 = .6,
+    qg <- ln_meancv(.9, .6, 1L)
+    expect_equal(EMC2:::pbawd(t = u, A = 0, b = 1.1, p1 = qg[1], p2 = qg[2],
                               k = .8, ell = 1, launch = 1L, gamma = 1),
                  want, tolerance = 1e-12)
-    expect_gt(EMC2:::dbawd(t = u, A = 0, b = 1.1, p1 = .9, p2 = .6,
+    expect_gt(EMC2:::dbawd(t = u, A = 0, b = 1.1, p1 = qg[1], p2 = qg[2],
                            k = .8, ell = 1, launch = 1L, gamma = 1), 0)
   }
 })

@@ -82,8 +82,21 @@
 }
 
 .emc_wpool_pid_alive <- function(pid) {
-  length(pid) == 1L && !is.na(pid) &&
-    isTRUE(tryCatch(tools::pskill(pid, 0L), error = function(e) FALSE))
+  if (length(pid) != 1L || is.na(pid)) return(FALSE)
+  alive <- isTRUE(tryCatch(tools::pskill(pid, 0L),
+                           error = function(e) FALSE))
+  if (!alive) return(FALSE)
+  # kill(pid, 0) reports TRUE for a zombie retained by the clean template.
+  # Treat that process as dead so a missing completion token triggers the
+  # serial correctness fallback instead of an infinite FIFO wait.
+  stat <- tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
+                   error = function(e) character())
+  if (length(stat)) {
+    tail <- sub("^.*\\) ", "", stat)
+    state <- strsplit(tail, " ", fixed = TRUE)[[1L]][1L]
+    if (identical(state, "Z")) return(FALSE)
+  }
+  TRUE
 }
 
 .emc_wpool_job_pid <- function(job) {
@@ -296,10 +309,13 @@
 }
 
 # `ctx` is constant for the block. Spawn serialises it once to the template;
-# fork workers inherit it directly.
-.emc_wpool_start <- function(n_workers, ctx) {
+# fork workers inherit it directly. `allow_one` is used by the one-shot LOO
+# wrapper, which needs a single clean process around loo's own inner workers;
+# the normal sampler/comparison pool still refuses a one-worker pool.
+.emc_wpool_start <- function(n_workers, ctx, allow_one = FALSE) {
   n_workers <- as.integer(n_workers)
-  if (is.na(n_workers) || n_workers <= 1L) return(NULL)
+  if (is.na(n_workers) || n_workers < 1L ||
+      (!isTRUE(allow_one) && n_workers <= 1L)) return(NULL)
   if (Sys.info()[["sysname"]] == "Windows") return(NULL)
   if (!nzchar(Sys.which("mkfifo"))) return(NULL)
 
@@ -527,6 +543,10 @@
     }
     if (!tryCatch({ serialize(out, wc); flush(wc); TRUE },
                   error = function(e) FALSE)) break
+    # One-shot wrapper jobs (currently the clean loo process) compute exactly
+    # one request, return it, and exit so their allocator/native state cannot
+    # accumulate work from later requests.
+    if (isTRUE(ctx$oneshot)) break
   }
   invisible(NULL)
 }
@@ -599,7 +619,53 @@
                                      model = ctx$model, component = msg$component,
                                      r_cores = 1L)))
   }
+  # loo::loo parallelises over columns with mclapply. Run it in a clean,
+  # one-shot process so those inner workers inherit only this model's matrix,
+  # never compare()'s accumulated matrices for earlier models.
+  if (identical(msg$kind, "loo")) {
+    loo_warnings <- character()
+    value <- withCallingHandlers(
+      loo::loo(ctx$ll_mat, cores = ctx$cores),
+      warning = function(w) {
+        loo_warnings <<- c(loo_warnings, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      })
+    return(list(value = value, warnings = loo_warnings))
+  }
   .emc_wpool_compute_particle(msg, ctx, shared)
+}
+
+# Execute loo::loo in a clean one-shot process. Its own implementation forks
+# once per pointwise column, so isolating that call is the important part: the
+# inner forks see only the current model's matrix and disappear with the
+# wrapper. A NULL return asks the caller to use a serial loo fallback.
+.emc_wpool_run_loo <- function(ll_mat, cores) {
+  cores <- suppressWarnings(as.integer(cores))
+  if (is.na(cores) || cores <= 1L) return(NULL)
+  ctx <- list(kind = "loo", ll_mat = ll_mat, cores = cores, oneshot = TRUE)
+  pool <- .emc_wpool_start(1L, ctx, allow_one = TRUE)
+  if (is.null(pool)) return(NULL)
+  # A fork fallback would still inherit compare()'s accumulated matrices.
+  # Only use the history-free spawned backend here; the caller will run loo
+  # serially if a clean process cannot be created.
+  if (!identical(pool$backend, "spawn")) {
+    .emc_wpool_stop(pool)
+    return(NULL)
+  }
+  on.exit(.emc_wpool_stop(pool), add = TRUE)
+
+  sent <- tryCatch({
+    serialize(list(kind = "loo", notify = FALSE, w = 1L), pool$wcs[[1L]])
+    flush(pool$wcs[[1L]])
+    TRUE
+  }, error = function(e) FALSE)
+  if (!sent) return(NULL)
+  res <- tryCatch(unserialize(pool$rcs[[1L]]), error = function(e) NULL)
+  if (is.null(res) || !is.null(res$failed) || is.null(res$value)) return(NULL)
+  if (length(res$warnings) && exists(".loo_warn_store")) {
+    .loo_warn_store$msgs <- c(.loo_warn_store$msgs, res$warnings)
+  }
+  res$value
 }
 
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({

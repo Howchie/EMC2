@@ -12,16 +12,16 @@ test_that("BAwDD exposes alpha = 1/rho with the exponential boundary", {
 test_that("BAwDD closed forms reuse the BAwD kernel under reciprocal rho", {
   alpha <- c(0, 0.5, 1)
   rho <- c(Inf, 2, 1)
-  pars <- data.frame(mu = 0, sigma = 0.4, b = 1.2, A = 0.2,
+  pars <- data.frame(mean = 1, cv = 0.4, b = 1.2, A = 0.2,
                      t0 = 0, k = 0.5, ell = 0, alpha = alpha)
   rt <- rep(0.8, length(alpha))
   got_d <- EMC2:::dBAwDD(rt, pars)
   got_p <- EMC2:::pBAwDD(rt, pars)
   ref_d <- vapply(rho, function(r)
-    EMC2:::dbawd(0.8, A = 0.2, b = 1.2, p1 = 0, p2 = 0.4,
+    EMC2:::dbawd(0.8, A = 0.2, b = 1.2, p1 = 1, p2 = 0.4,
                  k = 0.5, ell = 0, rho = r), numeric(1))
   ref_p <- vapply(rho, function(r)
-    EMC2:::pbawd(0.8, A = 0.2, b = 1.2, p1 = 0, p2 = 0.4,
+    EMC2:::pbawd(0.8, A = 0.2, b = 1.2, p1 = 1, p2 = 0.4,
                  k = 0.5, ell = 0, rho = r), numeric(1))
   expect_equal(got_d, ref_d, tolerance = 1e-10)
   expect_equal(got_p, ref_p, tolerance = 1e-10)
@@ -29,7 +29,7 @@ test_that("BAwDD closed forms reuse the BAwD kernel under reciprocal rho", {
 })
 
 test_that("BAwDD compiled simulator accepts row-wise alpha", {
-  pars <- as.matrix(data.frame(mu = c(0, 0), sigma = c(0.4, 0.4),
+  pars <- as.matrix(data.frame(mean = c(1, 1), cv = c(0.4, 0.4),
                                B = c(1, 1), A = c(0.2, 0.2),
                                t0 = c(0.05, 0.05), k = c(0.5, 0.5),
                                ell = c(0, 0), alpha = c(0, 1), eta = c(0, 0),
@@ -193,7 +193,7 @@ test_that("the simulator reaches threshold for alpha > 1 with ell > 0", {
   A <- 0.4; B <- 0.8; b <- B + A; k <- 0.9; ell <- 0.25
   N <- 60000
   for (a in c(1.5, 3)) {
-    pars <- cbind(mu = rep(0.3, N), sigma = 0.5, B = B, A = A, t0 = 0, k = k,
+    pars <- cbind(mean = rep(0.3, N), cv = 0.5, B = B, A = A, t0 = 0, k = k,
                   ell = ell, alpha = a, eta = 0, b = b)
     out <- EMC2:::rbawdd_cpp(pars, "a", rep(TRUE, N), 1L, TRUE)
     hit <- is.finite(out$rt)
@@ -212,7 +212,7 @@ test_that("the simulator reaches threshold for alpha > 1 with ell > 0", {
 test_that("Ttransform reports the finite endpoint that ell > 0 creates", {
   m <- EMC2::BAwDD()
   pars <- as.matrix(data.frame(
-    mu = 0, sigma = 0.5, B = 0.8, A = 0.4, t0 = 0.1, k = 0.9,
+    mean = 1, cv = 0.5, B = 0.8, A = 0.4, t0 = 0.1, k = 0.9,
     ell = c(0.25, 0.25, 0, 0.25), alpha = c(0.5, 3, 3, Inf), eta = 0))
   out <- m$Ttransform(pars, NULL)
   expect_equal(unname(out[, "b"]), rep(1.2, 4))

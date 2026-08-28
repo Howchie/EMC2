@@ -89,7 +89,14 @@ ref_f_normal <- function(u, v, sv, b, A, k, ell, posdrift = TRUE) {
      sv * E * (dnorm(hi) - dnorm(cc))) / (A * denom)
 }
 
-ref_F_logn <- function(u, mu, sg, b, A, k, ell) {
+# The plain lognormal launch is sampled as the natural-scale mean and CV; the
+# reference integrands below work in (mu, sigma), so convert on entry.
+ln_musigma <- function(m, cv) {
+  s2 <- log1p(unname(cv)^2)
+  c(mu = log(unname(m)) - s2 / 2, sigma = sqrt(s2))
+}
+ref_F_logn <- function(u, mean_, cv_, b, A, k, ell) {
+  .q <- ln_musigma(mean_, cv_); mu <- .q[["mu"]]; sg <- .q[["sigma"]]
   Gbar <- function(w) pnorm((mu - log(w)) / sg)
   M <- exp(mu + sg^2 / 2)
   Jf <- function(w) w * pnorm((mu - log(w)) / sg) -
@@ -117,7 +124,8 @@ ref_F_logn <- function(u, mu, sg, b, A, k, ell) {
   (live + froz) / A
 }
 
-ref_f_logn <- function(u, mu, sg, b, A, k, ell) {
+ref_f_logn <- function(u, mean_, cv_, b, A, k, ell) {
+  .q <- ln_musigma(mean_, cv_); mu <- .q[["mu"]]; sg <- .q[["sigma"]]
   q <- ref_q(u, k)
   E <- exp(-k * u)
   M <- exp(mu + sg^2 / 2)
@@ -273,7 +281,8 @@ test_that("Monte Carlo agrees for both launch distributions", {
     expect_true(all(T[!is.infinite(T)] > 0))
   }
   for (p in bawd_logn_sets[1]) {
-    V <- rlnorm(N, p[["mu"]], p[["sigma"]])
+    qms <- ln_musigma(p[["mu"]], p[["sigma"]])   # fixture holds (mean, cv)
+    V <- rlnorm(N, qms[["mu"]], qms[["sigma"]])
     z <- runif(N, 0, p[["A"]])
     T <- mapply(function(vv, zz) ref_fp(vv, zz, p[["b"]], p[["k"]], p[["ell"]]),
                 V, z)
@@ -453,8 +462,9 @@ test_that("the frozen integral agrees when its closed form is ill conditioned", 
   }
   # A narrow interval far into the lognormal upper tail, where the stop-loss
   # difference itself cancels.
-  got <- cpp_p(Inf, -6, 0.05, 1, 1e-5, 2, 1, 1L)
-  ref <- ref_F_logn(1e8, -6, 0.05, 1, 1e-5, 2, 1)
+  .q <- c(mean = exp(-6 + 0.05^2 / 2), cv = sqrt(expm1(0.05^2)))
+  got <- cpp_p(Inf, .q[["mean"]], .q[["cv"]], 1, 1e-5, 2, 1, 1L)
+  ref <- ref_F_logn(1e8, .q[["mean"]], .q[["cv"]], 1, 1e-5, 2, 1)
   expect_equal(got, ref, tolerance = 1e-6)
 })
 
@@ -522,7 +532,7 @@ test_that("the constructor wires drift_distribution consistently", {
   # The kernel column contract is positional; these ARE the orders in
   # src/col_registry.h and a reordering here must fail loudly there.
   expect_identical(m_ln$p_types_canonical,
-                   c("mu", "sigma", "B", "A", "t0", "k", "ell"))
+                   c("mean", "cv", "B", "A", "t0", "k", "ell"))
   expect_identical(m_no$p_types_canonical,
                    c("v", "sv", "B", "A", "t0", "k", "ell"))
   # "BAwD_LOGN" must not trip the IO substring test in the adapter.
@@ -538,7 +548,7 @@ test_that("dfun/pfun use the same launch distribution as the c_name", {
   for (dd in c("lognormal", "normal")) {
     m <- BAwD(dd)
     launch <- if (grepl("_LOGN", m$c_name)) 1L else 0L
-    nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+    nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
     rt <- c(0.3, 0.5, 0.9)
     pars <- cbind(0.6, 1, 1, 0.3, 0.2, 1.5, 0.6)
     colnames(pars) <- c(nm, "B", "A", "t0", "k", "ell")
@@ -551,7 +561,7 @@ test_that("dfun/pfun use the same launch distribution as the c_name", {
   }
   # rt = Inf must reach the pfun as F_max, not be dropped or clamped to one.
   m <- BAwD()
-  pars <- cbind(mu = 0.6, sigma = 1, B = 1, A = 0.3, t0 = 0.2, k = 1.5,
+  pars <- cbind(mean = 0.6, cv = 1, B = 1, A = 0.3, t0 = 0.2, k = 1.5,
                 ell = 0.6, b = 1.3)
   got <- m$pfun(Inf, pars)
   expect_gt(got, 0)
@@ -626,12 +636,12 @@ bawd_ll_fixture <- function() {
   list(
     dat = dat,
     ln = suppressMessages(mk(BAwD,
-      list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+      list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
       c(ell = log(1)))),
     no = suppressMessages(mk(function() BAwD("normal"),
       list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1),
       c(sv = log(1)))),
-    p = c(mu = 0.9, sigma = log(0.6), v = 3, B = log(0.8), A = log(0.3),
+    p = c(mean = 0.9, cv = log(0.6), v = 3, B = log(0.8), A = log(0.3),
           t0 = log(0.15), k = log(0.8), ell = log(0.5))
   )
 }
@@ -723,9 +733,9 @@ test_that("omissions, truncation and censoring beyond T_max stay well posed", {
   dat$R[1:8] <- NA
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
     constants = c(ell = log(1))))
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(0.8))[names(sampled_pars(des))]
 
   tmax <- EMC2:::bawd_tmax(0.3, 1.1, 0.8, 1)
@@ -754,7 +764,7 @@ test_that("omissions, truncation and censoring beyond T_max stay well posed", {
   # shift the total by exactly n * log(1 - pc).
   des_pc <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
                    pContaminant ~ 1),
     constants = c(ell = log(1))))
   dat_fin <- dat[9:nrow(dat), ]     # drop the omissions
@@ -787,11 +797,11 @@ test_that("a finite response beyond t0 + T_max floors cleanly", {
   dat <- dat[seq_len(30), ]
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
     constants = c(ell = log(1))))
   # A large k makes the supported window very short, so every observed rt is
   # past it.  Assert that premise rather than assuming it.
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(200))[names(sampled_pars(des))]
   expect_true(all(dat$rt > 0.15 + EMC2:::bawd_tmax(0.3, 1.1, 200, 1)))
   e <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
@@ -846,9 +856,9 @@ test_that("make_data produces omissions the design can be fit back through", {
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
-    contrasts = list(mu = list(lM = ADmat)), constants = c(ell = log(1))))
-  p <- c(mu = 1.2, mu_lMd = 0.8, sigma = log(0.5), B = log(0.7),
+    formula = list(mean ~ lM, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    contrasts = list(mean = list(lM = ADmat)), constants = c(ell = log(1))))
+  p <- c(mean = 1.2, mean_lMd = 0.8, cv = log(0.5), B = log(0.7),
          A = log(0.3), t0 = log(0.15), k = log(0.7))[names(sampled_pars(des))]
   sim <- make_data(p, design = des, n_trials = 60)
   expect_true(any(is.infinite(sim$rt)))            # intrinsic omissions
@@ -867,7 +877,7 @@ test_that("BAwDp evaluates closed-form densities and simulates consistently", {
   # Single accumulator check: zero density and flat CDF past u*
   t_seq <- seq(0.05, 1.5, length.out = 50)
   p_mat <- matrix(c(1.0, 0.5, 0.8, 0.3, 0.1, 1.5, 0.3, 1.1), nrow = 50, ncol = 8, byrow = TRUE,
-                  dimnames = list(NULL, c("mu", "sigma", "B", "A", "t0", "k", "lambda", "b")))
+                  dimnames = list(NULL, c("mean", "cv", "B", "A", "t0", "k", "lambda", "b")))
   d_val <- EMC2:::dBAwDp(t_seq, p_mat)
   p_val <- EMC2:::pBAwDp(t_seq, p_mat)
   u_star <- 0.1 + (-log(0.3) / 1.5)
@@ -890,9 +900,9 @@ test_that("BAwDp evaluates closed-form densities and simulates consistently", {
   dat <- dat[seq_len(60), ]
   des_dp <- suppressMessages(design(
     data = dat, model = BAwDp, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, lambda ~ 1)))
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, lambda ~ 1)))
   e_dp <- suppressMessages(make_emc(dat, des_dp, type = "single", n_chains = 1, compress = FALSE, rt_resolution = NULL))
-  p_dp <- c(mu = 1.0, sigma = log(0.5), B = log(0.8), A = log(0.3),
+  p_dp <- c(mean = 1.0, cv = log(0.5), B = log(0.8), A = log(0.3),
             t0 = log(0.15), k = log(1.2), lambda = qnorm(0.4))[names(sampled_pars(des_dp))]
   ll_dp <- bawd_ll(list(emc = e_dp), p_dp)
   expect_true(is.finite(ll_dp))
@@ -904,7 +914,8 @@ test_that("BAwDp CDF stays at its ceiling once exp(-k t) underflows", {
   # a ZERO cdf where the defective ceiling belongs, i.e. a survivor of one for
   # every loser in the race, with a visible jump at the underflow threshold.
   pr <- function(t) EMC2:::pbawdp(t, A = rep(0.4, length(t)), b = rep(1.2, length(t)),
-                                  p1 = rep(log(180), length(t)), p2 = rep(0.5, length(t)),
+                                  p1 = rep(exp(log(180) + 0.5^2 / 2), length(t)),
+                                  p2 = rep(sqrt(expm1(0.5^2)), length(t)),
                                   k = rep(200, length(t)), lambda = rep(0, length(t)),
                                   launch = 1L, posdrift = TRUE)
   ceiling_val <- pr(Inf)
@@ -912,7 +923,8 @@ test_that("BAwDp CDF stays at its ceiling once exp(-k t) underflows", {
   # k t spans 200 to 1000, i.e. either side of the underflow threshold
   expect_equal(pr(c(1, 2, 3, 3.7, 3.8, 5)), rep(ceiling_val, 6), tolerance = 1e-12)
   expect_equal(EMC2:::dbawdp(c(3.7, 3.8, 5), A = rep(0.4, 3), b = rep(1.2, 3),
-                             p1 = rep(log(180), 3), p2 = rep(0.5, 3), k = rep(200, 3),
+                             p1 = rep(exp(log(180) + 0.5^2 / 2), 3),
+                             p2 = rep(sqrt(expm1(0.5^2)), 3), k = rep(200, 3),
                              lambda = rep(0, 3), launch = 1L, posdrift = TRUE),
                rep(0, 3))
 })
@@ -978,7 +990,7 @@ test_that("BAwDp k = 0 is the LBA limit and preserves constructor bounds", {
   # 3. Pure-R and C++ simulation agree at k = 0
   lR <- factor(rep(c("left", "right"), 500), levels = c("left", "right"))
   pars_k0 <- matrix(c(1.0, 0.5, 0.8, 0.3, 0.1, 0, 0.3, 1.1), nrow = length(lR), ncol = 8, byrow = TRUE,
-                    dimnames = list(NULL, c("mu", "sigma", "B", "A", "t0", "k", "lambda", "b")))
+                    dimnames = list(NULL, c("mean", "cv", "B", "A", "t0", "k", "lambda", "b")))
   set.seed(123)
   sim_r_k0 <- EMC2:::rBAwDp(lR, pars_k0)
   set.seed(123)

@@ -92,11 +92,20 @@ rho_ref_frozen <- function(p1, p2, b, A, k, ell, launch, gamma, rho) {
   }, numeric(1))
   integrate(integrand, 0, A, rel.tol = 1e-9)$value / A
 }
+# The oracles here work in (mu, sigma); the compiled lognormal launch is
+# sampled as the natural-scale mean and CV, so convert at the kernel boundary.
+ln_meancv <- function(p1, p2, launch) {
+  if (as.integer(launch) != 1L) return(c(unname(p1), unname(p2)))
+  c(unname(exp(p1 + p2^2 / 2)), unname(sqrt(expm1(p2^2))))
+}
+
 rho_cpp_p <- function(u, p1, p2, b, A, k, ell, launch, gamma, rho) {
+  q <- ln_meancv(p1, p2, launch); p1 <- q[1]; p2 <- q[2]
   EMC2:::pbawd(t = u, A = A, b = b, p1 = p1, p2 = p2, k = k, ell = ell,
                launch = launch, gamma = gamma, rho = rho)
 }
 rho_cpp_d <- function(u, p1, p2, b, A, k, ell, launch, gamma, rho) {
+  q <- ln_meancv(p1, p2, launch); p1 <- q[1]; p2 <- q[2]
   EMC2:::dbawd(t = u, A = A, b = b, p1 = p1, p2 = p2, k = k, ell = ell,
                launch = launch, gamma = gamma, rho = rho)
 }
@@ -234,8 +243,8 @@ test_that("frozen fallback, boundary hygiene, simulator, and wiring", {
     expect_equal(got, want, tolerance = 2e-12)
   }
   lR_many <- factor(rep(c("L", "R"), 500), levels = c("L", "R"))
-  pars_many <- cbind(mu = rep(.8, length(lR_many)),
-                     sigma = rep(.7, length(lR_many)),
+  pars_many <- cbind(mean = rep(.8, length(lR_many)),
+                     cv = rep(.7, length(lR_many)),
                      b = rep(1.1, length(lR_many)),
                      A = rep(.2, length(lR_many)),
                      t0 = rep(.1, length(lR_many)),
@@ -249,14 +258,18 @@ test_that("frozen fallback, boundary hygiene, simulator, and wiring", {
     EMC2:::.rfun_BAwD(lR_many, pars_many, launch = 1L, gamma = .5, rho = 2))
   for (dat in list(r_ref, r_cpp)) {
     for (u in c(.3, .7, 1.2)) {
-      f <- rho_cpp_p(u - .1, .8, .7, 1.1, .2, .9, 1, 1L, .5, 2)
+      # pars_many holds the PUBLIC pair (mean = .8, cv = .7); rho_cpp_p takes
+      # (mu, sigma), so feed it the matching log-scale pair.
+      .s2 <- log1p(.7^2)
+      f <- rho_cpp_p(u - .1, log(.8) - .s2 / 2, sqrt(.s2), 1.1, .2, .9, 1,
+                     1L, .5, 2)
       expect_lt(abs(mean(is.finite(dat$rt) & dat$rt <= u) - (1 - (1 - f)^2)),
                 4e-2)
     }
   }
   expect_true(all(is.na(r_ref$R[!is.finite(r_ref$rt)])))
-  pars_k0 <- cbind(mu = rep(2, length(lR_many)),
-                   sigma = rep(.01, length(lR_many)),
+  pars_k0 <- cbind(mean = rep(2, length(lR_many)),
+                   cv = rep(.01, length(lR_many)),
                    b = rep(.8, length(lR_many)),
                    A = rep(0, length(lR_many)),
                    t0 = rep(.1, length(lR_many)),
@@ -267,7 +280,7 @@ test_that("frozen fallback, boundary hygiene, simulator, and wiring", {
     list(emc2.cpp_rfun = TRUE),
     EMC2:::.rfun_BAwD(lR_many, pars_k0, launch = 1L, gamma = .5, rho = 2))
   expect_true(all(is.finite(k0_cpp$rt)))
-  pars <- data.frame(mu = rep(.8, 2), sigma = rep(.7, 2), b = rep(1.1, 2),
+  pars <- data.frame(mean = rep(.8, 2), cv = rep(.7, 2), b = rep(1.1, 2),
                      A = rep(.2, 2), t0 = rep(.1, 2), k = rep(.9, 2),
                      ell = rep(1, 2))
   lR <- factor(c("R1", "R2"), levels = c("R1", "R2"))
@@ -285,9 +298,9 @@ test_that("finite rho reaches the sampled likelihood adapter", {
   des <- suppressMessages(EMC2::design(
     data = dat, model = function() EMC2::BAwD(gamma = .5, rho = 2),
     matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
                    ell ~ 1)))
-  p <- c(mu = .9, sigma = log(.6), B = log(.8), A = log(.3),
+  p <- c(mean = .9, cv = log(.6), B = log(.8), A = log(.3),
          t0 = log(.15), k = log(.8),
          ell = log(0.5))[names(EMC2::sampled_pars(des))]
   set.seed(20260821)

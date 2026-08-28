@@ -45,17 +45,21 @@ testthat::test_that("delta zero preserves the ordinary lognormal scalar path", {
                 "dBTAwL", "pBTAwL")
   available <- all(vapply(compiled, function(x) exists(x, envir = asNamespace("EMC2"), inherits = FALSE), logical(1)))
   skip_if_not(available, "compiled split-launch bindings are unavailable")
-  expect_equal(EMC2:::dbawd(1, 0, 1, 0, 1, 0, 1, launch = 1),
+  # launch = 1 is sampled as (mean, cv); launch = 2 with delta = 0 is the same
+  # distribution written as (mu, sigma).  Feed each branch its own coordinates.
+  ln_m  <- exp(0 + 1^2 / 2)      # mu = 0, sigma = 1
+  ln_cv <- sqrt(expm1(1^2))
+  expect_equal(EMC2:::dbawd(1, 0, 1, ln_m, ln_cv, 0, 1, launch = 1),
                EMC2:::dbawd(1, 0, 1, 0, 1, 0, 1, launch = 2, delta = 0), tolerance = 1e-12)
-  expect_equal(EMC2:::pbawd(1, 0, 1, 0, 1, 0, 1, launch = 1),
+  expect_equal(EMC2:::pbawd(1, 0, 1, ln_m, ln_cv, 0, 1, launch = 1),
                EMC2:::pbawd(1, 0, 1, 0, 1, 0, 1, launch = 2, delta = 0), tolerance = 1e-12)
-  expect_equal(EMC2:::dbawf(1, 0, 1, 0, 1, 0.5, 2, launch = 1),
+  expect_equal(EMC2:::dbawf(1, 0, 1, ln_m, ln_cv, 0.5, 2, launch = 1),
                EMC2:::dbawf(1, 0, 1, 0, 1, 0.5, 2, launch = 2, delta = 0), tolerance = 1e-12)
-  expect_equal(EMC2:::pbawf(1, 0, 1, 0, 1, 0.5, 2, launch = 1),
+  expect_equal(EMC2:::pbawf(1, 0, 1, ln_m, ln_cv, 0.5, 2, launch = 1),
                EMC2:::pbawf(1, 0, 1, 0, 1, 0.5, 2, launch = 2, delta = 0), tolerance = 1e-12)
-  expect_equal(EMC2:::dbawr(1, 0, 1, 0, 1, 0.5, 1, launch = 1),
+  expect_equal(EMC2:::dbawr(1, 0, 1, ln_m, ln_cv, 0.5, 1, launch = 1),
                EMC2:::dbawr(1, 0, 1, 0, 1, 0.5, 1, launch = 2, delta = 0), tolerance = 1e-12)
-  expect_equal(EMC2:::pbawr(1, 0, 1, 0, 1, 0.5, 1, launch = 1),
+  expect_equal(EMC2:::pbawr(1, 0, 1, ln_m, ln_cv, 0.5, 1, launch = 1),
                EMC2:::pbawr(1, 0, 1, 0, 1, 0.5, 1, launch = 2, delta = 0), tolerance = 1e-12)
 })
 
@@ -65,8 +69,10 @@ testthat::test_that("delta reaches point-start kernels and the pure-R fallback s
     exists(x, envir = asNamespace("EMC2"), inherits = FALSE), logical(1)))
   skip_if_not(available, "compiled split-launch bindings are unavailable")
   tv <- c(0.35, 0.6, 1.0)
+  # launch = 1L is sampled as (mean, cv); the split branch keeps (mu, sigma).
   expect_equal(EMC2:::pbawf(tv, 0, 1.5, 0, 1, 2, launch = 2L),
-               EMC2:::pbawf(tv, 0, 1.5, 0, 1, 2, launch = 1L), tolerance = 1e-12)
+               EMC2:::pbawf(tv, 0, 1.5, exp(0.5), sqrt(expm1(1)), 2, launch = 1L),
+               tolerance = 1e-12)
   expect_true(!isTRUE(all.equal(
     EMC2:::pbawf(tv, 0, 1.5, 0, 1, 2, launch = 2L, delta = 0.4),
     EMC2:::pbawf(tv, 0, 1.5, 0, 1, 2, launch = 2L))))
@@ -115,7 +121,7 @@ testthat::test_that("BAwF keeps the nuisance columns available to design", {
   expect_true(all(c("pContaminant", "pGuess") %in% names(BAwF()$p_types)))
   expect_silent(design(
     factors = list(subjects = 1, S = 1), Rlevels = 1,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
                    pContaminant ~ 1),
     model = BAwF, report_p_vector = FALSE
   ))

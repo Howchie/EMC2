@@ -107,7 +107,7 @@ namespace bawl {
 namespace bawl_logn {
   enum : int { mu = 0, sigma, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwL_LOGN"};
   }
 }
@@ -142,7 +142,7 @@ namespace bawd_logn {
   // Same positions as bawd: mu occupies v's slot and sigma occupies sv's.
   enum : int { mu = 0, sigma, B, A, t0, k, ell, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN"};
   }
 }
@@ -174,7 +174,7 @@ namespace bawdd {
 namespace bawdd_logn {
   enum : int { mu = 0, sigma, B, A, t0, k, ell, alpha, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell", "alpha"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "k", "ell", "alpha"};
     return {n, N_REQ, "BAwDD_LOGN"};
   }
 }
@@ -210,7 +210,7 @@ namespace bawf_logn {
   // Same positions as bawf: mu occupies v's slot and sigma occupies sv's.
   enum : int { mu = 0, sigma, B, A, t0, k, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwF_LOGN"};
   }
 }
@@ -245,7 +245,7 @@ namespace bawr_logn {
   // Same positions as bawr: mu occupies v's slot and sigma occupies sv's.
   enum : int { mu = 0, sigma, B, A, t0, kappa, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "kappa", "p"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR_LOGN"};
   }
 }
@@ -406,7 +406,7 @@ namespace bawdp {
 namespace bawdp_logn {
   enum : int { mu = 0, sigma, B, A, t0, k, lambda, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "lambda"};
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "k", "lambda"};
     return {n, N_REQ, "BAwDp_LOGN"};
   }
 }

@@ -501,7 +501,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     drifts <- if (launch == 3L) {
       .rweibull_mean(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 1L) {
-      rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+      .ba_rlnorm_meancv(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 2L) {
       .bawd_split_rlnorm(pars[, "mu"], pars[, "sigma"], pars[, "delta"])
     } else {
@@ -707,7 +707,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' `eta`.
 #' With `drift_distribution = "lognormal"`, `v` and `sv` are replaced by `mu`
 #' (identity, default 0) and `sigma` (log, default `log(1)`), giving
-#' `log V ~ N(mu, sigma^2)`.  With `"splitlognormal"`, `mu` is the exact
+#' `V` lognormal with sampled arithmetic `mean` and `cv`.  With
+#' `"splitlognormal"`, the log-scale `mu` is the exact
 #' median of `log V`, `delta` is an unbounded real parameter, and the
 #' continuous split-normal widths are
 #' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`;
@@ -730,7 +731,7 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' direction `mu -> mu + log c`, `B -> B + log c`, `A -> A + log c`, leaving
 #' `sigma`, `k`, `t0` and every contrast coefficient untouched. Fixing *any
 #' one* of `mu`'s intercept, `B`'s intercept, or `A` therefore identifies the
-#' scale; `constants = c(mu = 0)` and `constants = c(B = log(1))` are both
+#' scale; `constants = c(mean = log(1))` and `constants = c(B = log(1))` are both
 #' valid and differ only by reparameterization. Because the rescaling shifts
 #' only the intercept, condition effects on the fixed parameter survive: with
 #' `B ~ E`, `constants = c(B = log(1))` leaves `B_Eneutral` and `B_Eaccuracy`
@@ -790,8 +791,9 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   `rho` and use the correlated BAwL race simulator and likelihood path.
 #'   Only available for `drift_distribution = "normal"`.
 #' @param drift_distribution Distribution of the trialwise launch strength:
-#'   `"normal"` (the default) for `V ~ N(v, sv^2)`, `"lognormal"` for
-#'   `log V ~ N(mu, sigma^2)`, or `"splitlognormal"` for a continuous
+#'   `"normal"` (the default) for `V ~ N(v, sv^2)`, `"lognormal"` for a
+#'   lognormal `V` parameterized by its arithmetic `mean` and `cv`, or
+#'   `"splitlognormal"` for a continuous
 #'   split-normal `log V` with widths
 #'   `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`.
 #'   In the split variant `mu` is the exact median and `delta` is unbounded;
@@ -807,9 +809,9 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' design_BAwL_logn <- design(
 #'   data = forstmann, model = function() BAwL(drift_distribution = "lognormal"),
 #'   matchfun = matchfun,
-#'   formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
+#'   formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
 #'   contrasts = list(mu = list(lM = ADmat)),
-#'   constants = c(mu = 0))
+#'   constants = c(mean = log(1)))
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
@@ -855,15 +857,19 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     p_types <- c(shape = log(1), mean = log(1))
     transform <- c(shape = "exp", mean = "exp")
     minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
+  } else if (splitlognormal) {
+    # The split launch keeps log-scale (mu, sigma, delta): mu is the exact
+    # median and (m, cv, delta) has no closed-form inverse.
+    p_types <- c("mu" = 0, "sigma" = log(1), "delta" = 0)
+    transform <- c(mu = "identity", sigma = "exp", delta = "identity")
+    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf),
+                    delta = c(-Inf, Inf))
   } else if (lognormal) {
-    p_types <- c("mu" = 0, "sigma" = log(1))
-    transform <- c(mu = "identity", sigma = "exp")
-    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
-    if (splitlognormal) {
-      p_types <- c(p_types, delta = 0)
-      transform <- c(transform, delta = "identity")
-      minmax <- cbind(minmax, delta = c(-Inf, Inf))
-    }
+    # Natural-scale launch moments; the kernel converts to (mu, sigma) via
+    # launch_lognormal_pair() in src/wald_functions.h.
+    p_types <- c("mean" = log(1), "cv" = log(1))
+    transform <- c(mean = "exp", cv = "exp")
+    minmax <- cbind(mean = c(1e-4, Inf), cv = c(1e-4, Inf))
   } else {
     p_types <- c("v" = 1, "sv" = log(1))
     transform <- c(v = "identity", sv = "exp")

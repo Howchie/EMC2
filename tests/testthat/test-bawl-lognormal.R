@@ -45,10 +45,18 @@ ref_f_logn <- function(t, A, b, mu, sigma, k) {
             0, A, rel.tol = .Machine$double.eps^0.75)$value / A
 }
 
-cpp_p_logn <- function(t, A, b, mu, sigma, k)
-  EMC2:::pleakyba(t, A, b, mu, sigma, k, TRUE, 1L)
-cpp_d_logn <- function(t, A, b, mu, sigma, k)
-  EMC2:::dleakyba(t, A, b, mu, sigma, k, TRUE, 1L)
+# launch = 1L is sampled on the natural scale as (mean, cv); the reference
+# integrals below stay in (mu, sigma), so convert at the call boundary.
+ln_meancv <- function(mu, sigma)
+  c(mean = unname(exp(mu + sigma^2 / 2)), cv = unname(sqrt(expm1(sigma^2))))
+cpp_p_logn <- function(t, A, b, mu, sigma, k) {
+  mc <- ln_meancv(mu, sigma)
+  EMC2:::pleakyba(t, A, b, mc[["mean"]], mc[["cv"]], k, TRUE, 1L)
+}
+cpp_d_logn <- function(t, A, b, mu, sigma, k) {
+  mc <- ln_meancv(mu, sigma)
+  EMC2:::dleakyba(t, A, b, mc[["mean"]], mc[["cv"]], k, TRUE, 1L)
+}
 
 # ---------------------------------------------------------------------------
 # 1. Kernels
@@ -135,11 +143,11 @@ test_that("BAwL(drift_distribution) selects the launch pair and c_name", {
   expect_equal(ln$c_name, "BAwL_LOGN")
   expect_equal(no$c_name, "BAwL")
   expect_equal(no$drift_distribution, "normal")     # default is unchanged
-  expect_equal(names(ln$p_types)[1:2], c("mu", "sigma"))
+  expect_equal(names(ln$p_types)[1:2], c("mean", "cv"))
   expect_equal(names(no$p_types)[1:2], c("v", "sv"))
-  expect_equal(ln$p_types_canonical, c("mu", "sigma", "B", "A", "t0", "k"))
-  expect_equal(unname(ln$transform$func[c("mu", "sigma")]),
-               c("identity", "exp"))
+  expect_equal(ln$p_types_canonical, c("mean", "cv", "B", "A", "t0", "k"))
+  expect_equal(unname(ln$transform$func[c("mean", "cv")]),
+               c("exp", "exp"))
   # The clock suffixes still compose, and _LOGN never meets IO.
   expect_equal(BAwL(drift_distribution = "lognormal",
                     erlang_type = "local_kill")$c_name,
@@ -159,20 +167,21 @@ test_that("lognormal BAwL refuses the combinations it does not implement", {
 })
 
 test_that("the lognormal Ttransform emits the kernel column order", {
-  # p_types prefix IS the kernel column order, so mu/sigma must lead.
+  # p_types prefix IS the kernel column order, so mean/cv must lead.
   m <- BAwL(drift_distribution = "lognormal")
-  pars <- cbind(mu = 0.3, sigma = 0.5, B = 1, A = 0.3, t0 = 0.2, k = 0.8,
+  pars <- cbind(mean = 1.4, cv = 0.5, B = 1, A = 0.3, t0 = 0.2, k = 0.8,
                 mG = 1, mK = 1)
   out <- m$Ttransform(pars, NULL)
   expect_equal(colnames(out)[1:8],
-               c("mu", "sigma", "B", "A", "t0", "k", "lambda_g", "lambda_k"))
+               c("mean", "cv", "B", "A", "t0", "k", "lambda_g", "lambda_k"))
   expect_equal(unname(out[, "b"]), 1.3)
 })
 
 test_that("the model's dfun and pfun call the lognormal kernels", {
   m <- BAwL(drift_distribution = "lognormal")
-  pars <- cbind(mu = 0.3, sigma = 0.5, B = 1, A = 0.3, t0 = 0.2, k = 0.8,
-                lambda_g = 0, lambda_k = 0, b = 1.3)
+  mc <- ln_meancv(0.3, 0.5)
+  pars <- cbind(mean = mc[["mean"]], cv = mc[["cv"]], B = 1, A = 0.3, t0 = 0.2,
+                k = 0.8, lambda_g = 0, lambda_k = 0, b = 1.3)
   rt <- 0.9
   expect_equal(m$dfun(rt, pars), cpp_d_logn(rt - 0.2, 0.3, 1.3, 0.3, 0.5, 0.8),
                ignore_attr = TRUE)
@@ -191,8 +200,9 @@ test_that("the model's dfun and pfun call the lognormal kernels", {
 test_that("the lognormal BAwL simulators produce valid draws", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), 100), levels = c("left", "right"))
-  pars <- cbind(mu = 0.4, sigma = 0.5, b = 1.3, A = 0.3, t0 = 0.2, k = 0.6,
-                lambda_g = 0, lambda_k = 0)
+  mc <- ln_meancv(0.4, 0.5)
+  pars <- cbind(mean = mc[["mean"]], cv = mc[["cv"]], b = 1.3, A = 0.3,
+                t0 = 0.2, k = 0.6, lambda_g = 0, lambda_k = 0)
   pars <- pars[rep(1, length(lR)), , drop = FALSE]
   for (cpp in c(TRUE, FALSE)) {
     withr::local_options(emc2.cpp_rfun = cpp)

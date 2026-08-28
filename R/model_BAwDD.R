@@ -75,14 +75,15 @@ rBAwDD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' The frozen-branch closed forms carry the sign of `rho - 1` explicitly and so
 #' hold on both sides of `alpha = 1`.
 #'
-#' With `drift_distribution = "lognormal"` (the default), `log V ~
-#' N(mu, sigma^2)`.  The `splitlognormal`, `weibull`, and `normal` launch
+#' With `drift_distribution = "lognormal"` (the default), `V` is lognormal,
+#' sampled on the natural scale as its arithmetic `mean = E[V]` and
+#' `cv = SD(V)/E[V]`.  The `splitlognormal`, `weibull`, and `normal` launch
 #' choices use the same parameterisations as [BAwD].
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log-launch width. |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Arithmetic mean E[V] of the launch strength (lognormal launch). |
+#' | *cv* | log | \[0, Inf\] | log(1) | | Coefficient of variation SD(V)/E[V] (lognormal launch). |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
 #' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
@@ -124,15 +125,19 @@ BAwDD <- function(drift_distribution = c("lognormal", "normal",
     p_types <- c(shape = log(1), mean = log(1))
     transform <- c(shape = "exp", mean = "exp")
     minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
+  } else if (splitlognormal) {
+    # The split launch keeps log-scale (mu, sigma, delta): mu is the exact
+    # median and (m, cv, delta) has no closed-form inverse.
+    p_types <- c("mu" = 0, "sigma" = log(1), "delta" = 0)
+    transform <- c(mu = "identity", sigma = "exp", delta = "identity")
+    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf),
+                    delta = c(-Inf, Inf))
   } else if (lognormal) {
-    p_types <- c(mu = 0, sigma = log(1))
-    transform <- c(mu = "identity", sigma = "exp")
-    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
-    if (splitlognormal) {
-      p_types <- c(p_types, delta = 0)
-      transform <- c(transform, delta = "identity")
-      minmax <- cbind(minmax, delta = c(-Inf, Inf))
-    }
+    # Natural-scale launch moments; the kernel converts to (mu, sigma) via
+    # launch_lognormal_pair() in src/wald_functions.h.
+    p_types <- c("mean" = log(1), "cv" = log(1))
+    transform <- c(mean = "exp", cv = "exp")
+    minmax <- cbind(mean = c(1e-4, Inf), cv = c(1e-4, Inf))
   } else {
     p_types <- c(v = 1, sv = log(1))
     transform <- c(v = "identity", sv = "exp")

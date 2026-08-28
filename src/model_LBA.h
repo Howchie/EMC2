@@ -1014,8 +1014,11 @@ inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
                                   double &cdf, int launch,
                                   double delta = 0.0) {
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
-      launch == BAWL_LAUNCH_SPLITLOGNORMAL)
-    return bawl_natural_cdf_logn(t, A, b, p1, p2, k, accept_mode, cdf, delta);
+      launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    return bawl_natural_cdf_logn(t, A, b, L.mu, L.sigma, k, accept_mode, cdf, delta);
+  }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return bawl_natural_cdf_weib(t, A, b, p1, p2, k, accept_mode, cdf);
   return ba_natural_cdf(t, A, b, p1, p2, k, posdrift, denom_floor,
@@ -1028,8 +1031,11 @@ inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
                                   double &pdf, int launch,
                                   double delta = 0.0) {
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
-      launch == BAWL_LAUNCH_SPLITLOGNORMAL)
-    return bawl_natural_pdf_logn(t, A, b, p1, p2, k, accept_mode, pdf, delta);
+      launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    return bawl_natural_pdf_logn(t, A, b, L.mu, L.sigma, k, accept_mode, pdf, delta);
+  }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return bawl_natural_pdf_weib(t, A, b, p1, p2, k, accept_mode, pdf);
   return ba_natural_pdf(t, A, b, p1, p2, k, posdrift, denom_floor,
@@ -1041,8 +1047,11 @@ inline double log_ba_cdf_launch(double t, double A, double b, double p1,
                                 double denom_floor, int launch,
                                 double delta = 0.0) {
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
-      launch == BAWL_LAUNCH_SPLITLOGNORMAL)
-    return log_bawl_cdf_logn(t, A, b, p1, p2, k, delta);
+      launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    return log_bawl_cdf_logn(t, A, b, L.mu, L.sigma, k, delta);
+  }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_cdf_weib(t, A, b, p1, p2, k);
   return log_ba_cdf(t, A, b, p1, p2, k, posdrift, denom_floor);
@@ -1053,8 +1062,11 @@ inline double log_ba_surv_launch(double t, double A, double b, double p1,
                                  double denom_floor, int launch,
                                  double delta = 0.0) {
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
-      launch == BAWL_LAUNCH_SPLITLOGNORMAL)
-    return log_bawl_surv_logn(t, A, b, p1, p2, k, delta);
+      launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    return log_bawl_surv_logn(t, A, b, L.mu, L.sigma, k, delta);
+  }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_surv_weib(t, A, b, p1, p2, k);
   return log_bawl_surv_normal(t, A, b, p1, p2, k, posdrift, denom_floor);
@@ -1065,8 +1077,11 @@ inline double log_ba_pdf_launch(double t, double A, double b, double p1,
                                 double denom_floor, int launch,
                                 double delta = 0.0) {
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
-      launch == BAWL_LAUNCH_SPLITLOGNORMAL)
-    return log_bawl_pdf_logn(t, A, b, p1, p2, k, delta);
+      launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    return log_bawl_pdf_logn(t, A, b, L.mu, L.sigma, k, delta);
+  }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_pdf_weib(t, A, b, p1, p2, k);
   return log_ba_pdf(t, A, b, p1, p2, k, posdrift, denom_floor);

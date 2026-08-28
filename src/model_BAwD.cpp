@@ -1286,8 +1286,12 @@ bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
                                 int accept_mode, double &cdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_WEIBULL) return false;
-  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
-    return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf, delta);
+  if (launch == BAWD_LAUNCH_LOGNORMAL ||
+      launch == BAWD_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWD_LAUNCH_LOGNORMAL);
+    return bawd_natural_cdf_logn(u, g, L.mu, L.sigma, accept_mode, cdf, delta);
+  }
   return bawd_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, cdf);
 }
 
@@ -1297,8 +1301,12 @@ bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
                                 int accept_mode, double &pdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_WEIBULL) return false;
-  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
-    return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf, delta);
+  if (launch == BAWD_LAUNCH_LOGNORMAL ||
+      launch == BAWD_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWD_LAUNCH_LOGNORMAL);
+    return bawd_natural_pdf_logn(u, g, L.mu, L.sigma, accept_mode, pdf, delta);
+  }
   return bawd_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, pdf);
 }
 
@@ -1309,8 +1317,12 @@ double bawd_log_cdf(double u, double A, double b, double p1, double p2,
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_WEIBULL)
     return log_bawd_cdf_weib(u, g, p1, p2);
-  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
-    return log_bawd_cdf_logn(u, g, p1, p2, delta);
+  if (launch == BAWD_LAUNCH_LOGNORMAL ||
+      launch == BAWD_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWD_LAUNCH_LOGNORMAL);
+    return log_bawd_cdf_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawd_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
@@ -1321,8 +1333,12 @@ double bawd_log_surv(double u, double A, double b, double p1, double p2,
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_WEIBULL)
     return log_bawd_surv_weib(u, g, p1, p2);
-  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
-    return log_bawd_surv_logn(u, g, p1, p2, delta);
+  if (launch == BAWD_LAUNCH_LOGNORMAL ||
+      launch == BAWD_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWD_LAUNCH_LOGNORMAL);
+    return log_bawd_surv_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawd_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
@@ -1333,8 +1349,12 @@ double bawd_log_pdf(double u, double A, double b, double p1, double p2,
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_WEIBULL)
     return log_bawd_pdf_weib(u, g, p1, p2);
-  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
-    return log_bawd_pdf_logn(u, g, p1, p2, delta);
+  if (launch == BAWD_LAUNCH_LOGNORMAL ||
+      launch == BAWD_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWD_LAUNCH_LOGNORMAL);
+    return log_bawd_pdf_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawd_pdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 

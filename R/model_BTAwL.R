@@ -13,7 +13,7 @@
 
 
 .btawl_check_cols <- function(pars, launch) {
-  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau")
+  need <- c(.ba_par_names(launch, meancv = FALSE), "b", "A", "t0", "k", "tau")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -66,7 +66,7 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 }
 
 .btawl_local_race_check_cols <- function(pars, launch) {
-  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
+  need <- c(.ba_par_names(launch, meancv = FALSE), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -182,7 +182,7 @@ pBTAwLSeparate <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 }
 
 .btawl_sustained_check_cols <- function(pars, launch) {
-  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s")
+  need <- c(.ba_par_names(launch, meancv = FALSE), "b", "A", "t0", "k", "tau_s")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwLSustained requires parameter columns ", paste(missing, collapse = ", "))
@@ -555,7 +555,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
-  launch_pars <- .ba_par_names(launch)
+  launch_pars <- .ba_par_names(launch, meancv = FALSE)
   if (mode == "separate") {
     if (weibull) {
       p_types <- c(shape_S = log(1), mean_S = log(1),

@@ -943,8 +943,11 @@ bool ba_natural_cdf_bawf(double u, double A, double b, double p1,
   const BawfGeom g = bawf_geometry(A, b, k, rho);
   if (launch == BAWF_LAUNCH_WEIBULL) return false;
   if (launch == BAWF_LAUNCH_LOGNORMAL ||
-      launch == BAWF_LAUNCH_SPLITLOGNORMAL)
-    return bawf_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf, delta);
+      launch == BAWF_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWF_LAUNCH_LOGNORMAL);
+    return bawf_natural_cdf_logn(u, g, L.mu, L.sigma, accept_mode, cdf, delta);
+  }
   return bawf_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor,
                                  accept_mode, cdf);
 }
@@ -956,8 +959,11 @@ bool ba_natural_pdf_bawf(double u, double A, double b, double p1,
   const BawfGeom g = bawf_geometry(A, b, k, rho);
   if (launch == BAWF_LAUNCH_WEIBULL) return false;
   if (launch == BAWF_LAUNCH_LOGNORMAL ||
-      launch == BAWF_LAUNCH_SPLITLOGNORMAL)
-    return bawf_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf, delta);
+      launch == BAWF_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWF_LAUNCH_LOGNORMAL);
+    return bawf_natural_pdf_logn(u, g, L.mu, L.sigma, accept_mode, pdf, delta);
+  }
   return bawf_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor,
                                  accept_mode, pdf);
 }
@@ -970,8 +976,11 @@ double bawf_log_cdf(double u, double A, double b, double p1, double p2,
   if (launch == BAWF_LAUNCH_WEIBULL)
     return log_bawf_cdf_weib(u, g, p1, p2);
   if (launch == BAWF_LAUNCH_LOGNORMAL ||
-      launch == BAWF_LAUNCH_SPLITLOGNORMAL)
-    return log_bawf_cdf_logn(u, g, p1, p2, delta);
+      launch == BAWF_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWF_LAUNCH_LOGNORMAL);
+    return log_bawf_cdf_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawf_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
@@ -982,8 +991,11 @@ double bawf_log_surv(double u, double A, double b, double p1, double p2,
   if (launch == BAWF_LAUNCH_WEIBULL)
     return log_bawf_surv_weib(u, g, p1, p2);
   if (launch == BAWF_LAUNCH_LOGNORMAL ||
-      launch == BAWF_LAUNCH_SPLITLOGNORMAL)
-    return log_bawf_surv_logn(u, g, p1, p2, delta);
+      launch == BAWF_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWF_LAUNCH_LOGNORMAL);
+    return log_bawf_surv_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawf_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
@@ -994,8 +1006,11 @@ double bawf_log_pdf(double u, double A, double b, double p1, double p2,
   if (launch == BAWF_LAUNCH_WEIBULL)
     return log_bawf_pdf_weib(u, g, p1, p2);
   if (launch == BAWF_LAUNCH_LOGNORMAL ||
-      launch == BAWF_LAUNCH_SPLITLOGNORMAL)
-    return log_bawf_pdf_logn(u, g, p1, p2, delta);
+      launch == BAWF_LAUNCH_SPLITLOGNORMAL) {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWF_LAUNCH_LOGNORMAL);
+    return log_bawf_pdf_logn(u, g, L.mu, L.sigma, delta);
+  }
   return log_bawf_pdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 

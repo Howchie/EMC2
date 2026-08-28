@@ -22,13 +22,25 @@ skip_model_validation()
 ref_vstar_p <- function(u, z, b, kap, pw) (b - z) / u + kap * u^pw / (pw + 1)
 
 # Survivor and density of the launch strength.
+# For launch = 1L the public pair is (mean, cv); log V ~ N(mu, sigma^2) with
+# sigma^2 = log1p(cv^2) and mu = log(mean) - sigma^2/2.
+ln_musigma <- function(m, cv) {
+  s2 <- log1p(unname(cv)^2)
+  c(mu = log(unname(m)) - s2 / 2, sigma = sqrt(s2))
+}
 ref_gbar_p <- function(w, p1, p2, launch, posdrift = TRUE) {
-  if (launch == 1L) return(plnorm(w, p1, p2, lower.tail = FALSE))
+  if (launch == 1L) {
+    q <- ln_musigma(p1, p2)
+    return(plnorm(w, q[["mu"]], q[["sigma"]], lower.tail = FALSE))
+  }
   den <- if (posdrift) pnorm(0, p1, p2, lower.tail = FALSE) else 1
   pnorm(w, p1, p2, lower.tail = FALSE) / den
 }
 ref_g_p <- function(w, p1, p2, launch, posdrift = TRUE) {
-  if (launch == 1L) return(dlnorm(w, p1, p2))
+  if (launch == 1L) {
+    q <- ln_musigma(p1, p2)
+    return(dlnorm(w, q[["mu"]], q[["sigma"]]))
+  }
   den <- if (posdrift) pnorm(0, p1, p2, lower.tail = FALSE) else 1
   dnorm(w, p1, p2) / den
 }
@@ -82,6 +94,10 @@ ref_fp_bawr <- function(V, z, b, kap, pw) {
   stats::uniroot(Gx, c(1e-14, up), tol = 1e-13)$root
 }
 
+# The plain lognormal launch (launch = 1L) is sampled as the natural-scale
+# mean and CV; the reference integrals in this file work in (mu, sigma), so
+# these wrappers convert at the kernel boundary.  The split launch (2L) is not
+# reparameterized and passes straight through.
 d_bawr <- function(t, A, b, p1, p2, kap, pw, launch = 1L, posdrift = TRUE,
                    log_out = FALSE) {
   EMC2:::dbawr(t, A, b, p1, p2, kap, pw, launch = as.integer(launch),
@@ -142,8 +158,10 @@ test_that("V_c(0) = kappa T_max^p is the omission boundary", {
   # A launch exactly at V_c(0) from z = 0 is tangent: it reaches b at T_max and
   # nowhere else, so F(Inf) for a point start is P(V >= V_c(0)).
   vc0 <- EMC2:::bawr_vcrit_vec(0, 1.2, 1.3, 1)
+  q <- ln_musigma(1.0, 0.5)          # public (mean, cv) -> (mu, sigma)
   expect_equal(p_bawr(Inf, 0, 1.2, 1.0, 0.5, 1.3, 1, launch = 1L),
-               plnorm(vc0, 1.0, 0.5, lower.tail = FALSE), tolerance = 1e-10)
+               plnorm(vc0, q[["mu"]], q[["sigma"]], lower.tail = FALSE),
+               tolerance = 1e-10)
 })
 
 # ---------------------------------------------------------------------------
@@ -277,9 +295,10 @@ test_that("kappa = 0 is exactly the LBA, for every p", {
 test_that("the CDF matches a brute-force simulation of the trajectory", {
   skip_on_cran()
   set.seed(11)
-  A <- 0.4; b <- 1.2; mu <- 1.0; sg <- 0.5; kap <- 1.2; pw <- 1
+  A <- 0.4; b <- 1.2; mu <- 1.0; sg <- 0.5; kap <- 1.2; pw <- 1  # (mean, cv)
   N <- 1000
-  V <- rlnorm(N, mu, sg)
+  qms <- ln_musigma(mu, sg)
+  V <- rlnorm(N, qms[["mu"]], qms[["sigma"]])
   z <- runif(N, 0, A)
   hit <- vapply(seq_len(N), function(i) ref_fp_bawr(V[i], z[i], b, kap, pw),
                 numeric(1))
@@ -304,7 +323,7 @@ test_that("BAwR() exposes the documented parameters and c_name", {
   m <- BAwR()
   expect_equal(m$c_name, "BAwR_LOGN")
   expect_equal(m$p_types_canonical,
-               c("mu", "sigma", "B", "A", "t0", "kappa", "p"))
+               c("mean", "cv", "B", "A", "t0", "kappa", "p"))
   expect_equal(BAwR("normal")$c_name, "BAwR")
   expect_equal(BAwR("normal", posdrift = FALSE)$c_name, "BAwRIO")
   expect_equal(BAwR("normal")$p_types_canonical,
@@ -317,7 +336,7 @@ test_that("BAwR() exposes the documented parameters and c_name", {
 
 test_that("Ttransform reports b, Tmax, rt_max and Vcrit", {
   m <- BAwR()
-  pars <- cbind(mu = c(1, 1), sigma = c(0.5, 0.5), B = c(0.9, 3.6),
+  pars <- cbind(mean = c(1, 1), cv = c(0.5, 0.5), B = c(0.9, 3.6),
                 A = c(0.3, 0.3), t0 = c(0.15, 0.15), kappa = c(1.1, 1.1),
                 p = c(1, 1))
   out <- m$Ttransform(pars, NULL)
@@ -339,16 +358,19 @@ test_that("Ttransform reports b, Tmax, rt_max and Vcrit", {
 # ---------------------------------------------------------------------------
 
 ref_race_ll_bawr <- function(dadm, pars, launch, min_ll = log(1e-10)) {
-  nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+  nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
+  lp <- function(i) unname(c(pars[i, nm[1]], pars[i, nm[2]]))
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
     if (is.infinite(u)) u <- t_max_p(pars[i, "A"], pars[i, "b"],
                                      pars[i, "kappa"], pars[i, "p"])
-    ref_F_bawr(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+    q <- lp(i)
+    ref_F_bawr(u, q[1], q[2], pars[i, "b"], pars[i, "A"],
                pars[i, "kappa"], pars[i, "p"], launch)
   }
   fu <- function(i, u) {
-    ref_f_bawr(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+    q <- lp(i)
+    ref_f_bawr(u, q[1], q[2], pars[i, "b"], pars[i, "A"],
                pars[i, "kappa"], pars[i, "p"], launch)
   }
   n_lR <- length(levels(dadm$lR))
@@ -402,8 +424,8 @@ bawr_dat <- function(n = 60) {
   dat[seq_len(n), ]
 }
 
-bawr_form <- list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, kappa ~ 1, p ~ 1)
-bawr_p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+bawr_form <- list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, kappa ~ 1, p ~ 1)
+bawr_p <- c(mean = log(2.5), cv = log(0.6), B = log(0.8), A = log(0.3),
             t0 = log(0.15), kappa = log(0.8), p = log(1))
 
 test_that("the compiled race likelihood matches the R reference", {
@@ -506,7 +528,7 @@ test_that("omissions past t0 + T_max stay well posed", {
 
 test_that("the C++ and R simulators agree with each other and with the CDF", {
   skip_on_cran()
-  pars <- cbind(mu = 1.0, sigma = 0.5, b = 1.2, A = 0.4, t0 = 0.15,
+  pars <- cbind(mean = 1.0, cv = 0.5, b = 1.2, A = 0.4, t0 = 0.15,
                 kappa = 1.2, p = 1)
   n <- 1000
   pm <- pars[rep(1, 2 * n), , drop = FALSE]

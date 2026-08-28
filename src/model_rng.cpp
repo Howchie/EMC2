@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "wald_functions.h"
 #include "model_rng.h"
 #include "drift_factor.h"
 #include "model_FRQ.h"
@@ -38,6 +39,15 @@ std::unordered_map<std::string, int> col_index_map(const Rcpp::NumericMatrix& pa
 // variant reproduces the ordinary lognormal simulator when its extra
 // parameter is zero.  Distributionally matches R's .bawd_split_rlnorm
 // (R/model_BAwD.R:46-62).
+// Draw V from the plain lognormal launch, whose SAMPLED pair is the natural
+// scale mean m = E[V] and CV = SD(V)/E[V] (see launch_lognormal_pair() in
+// src/wald_functions.h).  The split-lognormal launch keeps (mu, sigma, delta)
+// and is drawn by rsplit_lognormal_r() below.
+inline double rlnorm_meancv_r(double m, double cv) {
+  const LaunchLogNormal L = launch_lognormal_pair(m, cv, true);
+  return std::exp(L.mu + L.sigma * R::norm_rand());
+}
+
 inline double rsplit_lognormal_r(double mu, double sigma, double delta) {
   if (delta == 0.0) return std::exp(mu + sigma * R::norm_rand());
   split_lognormal_shape h;
@@ -570,8 +580,10 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
   const bool split = (launch == 2);
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawl_cpp: the split-lognormal launch requires a 'delta' column.");
-  const int iv = ci.at(weib ? "shape" : (logn ? "mu" : "v")),
-            isv = ci.at(weib ? "mean" : (logn ? "sigma" : "sv")),
+  const int iv = ci.at(weib ? "shape"
+                          : (split ? "mu" : (logn ? "mean" : "v"))),
+            isv = ci.at(weib ? "mean"
+                             : (split ? "sigma" : (logn ? "cv" : "sv"))),
             ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
   const int ieta = ci.count("eta") ? ci.at("eta") : -1;
@@ -611,7 +623,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
       ? (*drift_override)[static_cast<size_t>(r)]
       : (weib ? rweibull_mean(pars(r, iv), pars(r, isv))
                : (split ? rsplit_lognormal_r(pars(r, iv), pars(r, isv), pars(r, idelta))
-               : (logn ? R::rlnorm(pars(r, iv), pars(r, isv))
+               : (logn ? rlnorm_meancv_r(pars(r, iv), pars(r, isv))
                        : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo))));
     // Lognormal and Weibull launch strengths are positive by construction.
     if (!logn && posdrift && !(drift > 0.0)) {
@@ -928,8 +940,9 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
   const bool split = (launch == 2);
-  if (logn && !(ci.count("mu") && ci.count("sigma")))
-    Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split ? !(ci.count("mu") && ci.count("sigma"))
+            : (logn && !(ci.count("mean") && ci.count("cv"))))
+    Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mean' and 'cv' (the split-lognormal launch requires 'mu' and 'sigma').");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawd_cpp: the split-lognormal launch requires a 'delta' column.");
   if (weib && !(ci.count("shape") && ci.count("mean")))
@@ -940,8 +953,10 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   // instead used to fail as an unhandled std::map::at ("_Map_base::at").
   for (const char* nm : {"b", "A", "t0", "k", "ell"})
     if (!ci.count(nm)) Rcpp::stop("rbawd_cpp: missing parameter column '%s'.", nm);
-  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip1 = weib ? ci.at("shape")
+                     : (split ? ci.at("mu") : (logn ? ci.at("mean") : ci.at("v")));
+  const int ip2 = weib ? ci.at("mean")
+                     : (split ? ci.at("sigma") : (logn ? ci.at("cv") : ci.at("sv")));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), iell = ci.at("ell");
@@ -959,7 +974,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
-          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          ? rlnorm_meancv_r(pars(r, ip1), pars(r, ip2))
           : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf)));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
@@ -991,8 +1006,9 @@ Rcpp::List rbawdd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
   const bool split = (launch == 2);
-  if (logn && !(ci.count("mu") && ci.count("sigma")))
-    Rcpp::stop("rbawdd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split ? !(ci.count("mu") && ci.count("sigma"))
+            : (logn && !(ci.count("mean") && ci.count("cv"))))
+    Rcpp::stop("rbawdd_cpp: the lognormal launch requires columns 'mean' and 'cv' (the split-lognormal launch requires 'mu' and 'sigma').");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawdd_cpp: the split-lognormal launch requires a 'delta' column.");
   if (weib && !(ci.count("shape") && ci.count("mean")))
@@ -1001,8 +1017,10 @@ Rcpp::List rbawdd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawdd_cpp: the normal launch requires columns 'v' and 'sv'.");
   for (const char* nm : {"b", "A", "t0", "k", "ell", "alpha"})
     if (!ci.count(nm)) Rcpp::stop("rbawdd_cpp: missing parameter column '%s'.", nm);
-  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip1 = weib ? ci.at("shape")
+                     : (split ? ci.at("mu") : (logn ? ci.at("mean") : ci.at("v")));
+  const int ip2 = weib ? ci.at("mean")
+                     : (split ? ci.at("sigma") : (logn ? ci.at("cv") : ci.at("sv")));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), iell = ci.at("ell"), ialpha = ci.at("alpha");
@@ -1020,7 +1038,7 @@ Rcpp::List rbawdd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
-          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          ? rlnorm_meancv_r(pars(r, ip1), pars(r, ip2))
           : rtnorm_lower_r(pars(r, ip1), pars(r, ip2),
                            posdrift ? 0.0 : R_NegInf)));
     const double z = pars(r, iA) * R::unif_rand();
@@ -1072,8 +1090,9 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
   const bool split = (launch == 2);
-  if (logn && !(ci.count("mu") && ci.count("sigma")))
-    Rcpp::stop("rbawf_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split ? !(ci.count("mu") && ci.count("sigma"))
+            : (logn && !(ci.count("mean") && ci.count("cv"))))
+    Rcpp::stop("rbawf_cpp: the lognormal launch requires columns 'mean' and 'cv' (the split-lognormal launch requires 'mu' and 'sigma').");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawf_cpp: the split-lognormal launch requires a 'delta' column.");
   if (weib && !(ci.count("shape") && ci.count("mean")))
@@ -1084,8 +1103,10 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   // instead used to fail as an unhandled std::map::at ("_Map_base::at").
   for (const char* nm : {"b", "A", "t0", "k"})
     if (!ci.count(nm)) Rcpp::stop("rbawf_cpp: missing parameter column '%s'.", nm);
-  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip1 = weib ? ci.at("shape")
+                     : (split ? ci.at("mu") : (logn ? ci.at("mean") : ci.at("v")));
+  const int ip2 = weib ? ci.at("mean")
+                     : (split ? ci.at("sigma") : (logn ? ci.at("cv") : ci.at("sv")));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k");
@@ -1103,7 +1124,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
-          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          ? rlnorm_meancv_r(pars(r, ip1), pars(r, ip2))
           : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf)));
     const double z = pars(r, iA) * R::unif_rand();
     // b and z are passed separately: the fading multiplies the start point.
@@ -1136,8 +1157,9 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
   const bool split = (launch == 2);
-  if (logn && !(ci.count("mu") && ci.count("sigma")))
-    Rcpp::stop("rbawr_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split ? !(ci.count("mu") && ci.count("sigma"))
+            : (logn && !(ci.count("mean") && ci.count("cv"))))
+    Rcpp::stop("rbawr_cpp: the lognormal launch requires columns 'mean' and 'cv' (the split-lognormal launch requires 'mu' and 'sigma').");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawr_cpp: the split-lognormal launch requires a 'delta' column.");
   if (weib && !(ci.count("shape") && ci.count("mean")))
@@ -1148,8 +1170,10 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   // instead used to fail as an unhandled std::map::at ("_Map_base::at").
   for (const char* nm : {"b", "A", "t0", "kappa", "p"})
     if (!ci.count(nm)) Rcpp::stop("rbawr_cpp: missing parameter column '%s'.", nm);
-  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip1 = weib ? ci.at("shape")
+                     : (split ? ci.at("mu") : (logn ? ci.at("mean") : ci.at("v")));
+  const int ip2 = weib ? ci.at("mean")
+                     : (split ? ci.at("sigma") : (logn ? ci.at("cv") : ci.at("sv")));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ika = ci.at("kappa"), ipw = ci.at("p");
@@ -1167,7 +1191,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
-          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          ? rlnorm_meancv_r(pars(r, ip1), pars(r, ip2))
           : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf)));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawr_hit_time_r(V, pars(r, ib) - z, pars(r, ika),
@@ -1199,8 +1223,9 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
   const bool split = (launch == 2);
-  if (logn && !(ci.count("mu") && ci.count("sigma")))
-    Rcpp::stop("rbawdp_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split ? !(ci.count("mu") && ci.count("sigma"))
+            : (logn && !(ci.count("mean") && ci.count("cv"))))
+    Rcpp::stop("rbawdp_cpp: the lognormal launch requires columns 'mean' and 'cv' (the split-lognormal launch requires 'mu' and 'sigma').");
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawdp_cpp: the split-lognormal launch requires a 'delta' column.");
   if (weib && !(ci.count("shape") && ci.count("mean")))
@@ -1209,8 +1234,10 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawdp_cpp: the normal launch requires columns 'v' and 'sv'.");
   for (const char* nm : {"b", "A", "t0", "k", "lambda"})
     if (!ci.count(nm)) Rcpp::stop("rbawdp_cpp: missing parameter column '%s'.", nm);
-  const int ip1 = weib ? ci.at("shape") : (logn ? ci.at("mu") : ci.at("v"));
-  const int ip2 = weib ? ci.at("mean") : (logn ? ci.at("sigma") : ci.at("sv"));
+  const int ip1 = weib ? ci.at("shape")
+                     : (split ? ci.at("mu") : (logn ? ci.at("mean") : ci.at("v")));
+  const int ip2 = weib ? ci.at("mean")
+                     : (split ? ci.at("sigma") : (logn ? ci.at("cv") : ci.at("sv")));
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
   const int ik = ci.at("k"), ilambda = ci.at("lambda");
@@ -1228,7 +1255,7 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : (split
       ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
       : (logn
-          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          ? rlnorm_meancv_r(pars(r, ip1), pars(r, ip2))
           : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf)));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawdp_hit_time_r(V, pars(r, ib) - z, pars(r, ik),

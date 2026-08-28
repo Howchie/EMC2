@@ -303,6 +303,29 @@ inline double mills_ratio_std(double z) {
   return fast_norm_phi(-z) * std::exp(0.5 * z * z + LOG_SQRT_2PI);
 }
 
+// Lognormal launch parameterization.  The SAMPLED pair for the plain
+// lognormal launch is the natural-scale arithmetic mean m = E[V] and the
+// coefficient of variation cv = SD(V)/E[V]; every downstream primitive works
+// in (mu, sigma) on log V.  The map is a bijection,
+//   sigma^2 = log(1 + cv^2),   mu = log m - sigma^2/2,
+// with inverse m = exp(mu + sigma^2/2), cv = sqrt(expm1(sigma^2)).  log1p
+// keeps sigma accurate as cv -> 0, where sigma -> cv.
+//
+// The SPLIT-lognormal launch is NOT reparameterized: it keeps (mu, sigma,
+// delta) with mu the exact median, because inverting (m, cv, delta) has no
+// closed form.  Callers therefore convert only when the launch code is the
+// plain lognormal one -- that is what `meancv` selects.
+struct LaunchLogNormal { double mu; double sigma; };
+
+inline LaunchLogNormal launch_lognormal_pair(double p1, double p2,
+                                             bool meancv) {
+  if (!meancv) return {p1, p2};
+  if (!(p1 > 0.0) || !(p2 > 0.0) || !R_finite(p1) || !R_finite(p2))
+    return {R_NaN, R_NaN};
+  const double s2 = std::log1p(p2 * p2);
+  return {std::log(p1) - 0.5 * s2, std::sqrt(s2)};
+}
+
 // log C(v), where C(v) = E[(V - v)_+] for log V ~ N(mu, sigma^2): the
 // undiscounted Black call / stop-loss price.  With M = e^{mu + sigma^2/2} and
 // x = (log v - mu)/sigma,

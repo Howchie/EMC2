@@ -137,7 +137,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     V <- if (launch == 3L) {
       .rweibull_mean(nrow(p), p[, "shape"], p[, "mean"])
     } else if (launch == 1L) {
-      rlnorm(nrow(p), p[, "mu"], p[, "sigma"])
+      .ba_rlnorm_meancv(nrow(p), p[, "mean"], p[, "cv"])
     } else if (launch == 2L) {
       .bawd_split_rlnorm(p[, "mu"], p[, "sigma"], p[, "delta"])
     } else {
@@ -206,7 +206,13 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' scale jointly with `T_max` and `p` invariant, so one of `mu` (or `v`), `B`
 #' or `A` must be pinned -- see the example.
 #'
-#' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
+#' With `drift_distribution = "lognormal"` (the default) the launch strength
+#' is lognormal, sampled on the natural scale as its arithmetic mean
+#' `mean = E[V]` and coefficient of variation `cv = SD(V)/E[V]`.  The kernel
+#' converts to the log-scale pair with `sigma^2 = log(1 + cv^2)` and
+#' `mu = log(mean) - sigma^2/2`, so `cv` is a pure relative-variability
+#' coordinate: changing `mean` at fixed `cv` rescales the whole launch
+#' distribution, and changing `cv` at fixed `mean` changes only its spread.
 #' With `"splitlognormal"`, `log V` is continuous split normal with widths
 #' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`.
 #' `mu` is its exact median, the split point is derived from that condition,
@@ -218,8 +224,8 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
+#' | *mean* | log | \[0, Inf\] | log(1) | | Arithmetic mean E[V] of the launch strength (lognormal launch). |
+#' | *cv* | log | \[0, Inf\] | log(1) | | Coefficient of variation SD(V)/E[V] (lognormal launch). |
 #' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
 #' | *mean* | log | \[0, Inf\] | log(1) | | Weibull arithmetic mean (Weibull launch only). |
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
@@ -267,7 +273,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' # p is commonly fixed rather than estimated: p = 1 is the linear-decay
 #' # member.  mu is pinned because nothing else anchors the evidence scale.
 #' design_BAwR <- design(data = forstmann, model = BAwR, matchfun = matchfun,
-#'                       formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
+#'                       formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1,
 #'                                      t0 ~ 1, kappa ~ 1, p ~ 1),
 #'                       contrasts = list(mu = list(lM = ADmat)),
 #'                       constants = c(mu = 0, p = log(1)))
@@ -288,15 +294,19 @@ BAwR <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
     p_types <- c(shape = log(1), mean = log(1))
     transform <- c(shape = "exp", mean = "exp")
     minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
+  } else if (splitlognormal) {
+    # The split launch keeps log-scale (mu, sigma, delta): mu is the exact
+    # median and (m, cv, delta) has no closed-form inverse.
+    p_types <- c("mu" = 0, "sigma" = log(1), "delta" = 0)
+    transform <- c(mu = "identity", sigma = "exp", delta = "identity")
+    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf),
+                    delta = c(-Inf, Inf))
   } else if (lognormal) {
-    p_types <- c("mu" = 0, "sigma" = log(1))
-    transform <- c(mu = "identity", sigma = "exp")
-    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
-    if (splitlognormal) {
-      p_types <- c(p_types, delta = 0)
-      transform <- c(transform, delta = "identity")
-      minmax <- cbind(minmax, delta = c(-Inf, Inf))
-    }
+    # Natural-scale launch moments; the kernel converts to (mu, sigma) via
+    # launch_lognormal_pair() in src/wald_functions.h.
+    p_types <- c("mean" = log(1), "cv" = log(1))
+    transform <- c(mean = "exp", cv = "exp")
+    minmax <- cbind(mean = c(1e-4, Inf), cv = c(1e-4, Inf))
   } else {
     p_types <- c("v" = 1, "sv" = log(1))
     transform <- c(v = "identity", sv = "exp")

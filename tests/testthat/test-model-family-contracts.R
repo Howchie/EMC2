@@ -194,7 +194,7 @@ test_that("the representative FPE solver keeps its closed-form anchor", {
 
 test_that("one compiled ballistic simulator path remains wired", {
   lR <- factor(rep(c("left", "right"), 8), levels = c("left", "right"))
-  pars <- cbind(mu = 1, sigma = .5, b = 1.2, A = .3, t0 = .1, k = 1)
+  pars <- cbind(mean = 1, cv = .5, b = 1.2, A = .3, t0 = .1, k = 1)
   pars <- pars[rep(1, length(lR)), , drop = FALSE]
   out <- EMC2:::.rfun_BAwF(lR, pars, rep(TRUE, nrow(pars)), launch = 1L)
   expect_named(out, c("R", "rt"))

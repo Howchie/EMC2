@@ -456,8 +456,14 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
          stop("Unknown ", caller, " drift_distribution: ", drift_distribution))
 }
 
-.ba_par_names <- function(launch) {
-  if (launch == 1L) c("mu", "sigma")
+# Public names of the launch pair, in kernel column order.  The plain
+# lognormal launch (1) is sampled on the natural scale as the arithmetic mean
+# and the coefficient of variation; the C++ kernels convert to (mu, sigma) via
+# launch_lognormal_pair() in src/wald_functions.h.  The split-lognormal launch
+# (2) is NOT reparameterized -- mu stays the exact median.  BTAwL has not been
+# converted yet and passes meancv = FALSE to keep its (mu, sigma) columns.
+.ba_par_names <- function(launch, meancv = TRUE) {
+  if (launch == 1L) if (meancv) c("mean", "cv") else c("mu", "sigma")
   else if (launch == 2L) c("mu", "sigma", "delta")
   else if (launch == 3L) c("shape", "mean")
   else c("v", "sv")

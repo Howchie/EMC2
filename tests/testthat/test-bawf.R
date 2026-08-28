@@ -316,7 +316,7 @@ test_that("boundary parameters produce no NaN", {
 test_that("the constructor wires drift_distribution and rho consistently", {
   expect_equal(BAwF()$c_name, "BAwF_LOGN")
   expect_equal(names(BAwF()$p_types)[1:6],
-               c("mu", "sigma", "B", "A", "t0", "k"))
+               c("mean", "cv", "B", "A", "t0", "k"))
   expect_equal(BAwF("normal")$c_name, "BAwF")
   expect_equal(names(BAwF("normal")$p_types)[1:6],
                c("v", "sv", "B", "A", "t0", "k"))
@@ -343,7 +343,7 @@ test_that("Ttransform reports the endpoint and the omission boundary", {
 })
 
 test_that("dfun/pfun use the same launch distribution as the c_name", {
-  pars <- cbind(mu = 1, sigma = 0.5, v = 1, sv = 0.5, b = 1.2, A = 0.3,
+  pars <- cbind(mean = 1, cv = 0.5, v = 1, sv = 0.5, b = 1.2, A = 0.3,
                 t0 = 0.15, k = 1.1)
   rt <- 0.4
   expect_equal(BAwF()$dfun(rt, pars),

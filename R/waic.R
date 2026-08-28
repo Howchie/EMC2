@@ -60,14 +60,47 @@ waic_warnings <- function() {
   if (has_any)
     message("pw_ll cache incomplete (not all chains have it) - recomputing. ",
             "Check that add_pw_ll() or save_pw_ll=TRUE completed without errors.")
+  # Use the raw array form here.  The mcmc-list form is not defined for
+  # single-level fits, while the array is uniform across single and
+  # hierarchical objects: [parameter, subject, iteration].
   alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
-                    by_subject = TRUE, merge_chains = TRUE)
+                    by_subject = TRUE, merge_chains = TRUE,
+                    return_mcmc = FALSE)
   data  <- emc[[1]]$data
   model <- emc[[1]]$model
-  ll_list <- auto_mclapply(names(alpha), function(sub) {
-    proposals <- do.call(rbind, alpha[[sub]])     # [n_iter x n_pars]
-    calc_ll_pw(proposals, data[[sub]], model)     # [n_iter x n_trials_sub]
-  }, mc.cores = cores)
+  if (is.array(alpha) && length(dim(alpha)) >= 3L) {
+    subjects <- dimnames(alpha)[[2]]
+    if (is.null(subjects)) subjects <- names(data)
+    alpha_by_subject <- setNames(lapply(seq_along(subjects), function(j) {
+      a <- alpha[, j, , drop = TRUE]
+      if (!is.matrix(a)) a <- matrix(a, nrow = dim(alpha)[1L])
+      a
+    }), subjects)
+  } else if (is.list(alpha)) {
+    alpha_by_subject <- alpha
+    subjects <- names(alpha_by_subject)
+    if (is.null(subjects)) subjects <- names(data)
+    names(alpha_by_subject) <- subjects
+  } else {
+    stop("Could not extract subject-level alpha samples for pointwise likelihood")
+  }
+
+  # `mc.preschedule = FALSE` gives every subject a fresh child. A child
+  # computes one subject/model matrix, returns it, and exits; only this master
+  # process retains the matrices for comparison. This is the same lifecycle
+  # as the sampler's short-lived fallback and avoids a worker accumulating a
+  # subject queue across the model.
+  ll_list <- auto_mclapply(subjects, function(sub) {
+    proposals <- if (is.matrix(alpha_by_subject[[sub]]))
+      t(alpha_by_subject[[sub]]) else do.call(rbind, alpha_by_subject[[sub]])
+    calc_ll_pw(proposals, data[[sub]], model)
+  }, mc.cores = cores, mc.preschedule = FALSE)
+  names(ll_list) <- subjects
+  if (any(!vapply(ll_list, is.matrix, logical(1)))) {
+    bad <- subjects[!vapply(ll_list, is.matrix, logical(1))]
+    stop("Pointwise likelihood failed for subject(s): ",
+         paste(bad, collapse = ", "))
+  }
   do.call(cbind, ll_list)                         # [n_iter x total_trials]
 }
 
@@ -136,8 +169,10 @@ waic_warnings <- function() {
   }
 
   n_cores <- max(1L, min(as.integer(cores), n_subj))
-  out <- do.call(cbind, auto_mclapply(seq_along(subjects), subject_ll,
-                                      mc.cores = n_cores))
+  # Each subject is also an independent one-shot job for the marginal path.
+  ll_list <- auto_mclapply(seq_along(subjects), subject_ll,
+                           mc.cores = n_cores, mc.preschedule = FALSE)
+  out <- do.call(cbind, ll_list)
   colnames(out) <- subjects
   out
 }
@@ -149,7 +184,16 @@ waic_from_ll <- function(ll_mat) {
 
 # Pooled or subject-level PSIS-LOO from a pointwise log-likelihood matrix.
 loo_from_ll <- function(ll_mat, cores = 1) {
-  .loo_call(function() loo::loo(ll_mat, cores = cores)$estimates["looic", "Estimate"])
+  .loo_call(function() {
+    fit <- if (cores > 1L)
+      .emc_wpool_run_loo(ll_mat, cores = cores)
+    else
+      NULL
+    # If a clean wrapper cannot be created, retain correctness and avoid
+    # forking from compare()'s dirty frame by running PSIS serially.
+    if (is.null(fit)) fit <- loo::loo(ll_mat, cores = 1L)
+    fit$estimates["looic", "Estimate"]
+  })
 }
 
 # Per-subject WAIC: [n_iter x n_trials] log-likelihood matrix -> scalar WAIC
