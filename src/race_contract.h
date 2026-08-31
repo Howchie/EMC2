@@ -164,6 +164,12 @@ struct ContextForRaceModels {
     // first five columns retain the LBA layout and optional BAwL columns must
     // not be read.
     bool bawl_k_fixed_zero = false;
+    // BAwL(parameterization = "ratio"): the k column holds r = k / mean launch
+    // strength, so the leak is rebuilt per row by bawl_leak().
+    bool bawl_ratio_chart = false;
+    // BAwD(parameterization = "ratio"): likewise, the k column holds
+    // r = k / mean launch strength and bawd_decay() rebuilds the decay rate.
+    bool bawd_ratio_chart = false;
     bool bawl_clocks_fixed_off = false;
 
     // BAwD launch-strength distribution: 0 = truncated normal (v, sv),

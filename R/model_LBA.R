@@ -688,6 +688,7 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate; `k = 0` is the LBA limit. |
+#' | *r* | log | \[0, Inf\] | log(0) | *k* = *r* * mean | Leak per unit mean drift, in the ratio chart only; replaces *k*. |
 #' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #'
@@ -737,6 +738,36 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' `B ~ E`, `constants = c(B = log(1))` leaves `B_Eneutral` and `B_Eaccuracy`
 #' free and identified. Omitting the constraint produces a ridge in the
 #' posterior rather than an error.
+#'
+#' **The leak-ratio chart.** The leaky trajectory reaches
+#' `v / k` asymptotically, so `v` and `k` are often only weakly identified apart
+#' while their ratio is pinned sharply — a ridge that a fit reports as a
+#' near-constant `v / k` across a wide range of both.
+#' `parameterization = "ratio"` samples `r = k / v` in `k`'s place, inverted
+#' relative to the asymptote so that the LBA limit is the representable value
+#' `r = 0` rather than a pole; the leak is then rebuilt as `k = r * v`. `r`
+#' takes `k`'s log transform, bounds, and zero exception, so `constants =
+#' c(r = log(0))` is still the LBA restriction.
+#'
+#' The map is a bijection, so the chart does not change the model and cannot by
+#' itself improve a fit: at `k = r * v` the two charts give the same likelihood
+#' to the last bit. What it changes is what a `design()` formula can say. `r ~
+#' 1` alongside `v ~ E` is a genuinely lower-dimensional model, nested in the
+#' default chart, which *tests* whether the constant ratio is structural rather
+#' than assuming it. It also aligns a sampled coordinate with the ridge, which
+#' matters most for the normal launch, where `v` is identity-transformed and the
+#' recoordinatisation is nonlinear; with the lognormal and Weibull launches
+#' `log r = log k - log mean` is linear in the sampled coordinates and a
+#' full-covariance group level already absorbs it.
+#'
+#' The divisor is the natural-scale mean launch strength — `v` for the normal
+#' launch and `mean` for the lognormal and Weibull ones. The split-lognormal
+#' launch samples the log-scale median instead of a mean and is refused, as is
+#' `correlated = TRUE`. Because the normal launch's `v` is unbounded, a
+#' non-positive mean drift clamps the leak to `k = 0` rather than producing a
+#' negative one; the likelihood stays continuous through `v = 0`, and that
+#' clamp is on the mean-drift parameter alone, so `posdrift = FALSE` with a
+#' positive mean keeps its full leak.
 #'
 #' Here `q = 1` for Erlang-1 clocks and `q = 2` for Erlang-2 clocks. In
 #' `erlang_shape = "mixed"`, the clock is Erlang-1 with probability `omega` and
@@ -800,6 +831,11 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   `delta = 0` is exactly the lognormal launch. `"weibull"` uses
 #'   `V ~ Weibull(shape, scale)` on the positive launch scale; the public
 #'   parameters are `shape` and its arithmetic `mean`.
+#' @param parameterization Leak coordinate. `"rate"` (the default) samples the
+#'   leak rate `k`; `"ratio"` samples `r = k / v`, the leak per unit mean drift,
+#'   in the same position, with the leak rebuilt as `k = r * v`. See the
+#'   leak-ratio chart section above. Not available for
+#'   `drift_distribution = "splitlognormal"` or `correlated = TRUE`.
 #' @return A model list defining the BAwL race model.
 #' @examples
 #' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
@@ -813,13 +849,26 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   contrasts = list(mu = list(lM = ADmat)),
 #'   constants = c(mean = log(1)))
 #'
+#' # The leak-ratio chart, holding the leak-to-drift ratio constant across
+#' # conditions while the drift itself varies.  This is the model that tests a
+#' # near-constant v/k ridge; compare it with `k ~ E` in the default chart.
+#' design_BAwL_ratio <- design(
+#'   data = forstmann, model = function() BAwL(parameterization = "ratio"),
+#'   matchfun = matchfun,
+#'   formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1, r ~ 1),
+#'   contrasts = list(v = list(lM = ADmat)),
+#'   constants = c(sv = log(1)))
+#'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
                  correlated = FALSE,
-                 drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull")) {
+                 drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull"),
+                 parameterization = c("rate", "ratio")) {
   erlang_type <- match.arg(erlang_type)
   drift_distribution <- match.arg(drift_distribution)
+  parameterization <- match.arg(parameterization)
+  ratio_chart <- parameterization == "ratio"
   launch <- .ba_launch_code(drift_distribution, "BAwL")
   lognormal <- launch %in% c(1L, 2L)
   weibull <- launch == 3L
@@ -835,6 +884,19 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     stop("BAwL: correlated = TRUE is only implemented for ",
          "drift_distribution = \"normal\".")
   }
+  if (ratio_chart && splitlognormal) {
+    # r is referenced to a natural-scale mean launch strength.  The split
+    # launch samples the log-scale median (mu) instead, so k = r * mean has no
+    # column to read; refuse rather than silently substituting the median.
+    stop("BAwL: parameterization = \"ratio\" needs a natural-scale mean launch ",
+         "column, which the split-lognormal launch does not have (mu is the ",
+         "log-scale median).  Use drift_distribution = \"normal\", ",
+         "\"lognormal\", or \"weibull\".")
+  }
+  if (ratio_chart && correlated) {
+    stop("BAwL: parameterization = \"ratio\" is not implemented for ",
+         "correlated = TRUE.")
+  }
   erlang_mixed <- identical(erlang_shape, "mixed")
   erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
 
@@ -842,7 +904,14 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
 
   # "_SPLIT" follows "_LOGN"; neither lognormal variant is combined with IO.
+  # The ratio-chart infix is "RAT", NOT "RATIO": resolve_race_model_adapter()
+  # detects the untruncated launch with an unanchored find("IO"), which
+  # "RATIO" would match, silently turning posdrift off.  The infix must also
+  # stay glued to the BAwL/BAwLIO stem, which is what the adapter anchors on
+  # ("RAT" alone is not unique -- BTAwL emits "_RATE").  See
+  # src/race_dispatch.cpp.
   base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
+                    if (ratio_chart) "RAT" else "",
                     if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                     if (splitlognormal) "_SPLIT" else "",
                     if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
@@ -875,13 +944,24 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
-  p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0),
-               "k" = log(0))
-  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp")
+  p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp")
   minmax <- cbind(minmax, A  = c(1e-4, Inf), B  = c(1e-4, Inf),
-                     t0 = c(0.05, Inf), k  = c(1e-4, Inf))
-  exception <- c(A = 0, k = 0)
+                     t0 = c(0.05, Inf))
+  exception <- c(A = 0)
+  # Leak coordinate.  The default chart samples the leak rate k; the ratio
+  # chart samples r = k / (mean launch strength) instead, so that the LBA limit
+  # sits at r = 0 rather than at a pole.  r takes k's kernel column POSITION,
+  # bounds, and zero exception, so only the name changes.
+  leak_par <- if (ratio_chart) "r" else "k"
+  p_types[[leak_par]] <- log(0)
+  transform[[leak_par]] <- "exp"
+  minmax <- cbind(minmax, `colnames<-`(matrix(c(1e-4, Inf), ncol = 1), leak_par))
+  exception[[leak_par]] <- 0
   launch_pars <- .ba_par_names(launch)
+  # The launch mean is the first column for the normal (v) and lognormal (mean)
+  # launches, but the SECOND for the Weibull one, whose pair is (shape, mean).
+  mean_par <- if (weibull) launch_pars[2] else launch_pars[1]
   
   p_types <- c(p_types, mG = log(1))
   transform <- c(transform, mG = "exp")
@@ -936,7 +1016,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     correlated = correlated,
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = c(launch_pars, "B", "A", "t0", "k"),
+    p_types_canonical = c(launch_pars, "B", "A", "t0", leak_par),
     transform = transform_spec,
     bound = list(
       minmax = minmax,
@@ -957,7 +1037,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       timed <- cbind(lambda_g = lg, lambda_k = lk)
       # The kernel column order is the p_types prefix, so the launch pair must
       # lead whichever names it uses.
-      lead <- c(launch_pars, "B", "A", "t0", "k")
+      lead <- c(launch_pars, "B", "A", "t0", leak_par)
       extra_drop <- c(lead, "mG", "mK", "omega")
       extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
       if (erlang_mixed) {
@@ -973,6 +1053,15 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
           timed,
           extra
         )
+      }
+      if (ratio_chart) {
+        # The R-side kernels and simulators read the leak by NAME, so derive it
+        # here.  Clamped at zero: a non-positive mean drift collapses to the
+        # LBA limit rather than feeding a negative leak to the kernel.  This
+        # mirrors bawl_leak() in src/model_BAwL.cpp exactly, and it is about
+        # the mean-drift parameter, not the per-trial draws -- posdrift is
+        # untouched, so an IO model with a positive mean keeps its full leak.
+        pars <- cbind(pars, k = pars[, leak_par] * pmax(pars[, mean_par], 0))
       }
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },

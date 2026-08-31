@@ -24,7 +24,8 @@ The full BTAwL model is a local race between independent sustained and
 transient processes.  \code{pi} allocates one base launch distribution between
 those processes; it is not a shared trialwise launch draw.  Normal launches
 scale both location and spread, lognormal launches shift the log location,
-and Weibull launches use \code{V ~ Weibull(shape, scale)} with public arithmetic \code{mean}.
+and Weibull launches use \code{V ~ Weibull(shape, scale)} with the arithmetic
+mean supplied publicly (the conventional scale is derived internally).
 }
 \details{
 The model uses the following parameter matrix.  \code{B} is the distance from the
@@ -56,9 +57,9 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-With \code{drift_distribution = "weibull"}, \code{shape} and arithmetic \code{mean} are positive;
-for the local race, \code{pi} multiplies the mean of the sustained channel and
-\code{1 - pi} multiplies the mean of the transient channel.
+With \code{drift_distribution = "weibull"}, \code{shape} and arithmetic \code{mean} are
+positive; for the local race, \code{pi} multiplies the mean of the sustained
+channel and \code{1 - pi} multiplies the mean of the transient channel.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 

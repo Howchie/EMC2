@@ -54,7 +54,9 @@ defaults to plotting full data set ungrouped by factors if \code{NULL}.}
 
 \item{to_plot}{Character vector: any of \code{"data"}, \code{"posterior"}, \code{"prior"}.}
 
-\item{use_lim}{Character vector controlling which source(s) define \code{xlim}.}
+\item{use_lim}{Character vector controlling which source(s) define the quantile-derived
+\code{xlim} when no finite numeric \code{xlim} is supplied via \code{...}. A supplied \code{xlim} sets
+the display window only and does not truncate CDF estimation.}
 
 \item{remove_na}{Logical; if \code{TRUE} (default), remove non-finite RT rows before
 computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows in denominators.}

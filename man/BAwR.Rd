@@ -59,17 +59,24 @@ There is no parameter fixing the evidence scale: \verb{(V, b, A, kappa)}
 scale jointly with \code{T_max} and \code{p} invariant, so one of \code{mu} (or \code{v}), \code{B}
 or \code{A} must be pinned -- see the example.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{drift_distribution = "lognormal"} (the default) the launch strength
+is lognormal, sampled on the natural scale as its arithmetic mean
+\code{mean = E[V]} and coefficient of variation \code{cv = SD(V)/E[V]}.  The kernel
+converts to the log-scale pair with \code{sigma^2 = log(1 + cv^2)} and
+\code{mu = log(mean) - sigma^2/2}, so \code{cv} is a pure relative-variability
+coordinate: changing \code{mean} at fixed \code{cv} rescales the whole launch
+distribution, and changing \code{cv} at fixed \code{mean} changes only its spread.
 With \code{"splitlognormal"}, \verb{log V} is continuous split normal with widths
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)}.
 \code{mu} is its exact median, the split point is derived from that condition,
 and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.
 With \code{"weibull"}, \code{V ~ Weibull(shape, scale)} on the positive launch scale,
-parameterised by arithmetic \code{mean} (the conventional scale is derived internally);
+parameterised by arithmetic \code{mean} and shape (the conventional scale is
+derived internally);
 the BAwR likelihood is closed form for this launch as well.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Arithmetic mean E\link{V} of the launch strength (lognormal launch). \cr
+   \emph{cv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Coefficient of variation SD(V)/E\link{V} (lognormal launch). \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
    \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
@@ -113,7 +120,7 @@ matchfun <- function(d) d$S == d$lM
 # p is commonly fixed rather than estimated: p = 1 is the linear-decay
 # member.  mu is pinned because nothing else anchors the evidence scale.
 design_BAwR <- design(data = forstmann, model = BAwR, matchfun = matchfun,
-                      formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
+                      formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1,
                                      t0 ~ 1, kappa ~ 1, p ~ 1),
                       contrasts = list(mu = list(lM = ADmat)),
                       constants = c(mu = 0, p = log(1)))

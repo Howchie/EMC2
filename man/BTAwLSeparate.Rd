@@ -59,7 +59,7 @@ With \code{drift_distribution = "normal"}, use \code{v_S}, \code{sv_S}, \code{v_
 With \code{"lognormal"}, use the \code{mu_S}, \code{sigma_S}, \code{mu_T}, and \code{sigma_T} rows.
 With \code{"splitlognormal"}, each channel has its own \code{delta} parameter;
 \code{delta = 0} reduces that channel exactly to the lognormal launch.  With
-\code{drift_distribution = "weibull"}, use the positive \code{shape} and arithmetic \code{mean}
+\code{drift_distribution = "weibull"}, use the positive \code{shape} and \code{mean}
 rows.  Optional fitting parameters are \code{pContaminant} (omission
 probability) and \code{pGuess} (uniform-outlier probability).
 

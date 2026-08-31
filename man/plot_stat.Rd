@@ -58,7 +58,9 @@ x-axis limits. Defaults to \code{c(-Inf, Inf)}.}
 
 \item{to_plot}{Character vector: any of \code{"data"}, \code{"posterior"}, \code{"prior"}.}
 
-\item{use_lim}{Character vector controlling which source(s) define \code{xlim}.}
+\item{use_lim}{Character vector controlling which source(s) define the quantile-derived
+\code{xlim} when no finite numeric \code{xlim} is supplied via \code{...}. A supplied \code{xlim} sets
+the display window only and does not truncate CDF estimation.}
 
 \item{legendpos}{Character vector controlling the positions of the legends}
 

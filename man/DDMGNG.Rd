@@ -60,8 +60,9 @@ TIMEOUT=function(d)rep(2.5,nrow(d))
 Rnogo=function(d)factor(rep("no",nrow(d)),levels=c("no","yes"))
 Rgo=function(d)factor(rep("yes",nrow(d)),levels=c("no","yes")))
 
-See the help for DDM for further details. At present this model is not fully
-implemented in C, so is a little slower to use than the DDM, but not greatly.
+See the help for DDM for further details. The default simulator uses the
+compiled bounded-Diffusion kernel; set \code{options(emc2.cpp_rfun = FALSE)} to
+use the reference R sampler.
 }
 \examples{
 dGNG <- design(Rlevels = c("left","right"),

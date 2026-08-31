@@ -25,45 +25,6 @@ plot_density(
   ...
 )
 }
-\arguments{
-\item{input}{Either an \code{emc} object or a data frame, or a \emph{list} of such objects.}
-
-\item{post_predict}{Optional posterior predictive data (matching columns) or \emph{list} thereof.}
-
-\item{prior_predict}{Optional prior predictive data (matching columns) or \emph{list} thereof.}
-
-\item{subject}{Subset the data to a single subject (by index or name).}
-
-\item{quants}{Numeric vector of credible interval bounds (e.g. \code{c(0.025, 0.975)}).}
-
-\item{functions}{A function (or list of functions) that create new columns in the datasets or predictives}
-
-\item{factors}{Character vector of factor names to aggregate over;
-defaults to plotting full data set ungrouped by factors if \code{NULL}.}
-
-\item{defective_factor}{Name of the factor used for the defective CDF (default "R").}
-
-\item{n_cores}{Number of CPU cores to use if generating predictives from an \code{emc} object.}
-
-\item{n_post}{Number of posterior draws to simulate if needed for predictives.}
-
-\item{layout}{Numeric vector used in \code{par(mfrow=...)}; use \code{NA} for auto-layout.}
-
-\item{to_plot}{Character vector: any of \code{"data"}, \code{"posterior"}, \code{"prior"}.}
-
-\item{use_lim}{Character vector controlling which source(s) define \code{xlim}.}
-
-\item{remove_na}{Logical; if \code{TRUE} (default), remove non-finite RT rows before
-computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows in denominators.}
-
-\item{legendpos}{Character vector controlling the positions of the legends}
-
-\item{posterior_args}{Optional list of graphical parameters for posterior lines/ribbons.}
-
-\item{prior_args}{Optional list of graphical parameters for prior lines/ribbons.}
-
-\item{...}{Other graphical parameters for the real data lines.}
-}
 \description{
 Plots panels that contain a set of densities for each level of the specified defective factor in the data.
 These densities are defective; their areas are relative to the respective

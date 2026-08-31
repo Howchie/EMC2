@@ -2,71 +2,43 @@
 % Please edit documentation in R/omission_decomposition.R
 \name{decompose_omissions}
 \alias{decompose_omissions}
-\alias{omission_mechanisms}
-\alias{plot_omission_decomposition}
-\title{Decompose predicted omissions by generating mechanism}
+\title{Decompose expected omissions by generating mechanism.}
 \usage{
-decompose_omissions(emc, factors = NULL, n_post = 50,
-                    stat = c("random", "mean", "median"),
-                    by_subject = FALSE, data = NULL,
-                    probs = c(0.025, 0.5, 0.975))
-
-omission_mechanisms(emc, data = NULL)
-
-plot_omission_decomposition(x, use = "mean", ...)
+decompose_omissions(
+  emc,
+  factors = NULL,
+  n_post = 50,
+  stat = c("random", "mean", "median"),
+  by_subject = FALSE,
+  data = NULL,
+  probs = c(0.025, 0.5, 0.975)
+)
 }
 \arguments{
-\item{emc}{A fitted single-design race-model \code{emc} object.}
+\item{emc}{A fitted single-design race-model emc object.}
 
-\item{factors}{Character data columns used to form decomposition cells, or
-\code{NULL} to pool trials.}
+\item{factors}{Character data columns used to form cells, or NULL.}
 
-\item{n_post}{Number of posterior draws when \code{stat = "random"}.}
+\item{n_post}{Number of posterior draws for \code{stat = "random"}.}
 
-\item{stat}{Posterior summary: \code{"random"}, \code{"mean"}, or
-\code{"median"}.}
+\item{stat}{Posterior summary: \code{"random"}, \code{"mean"}, or \code{"median"}.}
 
-\item{by_subject}{Logical; split cells by subject when \code{TRUE}.}
+\item{by_subject}{Split cells by subject when TRUE.}
 
 \item{data}{Optional data frame on which to evaluate the decomposition.}
 
-\item{probs}{Quantiles reported in the summary.}
-
-\item{x}{An \code{omission_decomposition} object.}
-
-\item{use}{Summary column to plot, usually \code{"mean"}.}
-
-\item{...}{Additional graphical arguments passed to \code{barplot}.}
+\item{probs}{Quantiles to report in \code{summary}.}
 }
 \value{
-\code{decompose_omissions()} returns an \code{omission_decomposition} object
-with posterior draws, summaries, observed omission rates, mechanism metadata,
-and optional coalition values. \code{omission_mechanisms()} returns a data
-frame describing live mechanisms. \code{plot_omission_decomposition()} returns
-the plotted matrix invisibly.
+A \code{omission_decomposition} object with draws, summary, long,
+observed, coalitions, and mechanisms components.
 }
 \description{
-These functions evaluate the fitted race model's own survivor functions to
-separate expected omissions into contaminant, upper-censor, negative-drift,
-and asymptotic-subthreshold contributions. No stochastic process simulation
-is used. The
-contaminant probability follows EMC2's convention of being mixed after
-truncation normalisation.
-}
-\details{
-The decomposition handles independent accumulator races, including the
-ballistic deterministic families, LBA/RDM variants, finite-reservoir quorum
-models, and shared Erlang kill clocks. Correlated accumulator races are not
-supported because marginal survivor products do not determine their joint race
-survivor. Designs with a lower-censoring interval beyond the lower-truncation
-point are also rejected because that would add a separate fast-censor omission
-route.
-}
-\examples{
-\dontrun{
-d <- decompose_omissions(fitted_emc, factors = c("condition", "subjects"))
-print(d)
-plot_omission_decomposition(d)
-omission_mechanisms(fitted_emc)
-}
+The returned probabilities are conditional on a trial being retained after
+lower/upper truncation.  For BAwL, \code{asymptotic_subthreshold} is the intrinsic
+mass with launch strength below the leak threshold (\verb{V < k b}).
+\code{censor_slow} is an upper-censor omission.  For BAwD with
+positive clearance, that residual is split into \code{dead_launch} (all launches
+below clearance, \code{V < ell}) and the turnaround-asymptote remainder
+(\code{V > ell} but still never reaching threshold).
 }

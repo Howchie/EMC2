@@ -39,17 +39,24 @@ A favourable start point consequently changes the omission probability.
 All PDF/CDF evaluations use closed-form LBA primitives; no quadrature is
 used.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{drift_distribution = "lognormal"} (the default) the launch strength
+is lognormal, sampled on the natural scale as its arithmetic mean
+\code{mean = E[V]} and coefficient of variation \code{cv = SD(V)/E[V]}.  The kernel
+converts to the log-scale pair with \code{sigma^2 = log(1 + cv^2)} and
+\code{mu = log(mean) - sigma^2/2}, so \code{cv} is a pure relative-variability
+coordinate: changing \code{mean} at fixed \code{cv} rescales the whole launch
+distribution, and changing \code{cv} at fixed \code{mean} changes only its spread.
 With \code{drift_distribution = "splitlognormal"}, \verb{Y = log V} is continuous
 split normal with \verb{sigma_L = sigma exp(delta/2)} and
 \verb{sigma_R = sigma exp(-delta/2)}; \code{mu} is its exact median and \code{delta}
 is an unbounded log-width ratio.  The derived split point is chosen so that
 \code{P(Y <= mu) = 1/2}.  \code{delta = 0} is exactly the ordinary lognormal launch.
 With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} with
-public arithmetic \code{mean}; the conventional scale is derived internally.\tabular{llllll}{
+public arithmetic \code{mean}; the conventional scale is derived internally and
+the closed-form BAwDp likelihood uses positive \code{shape} and \code{mean} directly.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Arithmetic mean E\link{V} of the launch strength (lognormal launch). \cr
+   \emph{cv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Coefficient of variation SD(V)/E\link{V} (lognormal launch). \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
    \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr

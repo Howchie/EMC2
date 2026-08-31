@@ -1579,6 +1579,19 @@ double bawd_rho_of(const ContextForRaceModels* ctx) {
 }
 }
 
+// BAwD(parameterization = "ratio") samples r = k / mean_launch in k's column
+// position, so the drive-decay rate is rebuilt per row here.  Clamped at zero:
+// the normal launch's v is identity-transformed and unbounded, and a negative
+// decay rate is not a model.  A non-positive mean drift collapses continuously
+// to the k = 0 limit.  This is about the mean-drift PARAMETER, not the
+// per-trial draws: posdrift is untouched, so an IO model with v > 0 keeps its
+// full decay.  Mirrors the Ttransform derivation in R/model_BAwD.R exactly.
+static inline double bawd_decay(const ContextForRaceModels* ctx,
+                               double k_or_r, double mean_launch) {
+  if (ctx == nullptr || !ctx->bawd_ratio_chart) return k_or_r;
+  return (mean_launch > 0.0) ? k_or_r * mean_launch : 0.0;
+}
+
 double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = bawd_launch_of(ctx);
@@ -1595,8 +1608,12 @@ double dbawd_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   const double b = par[iB] + par[iA];
   const double delta = split ? par[emc2col::bawdsplit::delta] : 0.0;
+  // The launch mean is column 0 for the normal and lognormal launches but
+  // column 1 for the Weibull one, whose public pair is (shape, mean).
+  const int imean = (launch == BAWD_LAUNCH_WEIBULL) ? isv : iv;
   return bawd_pdf_scalar_natural(tt, par[iA], b, par[iv], par[isv],
-    par[ik], par[ie], launch, ctx ? ctx->use_posdrift : true,
+    bawd_decay(ctx, par[ik], par[imean]), par[ie],
+    launch, ctx ? ctx->use_posdrift : true,
     bawd_gamma_of(ctx), bawd_rho_of(ctx), delta);
 }
 double pbawd_scalar(double t, const double* par, void* ctx_) {
@@ -1615,8 +1632,10 @@ double pbawd_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   const double b = par[iB] + par[iA];
   const double delta = split ? par[emc2col::bawdsplit::delta] : 0.0;
+  const int imean = (launch == BAWD_LAUNCH_WEIBULL) ? isv : iv;
   return bawd_cdf_scalar_natural(tt, par[iA], b, par[iv], par[isv],
-    par[ik], par[ie], launch, ctx ? ctx->use_posdrift : true,
+    bawd_decay(ctx, par[ik], par[imean]), par[ie],
+    launch, ctx ? ctx->use_posdrift : true,
     bawd_gamma_of(ctx), bawd_rho_of(ctx), delta);
 }
 
@@ -1639,6 +1658,9 @@ void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double* ell_ = cols[emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell)];
   const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     ? cols[emc2col::bawdsplit::delta] : nullptr;
+  // Ratio-chart divisor: the launch mean is p1_ except for the Weibull launch,
+  // whose public pair is (shape, mean).  Unused under the default chart.
+  const double* mean_ = (launch == BAWD_LAUNCH_WEIBULL) ? p2_ : p1_;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) {
@@ -1651,8 +1673,9 @@ void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double b_i = B_[i] + A_[i];
+    const double kv = bawd_decay(ctx, k_[i], mean_[i]);
     const double log_pdf = bawd_log_pdf(
-      tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i], launch, pd,
+      tt, A_[i], b_i, p1_[i], p2_[i], kv, ell_[i], launch, pd,
       gamma, rho, BAWD_DENOM_FLOOR,
       delta_ ? delta_[i] : 0.0);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
@@ -1680,20 +1703,24 @@ void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double* ell_ = cols[emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell)];
   const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     ? cols[emc2col::bawdsplit::delta] : nullptr;
+  // Ratio-chart divisor: the launch mean is p1_ except for the Weibull launch,
+  // whose public pair is (shape, mean).  Unused under the default chart.
+  const double* mean_ = (launch == BAWD_LAUNCH_WEIBULL) ? p2_ : p1_;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const double b_i = B_[i] + A_[i];
+    const double kv = bawd_decay(ctx, k_[i], mean_[i]);
     double cdf = 0.0;
-    if (ba_natural_cdf_bawd(tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i],
+    if (ba_natural_cdf_bawd(tt, A_[i], b_i, p1_[i], p2_[i], kv, ell_[i],
                             launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
                             BA_ACCEPT_RAW, cdf, delta_ ? delta_[i] : 0.0)) {
       out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
     } else {
       const double log_s = bawd_log_surv(
-        tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i], launch, pd,
+        tt, A_[i], b_i, p1_[i], p2_[i], kv, ell_[i], launch, pd,
         gamma, rho, BAWD_DENOM_FLOOR, delta_ ? delta_[i] : 0.0);
       out[i] = (log_s > R_NegInf && emc2_isfinite(log_s))
         ? log_s : raw_log_zero(min_ll, floor_raw);
@@ -1714,6 +1741,7 @@ void bawd_logS_at_t(double t, const double* const* cols,
   const double* p1_ = cols[emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v)];
   const double* p2_ = cols[emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv)];
   const double* delta_ = split ? cols[emc2col::bawdsplit::delta] : nullptr;
+  const double* mean_ = (launch == BAWD_LAUNCH_WEIBULL) ? p2_ : p1_;
   const double* B_  = cols[emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B)];
   const double* A_  = cols[emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A)];
   const double* t0_ = cols[emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0)];
@@ -1730,14 +1758,15 @@ void bawd_logS_at_t(double t, const double* const* cols,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
       const double b_r = B_[r] + A_[r];
+      const double kv = bawd_decay(ctx, k_[r], mean_[r]);
       double cdf = 0.0;
-      if (ba_natural_cdf_bawd(tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_[r],
+      if (ba_natural_cdf_bawd(tt, A_[r], b_r, p1_[r], p2_[r], kv, ell_[r],
                               launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
                               BA_ACCEPT_RAW, cdf, delta_ ? delta_[r] : 0.0)) {
         if (cdf > 0.0) logS += std::log1p(-cdf);
       } else {
         const double log_s = bawd_log_surv(
-          tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_[r], launch, pd,
+          tt, A_[r], b_r, p1_[r], p2_[r], kv, ell_[r], launch, pd,
           gamma, rho, BAWD_DENOM_FLOOR, delta_ ? delta_[r] : 0.0);
         if (!(log_s > R_NegInf) || ISNAN(log_s)) { bad = true; break; }
         logS += log_s;

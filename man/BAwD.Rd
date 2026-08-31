@@ -8,7 +8,8 @@ BAwD(
   drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   posdrift = TRUE,
   gamma = 0,
-  rho = Inf
+  rho = Inf,
+  parameterization = c("rate", "ratio")
 )
 }
 \arguments{
@@ -24,6 +25,12 @@ name. Only meaningful for normal launches.}
 \item{rho}{Fixed base-kernel shape: \code{1}, \code{2}, \code{4}, or \code{Inf} (default).
 \code{Inf} is the exponential kernel and has no rho suffix; finite values
 append \code{"_RHO1"}, \code{"_RHO2"}, or \code{"_RHO4"} after the gamma suffix.}
+
+\item{parameterization}{Decay coordinate. \code{"rate"} (the default) samples the
+drive-decay rate \code{k}; \code{"ratio"} samples \code{r = k / v}, the decay per unit
+mean drift, in the same position, with the rate rebuilt as \code{k = r * v}.
+See the decay-ratio chart section above. Not available for
+\code{drift_distribution = "splitlognormal"}.}
 }
 \value{
 A model list defining the BAwD race model.
@@ -53,7 +60,13 @@ The start point is static and weak drive can produce an omission. The
 fixed \code{rho} and \code{gamma} choices are model options, never estimated
 parameters, so they do not appear in \code{p_types}.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{drift_distribution = "lognormal"} (the default) the launch strength
+is lognormal, sampled on the natural scale as its arithmetic mean
+\code{mean = E[V]} and coefficient of variation \code{cv = SD(V)/E[V]}.  The kernel
+converts to the log-scale pair with \code{sigma^2 = log(1 + cv^2)} and
+\code{mu = log(mean) - sigma^2/2}, so \code{cv} is a pure relative-variability
+coordinate: changing \code{mean} at fixed \code{cv} rescales the whole launch
+distribution, and changing \code{cv} at fixed \code{mean} changes only its spread.
 With \code{drift_distribution = "splitlognormal"}, \verb{Y = log V} has the continuous
 split-normal density with left and right widths
 \verb{sigma_L = sigma exp(delta/2)} and
@@ -62,18 +75,20 @@ log-width ratio and \code{mu} is the median of \code{Y}; the split point \code{c
 from these parameters so that \code{P(Y <= mu) = 1/2} exactly.  Setting \code{delta = 0}
 reduces exactly to the ordinary lognormal launch.
 With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} on the
-positive launch scale, parameterised by arithmetic \code{mean}; the
-conventional scale is derived internally. The Weibull BAwD likelihood is closed form, including
+positive launch scale, parameterised publicly by its arithmetic \code{mean} and
+shape. The conventional scale is \code{mean / Gamma(1 + 1 / shape)}. The Weibull
+BAwD likelihood is closed form, including
 its finite-\code{Tmax} frozen branch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean width of log launch. \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Arithmetic mean E\link{V} of the launch strength (lognormal launch). \cr
+   \emph{cv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Coefficient of variation SD(V)/E\link{V} (lognormal launch). \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
    \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay rate. \cr
+   \emph{r} \tab log \tab [0, Inf] \tab log(0) \tab \emph{k} = \emph{r} * \emph{v} \tab Decay per unit mean drift (\code{parameterization = "ratio"} only, replaces \emph{k}). \cr
    \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Clearance rate. \cr
    \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
@@ -104,6 +119,36 @@ For BAwL, this contract applies only to the clock-free, uncorrelated
 constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
 correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
 \code{eta}.
+
+\strong{The decay-ratio chart.} Over the exponential kernel the drive contributes
+\code{V / k} of evidence in total, so \code{V} and \code{k} are often only weakly identified
+apart while their ratio is pinned sharply -- a ridge that a fit reports as a
+near-constant \code{v / k} across a wide range of both.
+\code{parameterization = "ratio"} samples \code{r = k / v} in \code{k}'s place, inverted
+relative to that asymptote so that the no-decay limit is the representable
+value \code{r = 0} rather than a pole; the decay rate is then rebuilt as
+\code{k = r * v}. \code{r} takes \code{k}'s log transform, bounds, and zero exception, so
+\code{constants = c(r = log(0))} is still the no-decay restriction. The clearance
+rate \code{ell} is a separate scale and is untouched by the chart.
+
+The map is a bijection, so the chart does not change the model and cannot by
+itself improve a fit: at \code{k = r * v} the two charts give the same likelihood
+to the last bit. What it changes is what a \code{design()} formula can say. \code{r ~ 1} alongside \code{v ~ E} is a genuinely lower-dimensional model, nested in the
+default chart, which \emph{tests} whether the constant ratio is structural rather
+than assuming it. It also aligns a sampled coordinate with the ridge, which
+matters most for the normal launch, where \code{v} is identity-transformed and the
+recoordinatisation is nonlinear; with the lognormal and Weibull launches
+\verb{log r = log k - log mean} is linear in the sampled coordinates and a
+full-covariance group level already absorbs it.
+
+The divisor is the natural-scale mean launch strength -- \code{v} for the normal
+launch and \code{mean} for the lognormal and Weibull ones. The split-lognormal
+launch samples the log-scale median instead of a mean and is refused.
+Because the normal launch's \code{v} is unbounded, a non-positive mean drift
+clamps the decay to \code{k = 0} rather than producing a negative one; the
+likelihood stays continuous through \code{v = 0}, and that clamp is on the
+mean-drift parameter alone, so \code{posdrift = FALSE} with a positive mean keeps
+its full decay.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -111,7 +156,18 @@ matchfun <- function(d) d$S == d$lR
 # ell is left out of the formula, so it stays at its default of 1 and fixes
 # the evidence scale for the lognormal launch.
 design_BAwD <- design(data = forstmann, model = BAwD, matchfun = matchfun,
-                      formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
+                      formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1,
                                      t0 ~ 1, k ~ 1),
                       contrasts = list(mu = list(lM = ADmat)))
+
+# The decay-ratio chart, holding the decay-to-drift ratio constant across
+# conditions while the drift itself varies.  This is the model that tests a
+# near-constant v/k ridge; compare it with `k ~ E` in the default chart.
+design_BAwD_ratio <- design(
+  data = forstmann, model = function() BAwD(drift_distribution = "normal",
+                                            parameterization = "ratio"),
+  matchfun = matchfun,
+  formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1, r ~ 1),
+  contrasts = list(v = list(lM = ADmat)),
+  constants = c(sv = log(1)))
 }

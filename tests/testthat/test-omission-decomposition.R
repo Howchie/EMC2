@@ -53,7 +53,8 @@ test_that("decomposition retains newer BAwD options and finite UT", {
   expect_true(any(out$draws$censor_slow > 0))
   expect_true("asymptotic_subthreshold" %in% out$summary$component)
   audit <- omission_mechanisms(emc)
-  expect_true(isTRUE(audit$live[audit$mechanism == "censor_slow"]))
+  expect_true("censor_slow" %in% audit$mechanism)
+  expect_false("live" %in% names(audit))
 })
 
 test_that("BAwD splits dead launches from the turnaround residual", {
@@ -73,16 +74,25 @@ test_that("BAwD splits dead launches from the turnaround residual", {
                split$residual, tolerance = 1e-12)
 })
 
-test_that("IO clock and leak mechanisms are separated", {
+test_that("IO clock and BAwL asymptotic mass are separated", {
   model <- BAwL(posdrift = FALSE, erlang_type = "local_kill")
   emc <- omx_test_emc(model)
   audit <- omission_mechanisms(emc)
-  expect_true(all(c("kill", "leak", "negative_drift",
+  expect_true(all(c("kill", "negative_drift",
                     "asymptotic_subthreshold") %in% audit$mechanism))
+  expect_false("leak" %in% audit$mechanism)
+  expect_match(audit$description[
+    audit$mechanism == "asymptotic_subthreshold"
+  ], "V < k b", fixed = TRUE)
   out <- decompose_omissions(emc, stat = "mean")
-  expect_true(all(c("kill", "leak", "negative_drift") %in%
+  expect_true(all(c("kill", "negative_drift", "asymptotic_subthreshold") %in%
                     as.character(out$summary$component)))
+  expect_false("leak" %in% as.character(out$summary$component))
+  expect_gt(out$draws$asymptotic_subthreshold, 0)
   expect_true(all(out$draws$omission_total >= 0 & out$draws$omission_total <= 1))
+  printed <- capture.output(print(out))
+  expect_false(any(grepl("censor_slow", printed, fixed = TRUE)))
+  expect_false(any(grepl("live", printed, fixed = TRUE)))
 
   lba <- decompose_omissions(
     omx_test_emc(function() LBA(posdrift = FALSE)), stat = "mean"

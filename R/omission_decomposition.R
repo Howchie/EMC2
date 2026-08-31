@@ -71,12 +71,8 @@
         null = .omx_setcol("lambda_k", 0))
   }
 
-  # BAwL has a genuine asymptotic leak.  Other ballistic models have finite
-  # peaks or finite total drive; those are reported by the residual category.
-  if (identical(family, "BAwL") && live("k")) {
-    add("leak", "leak asymptote remains below threshold",
-        null = .omx_setcol("k", 0))
-  }
+  # BAwL's leak defines the intrinsic endpoint defect; keep that mass in the
+  # named asymptotic residual rather than registering a duplicate switch.
 
   # BAwD has two distinct sources of defective (never-finish) mass whenever
   # clearance is present.  Launches with V < ell never have positive
@@ -117,7 +113,10 @@
   if (is.null(attr(m, "residual"))) {
     attr(m, "residual") <- c(
       name = "asymptotic_subthreshold",
-      desc = "accumulation remains below threshold without a registered switch"
+      desc = if (identical(family, "BAwL"))
+        "launch strength below leak threshold (V < k b)"
+      else
+        "accumulation remains below threshold without a registered switch"
     )
   }
   m
@@ -419,47 +418,57 @@
 #'
 #' @param emc A fitted single-design race-model emc object.
 #' @param data Optional data frame on which to evaluate the decomposition.
-#' @return A data frame describing the omission mechanisms.
+#' @return A data frame containing only live omission mechanisms, with
+#'   `mechanism` and `description` columns.
 #' @export
 omission_mechanisms <- function(emc, data = NULL) {
   prep <- .omx_prep(emc, data)
   mech <- .omx_mechanisms(prep$model_list, prep$pars_ref)
-  rows <- list(data.frame(
-    mechanism = "contaminant", live = any(prep$pars_ref_pC > 0, na.rm = TRUE),
-    description = "pContaminant: omission before the accumulator race"
-  ))
-  if (length(mech)) for (mm in mech) rows[[length(rows) + 1L]] <- data.frame(
-    mechanism = mm$name, live = TRUE, description = mm$desc
-  )
+  rows <- list()
+  add_row <- function(name, is_live, description) {
+    if (isTRUE(is_live)) rows[[length(rows) + 1L]] <<- data.frame(
+      mechanism = name, description = description,
+      stringsAsFactors = FALSE
+    )
+  }
+  add_row("contaminant", any(prep$pars_ref_pC > 0, na.rm = TRUE),
+          "pContaminant: omission before the accumulator race")
+  if (length(mech)) for (mm in mech)
+    add_row(mm$name, TRUE, mm$desc)
   residual <- attr(mech, "residual")
   split <- attr(mech, "split")
   if (is.null(split)) {
-    rows[[length(rows) + 1L]] <- data.frame(
-      mechanism = residual[["name"]],
-      live = any(.omx_ablate_all(prep, mech) > 1e-10, na.rm = TRUE),
-      description = residual[["desc"]]
-    )
+    add_row(residual[["name"]],
+            any(.omx_ablate_all(prep, mech) > 1e-10, na.rm = TRUE),
+            residual[["desc"]])
   } else {
     split_ref <- .omx_split_inf(prep$model_list, mech, prep$pars_ref,
                                 nrow(prep$trial), prep$n_acc)
-    rows[[length(rows) + 1L]] <- data.frame(
-      mechanism = split$name,
-      live = any(split_ref$dead_launch > 1e-10, na.rm = TRUE),
-      description = split$desc
-    )
-    rows[[length(rows) + 1L]] <- data.frame(
-      mechanism = residual[["name"]],
-      live = any(split_ref$asymptotic_subthreshold > 1e-10, na.rm = TRUE),
-      description = residual[["desc"]]
-    )
+    add_row(split$name,
+            any(split_ref$dead_launch > 1e-10, na.rm = TRUE), split$desc)
+    add_row(residual[["name"]],
+            any(split_ref$asymptotic_subthreshold > 1e-10, na.rm = TRUE),
+            residual[["desc"]])
   }
-  rows[[length(rows) + 1L]] <- data.frame(
-    mechanism = "censor_slow",
-    live = any(!prep$UCresp & is.finite(prep$UC) & prep$UC <= prep$UT,
-               na.rm = TRUE),
-    description = "response after UC and before UT (upper-censor omission)"
+  censor_window <- !prep$UCresp & is.finite(prep$UC) & prep$UC <= prep$UT
+  censor_ref <- if (any(censor_window, na.rm = TRUE)) {
+    s_ref <- function(t) {
+      if (.omx_global_kill(prep$model_list))
+        .omx_S_global_kill(t, prep$pars_ref, prep$model_list$pfun,
+                           prep$n_acc, .omx_erlang_shape(prep$model_list))
+      else
+        .omx_S(t, prep$pars_ref, prep$model_list$pfun, prep$n_acc)
+    }
+    ifelse(censor_window, pmax(s_ref(prep$UC) - s_ref(prep$UT), 0), 0)
+  } else numeric(nrow(prep$trial))
+  add_row(
+    "censor_slow",
+    any(censor_ref > 1e-10, na.rm = TRUE),
+    "response after UC and before UT (upper-censor omission)"
   )
-  out <- do.call(rbind, rows)
+  out <- if (length(rows)) do.call(rbind, rows) else
+    data.frame(mechanism = character(), description = character(),
+               stringsAsFactors = FALSE)
   attr(out, "c_name") <- prep$model_list$c_name
   out
 }
@@ -467,8 +476,9 @@ omission_mechanisms <- function(emc, data = NULL) {
 #' Decompose expected omissions by generating mechanism.
 #'
 #' The returned probabilities are conditional on a trial being retained after
-#' lower/upper truncation.  `censor_slow` is an upper-censor omission; the
-#' intrinsic residual is named `asymptotic_subthreshold`.  For BAwD with
+#' lower/upper truncation.  For BAwL, `asymptotic_subthreshold` is the intrinsic
+#' mass with launch strength below the leak threshold (`V < k b`).
+#' `censor_slow` is an upper-censor omission.  For BAwD with
 #' positive clearance, that residual is split into `dead_launch` (all launches
 #' below clearance, `V < ell`) and the turnaround-asymptote remainder
 #' (`V > ell` but still never reaching threshold).
@@ -647,10 +657,15 @@ print.omission_decomposition <- function(x, ...) {
   cat("Omission decomposition for", x$c_name, "\n")
   cat("cells:", if (length(x$cell_cols)) paste(x$cell_cols, collapse = " x ")
       else "(pooled)", "\n\n")
-  print(x$mechanisms, row.names = FALSE)
+  if (nrow(x$mechanisms)) print(x$mechanisms, row.names = FALSE)
   cat("\n")
-  print(x$summary[x$summary$component != "responded", ],
-        row.names = FALSE, digits = 3)
+  live <- if (nrow(x$mechanisms)) as.character(x$mechanisms$mechanism) else
+    character()
+  breakdown <- x$summary[
+    as.character(x$summary$component) %in% c(live, "omission_total"), ,
+    drop = FALSE
+  ]
+  print(breakdown, row.names = FALSE, digits = 3)
   if (!is.null(x$coalitions) && ncol(x$coalitions) > 2L) {
     cat("\nnever-finish mass with registered mechanisms switched on:\n")
     print(x$coalitions, digits = 3)

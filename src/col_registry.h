@@ -100,6 +100,14 @@ namespace bawl {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwL"};
   }
+  // BAwL(parameterization = "ratio"): the sampled leak coordinate is
+  // r = k / (mean launch strength) and occupies k's POSITION, so every kernel
+  // keeps indexing through this enum and only the name differs.  The leak
+  // itself is rebuilt per row by bawl_leak() in src/model_BAwL.cpp.
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "r"};
+    return {n, N_REQ, "BAwLRAT"};
+  }
 }
 // Lognormal launch strength: same POSITIONS as bawl (mu occupies v's slot and
 // sigma occupies sv's), so every kernel indexes through the bawl enum and only
@@ -110,12 +118,22 @@ namespace bawl_logn {
     static const char* n[] = {"mean", "cv", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwL_LOGN"};
   }
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "r"};
+    return {n, N_REQ, "BAwL_LOGNRAT"};
+  }
 }
 namespace bawl_weib {
   enum : int { shape = 0, mean, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
   inline ColSpec spec() {
     static const char* n[] = {"shape", "mean", "B", "A", "t0", "k"};
     return {n, N_REQ, "BAwL_WEIB"};
+  }
+  // Note the launch mean is column 1 here, not column 0: the ratio chart's
+  // divisor follows the shape.
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "r"};
+    return {n, N_REQ, "BAwL_WEIBRAT"};
   }
 }
 namespace bawlsplit {
@@ -137,6 +155,14 @@ namespace bawd {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD"};
   }
+  // BAwD(parameterization = "ratio"): the sampled decay coordinate is
+  // r = k / (mean launch strength) and occupies k's POSITION, so every kernel
+  // keeps this enum and rebuilds the drive-decay rate per row via bawd_decay().
+  // The clearance rate `ell` is a separate scale and stays untouched in slot 6.
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "r", "ell"};
+    return {n, N_REQ, "BAwDRAT"};
+  }
 }
 namespace bawd_logn {
   // Same positions as bawd: mu occupies v's slot and sigma occupies sv's.
@@ -145,12 +171,22 @@ namespace bawd_logn {
     static const char* n[] = {"mean", "cv", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN"};
   }
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"mean", "cv", "B", "A", "t0", "r", "ell"};
+    return {n, N_REQ, "BAwDRAT_LOGN"};
+  }
 }
 namespace bawd_weib {
   enum : int { shape = 0, mean, B, A, t0, k, ell, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"shape", "mean", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_WEIB"};
+  }
+  // As for BAwL: the launch mean is column 1 here, not column 0, so the ratio
+  // chart's divisor follows the shape.
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"shape", "mean", "B", "A", "t0", "r", "ell"};
+    return {n, N_REQ, "BAwDRAT_WEIB"};
   }
 }
 namespace bawdsplit {

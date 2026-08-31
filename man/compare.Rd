@@ -26,7 +26,8 @@ compare(
 )
 }
 \arguments{
-\item{sList}{List of samples objects}
+\item{sList}{List of EMC fits, or a non-empty list of data frames returned by
+\code{compare()} to combine saved model summaries.}
 
 \item{stage}{A string. Specifies which stage the samples are to be taken from \code{"preburn"}, \code{"burn"}, \code{"adapt"}, or \code{"sample"}}
 
@@ -44,9 +45,6 @@ via the \code{loo} package. Requires computing per-trial log-likelihoods across 
 
 \item{LOO}{Boolean, defaults to \code{FALSE}. Include PSIS-LOO computed via the \code{loo} package.
 Uses the same pointwise log-likelihood matrix as WAIC and is typically slower.}
-
-\item{loo}{Lowercase alias for \code{LOO}, accepted for compatibility with code
-using the package name of the underlying \code{loo} package.}
 
 \item{pointwise}{Character string, one of \code{"trial"} or \code{"subject"}, controlling
 the unit of prediction for WAIC/LOO in pooled hierarchical comparisons.
@@ -80,13 +78,26 @@ Only relevant when \code{WAIC} or \code{LOO} is \code{TRUE} and the pw_ll is not
 \item{digits_p}{Integer, significant digits in printed table for model weights}
 
 \item{...}{Additional, optional arguments}
+
+\item{loo}{Lowercase alias for \code{LOO}, accepted for compatibility with code
+using the package name of the underlying \code{loo} package.}
 }
 \value{
-Matrix of effective number of parameters, mean deviance, deviance of
-mean, DIC, BPIC, Marginal Deviance (if \code{BayesFactor=TRUE}) and associated weights.
+A data frame of effective number of parameters, mean deviance,
+deviance of mean, DIC, BPIC, Marginal Deviance (if \code{BayesFactor=TRUE}) and
+associated weights.
 }
 \description{
 Returns the BPIC/DIC or marginal deviance (-2*marginal likelihood) for a list of samples objects.
+}
+\details{
+Saved comparison results can be combined without reopening fitted objects or
+recomputing criteria.  Save each full-precision result with
+\code{saveRDS()} and pass the data frames to \code{compare()}, for example:
+\code{saveRDS(compare(list(m = fit_m), print_summary = FALSE), "m.rds")}
+and then \code{compare(list(m = readRDS("m.rds"), n = readRDS("n.rds")))}.
+The saved results must use the same comparison settings and contain the same
+information-criterion columns.
 }
 \examples{
 \donttest{

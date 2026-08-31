@@ -9,7 +9,8 @@ BAwL(
   erlang_shape = 1L,
   erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
   correlated = FALSE,
-  drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull")
+  drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull"),
+  parameterization = c("rate", "ratio")
 )
 }
 \arguments{
@@ -27,14 +28,21 @@ or \code{"mixed"} for an Erlang-1/Erlang-2 mixture controlled by \code{omega}.}
 Only available for \code{drift_distribution = "normal"}.}
 
 \item{drift_distribution}{Distribution of the trialwise launch strength:
-\code{"normal"} (the default) for \code{V ~ N(v, sv^2)}, \code{"lognormal"} for
-\verb{log V ~ N(mu, sigma^2)}, or \code{"splitlognormal"} for a continuous
+\code{"normal"} (the default) for \code{V ~ N(v, sv^2)}, \code{"lognormal"} for a
+lognormal \code{V} parameterized by its arithmetic \code{mean} and \code{cv}, or
+\code{"splitlognormal"} for a continuous
 split-normal \verb{log V} with widths
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)}.
 In the split variant \code{mu} is the exact median and \code{delta} is unbounded;
 \code{delta = 0} is exactly the lognormal launch. \code{"weibull"} uses
-\code{V ~ Weibull(shape, scale)} on the positive launch scale, with the
-public arithmetic mean supplied instead of the conventional scale.}
+\code{V ~ Weibull(shape, scale)} on the positive launch scale; the public
+parameters are \code{shape} and its arithmetic \code{mean}.}
+
+\item{parameterization}{Leak coordinate. \code{"rate"} (the default) samples the
+leak rate \code{k}; \code{"ratio"} samples \code{r = k / v}, the leak per unit mean drift,
+in the same position, with the leak rebuilt as \code{k = r * v}. See the
+leak-ratio chart section above. Not available for
+\code{drift_distribution = "splitlognormal"} or \code{correlated = TRUE}.}
 }
 \value{
 A model list defining the BAwL race model.
@@ -69,6 +77,7 @@ scale before trial-dependent transforms are applied.\tabular{llllll}{
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate; \code{k = 0} is the LBA limit. \cr
+   \emph{r} \tab log \tab [0, Inf] \tab log(0) \tab \emph{k} = \emph{r} * mean \tab Leak per unit mean drift, in the ratio chart only; replaces \emph{k}. \cr
    \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
@@ -89,7 +98,8 @@ correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
 \code{eta}.
 With \code{drift_distribution = "lognormal"}, \code{v} and \code{sv} are replaced by \code{mu}
 (identity, default 0) and \code{sigma} (log, default \code{log(1)}), giving
-\verb{log V ~ N(mu, sigma^2)}.  With \code{"splitlognormal"}, \code{mu} is the exact
+\code{V} lognormal with sampled arithmetic \code{mean} and \code{cv}.  With
+\code{"splitlognormal"}, the log-scale \code{mu} is the exact
 median of \verb{log V}, \code{delta} is an unbounded real parameter, and the
 continuous split-normal widths are
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)};
@@ -99,7 +109,7 @@ positive by construction, so \code{posdrift} does not apply.  The \code{correlat
 one-factor path — which decomposes the \emph{Gaussian} drift vector — is not
 available for either lognormal variant.
 With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} with
-positive shape and arithmetic mean. The conventional scale is derived as
+positive shape and arithmetic \code{mean}. The conventional Weibull scale is derived as
 \code{mean / Gamma(1 + 1 / shape)}. Weibull launches are also incompatible with the
 Gaussian \code{correlated} path.
 
@@ -112,12 +122,40 @@ dimensionless, and on the sampled scale the rescaling is the single
 direction \verb{mu -> mu + log c}, \verb{B -> B + log c}, \verb{A -> A + log c}, leaving
 \code{sigma}, \code{k}, \code{t0} and every contrast coefficient untouched. Fixing \emph{any
 one} of \code{mu}'s intercept, \code{B}'s intercept, or \code{A} therefore identifies the
-scale; \code{constants = c(mu = 0)} and \code{constants = c(B = log(1))} are both
+scale; \code{constants = c(mean = log(1))} and \code{constants = c(B = log(1))} are both
 valid and differ only by reparameterization. Because the rescaling shifts
 only the intercept, condition effects on the fixed parameter survive: with
 \code{B ~ E}, \code{constants = c(B = log(1))} leaves \code{B_Eneutral} and \code{B_Eaccuracy}
 free and identified. Omitting the constraint produces a ridge in the
 posterior rather than an error.
+
+\strong{The leak-ratio chart.} The leaky trajectory reaches
+\code{v / k} asymptotically, so \code{v} and \code{k} are often only weakly identified apart
+while their ratio is pinned sharply — a ridge that a fit reports as a
+near-constant \code{v / k} across a wide range of both.
+\code{parameterization = "ratio"} samples \code{r = k / v} in \code{k}'s place, inverted
+relative to the asymptote so that the LBA limit is the representable value
+\code{r = 0} rather than a pole; the leak is then rebuilt as \code{k = r * v}. \code{r}
+takes \code{k}'s log transform, bounds, and zero exception, so \code{constants = c(r = log(0))} is still the LBA restriction.
+
+The map is a bijection, so the chart does not change the model and cannot by
+itself improve a fit: at \code{k = r * v} the two charts give the same likelihood
+to the last bit. What it changes is what a \code{design()} formula can say. \code{r ~ 1} alongside \code{v ~ E} is a genuinely lower-dimensional model, nested in the
+default chart, which \emph{tests} whether the constant ratio is structural rather
+than assuming it. It also aligns a sampled coordinate with the ridge, which
+matters most for the normal launch, where \code{v} is identity-transformed and the
+recoordinatisation is nonlinear; with the lognormal and Weibull launches
+\verb{log r = log k - log mean} is linear in the sampled coordinates and a
+full-covariance group level already absorbs it.
+
+The divisor is the natural-scale mean launch strength — \code{v} for the normal
+launch and \code{mean} for the lognormal and Weibull ones. The split-lognormal
+launch samples the log-scale median instead of a mean and is refused, as is
+\code{correlated = TRUE}. Because the normal launch's \code{v} is unbounded, a
+non-positive mean drift clamps the leak to \code{k = 0} rather than producing a
+negative one; the likelihood stays continuous through \code{v = 0}, and that
+clamp is on the mean-drift parameter alone, so \code{posdrift = FALSE} with a
+positive mean keeps its full leak.
 
 Here \code{q = 1} for Erlang-1 clocks and \code{q = 2} for Erlang-2 clocks. In
 \code{erlang_shape = "mixed"}, the clock is Erlang-1 with probability \code{omega} and
@@ -170,8 +208,18 @@ matchfun <- function(d) d$S == d$lR
 design_BAwL_logn <- design(
   data = forstmann, model = function() BAwL(drift_distribution = "lognormal"),
   matchfun = matchfun,
-  formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
+  formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
   contrasts = list(mu = list(lM = ADmat)),
-  constants = c(mu = 0))
+  constants = c(mean = log(1)))
+
+# The leak-ratio chart, holding the leak-to-drift ratio constant across
+# conditions while the drift itself varies.  This is the model that tests a
+# near-constant v/k ridge; compare it with `k ~ E` in the default chart.
+design_BAwL_ratio <- design(
+  data = forstmann, model = function() BAwL(parameterization = "ratio"),
+  matchfun = matchfun,
+  formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1, r ~ 1),
+  contrasts = list(v = list(lM = ADmat)),
+  constants = c(sv = log(1)))
 
 }

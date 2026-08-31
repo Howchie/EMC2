@@ -48,7 +48,7 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 derived from the median condition, and \code{delta = 0} is exactly lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-With \code{drift_distribution = "weibull"}, use positive \code{shape} and arithmetic \code{mean}
+With \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{mean}
 instead of the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.

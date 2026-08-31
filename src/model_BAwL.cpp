@@ -10,6 +10,20 @@
 // BAwL (Ballistic Accumulator with Leak + killing/guessing) adapters
 // Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
 // ============================================================
+// BAwL(parameterization = "ratio") samples r = k / (mean launch strength) in
+// k's column, so the leak has to be rebuilt per row.  The clamp at zero is
+// deliberate: the normal launch's v is identity-transformed and unbounded, and
+// a negative leak is not a model, so a non-positive mean drift collapses
+// continuously to the LBA limit (k = 0).  This is about the mean-drift
+// PARAMETER, not the per-trial draws -- posdrift is untouched here, so an IO
+// model with a positive mean keeps its full leak.  Mirrored exactly by the
+// Ttransform of BAwL() in R/model_LBA.R.
+static inline double bawl_leak(const ContextForRaceModels* ctx,
+                               double k_or_r, double mean_launch) {
+  if (ctx == nullptr || !ctx->bawl_ratio_chart) return k_or_r;
+  return (mean_launch > 0.0) ? k_or_r * mean_launch : 0.0;
+}
+
 double dbawl_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int lau = ctx ? ctx->bawl_launch : BAWL_LAUNCH_NORMAL;
@@ -23,6 +37,9 @@ double dbawl_scalar(double t, const double* par, void* ctx_) {
   const int imG = emc2col::select_index(split, emc2col::bawlsplit::mG, emc2col::bawl::mG);
   const int imK = emc2col::select_index(split, emc2col::bawlsplit::mK, emc2col::bawl::mK);
   const double delta = split ? par[emc2col::bawlsplit::delta] : 0.0;
+  // The ratio chart divides by the launch MEAN: column 0 for the normal (v)
+  // and lognormal (mean) launches, column 1 for the Weibull pair (shape, mean).
+  const int imean = (lau == BAWL_LAUNCH_WEIBULL) ? isv : iv;
   if (R_IsNA(par[iv])) return 0.0;
   const double t0_val = par[it0];
   const double tt = t - t0_val;
@@ -34,7 +51,8 @@ double dbawl_scalar(double t, const double* par, void* ctx_) {
   }
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : par[ik];
+  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0
+                                                       : bawl_leak(ctx, par[ik], par[imean]);
   const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
     ((ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[imG], ks) : 0.0);
   const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
@@ -62,6 +80,9 @@ double pbawl_scalar(double t, const double* par, void* ctx_) {
   const int imG = emc2col::select_index(split, emc2col::bawlsplit::mG, emc2col::bawl::mG);
   const int imK = emc2col::select_index(split, emc2col::bawlsplit::mK, emc2col::bawl::mK);
   const double delta = split ? par[emc2col::bawlsplit::delta] : 0.0;
+  // The ratio chart divides by the launch MEAN: column 0 for the normal (v)
+  // and lognormal (mean) launches, column 1 for the Weibull pair (shape, mean).
+  const int imean = (lau == BAWL_LAUNCH_WEIBULL) ? isv : iv;
   if (R_IsNA(par[iv])) return 0.0;
   const double t0_val = par[it0];
   const double tt = t - t0_val;
@@ -79,7 +100,8 @@ double pbawl_scalar(double t, const double* par, void* ctx_) {
   }
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : par[ik];
+  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0
+                                                       : bawl_leak(ctx, par[ik], par[imean]);
   const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
     ((ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[imG], ks) : 0.0);
   const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
@@ -119,6 +141,9 @@ void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[iA];
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
+  // The ratio chart divides by the launch MEAN: v_ for the normal and
+  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
     // Exact LBA member: retain the shared numerical kernel, but skip the
     // killed-clock wrapper and all optional-column bookkeeping per row.
@@ -163,7 +188,8 @@ void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[i];
+    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0
+                                                        : bawl_leak(ctx, k_[i], mean_[i]);
     const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
       ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks));
     const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
@@ -230,6 +256,9 @@ void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[iA];
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
+  // The ratio chart divides by the launch MEAN: v_ for the normal and
+  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
     // Exact LBA member; pfun writes the log-survivor expected by the raw
     // likelihood path, while the launch dispatch supplies stable tails.
@@ -280,7 +309,8 @@ void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[i];
+    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0
+                                                        : bawl_leak(ctx, k_[i], mean_[i]);
     const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
       ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks));
     const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
@@ -341,6 +371,9 @@ void bawl_logS_at_t(double t, const double* const* cols,
   const double* A_ = cols[iA];
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
+  // The ratio chart divides by the launch MEAN: v_ for the normal and
+  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   const double* k_ = (ctx && ctx->bawl_k_fixed_zero) ? nullptr : cols[ik];
   const double* lg_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[imG];
   const double* lk_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[imK];
@@ -373,7 +406,8 @@ void bawl_logS_at_t(double t, const double* const* cols,
         }
         continue;
       }
-      const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[r];
+      const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0
+                                                          : bawl_leak(ctx, k_[r], mean_[r]);
       const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
         ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], ks));
       const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :

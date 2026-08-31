@@ -480,6 +480,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate. |
+#' | *r* | log | \[0, Inf\] | log(0) | *k* = *r* * *v* | Decay per unit mean drift (`parameterization = "ratio"` only, replaces *k*). |
 #' | *ell* | log | \[0, Inf\] | log(1) | | Clearance rate. |
 #' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
@@ -509,6 +510,37 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
 #' `eta`.
 #'
+#' **The decay-ratio chart.** Over the exponential kernel the drive contributes
+#' `V / k` of evidence in total, so `V` and `k` are often only weakly identified
+#' apart while their ratio is pinned sharply -- a ridge that a fit reports as a
+#' near-constant `v / k` across a wide range of both.
+#' `parameterization = "ratio"` samples `r = k / v` in `k`'s place, inverted
+#' relative to that asymptote so that the no-decay limit is the representable
+#' value `r = 0` rather than a pole; the decay rate is then rebuilt as
+#' `k = r * v`. `r` takes `k`'s log transform, bounds, and zero exception, so
+#' `constants = c(r = log(0))` is still the no-decay restriction. The clearance
+#' rate `ell` is a separate scale and is untouched by the chart.
+#'
+#' The map is a bijection, so the chart does not change the model and cannot by
+#' itself improve a fit: at `k = r * v` the two charts give the same likelihood
+#' to the last bit. What it changes is what a `design()` formula can say. `r ~
+#' 1` alongside `v ~ E` is a genuinely lower-dimensional model, nested in the
+#' default chart, which *tests* whether the constant ratio is structural rather
+#' than assuming it. It also aligns a sampled coordinate with the ridge, which
+#' matters most for the normal launch, where `v` is identity-transformed and the
+#' recoordinatisation is nonlinear; with the lognormal and Weibull launches
+#' `log r = log k - log mean` is linear in the sampled coordinates and a
+#' full-covariance group level already absorbs it.
+#'
+#' The divisor is the natural-scale mean launch strength -- `v` for the normal
+#' launch and `mean` for the lognormal and Weibull ones. The split-lognormal
+#' launch samples the log-scale median instead of a mean and is refused.
+#' Because the normal launch's `v` is unbounded, a non-positive mean drift
+#' clamps the decay to `k = 0` rather than producing a negative one; the
+#' likelihood stays continuous through `v = 0`, and that clamp is on the
+#' mean-drift parameter alone, so `posdrift = FALSE` with a positive mean keeps
+#' its full decay.
+#'
 #' @param drift_distribution Distribution of trialwise launch strength:
 #'   `"lognormal"` (default), `"splitlognormal"`, `"weibull"`, or `"normal"`.
 #' @param posdrift Logical. If `TRUE` (default), truncate normal launch
@@ -518,6 +550,11 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' @param rho Fixed base-kernel shape: `1`, `2`, `4`, or `Inf` (default).
 #'   `Inf` is the exponential kernel and has no rho suffix; finite values
 #'   append `"_RHO1"`, `"_RHO2"`, or `"_RHO4"` after the gamma suffix.
+#' @param parameterization Decay coordinate. `"rate"` (the default) samples the
+#'   drive-decay rate `k`; `"ratio"` samples `r = k / v`, the decay per unit
+#'   mean drift, in the same position, with the rate rebuilt as `k = r * v`.
+#'   See the decay-ratio chart section above. Not available for
+#'   `drift_distribution = "splitlognormal"`.
 #' @return A model list defining the BAwD race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -528,10 +565,24 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'                       formula = list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1,
 #'                                      t0 ~ 1, k ~ 1),
 #'                       contrasts = list(mu = list(lM = ADmat)))
+#'
+#' # The decay-ratio chart, holding the decay-to-drift ratio constant across
+#' # conditions while the drift itself varies.  This is the model that tests a
+#' # near-constant v/k ridge; compare it with `k ~ E` in the default chart.
+#' design_BAwD_ratio <- design(
+#'   data = forstmann, model = function() BAwD(drift_distribution = "normal",
+#'                                             parameterization = "ratio"),
+#'   matchfun = matchfun,
+#'   formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1, r ~ 1),
+#'   contrasts = list(v = list(lM = ADmat)),
+#'   constants = c(sv = log(1)))
 #' @export
 BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
-                 posdrift = TRUE, gamma = 0, rho = Inf) {
+                 posdrift = TRUE, gamma = 0, rho = Inf,
+                 parameterization = c("rate", "ratio")) {
   drift_distribution <- match.arg(drift_distribution)
+  parameterization <- match.arg(parameterization)
+  ratio_chart <- parameterization == "ratio"
   gamma <- .bawd_check_gamma(gamma)
   rho <- .bawd_check_rho(rho)
 
@@ -542,6 +593,15 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   if ((lognormal || weibull) && !isTRUE(posdrift)) {
     stop("BAwD: posdrift only applies to drift_distribution = \"normal\"; a ",
          "lognormal and Weibull launch strengths are positive by construction.")
+  }
+  if (ratio_chart && splitlognormal) {
+    # r is referenced to a natural-scale mean launch strength.  The split
+    # launch samples the log-scale median (mu) instead, so k = r * mean has no
+    # column to read; refuse rather than silently substituting the median.
+    stop("BAwD: parameterization = \"ratio\" needs a natural-scale mean launch ",
+         "column, which the split-lognormal launch does not have (mu is the ",
+         "log-scale median).  Use drift_distribution = \"normal\", ",
+         "\"lognormal\", or \"weibull\".")
   }
 
   if (weibull) {
@@ -566,17 +626,32 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
+  # Decay coordinate.  The default chart samples the drive-decay rate k; the
+  # ratio chart samples r = k / (mean launch strength) instead, so that the
+  # no-decay limit sits at r = 0 rather than at a pole.  r takes k's kernel
+  # column POSITION, bounds, and zero exception, so only the name changes; the
+  # clearance rate `ell` is a separate scale and is left alone.
+  decay_par <- if (ratio_chart) "r" else "k"
+  p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp")
+  minmax <- cbind(minmax, A = c(1e-4, Inf), B = c(1e-4, Inf),
+                  t0 = c(0.05, Inf))
+  p_types[[decay_par]] <- log(0)
+  transform[[decay_par]] <- "exp"
+  minmax <- cbind(minmax, `colnames<-`(matrix(c(1e-4, Inf), ncol = 1), decay_par))
   # ell defaults to log(1): leaving it out of the formula fixes the evidence
   # scale, which is the recommended convention for the lognormal launch.
-  p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0),
-               "k" = log(0), "ell" = log(1))
-  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp",
-                 ell = "exp")
-  minmax <- cbind(minmax, A = c(1e-4, Inf), B = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), k = c(1e-4, Inf), ell = c(1e-4, Inf))
-  # ell = 0 (the static-start BAwL limit) and k = 0 (the LBA limit) must stay
-  # exactly reachable, so both are bound exceptions rather than clamped.
-  exception <- c(A = 0, k = 0, ell = 0)
+  p_types <- c(p_types, "ell" = log(1))
+  transform <- c(transform, ell = "exp")
+  minmax <- cbind(minmax, ell = c(1e-4, Inf))
+  # ell = 0 (the static-start BAwL limit) and a zero decay coordinate (the
+  # no-decay limit -- k = 0, or r = 0 under the ratio chart) must stay exactly
+  # reachable, so both are bound exceptions rather than clamped.
+  exception <- stats::setNames(c(0, 0, 0), c("A", decay_par, "ell"))
+  launch_pars <- .ba_par_names(launch)
+  # The launch mean is the first column for the normal (v) and lognormal (mean)
+  # launches, but the SECOND for the Weibull one, whose pair is (shape, mean).
+  mean_par <- if (weibull) launch_pars[2] else launch_pars[1]
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   # Operational-time warp; eta = 0 is exactly this model.
@@ -589,9 +664,17 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
 
   # "_SPLIT" follows "_LOGN"; the IO suffix is only reachable for normal
   # launches, and neither lognormal name contains the substring "IO".
-  c_name <- paste0("BAwD", if (weibull) "_WEIB"
-                           else if (lognormal) "_LOGN"
-                           else if (!posdrift) "IO" else "",
+  # The ratio-chart infix is "RAT", NOT "RATIO": resolve_race_model_adapter()
+  # detects the untruncated launch with an unanchored find("IO"), which
+  # "RATIO" would match, silently turning posdrift off.  The infix must also
+  # stay glued to the BAwD/BAwDIO stem, which is what the adapter anchors on
+  # ("RAT" alone is not unique -- BTAwL emits "_RATE"), and it must not create
+  # a "BAwDp"/"BAwDD" prefix, which dispatch tests first.  See
+  # src/race_dispatch.cpp.
+  c_name <- paste0("BAwD",
+                   if (!weibull && !lognormal && !posdrift) "IO" else "",
+                   if (ratio_chart) "RAT" else "",
+                   if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                    if (splitlognormal) "_SPLIT" else "",
                    .bawd_gamma_suffix(gamma), .bawd_rho_suffix(rho))
   list(
@@ -606,6 +689,16 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
+      if (ratio_chart) {
+        # The R-side kernels, simulators and bawd_tmax_vec() below all read the
+        # decay rate by NAME, so derive it here, before anything consumes it.
+        # Clamped at zero: a non-positive mean drift collapses to the no-decay
+        # limit rather than feeding a negative rate to the kernel.  This
+        # mirrors bawd_decay() in src/model_BAwD.cpp exactly, and it is about
+        # the mean-drift parameter, not the per-trial draws -- posdrift is
+        # untouched, so an IO model with a positive mean keeps its full decay.
+        pars <- cbind(pars, k = pars[, decay_par] * pmax(pars[, mean_par], 0))
+      }
       b <- pars[, "B"] + pars[, "A"]
       Tmax_op <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
                                gamma = gamma, rho = rho)

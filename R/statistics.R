@@ -2,7 +2,8 @@
 #'
 #' Returns the BPIC/DIC or marginal deviance (-2*marginal likelihood) for a list of samples objects.
 #'
-#' @param sList List of samples objects
+#' @param sList List of EMC fits, or a non-empty list of data frames returned by
+#' \code{compare()} to combine saved model summaries.
 #' @param stage A string. Specifies which stage the samples are to be taken from `"preburn"`, `"burn"`, `"adapt"`, or `"sample"`
 #' @param filter An integer or vector. If it's an integer, iterations up until the value set by `filter` will be excluded.
 #' If a vector is supplied, only the iterations in the vector will be considered.
@@ -40,8 +41,18 @@
 #' @param digits_p Integer, significant digits in printed table for model weights
 #' @param ... Additional, optional arguments
 #'
-#' @return Matrix of effective number of parameters, mean deviance, deviance of
-#' mean, DIC, BPIC, Marginal Deviance (if `BayesFactor=TRUE`) and associated weights.
+#' @details
+#' Saved comparison results can be combined without reopening fitted objects or
+#' recomputing criteria.  Save each full-precision result with
+#' \code{saveRDS()} and pass the data frames to \code{compare()}, for example:
+#' \code{saveRDS(compare(list(m = fit_m), print_summary = FALSE), "m.rds")}
+#' and then \code{compare(list(m = readRDS("m.rds"), n = readRDS("n.rds")))}.
+#' The saved results must use the same comparison settings and contain the same
+#' information-criterion columns.
+#'
+#' @return A data frame of effective number of parameters, mean deviance,
+#' deviance of mean, DIC, BPIC, Marginal Deviance (if `BayesFactor=TRUE`) and
+#' associated weights.
 #' @examples \donttest{
 #' compare(list(samples_LNR), cores_for_props = 1)
 #' # Typically we would define a list of two (or more) different models:
@@ -72,6 +83,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                         pointwise = c("trial", "subject"),
                         K = 200, cores_for_loo = 1, cores_for_props = 4, cores_per_prop = 1, both_splits = FALSE,
                         print_summary=TRUE,digits=0,digits_p=3, ..., loo = NULL) {
+  if (is.data.frame(sList)) sList <- list(sList)
   if(is(sList, "emc")) sList <- list(sList)
   if (!is.null(loo)) {
     if (!is.logical(loo) || length(loo) != 1L || is.na(loo))
@@ -85,6 +97,99 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     IC <- -(IC - min(IC))/2
     exp(IC)/sum(exp(IC))
   }
+
+  # Saved compare() results are already summaries, so combine their rows and
+  # recompute weights jointly instead of treating the data frames as fits.
+  is_saved <- is.list(sList) && length(sList) > 0L &&
+    all(vapply(sList, is.data.frame, logical(1)))
+  if (is_saved) {
+    metric_names <- c("MD", "WAIC", "LOO", "DIC", "BPIC")
+    if (any(vapply(sList, nrow, integer(1)) == 0L))
+      stop("Saved compare() outputs must be non-empty data frames.")
+
+    first_names <- names(sList[[1]])
+    if (length(first_names) == 0L || anyDuplicated(first_names))
+      stop("Saved compare() outputs must have unique, non-empty column names.")
+    metric_sets <- lapply(sList, function(x) metric_names[metric_names %in% names(x)])
+    if (length(metric_sets[[1]]) == 0L)
+      stop("Saved compare() output has no recognised metric columns (MD, WAIC, LOO, DIC, or BPIC).")
+    if (!all(vapply(metric_sets, function(x) identical(x, metric_sets[[1]]), logical(1))))
+      stop("Saved compare() outputs must contain the same information-criterion metrics.")
+
+    # Column names may be in a different order, but the set of columns and the
+    # column types must be compatible so values are preserved by row binding.
+    for (i in seq_along(sList)) {
+      nams <- names(sList[[i]])
+      if (length(nams) == 0L || anyDuplicated(nams) || !setequal(nams, first_names))
+        stop("Saved compare() outputs must have compatible columns.")
+      sList[[i]] <- sList[[i]][, first_names, drop = FALSE]
+      attr(sList[[i]], "pw_ll") <- NULL
+      for (nm in first_names) {
+        a <- sList[[1]][[nm]]
+        b <- sList[[i]][[nm]]
+        if (is.factor(a) || is.factor(b)) {
+          compatible <- is.factor(a) && is.factor(b)
+        } else if (is.numeric(a) && is.numeric(b)) {
+          compatible <- TRUE
+        } else {
+          compatible <- identical(typeof(a), typeof(b)) &&
+            identical(class(a), class(b))
+        }
+        if (!compatible)
+          stop("Saved compare() outputs have incompatible column types for `", nm, "`.")
+      }
+    }
+
+    for (metric in metric_sets[[1]]) {
+      weight <- paste0("w", metric)
+      if (!(weight %in% first_names))
+        stop("Saved compare() output is missing the `", weight, "` column for `", metric, "`.")
+      vals <- lapply(sList, `[[`, metric)
+      weights <- lapply(sList, `[[`, weight)
+      if (!all(vapply(vals, is.numeric, logical(1))) ||
+          !all(vapply(vals, function(x) all(is.finite(x)), logical(1))))
+        stop("Saved compare() metric `", metric, "` must contain only finite numeric values.")
+      if (!all(vapply(weights, is.numeric, logical(1))) ||
+          !all(vapply(weights, function(x) all(is.finite(x)), logical(1))))
+        stop("Saved compare() weight `", weight, "` must contain only finite numeric values.")
+    }
+    orphan_weights <- intersect(first_names, paste0("w", metric_names[!metric_names %in% metric_sets[[1]]]))
+    if (length(orphan_weights) > 0L)
+      stop("Saved compare() output contains weight columns without matching metrics: ",
+           paste(orphan_weights, collapse = ", "), ".")
+
+    # Unnamed row binding retains model names stored as row names in each
+    # saved result. If one-row results are named at the list level, use those
+    # names when the individual results only have default row names.
+    outer_names <- names(sList)
+    out <- do.call(rbind, unname(sList))
+    if (!is.null(outer_names) && length(outer_names) == length(sList) &&
+        !anyDuplicated(outer_names) &&
+        all(vapply(sList, nrow, integer(1)) == 1L) &&
+        all(vapply(sList, function(x) identical(rownames(x), "1"), logical(1))))
+      rownames(out) <- outer_names
+
+    for (metric in metric_sets[[1]])
+      out[[paste0("w", metric)]] <- getp(out[[metric]])
+    attr(out, "pw_ll") <- NULL
+
+    if (print_summary) {
+      tmp <- out
+      weight_cols <- paste0("w", metric_sets[[1]])
+      for (j in seq_along(tmp)) {
+        if (!is.numeric(tmp[[j]])) next
+        tmp[[j]] <- round(tmp[[j]], if (names(tmp)[j] %in% weight_cols) digits_p else digits)
+      }
+      print(tmp)
+    }
+    return(invisible(out))
+  }
+
+  if (!is.list(sList) || length(sList) == 0L)
+    stop("`sList` must be a non-empty list of emc fits or saved compare() data frames.")
+  if (any(vapply(sList, is.data.frame, logical(1))))
+    stop("Cannot mix EMC2 fits and saved compare() data frames in `sList`.")
+
   if (is.numeric(filter)) defaultsf <- filter[1] else defaultsf <- 0
   sflist <- as.list(setNames(rep(defaultsf,length(sList)),names(sList)))
   if (is.list(filter)) for (i in names(filter))
@@ -103,7 +208,6 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     subj <- list(...)$subject
     WAICs <- if(WAIC) rep(NA_real_, length(sList)) else NULL
     LOOs <- if(LOO) rep(NA_real_, length(sList)) else NULL
-    pw_ll_list <- list()
     for(i in seq_along(sList)){
       tryCatch({
         ll_mat <- if(!is.null(subj)) {
@@ -114,15 +218,14 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
           .marg_ll_matrix(sList[[i]], stage=stage, filter=sflist[[i]], K=K,
                           cores=cores_for_loo)
         }
-        pw_ll_list[[i]] <- ll_mat
         if(WAIC) WAICs[i] <- waic_from_ll(ll_mat)
         if(LOO) LOOs[i] <- loo_from_ll(ll_mat, cores=cores_for_loo)
       }, error = function(e) {
         if(WAIC) warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
         if(LOO) warning("LOO computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
       })
+      if (exists("ll_mat", inherits = FALSE)) rm(ll_mat)
     }
-    names(pw_ll_list) <- names(sList)
     if(WAIC){
       if(!all(is.na(WAICs))){
         WAICp <- getp(WAICs)
@@ -139,7 +242,6 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         LOO <- FALSE
       }
     }
-    attr(out, "pw_ll") <- pw_ll_list
   }
 
   if(BayesFactor){
@@ -154,16 +256,10 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
   }
   if (print_summary) {
     tmp <- out
-    weight_cols <- c("wDIC","wBPIC")
-    if(WAIC) weight_cols <- c(weight_cols, "wWAIC")
-    if(LOO) weight_cols <- c(weight_cols, "wLOO")
-    if(BayesFactor) weight_cols <- c(weight_cols, "wMD")
-    w_idx <- which(names(tmp) %in% weight_cols)
-    for(wc in weight_cols) if(wc %in% names(tmp)) tmp[[wc]] <- round(tmp[[wc]], digits_p)
-    if (length(w_idx) > 0) {
-      tmp[,-w_idx] <- round(tmp[,-w_idx], digits=digits)
-    } else {
-      tmp[,] <- round(tmp[,], digits=digits)
+    weight_cols <- paste0("w", c("DIC", "BPIC", "WAIC", "LOO", "MD"))
+    for (j in seq_along(tmp)) {
+      if (!is.numeric(tmp[[j]])) next
+      tmp[[j]] <- round(tmp[[j]], if (names(tmp)[j] %in% weight_cols) digits_p else digits)
     }
     print(tmp)
   }

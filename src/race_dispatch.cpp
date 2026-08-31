@@ -478,6 +478,14 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     const bool bawd_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawd_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool bawd_weib = (type_std.find("_WEIB") != std::string::npos);
+    // BAwD(parameterization = "ratio").  The infix is "RAT", NOT "RATIO":
+    // the untruncated normal launch is detected below with an unanchored
+    // find("IO"), which "RATIO" would match, silently turning posdrift off.
+    // Match the glued stems rather than a bare "RAT", which is not unique
+    // across the file (BTAwL emits "_RATE").
+    const bool bawd_ratio = (type_std.find("BAwDRAT") != std::string::npos ||
+                             type_std.find("BAwDIORAT") != std::string::npos);
+    out.ctx.bawd_ratio_chart = bawd_ratio;
     out.ctx.t0_index = bawd_split ? int(emc2col::bawdsplit::t0) :
       (bawd_weib ? int(emc2col::bawd_weib::t0) : int(emc2col::bawd::t0));
     out.ctx.bawd_launch = bawd_split ? BAWD_LAUNCH_SPLITLOGNORMAL
@@ -495,9 +503,18 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     // Slot 6 samples the clearance rate `ell` for every gamma/rho option; the
     // endpoint is derived on the R side and never stored in a design column.
     out.col_spec = bawd_split ? emc2col::bawdsplit::spec()
-                  : (bawd_weib ? emc2col::bawd_weib::spec()
-                               : (bawd_logn ? emc2col::bawd_logn::spec()
-                                            : emc2col::bawd::spec()));
+                  : (bawd_weib ? (bawd_ratio ? emc2col::bawd_weib::spec_ratio()
+                                             : emc2col::bawd_weib::spec())
+                               : (bawd_logn ? (bawd_ratio ? emc2col::bawd_logn::spec_ratio()
+                                                          : emc2col::bawd_logn::spec())
+                                            : (bawd_ratio ? emc2col::bawd::spec_ratio()
+                                                          : emc2col::bawd::spec())));
+    if (bawd_ratio && bawd_split) {
+      // BAwD() already refuses this; this is the other half of the contract.
+      Rcpp::stop("resolve_race_model_adapter: the BAwD ratio chart is not "
+                 "implemented for the split-lognormal launch (%s).",
+                 type_std.c_str());
+    }
     // Fixed power-decay kernel parameter parsed from the c_name suffix.
     // Default (no suffix) is R_PosInf (exponential kernel).
     out.ctx.bawd_rho =
@@ -525,10 +542,23 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     const bool bawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool bawl_weib = (type_std.find("_WEIB") != std::string::npos);
+    // BAwL(parameterization = "ratio").  Two naming hazards meet here.  The
+    // infix is "RAT" and NOT "RATIO" because the untruncated launch below is
+    // detected with an unanchored find("IO"), which "RATIO" would match,
+    // silently turning posdrift off.  And "RAT" is only unique among the names
+    // that reach THIS branch -- BTAwL builds c_names ending in "_RATE" -- so
+    // match the stem it is actually spliced into rather than relying on the
+    // branch order above to keep those away.
+    const bool bawl_ratio = (type_std.find("BAwLRAT") != std::string::npos ||
+                             type_std.find("BAwLIORAT") != std::string::npos);
+    out.ctx.bawl_ratio_chart = bawl_ratio;
     out.col_spec       = bawl_split ? emc2col::bawlsplit::spec()
-                        : (bawl_weib ? emc2col::bawl_weib::spec()
-                                     : (bawl_logn ? emc2col::bawl_logn::spec()
-                                                  : emc2col::bawl::spec()));
+                        : (bawl_weib ? (bawl_ratio ? emc2col::bawl_weib::spec_ratio()
+                                                   : emc2col::bawl_weib::spec())
+                                     : (bawl_logn ? (bawl_ratio ? emc2col::bawl_logn::spec_ratio()
+                                                                : emc2col::bawl_logn::spec())
+                                                  : (bawl_ratio ? emc2col::bawl::spec_ratio()
+                                                                : emc2col::bawl::spec())));
     out.ctx.t0_index   = bawl_split ? int(emc2col::bawlsplit::t0) :
       (bawl_weib ? int(emc2col::bawl_weib::t0) : int(emc2col::bawl::t0));
     out.ctx.mean_g_index = bawl_split ? int(emc2col::bawlsplit::mG) :
@@ -548,6 +578,15 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.corr_drift_active = (type_std.find("_CORR") != std::string::npos);
     out.ctx.corr_drift_v_col = emc2col::bawl::v;
     out.ctx.corr_drift_sv_col = emc2col::bawl::sv;
+    // The split launch has no natural-scale mean column to divide by, and the
+    // correlated kernels in src/correlated_likelihood.cpp still read the leak
+    // straight out of k's column.  BAwL() already refuses both; this is the
+    // defensive half of the same contract.
+    if (bawl_ratio && (bawl_split || out.ctx.corr_drift_active)) {
+      Rcpp::stop("resolve_race_model_adapter: the BAwL ratio chart is not "
+                 "implemented for the split-lognormal launch or the "
+                 "correlated-drift path (%s).", type_std.c_str());
+    }
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;

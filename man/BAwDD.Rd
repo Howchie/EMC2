@@ -28,20 +28,22 @@ limit \verb{h_0(u) = exp(-k u)}.  The reciprocal power-law shape \code{alpha} is
 estimated for each accumulator; all density and distribution evaluations
 are closed form through the shared BAwD/LBA primitives.  The special value
 \code{alpha = Inf} is accepted as the no-decay limit.
-
+}
+\details{
 \code{alpha} is unbounded above.  \code{alpha > 1} (equivalently \code{rho < 1}) is an
 ordinary member: the drive clock \code{Q_alpha} is then unbounded, but with
 \code{gamma = 0} the constant clearance still outruns it, so the trajectory keeps
 a finite peak and a finite endpoint \code{Tmax} whenever \code{k > 0} and \code{ell > 0}.
 The frozen-branch closed forms carry the sign of \code{rho - 1} explicitly and so
 hold on both sides of \code{alpha = 1}.
-}
-\details{
-With \code{drift_distribution = "lognormal"} (the default), \verb{log V ~ N(mu, sigma^2)}.  The \code{splitlognormal}, \code{weibull}, and \code{normal} launch
+
+With \code{drift_distribution = "lognormal"} (the default), \code{V} is lognormal,
+sampled on the natural scale as its arithmetic \code{mean = E[V]} and
+\code{cv = SD(V)/E[V]}.  The \code{splitlognormal}, \code{weibull}, and \code{normal} launch
 choices use the same parameterisations as \link{BAwD}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log-launch width. \cr
+   \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Arithmetic mean E\link{V} of the launch strength (lognormal launch). \cr
+   \emph{cv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Coefficient of variation SD(V)/E\link{V} (lognormal launch). \cr
    \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
    \emph{mean} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull arithmetic mean (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
