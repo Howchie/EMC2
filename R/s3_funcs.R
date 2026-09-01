@@ -1282,12 +1282,14 @@ plot_design.emc <- function(x, data = NULL, factors = NULL, plot_factor = NULL, 
 #' @rdname mapped_pars
 #' @export
 mapped_pars.emc <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
-                                  covariates=NULL, data = NULL, use_data = TRUE, ...){
+                                  covariates=NULL, data = NULL, use_data = TRUE,
+                                  n_covariates = 10, ...){
   if(is.null(p_vector)) p_vector <- credint(x, probs = .5)[[1]]
   if (isTRUE(use_data) && is.null(data)) data <- get_data(x)
   design <- get_design(x)
   mapped_pars(design, p_vector, model = model, digits = digits, remove_subjects=remove_subjects,
-              covariates=covariates, data = data, use_data = use_data, ...)
+              covariates=covariates, data = data, use_data = use_data,
+              n_covariates = n_covariates, ...)
 }
 
 #' Get Design

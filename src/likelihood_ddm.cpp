@@ -209,6 +209,11 @@ int bou_bnd_kind_from_type(const std::string& type_std) {
   return fpe::FPE_BND_FIXED;
 }
 
+bool bou_anchor_at_z_from_type(const std::string& type_std) {
+  return type_std.find("BOU_START") != std::string::npos ||
+         type_std.find("_START") != std::string::npos;
+}
+
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // Handles truncation and censoring with high numerical stability.
 //

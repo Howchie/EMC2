@@ -11,6 +11,8 @@
                  linear_additive = "_BLIN_ADD",
                  linear_multiplicative = "_BLIN_MULT")
 
+.BOU_ANCHOR_SUFFIX <- c(midpoint = "", start = "_START")
+
 # Pull the columns required by the C++ entry points.
 .bou_cols <- function(pars) {
   get1 <- function(nm, default) {
@@ -37,20 +39,22 @@
   if (is.null(kind)) p$bkind else .BOU_BND[[kind]]
 }
 
-.bou_pdf_cdf <- function(rt, R, pars, want_cdf = TRUE, kind = NULL) {
+.bou_pdf_cdf <- function(rt, R, pars, want_cdf = TRUE, kind = NULL,
+                         anchor_at_z = FALSE) {
   p <- .bou_cols(pars)
   # lower is the first level of R and upper the second, exactly as for the DDM.
   Ri <- as.integer(R)
   bou_pdf_cdf_vec(rt, Ri, p$v, p$a, p$Z, p$sv, p$SZ, p$t0, p$st0, p$s, p$beta,
                   bkind = .bou_kind_code(p, kind),
                   aInf = p$aInf, tau = p$tau, pw = p$pw,
-                  nx = getOption("emc2.bou_nx", 384L),
-                  dt_target = getOption("emc2.bou_dt", 5e-4),
+                  nx = getOption("emc2.bou_nx", 256L),
+                  dt_target = getOption("emc2.bou_dt", 1e-3),
                   grade = getOption("emc2.bou_grade", 1),
-                  tgrade = getOption("emc2.bou_tgrade", 32),
-                  n_sv = getOption("emc2.bou_n_sv", 7L),
-                  n_sz = getOption("emc2.bou_n_sz", 7L),
+                  tgrade = getOption("emc2.bou_tgrade", 8),
+                  n_sv = getOption("emc2.bou_n_sv", 5L),
+                  n_sz = getOption("emc2.bou_n_sz", 5L),
                   n_st0 = getOption("emc2.bou_n_st0", 7L),
+                  anchor_at_z = anchor_at_z,
                   want_cdf = want_cdf)
 }
 
@@ -66,8 +70,9 @@
 #' @return Numeric vector of densities
 #' @keywords internal
 #' @noRd
-dBOU <- function(rt, R, pars, kind = NULL)
-  .bou_pdf_cdf(rt, R, pars, want_cdf = FALSE, kind = kind)$pdf
+dBOU <- function(rt, R, pars, kind = NULL, anchor_at_z = FALSE)
+  .bou_pdf_cdf(rt, R, pars, want_cdf = FALSE, kind = kind,
+               anchor_at_z = anchor_at_z)$pdf
 
 #' Distribution function of the bounded OU model
 #'
@@ -78,8 +83,9 @@ dBOU <- function(rt, R, pars, kind = NULL)
 #' @return Numeric vector of cumulative probabilities
 #' @keywords internal
 #' @noRd
-pBOU <- function(rt, R, pars, kind = NULL)
-  .bou_pdf_cdf(rt, R, pars, want_cdf = TRUE, kind = kind)$cdf
+pBOU <- function(rt, R, pars, kind = NULL, anchor_at_z = FALSE)
+  .bou_pdf_cdf(rt, R, pars, want_cdf = TRUE, kind = kind,
+               anchor_at_z = anchor_at_z)$cdf
 
 #' Random generation for the bounded OU model
 #'
@@ -98,7 +104,7 @@ pBOU <- function(rt, R, pars, kind = NULL)
 #' @keywords internal
 #' @noRd
 rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
-                 kind = NULL) {
+                 kind = NULL, anchor_at_z = FALSE) {
   bad <- rep(NA_real_, nrow(pars))
   out <- data.frame(R = rep(NA_integer_, nrow(pars)), rt = bad)
   if (any(ok)) {
@@ -106,7 +112,7 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
     sim <- rbou_cpp(sum(ok), p$v, p$a, p$Z, p$sv, p$SZ, p$t0, p$st0, p$s, p$beta,
                     bkind = .bou_kind_code(p, kind),
                     aInf = p$aInf, tau = p$tau, pw = p$pw,
-                    dt = dt, t_max = t_max)
+                    dt = dt, t_max = t_max, anchor_at_z = anchor_at_z)
     out[ok, "R"] <- sim$R
     out[ok, "rt"] <- sim$rt
   }
@@ -118,7 +124,7 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #'
 #' The two-choice OU diffusion of Smith and Ratcliff (2004): the diffusion
 #' decision model with a leak term. Evidence accumulates between two absorbing
-#' boundaries, and the drift is pulled back toward the starting point at rate
+#' boundaries, and the drift is pulled toward the selected anchor at rate
 #' `beta`. At `beta = 0` the model is exactly the Wiener diffusion of [DDM()],
 #' which is how it is validated -- but it reaches that answer through a
 #' Fokker-Planck solver rather than the DDM's series expansion.
@@ -135,7 +141,7 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #' |---|---|---|---|---|---|
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean evidence-accumulation rate (drift rate). |
 #' | *a* | log | \[0, Inf\] | log(1) | | Boundary separation |
-#' | *beta* | log | \[0, Inf\] | log(0) | | Leak: decay toward the starting point. 0 gives the DDM |
+#' | *beta* | log | \[0, Inf\] | log(0) | | Leak toward the selected anchor. 0 gives the DDM |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
 #' | *s* | log | \[0, Inf\] | log(1) | | Within-trial standard deviation of drift rate |
 #' | *Z* | probit | \[0, 1\] | qnorm(0.5) | *z* = *Z* x *a* | Relative start point (bias) |
@@ -154,17 +160,15 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #' The parameterisation is [DDM()]'s with `beta` added, so a DDM design converts
 #' to this model by adding `beta ~ 1`, and `beta` fixed to 0 recovers the DDM.
 #'
-#' Note that the decay pulls the process toward the *starting point*, following
-#' Smith and Ratcliff's own choice (their footnote 2). Decay toward zero is not
-#' an available alternative here, because zero is one of the response
-#' boundaries.
+#' The default decay anchor is the midpoint of the decision interval. The
+#' original start-point anchor remains available with `anchor = "start"`.
 #'
 #' Estimation cost is dominated by across-trial variability rather than by the
-#' diffusion: one Fokker-Planck march yields both response distributions, but
-#' because the decay is anchored at the starting point, `sv` and `SZ` each add a
-#' quadrature dimension whose nodes need their own march. With both switched on
-#' the model costs roughly `n_sv * n_SZ` solves per distinct parameter set; node
-#' counts are controlled by the options `emc2.bou_n_sv` and `emc2.bou_n_sz`.
+#' diffusion: one Fokker-Planck march yields both response distributions. With
+#' the default midpoint anchor, start-point variability is integrated by a
+#' uniform interval seed, so only drift nodes require separate marches. The
+#' legacy start anchor is available with `anchor = "start"`; it costs roughly
+#' `n_sv * n_SZ` solves per distinct parameter set.
 #' `st0` is a convolution and is nearly free.
 #'
 #' Smith, P. L., & Ratcliff, R. (2004). A comparison of sequential sampling
@@ -191,6 +195,8 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #'   `aInf = 0` means "collapse essentially all the way" rather than exactly so;
 #'   below that width the remaining survivor is absorbed within a millisecond
 #'   and the time step, not the mesh, is what stops resolving it.
+#' @param anchor Character; decay anchor, either `"midpoint"` (the default) or
+#'   the legacy `"start"` anchor used by Smith and Ratcliff.
 #' @return A model list with all the necessary functions for EMC2 to sample
 #' @examples
 #' design_BOU <- design(data = forstmann, model = BOU,
@@ -206,9 +212,12 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #'                       constants = c(s = log(1)))
 #' @export
 BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
-                                      "linear_multiplicative", "weibull")) {
+                                      "linear_multiplicative", "weibull"),
+                anchor = c("midpoint", "start")) {
   boundary_collapse <- match.arg(boundary_collapse)
+  anchor <- match.arg(anchor)
   kind <- boundary_collapse
+  anchor_at_z <- identical(anchor, "start")
 
   p_types <- c("v" = 1, "a" = log(1), "sv" = log(0), "t0" = log(0),
                "st0" = log(0), "s" = log(1), "Z" = qnorm(0.5),
@@ -248,7 +257,9 @@ BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
   minmax <- .nuis$minmax; exception <- .nuis$exception
 
   list(
-    c_name = paste0("BOU", .BOU_SUFFIX[[kind]]),
+    # Keep the boundary suffix immediately after BOU so the C++ dispatcher can
+    # identify it; append the anchor marker after that suffix.
+    c_name = paste0("BOU", .BOU_SUFFIX[[kind]], .BOU_ANCHOR_SUFFIX[[anchor]]),
     type = "DDM",
     # Fokker-Planck solve cached per parameter tuple: rt only picks readout
     # points off a march that has already been paid for, so binning it saves
@@ -272,9 +283,11 @@ BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
       pars
     },
     rfun = function(data = NULL, pars) rBOU(data$R, pars, attr(pars, "ok"),
-                                            kind = kind),
-    dfun = function(rt, R, pars) dBOU(rt, R, pars, kind = kind),
-    pfun = function(rt, R, pars) pBOU(rt, R, pars, kind = kind),
+                                            kind = kind, anchor_at_z = anchor_at_z),
+    dfun = function(rt, R, pars) dBOU(rt, R, pars, kind = kind,
+                                      anchor_at_z = anchor_at_z),
+    pfun = function(rt, R, pars) pBOU(rt, R, pars, kind = kind,
+                                      anchor_at_z = anchor_at_z),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_ddm(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }

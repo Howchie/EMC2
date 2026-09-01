@@ -126,7 +126,7 @@ inline void bou_eval(const double* rts, const int* Rs,
 
     const fpebou::BouMix m = fpebou::bou_mix_t0(
       C, t, r.v, r.sv, r.a, r.z, r.sz, r.s, r.beta,
-      /*anchor_at_z=*/true, 0.5 * r.a, r.t0, r.st0,
+      ctx->bou_anchor_at_z, 0.5 * r.a, r.t0, r.st0,
       ctx->bnd_kind, r.aInf, r.tau, r.pw, want_cdf);
 
     const bool up = (Rs[i] == 2);
@@ -164,12 +164,12 @@ inline void bou_configure(fpebou::SolveCache& C) {
     SEXP v = getOption(nm, Rcpp::wrap(def));
     return Rf_isNull(v) ? def : Rcpp::as<double>(v);
   };
-  C.grid.nx        = opt_i("emc2.bou_nx", 384);
-  C.grid.dt_target = opt_d("emc2.bou_dt", 5e-4);
+  C.grid.nx        = opt_i("emc2.bou_nx", 256);
+  C.grid.dt_target = opt_d("emc2.bou_dt", 1e-3);
   C.grid.grade     = opt_d("emc2.bou_grade", fpe::FPE_GRADE_BOUNDED);
-  C.grid.tgrade    = opt_d("emc2.bou_tgrade", fpe::FPE_TGRADE);
-  C.grid.n_sv      = opt_i("emc2.bou_n_sv", 7);
-  C.grid.n_sz      = opt_i("emc2.bou_n_sz", 7);
+  C.grid.tgrade    = opt_d("emc2.bou_tgrade", 8.0);
+  C.grid.n_sv      = opt_i("emc2.bou_n_sv", 5);
+  C.grid.n_sz      = opt_i("emc2.bou_n_sz", 5);
   C.grid.n_st0     = opt_i("emc2.bou_n_st0", 7);
 }
 

@@ -507,7 +507,8 @@ inline double rlf_bernoulli(double t) {
 // off-diagonals, so the generator stays an M-matrix and exp(tL) stays
 // positive.
 inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
-                                              const RLF_Mesh& mesh) {
+                                              const RLF_Mesh& mesh,
+                                              std::vector<double>* g_scratch = nullptr) {
   const int n = mesh.n;
   RLF_Operator op;
   op.n = n;
@@ -549,21 +550,21 @@ inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
   const int u0 = mesh.uniform_from;
   std::vector<double> band(nf, 0.0);
   for (int k = 1; k < nf - u0; ++k) band[k] = phi(k * mesh.uniform_h);
-  std::vector<double> G(static_cast<size_t>(nf) * nf, 0.0);
-  std::vector<double> Xt(static_cast<size_t>(nf) * nf, 0.0);
+  std::vector<double> g_local;
+  std::vector<double>& G = g_scratch != nullptr ? *g_scratch : g_local;
+  G.assign(static_cast<size_t>(nf) * nf, 0.0);
   for (int p = 0; p < nf; ++p) {
     for (int q = p + 1; q < nf; ++q) {
       const double d = mesh.face[q] - mesh.face[p];
       const double gv = (p >= u0) ? band[q - p] : phi(d);
-      const double xv = gv * d;
       G[static_cast<size_t>(p) * nf + q] = gv;
       G[static_cast<size_t>(q) * nf + p] = gv;
-      Xt[static_cast<size_t>(p) * nf + q] = -xv;  // Chi(f_p - f_q), odd
-      Xt[static_cast<size_t>(q) * nf + p] = xv;
     }
   }
   auto Gv = [&](int p, int q) { return G[static_cast<size_t>(p) * nf + q]; };
-  auto Xv = [&](int p, int q) { return Xt[static_cast<size_t>(p) * nf + q]; };
+  auto Xv = [&](int p, int q) {
+    return Gv(p, q) * (mesh.face[p] - mesh.face[q]);
+  };
 
   // Piecewise-linear reconstruction inside each cell.
   //
@@ -1134,6 +1135,8 @@ struct RLF_Modes {
 struct RLF_KrylovWork {
   std::vector<double> shifted, basis, hessenberg, vector, projection;
   std::vector<double> reduced, eigvec, coefficient, lapack;
+  // Reusable face-pair kernel table for graded operator assembly.
+  std::vector<double> operator_G;
   // H_m is consumed by the Schur factorisation, but the residual estimate
   // needs it afterwards, so it is kept.
   std::vector<double> hess_copy, residual_row;
@@ -1829,7 +1832,8 @@ inline RLF_Result rlf_solve_graded(
     const RLF_Model& m, double t_max, const RLF_Mesh& mesh, int n_out,
     const std::vector<double>* query_times = nullptr,
     RLF_KrylovWork* scratch = nullptr, int m_fixed = 0) {
-  const RLF_Operator op = build_rlf_operator_graded(m, mesh);
+  const RLF_Operator op = build_rlf_operator_graded(
+    m, mesh, scratch != nullptr ? &scratch->operator_G : nullptr);
   std::vector<double> p;
   rlf_initial_density_mesh(m, mesh, p);
   RLF_Result res = rlf_propagate(

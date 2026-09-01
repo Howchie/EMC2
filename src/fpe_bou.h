@@ -15,19 +15,15 @@
 // this model:
 //
 //   * sv (drift, normal)      changes the drift    => new operator => new solve
-//   * sz (start, uniform)     changes the START, and because Smith & Ratcliff
-//                             anchor the decay AT the start point the drift is
-//                             xi - beta*(x - z) = (xi + beta*z) - beta*x, so z
-//                             changes the OPERATOR too => new solve
+//   * sz (start, uniform)     changes the START.  With the legacy start anchor
+//                             this also changes the operator; with the midpoint
+//                             anchor the operator is unchanged and the whole
+//                             interval is seeded in one solve.
 //   * st0 (non-decision)      a convolution on the finished density => free
 //
-// So the cost is n_sv * n_sz solves per distinct parameter row, not one.  There
-// is no way around it while the anchor is z: substituting y = x - z removes z
-// from the drift but moves it into the domain [-z, a-z] instead, so the solve is
-// still z-specific.  (An anchor that does not depend on z -- the midpoint -- WOULD
-// collapse the whole uniform start into a single march, which is why
-// FPE_ModelBoundedOU keeps `anchor` as a field.  Note that zero is not available:
-// it is one of the response boundaries.)
+// With the start anchor the cost is n_sv * n_sz solves per distinct parameter
+// row.  The midpoint anchor instead uses one interval-seeded solve per drift
+// node, so the start-point quadrature disappears exactly.
 //
 // Consequence for defaults: this model spends its budget very differently from
 // the race models, and must NOT inherit fperace::FPE_Grid.  Two measurements
@@ -42,6 +38,7 @@
 #include <cstddef>
 #include <limits>
 #include <cfloat>
+#include <unordered_map>
 #include "fpe_models.h"
 #include "gh_quad.h"
 #include "gl_quad.h"
@@ -63,23 +60,24 @@ namespace fpebou {
 //   err   4.1e-3   2.1e-4   3.4e-5   3.4e-5
 //
 //   at 7x7:  nx=512/dt=2.5e-4  3.4e-5  0.336 s
-//            nx=384/dt=5e-4    6.1e-5  0.129 s     <- default
+//            nx=384/dt=5e-4    6.1e-5  0.129 s
 //            nx=256/dt=1e-3    1.4e-4  0.049 s
 //
-// The quadrature floor at 7x7 is 3.4e-5, so a grid much finer than nx=384 buys
-// nothing: at 5x5 the grid is irrelevant entirely (every setting from nx=512 to
-// nx=256 returns 2.05e-4, i.e. the error is ALL quadrature).  n_sv and n_sz are
-// therefore the accuracy dial AND the cost dial -- cost is n_sv * n_sz solves --
-// and the grid is set just fine enough not to be the binding term.
+// At 5x5 the grid is irrelevant in the measured parameter net (every setting
+// from nx=512 to nx=256 returns 2.05e-4, i.e. the error is all quadrature).
+// The midpoint anchor removes the n_sz solve multiplier, so the defaults use
+// five nodes in each quadrature and a 256-cell grid with a 1 ms target step.
 struct Grid {
-  int nx = 384;
-  double dt_target = 5e-4;
+  int nx = 256;
+  double dt_target = 1e-3;
   int nt_min = 512;
   int nt_max = 16384;
   double grade = fpe::FPE_GRADE_BOUNDED;   // 1.0: uniform, measured best
-  double tgrade = fpe::FPE_TGRADE;
-  int n_sv = 7;                 // Gauss-Hermite nodes for drift variability
-  int n_sz = 7;                 // Gauss-Legendre nodes for start-point variability
+  // A shorter grading ratio avoids coarse late-time interpolation at the
+  // balanced 1 ms target step without materially changing solve cost.
+  double tgrade = 8.0;
+  int n_sv = 5;                 // Gauss-Hermite nodes for drift variability
+  int n_sz = 5;                 // Gauss-Legendre nodes for start-point variability
   int n_st0 = 7;                // Gauss-Legendre nodes for the t0 convolution
 
   int nt_for(double t_max) const {
@@ -89,8 +87,9 @@ struct Grid {
 };
 
 // ---------------------------------------------------------------------------
-// Cache key.  One entry per (drift, leak, separation, start, anchor, boundary)
-// tuple, compared BIT-EXACTLY: these values are read from the same ParamTable
+// Cache key.  One entry per (drift, leak, separation, start interval, anchor,
+// boundary) tuple, compared BIT-EXACTLY: these values are read from the same
+// ParamTable
 // columns for every row in a design cell, so equal parameters really do produce
 // identical doubles.  Quadrature nodes are folded in before the key is built, so
 // a node is just another key -- the cache dedupes across nodes for free when two
@@ -101,12 +100,14 @@ struct Grid {
 // needed on the density.
 // ---------------------------------------------------------------------------
 struct Key {
-  double v = 0.0, beta = 0.0, a = 1.0, z = 0.5, anchor = 0.5;
+  double v = 0.0, beta = 0.0, a = 1.0;
+  double z_lo = 0.5, z_hi = 0.5, anchor = 0.5;
   int bkind = fpe::FPE_BND_FIXED;
   double binf = 0.0, tau = 0.0, pw = 0.0;
 
   bool operator==(const Key& o) const {
-    return v == o.v && beta == o.beta && a == o.a && z == o.z &&
+    return v == o.v && beta == o.beta && a == o.a &&
+           z_lo == o.z_lo && z_hi == o.z_hi &&
            anchor == o.anchor && bkind == o.bkind && binf == o.binf &&
            tau == o.tau && pw == o.pw;
   }
@@ -115,19 +116,23 @@ struct Key {
 // Build a key from natural-scale parameters, scaling s out.  Returns false for
 // a parameter set the solver cannot answer, so the caller floors the row rather
 // than solving nonsense.
-inline bool bou_key(double v, double beta, double a, double z, double anchor,
+inline bool bou_key(double v, double beta, double a, double z_lo, double z_hi,
+                    double anchor,
                     double s, int bkind, double binf, double tau, double pw,
                     Key& out) {
   if (!(s > 0.0) || !R_FINITE(s)) return false;
   if (!(a > 0.0) || !R_FINITE(a)) return false;
   if (!R_FINITE(v) || !R_FINITE(beta) || beta < 0.0) return false;
-  if (!(z > 0.0) || !(z < a)) return false;
+  if (!R_FINITE(z_lo) || !R_FINITE(z_hi) || z_lo > z_hi) return false;
+  if (!(z_hi > 0.0) || !(z_lo < a)) return false;
+  if (!R_FINITE(anchor)) return false;
 
   const double inv = 1.0 / s;
   out.v = v * inv;
   out.beta = beta;                 // a rate: invariant under the state rescale
   out.a = a * inv;
-  out.z = z * inv;
+  out.z_lo = z_lo * inv;
+  out.z_hi = z_hi * inv;
   out.anchor = anchor * inv;
   out.bkind = bkind;
   if (bkind == fpe::FPE_BND_FIXED) {
@@ -139,6 +144,28 @@ inline bool bou_key(double v, double beta, double a, double z, double anchor,
   }
   return true;
 }
+
+// Hash for the solve index below.  Mirrors fperace::KeyHash: the fields are
+// compared bit-exactly, so they are hashed bit-exactly too.
+struct KeyHash {
+  size_t operator()(const Key& key) const noexcept {
+    size_t h = std::hash<double>{}(key.v);
+    auto mix = [&](double x) {
+      const size_t hx = std::hash<double>{}(x);
+      h ^= hx + static_cast<size_t>(0x9e3779b9U) + (h << 6) + (h >> 2);
+    };
+    mix(key.beta);
+    mix(key.a);
+    mix(key.z_lo);
+    mix(key.z_hi);
+    mix(key.anchor);
+    mix(static_cast<double>(key.bkind));
+    mix(key.binf);
+    mix(key.tau);
+    mix(key.pw);
+    return h;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // A solved entry.  Holds BOTH responses; `lower` is R's first factor level and
@@ -172,18 +199,36 @@ struct SolveCache {
   // has been seen.
   double t_horizon = 0.0;
 
+  // Key -> entry slot.  find() was a LINEAR scan over the entries, and it is
+  // called once per (drift x start-interval) node per (row x t0 node).  The
+  // legacy start-anchor path has n_sv * n_sz entries per design cell; the
+  // midpoint path has n_sv entries because its interval seed is exact.
+  //
+  // MEASURED: on forstmann with six parameter cells (294 entries) this index
+  // made no measurable difference -- the per-row cost there is the quadrature
+  // bookkeeping, not the lookup.  It is kept because the scan is the one part
+  // of the loop whose cost grows quadratically with the design, which is the
+  // same argument fperace::SolveCache made when it replaced its own linear scan
+  // (see cache_get_batch); do not expect it to show up on a small design.
+  std::unordered_map<Key, int, KeyHash> index;
+
   // Cleared once per particle.  Keys are exact, so a stale entry could never be
   // returned for different parameters -- but the parameters DO change every
   // particle, so keeping them would only grow the scan.
-  void new_particle() { n_entries = 0; }
+  void new_particle() { n_entries = 0; index.clear(); }
 
   Entry* find(const Key& k) {
-    for (size_t i = 0; i < n_entries; ++i)
-      if (e[i].key == k) return &e[i];
-    return nullptr;
+    const auto it = index.find(k);
+    if (it == index.end()) return nullptr;
+    const size_t i = static_cast<size_t>(it->second);
+    return (i < n_entries) ? &e[i] : nullptr;
   }
-  Entry& push() {
+  // The key must be supplied here rather than left to whoever fills the entry:
+  // the index is what makes find() O(1), and an entry that never reached it
+  // would be re-solved on every lookup.
+  Entry& push(const Key& k) {
     if (n_entries >= e.size()) e.resize(n_entries + 1);
+    index[k] = static_cast<int>(n_entries);
     return e[n_entries++];
   }
   // Grow the store so the next `n` push() calls cannot reallocate, which would
@@ -216,10 +261,10 @@ inline void bou_solve(const Key& p, double t_max, const Grid& gr, Entry& out) {
   g.build(gr.nx, gr.grade, fpe::FPE_ModelBoundedOU::symmetric_mesh);
   std::vector<double> q0;
   double absorbed_lower = 0.0;
-  // Point start: the sz spread is carried by the quadrature outside this
-  // function, because with the decay anchored at z each start point needs its
-  // own operator and so its own march.
-  const double t0 = fpe::fpe_seed(m, p.z, p.z, g, t_max, q0, &absorbed_lower);
+  // The key carries either a point start (legacy start anchor) or the complete
+  // uniform start interval (midpoint anchor).
+  const double t0 = fpe::fpe_seed(m, p.z_lo, p.z_hi, g, t_max, q0,
+                                  &absorbed_lower);
   const fpe::FPE_Result r =
     fpe::fpe_solve(m, q0, t0, t_max, g, gr.nt_for(t_max), gr.tgrade, absorbed_lower);
 
@@ -386,13 +431,13 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
     for (size_t l = 0; l < BOU_LANES; ++l) {
       const size_t src = base + std::min(l, n_lane - 1);
       models[l] = bou_model(keys[src]);
-      const double ts = fpe::fpe_seed(models[l], keys[src].z, keys[src].z, g,
-                                      t_max, q0[l], &absorbed[l]);
+      const double ts = fpe::fpe_seed(models[l], keys[src].z_lo, keys[src].z_hi,
+                                      g, t_max, q0[l], &absorbed[l]);
       if (ts < t_seed) t_seed = ts;
     }
     for (size_t l = 0; l < BOU_LANES; ++l) {
       const size_t src = base + std::min(l, n_lane - 1);
-      fpe::fpe_seed(models[l], keys[src].z, keys[src].z, g, t_max, q0[l],
+      fpe::fpe_seed(models[l], keys[src].z_lo, keys[src].z_hi, g, t_max, q0[l],
                     &absorbed[l], t_seed);
     }
 
@@ -409,7 +454,7 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
       fpe::fpe_time_schedule(t_max - t_seed, gr.nt_for(t_max), gr.tgrade);
 
     const size_t SZ = static_cast<size_t>(M) * BOU_LANES;
-    std::vector<double> Q(SZ), RHS(SZ), DIAG(SZ), SUB(SZ), SUP(SZ),
+    std::vector<double> Q(SZ), DIAG(SZ), SUB(SZ), SUP(SZ),
                         DINV(SZ), CPRIME(SZ);
     std::vector<double> opD(BOU_LANES, 0.0);
     // Second operator buffer, allocated only when the bounds actually move: the
@@ -523,39 +568,87 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
           const double* osb = stat ? Sb : Sb2;
           const double* osp = stat ? Sp : Sp2;
 
+          // Thomas, with the Crank-Nicolson right-hand side FUSED into the
+          // forward sweep and both recurrences carried in lane-local arrays.
+          //
+          // Two separate costs are removed here.  The right-hand side used to
+          // be a whole extra pass over Q and the operator, materialised into
+          // RHS; the three q values a row needs (before the step) fit in a
+          // rolling three-register window instead, and q_{i+1} is read before
+          // q_i is overwritten so updating in place is safe.  And the sweeps
+          // used to read Q[i-1] / Q[i+1] back one iteration after storing
+          // them, which puts a store-to-load forward (~6 cycles) on top of the
+          // 8-cycle multiply-add chain -- roughly doubling the cost of a sweep
+          // that is already latency-bound.  Same arithmetic, same order.
+          //
+          // The right-hand side reads the operator at the OLD time
+          // (odg/osb/osp) while the elimination reads the factorisation of the
+          // new one (Sb/DINV/CPRIME), so fusing is valid for a moving boundary
+          // as well as a fixed one -- they are different arrays.
+          double y[BOU_LANES], xb[BOU_LANES], ms[BOU_LANES];
           if (be) {
-            RHS = Q;
-          } else {
-            const double ch = 0.5 * step;
-            for (int i = 0; i < M; ++i) {
+            // Backward Euler: the right-hand side IS q, so there is nothing to
+            // build -- read Q[i] and overwrite it in the same iteration.
+            for (size_t l = 0; l < BOU_LANES; ++l) {
+              y[l] = Q[l] * DINV[l];
+              Q[l] = y[l];
+            }
+            for (int i = 1; i < M; ++i) {
               const size_t o = static_cast<size_t>(i) * BOU_LANES;
               for (size_t l = 0; l < BOU_LANES; ++l) {
-                double vv = Q[o + l] + ch * odg[o + l] * Q[o + l];
-                if (i > 0) vv += ch * osb[o + l] * Q[o - BOU_LANES + l];
-                if (i < M - 1) vv += ch * osp[o + l] * Q[o + BOU_LANES + l];
-                RHS[o + l] = vv;
+                y[l] = (Q[o + l] + c * Sb[o + l] * y[l]) * DINV[o + l];
+                Q[o + l] = y[l];
+              }
+            }
+          } else {
+            const double ch = 0.5 * step;
+            double qm1[BOU_LANES], qcur[BOU_LANES], qnext[BOU_LANES];
+            for (size_t l = 0; l < BOU_LANES; ++l) {
+              qcur[l] = Q[l];
+              qnext[l] = Q[BOU_LANES + l];
+              const double r = qcur[l] + ch * odg[l] * qcur[l]
+                                       + ch * osp[l] * qnext[l];
+              y[l] = r * DINV[l];
+              Q[l] = y[l];
+            }
+            for (int i = 1; i < M - 1; ++i) {
+              const size_t o = static_cast<size_t>(i) * BOU_LANES;
+              for (size_t l = 0; l < BOU_LANES; ++l) {
+                qm1[l] = qcur[l];
+                qcur[l] = qnext[l];
+                qnext[l] = Q[o + BOU_LANES + l];
+                const double r = qcur[l] + ch * odg[o + l] * qcur[l]
+                                         + ch * osb[o + l] * qm1[l]
+                                         + ch * osp[o + l] * qnext[l];
+                y[l] = (r + c * Sb[o + l] * y[l]) * DINV[o + l];
+                Q[o + l] = y[l];
+              }
+            }
+            if (M > 1) {
+              const size_t o = static_cast<size_t>(M - 1) * BOU_LANES;
+              for (size_t l = 0; l < BOU_LANES; ++l) {
+                qm1[l] = qcur[l];
+                qcur[l] = qnext[l];
+                const double r = qcur[l] + ch * odg[o + l] * qcur[l]
+                                         + ch * osb[o + l] * qm1[l];
+                y[l] = (r + c * Sb[o + l] * y[l]) * DINV[o + l];
+                Q[o + l] = y[l];
               }
             }
           }
-
-          // Thomas: forward substitution then back substitution, with the mass
-          // accumulated on the way back so the sweep is single-pass.
-          for (size_t l = 0; l < BOU_LANES; ++l) Q[l] = RHS[l] * DINV[l];
-          for (int i = 1; i < M; ++i) {
-            const size_t o = static_cast<size_t>(i) * BOU_LANES;
-            const size_t p = o - BOU_LANES;
-            for (size_t l = 0; l < BOU_LANES; ++l)
-              Q[o + l] = (RHS[o + l] + c * Sb[o + l] * Q[p + l]) * DINV[o + l];
+          for (size_t l = 0; l < BOU_LANES; ++l) {
+            xb[l] = y[l];                       // == Q[(M-1)*BOU_LANES + l]
+            ms[l] = g.dx[M - 1] * xb[l];
           }
-          for (size_t l = 0; l < BOU_LANES; ++l)
-            mass[l] = g.dx[M - 1] * Q[static_cast<size_t>(M - 1) * BOU_LANES + l];
           for (int i = M - 2; i >= 0; --i) {
             const size_t o = static_cast<size_t>(i) * BOU_LANES;
             for (size_t l = 0; l < BOU_LANES; ++l) {
-              Q[o + l] -= CPRIME[o + l] * Q[o + BOU_LANES + l];
-              mass[l] += g.dx[i] * Q[o + l];
+              xb[l] = Q[o + l] - CPRIME[o + l] * xb[l];
+              Q[o + l] = xb[l];
+              ms[l] += g.dx[i] * xb[l];
             }
           }
+          for (size_t l = 0; l < BOU_LANES; ++l) mass[l] = ms[l];
 
           t += step;
           for (size_t l = 0; l < n_lane; ++l) {
@@ -607,7 +700,7 @@ inline Entry& bou_cache_get(SolveCache& C, const Key& p, double t_need) {
   Entry* hit = C.find(p);
   if (hit != nullptr && hit->t_max >= t_need) return *hit;
   if (hit != nullptr) { bou_solve(p, t_max, C.grid, *hit); return *hit; }
-  Entry& en = C.push();
+  Entry& en = C.push(p);
   bou_solve(p, t_max, C.grid, en);
   return en;
 }
@@ -686,7 +779,10 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
   const bool do_sv = (sv > 0.0) && R_FINITE(sv);
   const bool do_sz = (sz > 0.0) && R_FINITE(sz);
   const int nv = do_sv ? std::max(1, gr.n_sv) : 1;
-  const int nz = do_sz ? std::max(1, gr.n_sz) : 1;
+  // A midpoint-anchored operator is independent of the start point.  Seed
+  // the entire uniform interval once instead of solving one point-start
+  // operator per Gauss-Legendre node.
+  const int nz = (anchor_at_z && do_sz) ? std::max(1, gr.n_sz) : 1;
 
   // gh_rule() rejects n < 2, so only build a rule when it is actually used.
   static const GHRule gh_dummy{};
@@ -703,16 +799,29 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
     if (!(wv > 0.0)) continue;
 
     for (int iz = 0; iz < nz; ++iz) {
-      // Uniform on [z - sz/2, z + sz/2]; GL nodes on [-1,1] map by sz/2, and the
-      // uniform density cancels against the interval width, leaving w/2.
-      const double wz = do_sz ? 0.5 * glr.w[iz] : 1.0;
-      const double zi = do_sz ? (z + 0.5 * sz * glr.x[iz]) : z;
+      double wz = 1.0, zi = z, z_lo = z, z_hi = z;
+      if (anchor_at_z) {
+        // Uniform on [z - sz/2, z + sz/2]; GL nodes on [-1,1] map by sz/2, and
+        // the uniform density cancels against the interval width, leaving w/2.
+        wz = do_sz ? 0.5 * glr.w[iz] : 1.0;
+        zi = do_sz ? (z + 0.5 * sz * glr.x[iz]) : z;
+        z_lo = z_hi = zi;
+      } else if (do_sz) {
+        // fpe_seed integrates this interval by exact cell overlap at t = 0.
+        z_lo = z - 0.5 * sz;
+        z_hi = z + 0.5 * sz;
+      }
       if (!(wz > 0.0)) continue;
-      if (!(zi > 0.0) || !(zi < a)) continue;   // a start outside the barriers
+      if (anchor_at_z) {
+        if (!(zi > 0.0) || !(zi < a)) continue;
+      } else if (!(z_hi > 0.0) || !(z_lo < a)) {
+        continue;
+      }
 
       Key k;
       const double anc = anchor_at_z ? zi : anchor_fix;
-      if (!bou_key(vi, beta, a, zi, anc, s, bkind, binf, tau, pw, k)) continue;
+      if (!bou_key(vi, beta, a, z_lo, z_hi, anc, s, bkind, binf, tau, pw, k))
+        continue;
 
       // Two passes over the same node list: gather misses, solve them batched,
       // then read every node out of the cache.
@@ -730,7 +839,7 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
     // at a time would reallocate mid-loop and leave every earlier pointer
     // dangling.
     C.reserve_for(miss.size());
-    for (size_t i = 0; i < miss.size(); ++i) miss_e[i] = &C.push();
+    for (size_t i = 0; i < miss.size(); ++i) miss_e[i] = &C.push(miss[i]);
     bou_solve_batch(miss, t_max, gr, miss_e);
   }
 
@@ -739,14 +848,26 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
     const double vi = do_sv ? (v + sv * M_SQRT2 * ghr.x[iv]) : v;
     if (!(wv > 0.0)) continue;
     for (int iz = 0; iz < nz; ++iz) {
-      const double wz = do_sz ? 0.5 * glr.w[iz] : 1.0;
-      const double zi = do_sz ? (z + 0.5 * sz * glr.x[iz]) : z;
+      double wz = 1.0, zi = z, z_lo = z, z_hi = z;
+      if (anchor_at_z) {
+        wz = do_sz ? 0.5 * glr.w[iz] : 1.0;
+        zi = do_sz ? (z + 0.5 * sz * glr.x[iz]) : z;
+        z_lo = z_hi = zi;
+      } else if (do_sz) {
+        z_lo = z - 0.5 * sz;
+        z_hi = z + 0.5 * sz;
+      }
       if (!(wz > 0.0)) continue;
-      if (!(zi > 0.0) || !(zi < a)) continue;
+      if (anchor_at_z) {
+        if (!(zi > 0.0) || !(zi < a)) continue;
+      } else if (!(z_hi > 0.0) || !(z_lo < a)) {
+        continue;
+      }
 
       Key k;
       const double anc = anchor_at_z ? zi : anchor_fix;
-      if (!bou_key(vi, beta, a, zi, anc, s, bkind, binf, tau, pw, k)) continue;
+      if (!bou_key(vi, beta, a, z_lo, z_hi, anc, s, bkind, binf, tau, pw, k))
+        continue;
 
       Entry* enp = C.find(k);
       if (enp == nullptr) continue;

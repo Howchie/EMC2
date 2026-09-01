@@ -16,6 +16,7 @@ mapped_pars(
   covariates = NULL,
   data = NULL,
   use_data = TRUE,
+  n_covariates = 10,
   ...
 )
 
@@ -28,6 +29,7 @@ mapped_pars(
   covariates = NULL,
   data = NULL,
   use_data = TRUE,
+  n_covariates = 10,
   ...
 )
 
@@ -40,6 +42,7 @@ mapped_pars(
   covariates = NULL,
   data = NULL,
   use_data = TRUE,
+  n_covariates = 10,
   ...
 )
 
@@ -52,6 +55,7 @@ mapped_pars(
   covariates = NULL,
   data = NULL,
   use_data = TRUE,
+  n_covariates = 10,
   ...
 )
 }
@@ -67,13 +71,23 @@ Must be in the form of \code{sampled_pars(design)}}
 
 \item{remove_subjects}{Boolean. Whether to include subjects as a factor in the design}
 
-\item{covariates}{Covariates specified in the design can be included here.}
+\item{covariates}{Values for the covariates specified in the design, as a
+named list (e.g. \code{list(delta = 0:5)}). Each covariate's values are crossed
+into every design cell. Covariates not named here are taken from \code{data},
+using the values each one actually takes within each design cell, so that a
+trend driven by a covariate is visible in the output. A covariate that can
+be resolved from neither is filled with random values, with a warning.}
 
 \item{data}{Optional data frame. If supplied, only factor combinations observed
 in the data are returned.}
 
 \item{use_data}{Logical. Whether to restrict mappings to combinations observed
 in \code{data}. Defaults to \code{TRUE}.}
+
+\item{n_covariates}{Integer. Maximum number of distinct values of each
+covariate to report per design cell. A continuous covariate can take
+thousands of values; the reported ones are an evenly spaced slice of those
+observed (or supplied). Defaults to 10.}
 
 \item{...}{optional arguments}
 }

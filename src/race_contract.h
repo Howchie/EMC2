@@ -282,6 +282,10 @@ struct ContextForDDMModels {
   // allocates nothing.  Cleared once per particle; see fpebou::SolveCache.
   std::shared_ptr<fpebou::SolveCache> bou_cache;
   int bnd_kind = 0;                 // FPE_BoundaryKind for a collapsing bound
+  // BOU's default midpoint anchor makes the operator independent of the start
+  // interval.  The legacy Smith--Ratcliff start anchor remains selectable by
+  // the model's c_name suffix.
+  bool bou_anchor_at_z = false;
   bool floor_raw_log_lik = false;
 };
 

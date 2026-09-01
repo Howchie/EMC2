@@ -63,9 +63,9 @@ Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R,
                            NumericVector aInf = NumericVector::create(),
                            NumericVector tau = NumericVector::create(),
                            NumericVector pw = NumericVector::create(),
-                           int nx = 512, double dt_target = 5e-4,
-                           double grade = 1.0, double tgrade = 32.0,
-                           int n_sv = 7, int n_sz = 7, int n_st0 = 7,
+                           int nx = 256, double dt_target = 1e-3,
+                           double grade = 1.0, double tgrade = 8.0,
+                           int n_sv = 5, int n_sz = 5, int n_st0 = 7,
                            bool anchor_at_z = true, double anchor_fix = NA_REAL,
                            bool want_cdf = true) {
   const int n = rt.size();

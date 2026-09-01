@@ -113,16 +113,62 @@ struct FPE_Tri {
     }
   }
 
+  // Both sweeps carry their recurrence in a LOCAL, never through out[].
+  // Reading out[i-1] back from memory one iteration after storing it adds a
+  // store-to-load forward (~6 cycles) on top of the 8-cycle fnmadd/mul
+  // dependency, i.e. it roughly doubles the cost of the sweep; the same holds
+  // for out[i+1] on the way back.  Same arithmetic, same order, same result.
   void solve(const std::vector<double>& rhs, std::vector<double>& out) const {
     const int n = static_cast<int>(dia.size());
     if (n == 0) return;
     out.resize(n);
-    out[0] = rhs[0] * dinv[0];
+    double y = rhs[0] * dinv[0];
+    out[0] = y;
     for (int i = 1; i < n; ++i) {
-      out[i] = (rhs[i] - sub[i] * out[i - 1]) * dinv[i];
+      y = (rhs[i] - sub[i] * y) * dinv[i];
+      out[i] = y;
     }
+    double x = out[n - 1];
     for (int i = n - 2; i >= 0; --i) {
-      out[i] -= cprime[i] * out[i + 1];
+      x = out[i] - cprime[i] * x;
+      out[i] = x;
+    }
+  }
+
+  // Crank-Nicolson in ONE forward pass: build the right-hand side
+  //   r_i = q_i + c*(L q)_i
+  // and eliminate it in the same loop, so `rhs` is never materialised and q is
+  // read once instead of twice.  q_{i-1}, q_i, q_{i+1} are the values BEFORE
+  // the step, carried in a rolling three-variable window -- q_{i+1} is read
+  // before q_i is overwritten, so updating in place is safe.
+  //
+  // Only valid when the operator on the right-hand side is the one this
+  // factorisation was built from, i.e. a time-invariant L (see FPE_Op /
+  // Model::static_op).
+  template <class OpT>
+  void solve_cn(const OpT& op, double c, std::vector<double>& q) const {
+    const int n = static_cast<int>(dia.size());
+    if (n == 0) return;
+    double qm1 = 0.0;
+    double qcur = q[0];
+    double qnext = (n > 1) ? q[1] : 0.0;
+    double r = qcur + c * op.diag[0] * qcur;
+    if (n > 1) r += c * op.sup[0] * qnext;
+    double y = r * dinv[0];
+    q[0] = y;
+    for (int i = 1; i < n; ++i) {
+      qm1 = qcur;
+      qcur = qnext;
+      qnext = (i + 1 < n) ? q[i + 1] : 0.0;
+      double v = qcur + c * op.diag[i] * qcur + c * op.sub[i] * qm1;
+      if (i + 1 < n) v += c * op.sup[i] * qnext;
+      y = (v - sub[i] * y) * dinv[i];
+      q[i] = y;
+    }
+    double x = q[n - 1];
+    for (int i = n - 2; i >= 0; --i) {
+      x = q[i] - cprime[i] * x;
+      q[i] = x;
     }
   }
 };
@@ -631,15 +677,20 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
     const double t_new = t + step;
     if (!stat) build_op(m, t_new, g, *op_new);
 
-    if (backward_euler) {
-      rhs = q;
+    if (stat && !backward_euler) {
+      // Time-invariant operator: the CN right-hand side and the forward
+      // elimination read the same L, so they run as a single pass.
+      tri.solve_cn(*op_old, 0.5 * step, q);
     } else {
-      apply_shifted(*op_old, 0.5 * step, q, rhs);
+      if (backward_euler) {
+        rhs = q;
+      } else {
+        apply_shifted(*op_old, 0.5 * step, q, rhs);
+      }
+      // (I - c*L^{n+1}) q^{n+1} = rhs
+      if (!stat) set_lhs(backward_euler ? step : 0.5 * step, *op_new);
+      tri.solve(rhs, q);
     }
-
-    // (I - c*L^{n+1}) q^{n+1} = rhs
-    if (!stat) set_lhs(backward_euler ? step : 0.5 * step, *op_new);
-    tri.solve(rhs, q);
 
     t = t_new;
     if (!stat) std::swap(op_old, op_new);

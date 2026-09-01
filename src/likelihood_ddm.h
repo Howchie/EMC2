@@ -41,6 +41,10 @@ const DDMAdapter& ddm_wien_adapter();
 // BOU(boundary_collapse=).
 int bou_bnd_kind_from_type(const std::string& type_std);
 
+// True for the legacy BOU start-point anchor; the default BOU model uses the
+// midpoint anchor so start-point variability can be seeded in one march.
+bool bou_anchor_at_z_from_type(const std::string& type_std);
+
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // `ker` supplies the two model-specific operations and defaults to the Wiener
 // pair, so every existing call site is unchanged in behaviour.

@@ -1704,6 +1704,86 @@ update2version <- function(emc){
   mapping_data[mapping_key(mapping_data) %in% observed_keys, , drop = FALSE]
 }
 
+# Give trial-level covariates a cell structure.
+#
+# `minimal_design()` builds a factorial backbone out of the design *factors*.  A
+# covariate is not a factor, so it has no cell of its own: minimal_design either
+# fills it with random values (nothing was supplied for it) or recycles a
+# supplied vector positionally across whatever rows happen to line up.  Both are
+# meaningless for a covariate that is confounded with the factors -- and that is
+# exactly the case whenever a trend is worth inspecting, since the covariate is
+# what drives the trend.
+#
+# So resolve covariates the same way the factors are resolved:
+#   * values passed explicitly in `covariates` are crossed into every cell, so
+#     the caller sees the mapping at each value they asked for;
+#   * otherwise the values observed for that covariate *within each design cell*
+#     are used, expanding to one row per (cell x observed value combination).
+# Cells with many distinct values (a continuous covariate) are thinned to an
+# evenly spaced slice of at most `n_covariates` of them so the output stays
+# readable.
+.expand_covariate_values <- function(mapping_data, design, data, supplied = NULL,
+                                     remove_subjects = TRUE, n_covariates = 10) {
+  covariates <- design$Fcovariates
+  if (is.null(covariates) || length(covariates) == 0) return(mapping_data)
+  covariates <- intersect(covariates, names(mapping_data))
+  if (length(covariates) == 0) return(mapping_data)
+  if (!is.list(supplied)) supplied <- NULL
+
+  cross <- intersect(covariates, names(supplied))
+  from_data <- setdiff(covariates, cross)
+  if (!is.null(data)) from_data <- intersect(from_data, names(data)) else from_data <- character(0)
+
+  thin <- function(idx) {
+    if (length(idx) <= n_covariates) return(idx)
+    idx[unique(round(seq(1, length(idx), length.out = n_covariates)))]
+  }
+
+  # 1. Explicitly supplied values: cross them into every cell.
+  for (cv in cross) {
+    values <- unique(supplied[[cv]])
+    values <- values[order(values)]
+    values <- values[thin(seq_along(values))]
+    if (length(values) == 0) next
+    mapping_data <- mapping_data[rep(seq_len(nrow(mapping_data)), each = length(values)), ,
+                                 drop = FALSE]
+    mapping_data[[cv]] <- rep(values, length.out = nrow(mapping_data))
+  }
+  rownames(mapping_data) <- NULL
+  if (length(from_data) == 0) return(mapping_data)
+
+  # 2. Remaining covariates: take the values observed in each design cell.
+  cells <- names(design$Ffactors)
+  if (isTRUE(remove_subjects)) cells <- setdiff(cells, "subjects")
+  cells <- intersect(intersect(cells, names(mapping_data)), names(data))
+
+  cell_key <- function(df) {
+    if (length(cells) == 0) return(rep("", nrow(df)))
+    values <- lapply(df[, cells, drop = FALSE], as.character)
+    values <- lapply(values, function(value) {
+      value[is.na(value)] <- "<NA>"
+      value
+    })
+    do.call(paste, c(values, sep = "\r"))
+  }
+
+  observed <- unique(data[, c(cells, from_data), drop = FALSE])
+  observed <- observed[do.call(order, unname(as.list(observed[, from_data, drop = FALSE]))), ,
+                       drop = FALSE]
+  by_cell <- lapply(split(seq_len(nrow(observed)), cell_key(observed)), thin)
+
+  matches <- by_cell[cell_key(mapping_data)]
+  reps <- vapply(matches, function(m) max(1L, length(m)), integer(1L))
+  out <- mapping_data[rep(seq_len(nrow(mapping_data)), reps), , drop = FALSE]
+  # Cells with nothing observed keep whatever minimal_design() put there.
+  fill <- unlist(lapply(matches, function(m) if (length(m)) m else NA_integer_),
+                 use.names = FALSE)
+  keep <- !is.na(fill)
+  out[keep, from_data] <- observed[fill[keep], from_data, drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
 #' Parameter Mapping Back to the Design Factors
 #'
 #' Maps parameters of the cognitive model back to the experimental design. If p_vector
@@ -1719,11 +1799,20 @@ update2version <- function(emc){
 #' @param digits Integer. Will round the output parameter values to this many decimals
 #' @param ... optional arguments
 #' @param remove_subjects Boolean. Whether to include subjects as a factor in the design
-#' @param covariates Covariates specified in the design can be included here.
+#' @param covariates Values for the covariates specified in the design, as a
+#'   named list (e.g. `list(delta = 0:5)`). Each covariate's values are crossed
+#'   into every design cell. Covariates not named here are taken from `data`,
+#'   using the values each one actually takes within each design cell, so that a
+#'   trend driven by a covariate is visible in the output. A covariate that can
+#'   be resolved from neither is filled with random values, with a warning.
 #' @param data Optional data frame. If supplied, only factor combinations observed
 #'   in the data are returned.
 #' @param use_data Logical. Whether to restrict mappings to combinations observed
 #'   in `data`. Defaults to `TRUE`.
+#' @param n_covariates Integer. Maximum number of distinct values of each
+#'   covariate to report per design cell. A continuous covariate can take
+#'   thousands of values; the reported ones are an evenly spaced slice of those
+#'   observed (or supplied). Defaults to 10.
 #' @return Matrix with a column for each factor in the design and for   each model parameter type (``p_type``).
 #' @examples
 #' # First define a design:
@@ -1740,7 +1829,8 @@ update2version <- function(emc){
 #' @export
 mapped_pars <- function(x, p_vector = NULL, model=NULL,
                         digits=3,remove_subjects=TRUE,
-                        covariates=NULL, data = NULL, use_data = TRUE, ...)
+                        covariates=NULL, data = NULL, use_data = TRUE,
+                        n_covariates = 10, ...)
   # Show augmented data and corresponding mapped parameter
 {
   UseMethod("mapped_pars")
@@ -1750,7 +1840,8 @@ mapped_pars <- function(x, p_vector = NULL, model=NULL,
 #' @export
 mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                                    digits=3,remove_subjects=TRUE,
-                                   covariates=NULL, data = NULL, use_data = TRUE, ...){
+                                   covariates=NULL, data = NULL, use_data = TRUE,
+                                   n_covariates = 10, ...){
   if(is.null(x)) return(NULL)
   if(is.null(x$Ffactors)){
     x <- x[[1]]
@@ -1783,6 +1874,25 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
   if (isTRUE(use_data)) {
     mapping_data <- .restrict_to_observed_factors(mapping_data, design, data,
                                                   remove_subjects = remove_subjects)
+  }
+  # A covariate has no cell of its own in the factorial backbone, so give it one
+  # from the supplied values or from the data.  Without this a trend driven by a
+  # covariate is invisible here: the covariate column is noise or is recycled
+  # into cells it never occurs in.
+  mapping_data <- .expand_covariate_values(
+    mapping_data, design, if (isTRUE(use_data)) data else NULL,
+    supplied = if (is.list(covariates)) covariates else NULL,
+    remove_subjects = remove_subjects, n_covariates = n_covariates
+  )
+  unresolved <- setdiff(design$Fcovariates,
+                        c(if (is.list(covariates)) names(covariates),
+                          if (isTRUE(use_data)) names(data),
+                          c("LT", "LC", "UT", "UC")))
+  if (length(unresolved) > 0) {
+    warning("covariate(s) ", paste(unresolved, collapse = ", "), " could not be ",
+            "resolved from `data` or `covariates`, so they were filled with random ",
+            "values; any trend on them is meaningless here. Supply `data`, or pass ",
+            "covariates = list(", unresolved[1], " = <values>).", call. = FALSE)
   }
   dadm <- design_model(mapping_data, design,model,rt_check=FALSE,compress=FALSE,
                        verbose = FALSE,

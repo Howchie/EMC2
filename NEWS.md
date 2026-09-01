@@ -1,6 +1,13 @@
 # EMC2 3.4.0
 ## Development
 
+-   **BOU performance:** The default bounded-OU solver grid is now 256 cells
+    with a 1 ms target step and five drift/start quadrature nodes. BOU now
+    anchors decay at the interval midpoint by default, integrating start-point
+    variability with an exact uniform seed and requiring only drift-node
+    marches. The previous start-point anchor remains available with
+    `BOU(anchor = "start")`; fits using the two anchors are different models.
+
 -   **Breaking:** BTAwL no longer accepts `chart = "endpoint"`; sample
     `tau`/`tau_t` directly.
 -   **New:** Ballistic models now expose a trailing `eta` parameter on the

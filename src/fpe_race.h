@@ -1413,6 +1413,56 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       CPRIME[o] = 0.0;
     }
   };
+  // Factorise (I - c*L) for EVERY lane at once, c per lane.  The Thomas
+  // elimination's dependency runs along i only, so the lanes vectorise.  A lane
+  // passed c = 0 gets the identity, which is what an inactive lane wants.
+  //
+  // This is what the ROUp branch below has always used; the generic
+  // moving-operator branch used to call set_lane_factor() once per lane
+  // instead, i.e. LANES scalar passes over the mesh at every time step.  That
+  // is the dominant cost of a COLLAPSING-bound solve, where the operator has to
+  // be refactorised at every step and never amortises.
+  auto set_all_lane_factors = [&](const double* lhs_vec) {
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+    using SimdL = OUSimd<LANES>;
+    using VecL = typename SimdL::Vec;
+    VecL cprime_prev = SimdL::set1(0.0);
+    const VecL one = SimdL::set1(1.0);
+    const VecL zero = SimdL::set1(0.0);
+    const VecL c = SimdL::load(lhs_vec);
+    for (int i = 0; i < M; ++i) {
+      const size_t o = static_cast<size_t>(i) * LANES;
+      const VecL sub = SimdL::fnmadd(c, SimdL::load(&OP_SUB[o]), zero);
+      const VecL dia = SimdL::fnmadd(c, SimdL::load(&OP_DIAG[o]), one);
+      const VecL sup = SimdL::fnmadd(c, SimdL::load(&OP_SUP[o]), zero);
+      const VecL denom = SimdL::fnmadd(sub, cprime_prev, dia);
+      const VecL dinv = SimdL::div(one, denom);
+      const VecL cp = SimdL::mul(sup, dinv);
+      SimdL::store(&SUB[o], sub);
+      SimdL::store(&DINV[o], dinv);
+      SimdL::store(&CPRIME[o], cp);
+      cprime_prev = cp;
+    }
+#else
+    double cprime_prev[LANES] = {};
+    for (int i = 0; i < M; ++i) {
+      for (size_t l = 0; l < LANES; ++l) {
+        const size_t o = static_cast<size_t>(i) * LANES + l;
+        const double sub = -lhs_vec[l] * OP_SUB[o];
+        const double dia = 1.0 - lhs_vec[l] * OP_DIAG[o];
+        const double sup = -lhs_vec[l] * OP_SUP[o];
+        double denom = dia - ((i > 0) ? sub * cprime_prev[l] : 0.0);
+        if (denom == 0.0) denom = std::numeric_limits<double>::min();
+        const double dinv = 1.0 / denom;
+        SUB[o] = sub;
+        DINV[o] = dinv;
+        CPRIME[o] = (i + 1 < M) ? sup * dinv : 0.0;
+        cprime_prev[l] = CPRIME[o];
+      }
+    }
+#endif
+  };
+
   auto set_lane_factor = [&](int lane, double lhs_c) {
     double cprime_prev = 0.0;
     for (int i = 0; i < M; ++i) {
@@ -1436,9 +1486,21 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
     set_identity_factor(static_cast<int>(l));
 
   bool is_moving[LANES] = {};
+  bool any_moving = false;
   for (size_t l = 0; l < num_models; ++l) {
     is_moving[l] = !models[l].static_op();
+    if (is_moving[l]) any_moving = true;
   }
+  // With a time-invariant operator the CN right-hand side and the forward
+  // Thomas sweep read the SAME operator, so they can run as one pass: the
+  // three q values a row needs are carried in registers and RHS never has to
+  // be materialised.  A moving operator is rebuilt between the two, so it
+  // keeps the split path.
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+  const bool fuse_rhs = !any_moving;
+#else
+  const bool fuse_rhs = false;
+#endif
 
   // build_op_lanes() reads LANES models; pad the tail with the last real one so
   // the vector build never reads past the batch.  Padding lanes are inactive
@@ -1468,6 +1530,7 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       }
     }
 
+    if (!fuse_rhs)
     for (int i = 0; i < M; ++i) {
 #if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
       using Simd = OUSimd<LANES>;
@@ -1524,43 +1587,13 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       }
       build_op_lanes<Model, LANES>(lane_models.data(), t_new, g, OP_SUB.data(),
                                    OP_DIAG.data(), OP_SUP.data(), op_D);
-#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
-      using Simd = OUSimd<LANES>;
-      using Vec = typename Simd::Vec;
-      Vec cprime_prev = Simd::set1(0.0);
-      const Vec one = Simd::set1(1.0);
-      const Vec zero = Simd::set1(0.0);
-      const Vec c = Simd::load(lhs_vec);
-      for (int i = 0; i < M; ++i) {
-        const size_t o = static_cast<size_t>(i) * LANES;
-        const Vec os = Simd::load(&OP_SUB[o]);
-        const Vec od = Simd::load(&OP_DIAG[o]);
-        const Vec ou = Simd::load(&OP_SUP[o]);
-        const Vec sub = Simd::fnmadd(c, os, zero);
-        const Vec dia = Simd::fnmadd(c, od, one);
-        const Vec sup = Simd::fnmadd(c, ou, zero);
-        const Vec denom = Simd::fnmadd(sub, cprime_prev, dia);
-        const Vec dinv = Simd::div(one, denom);
-        const Vec cp = Simd::mul(sup, dinv);
-        Simd::store(&SUB[o], sub);
-        Simd::store(&DINV[o], dinv);
-        Simd::store(&CPRIME[o], cp);
-        cprime_prev = cp;
-      }
+      set_all_lane_factors(lhs_vec);
       for (size_t l = 0; l < LANES; ++l) {
         if (active[l]) {
           last_lhs[l] = lhs_vec[l];
           factor_live[l] = true;
         }
       }
-#else
-      for (size_t l = 0; l < LANES; ++l) {
-        if (!active[l]) continue;
-        set_lane_factor(static_cast<int>(l), lhs_vec[l]);
-        last_lhs[l] = lhs_vec[l];
-        factor_live[l] = true;
-      }
-#endif
     } else {
       // Crank--Nicolson uses the operator at the previous time on its RHS and
       // the operator at the new time in the implicit solve. Update moving lanes
@@ -1583,11 +1616,13 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
         build_op_lanes<Model, LANES>(lane_models.data(), t_new, g,
                                      OP_SUB.data(), OP_DIAG.data(),
                                      OP_SUP.data(), op_D);
+        alignas(64) double lhs_vec[LANES] = {};
+        for (size_t l = 0; l < LANES; ++l)
+          if (active[l]) lhs_vec[l] = actions[l][aidx].lhs_c;
+        set_all_lane_factors(lhs_vec);
         for (size_t l = 0; l < LANES; ++l) {
           if (!active[l]) continue;
-          const Action& a = actions[l][aidx];
-          set_lane_factor(static_cast<int>(l), a.lhs_c);
-          last_lhs[l] = a.lhs_c;
+          last_lhs[l] = lhs_vec[l];
           factor_live[l] = true;
         }
       } else {
@@ -1605,43 +1640,82 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       }
     }
 
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+    {
+    using SimdF = OUSimd<LANES>;
+    using VecF = typename SimdF::Vec;
+    // The Thomas recurrence is carried in a REGISTER.  Reading Q[i-1] back from
+    // memory turns every row into a store-to-load forward (~6 cycles on top of
+    // the 8-cycle fnmadd/mul chain), which measured as the single largest cost
+    // in the march.
+    if (fuse_rhs) {
+      // One pass: build the CN right-hand side and eliminate in the same loop.
+      // q[i-1], q[i], q[i+1] are the values BEFORE this step, held in a rolling
+      // three-register window -- q[i+1] is read before q[i] is overwritten, so
+      // the in-place update is safe.
+      const VecF c = SimdF::load(rhs_c);
+      const VecF zero = SimdF::set1(0.0);
+      VecF qm1 = zero;
+      VecF qcur = SimdF::load(&Q[0]);
+      VecF qnext = (M > 1) ? SimdF::load(&Q[LANES]) : zero;
+      VecF r = SimdF::fmadd(c, SimdF::mul(SimdF::load(&OP_DIAG[0]), qcur), qcur);
+      r = SimdF::fmadd(c, SimdF::mul(SimdF::load(&OP_SUP[0]), qnext), r);
+      VecF qcarry = SimdF::mul(r, SimdF::load(&DINV[0]));
+      SimdF::store(&Q[0], qcarry);
+      for (int i = 1; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        qm1 = qcur;
+        qcur = qnext;
+        qnext = (i + 1 < M)
+            ? SimdF::load(&Q[static_cast<size_t>(i + 1) * LANES]) : zero;
+        VecF v = SimdF::fmadd(c, SimdF::mul(SimdF::load(&OP_DIAG[o]), qcur), qcur);
+        v = SimdF::fmadd(c, SimdF::mul(SimdF::load(&OP_SUB[o]), qm1), v);
+        if (i + 1 < M)
+          v = SimdF::fmadd(c, SimdF::mul(SimdF::load(&OP_SUP[o]), qnext), v);
+        qcarry = SimdF::mul(
+            SimdF::fnmadd(SimdF::load(&SUB[o]), qcarry, v),
+            SimdF::load(&DINV[o]));
+        SimdF::store(&Q[o], qcarry);
+      }
+    } else {
+      VecF qcarry = SimdF::mul(SimdF::load(&RHS[0]), SimdF::load(&DINV[0]));
+      SimdF::store(&Q[0], qcarry);
+      for (int i = 1; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        qcarry = SimdF::mul(
+            SimdF::fnmadd(SimdF::load(&SUB[o]), qcarry, SimdF::load(&RHS[o])),
+            SimdF::load(&DINV[o]));
+        SimdF::store(&Q[o], qcarry);
+      }
+    }
+    }
+#else
     for (size_t l = 0; l < LANES; ++l)
       Q[l] = RHS[l] * DINV[l];
     for (int i = 1; i < M; ++i) {
-#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
-      using Simd = OUSimd<LANES>;
-      using Vec = typename Simd::Vec;
-      const size_t o = static_cast<size_t>(i) * LANES;
-      const Vec r = Simd::load(&RHS[o]);
-      const Vec s = Simd::load(&SUB[o]);
-      const Vec qp = Simd::load(&Q[static_cast<size_t>(i - 1) * LANES]);
-      const Vec d = Simd::load(&DINV[o]);
-      const Vec qc = Simd::mul(Simd::fnmadd(s, qp, r), d);
-      Simd::store(&Q[o], qc);
-#else
+      {
       for (size_t l = 0; l < LANES; ++l) {
         const size_t o = static_cast<size_t>(i) * LANES + l;
         Q[o] = (RHS[o] - SUB[o] *
                 Q[static_cast<size_t>(i - 1) * LANES + l]) * DINV[o];
       }
-#endif
+      }
     }
+#endif
 
     alignas(64) double mass[LANES];
 #if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
     using Simd = OUSimd<LANES>;
     using Vec = typename Simd::Vec;
-    Vec massv = Simd::mul(
-        Simd::set1(g.dx[M - 1]),
-        Simd::load(&Q[static_cast<size_t>(M - 1) * LANES]));
+    Vec qn = Simd::load(&Q[static_cast<size_t>(M - 1) * LANES]);
+    Vec massv = Simd::mul(Simd::set1(g.dx[M - 1]), qn);
     for (int i = M - 2; i >= 0; --i) {
       const size_t o = static_cast<size_t>(i) * LANES;
-      const Vec qn = Simd::load(&Q[static_cast<size_t>(i + 1) * LANES]);
-      const Vec cp = Simd::load(&CPRIME[o]);
-      Vec qc = Simd::load(&Q[o]);
-      qc = Simd::fnmadd(cp, qn, qc);
-      Simd::store(&Q[o], qc);
-      massv = Simd::fmadd(Simd::set1(g.dx[i]), qc, massv);
+      // Same reason as the forward sweep: q_{i+1} was just stored, so reading
+      // it back costs a store-to-load forward on every row.
+      qn = Simd::fnmadd(Simd::load(&CPRIME[o]), qn, Simd::load(&Q[o]));
+      Simd::store(&Q[o], qn);
+      massv = Simd::fmadd(Simd::set1(g.dx[i]), qn, massv);
     }
     Simd::store(mass, massv);
 #else

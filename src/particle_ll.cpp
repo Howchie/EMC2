@@ -654,6 +654,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
     bou::bou_configure(*ddm_adapter.ctx.bou_cache);
     ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
+    ddm_adapter.ctx.bou_anchor_at_z = bou_anchor_at_z_from_type(type_std);
   }
   if (is_ddm_type) {
     emc2col::validate_col_prefix(keep_names, ddm_adapter.col_spec);
@@ -1205,6 +1206,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
       bou::bou_configure(*ddm_adapter.ctx.bou_cache);
       ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
+      ddm_adapter.ctx.bou_anchor_at_z = bou_anchor_at_z_from_type(type_std);
     }
     IntegerVector expand = data.attr("expand");
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;

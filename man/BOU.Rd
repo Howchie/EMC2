@@ -6,7 +6,8 @@
 \usage{
 BOU(
   boundary_collapse = c("fixed", "exponential", "linear_additive",
-    "linear_multiplicative", "weibull")
+    "linear_multiplicative", "weibull"),
+  anchor = c("midpoint", "start")
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ two response boundaries. The separation is floored at 2\% of \code{a}, so
 \code{aInf = 0} means "collapse essentially all the way" rather than exactly so;
 below that width the remaining survivor is absorbed within a millisecond
 and the time step, not the mesh, is what stops resolving it.}
+\item{anchor}{Character; decay anchor, either \code{"midpoint"} (the default) or
+the legacy \code{"start"} anchor used by Smith and Ratcliff.}
 }
 \value{
 A model list with all the necessary functions for EMC2 to sample
@@ -37,7 +40,7 @@ A model list with all the necessary functions for EMC2 to sample
 \description{
 The two-choice OU diffusion of Smith and Ratcliff (2004): the diffusion
 decision model with a leak term. Evidence accumulates between two absorbing
-boundaries, and the drift is pulled back toward the starting point at rate
+boundaries, and the drift is pulled toward the selected anchor at rate
 \code{beta}. At \code{beta = 0} the model is exactly the Wiener diffusion of \code{\link[=DDM]{DDM()}},
 which is how it is validated -- but it reaches that answer through a
 Fokker-Planck solver rather than the DDM's series expansion.
@@ -51,7 +54,7 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate (drift rate). \cr
    \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Boundary separation \cr
-   \emph{beta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak: decay toward the starting point. 0 gives the DDM \cr
+   \emph{beta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak toward the selected anchor. 0 gives the DDM \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of drift rate \cr
    \emph{Z} \tab probit \tab [0, 1] \tab qnorm(0.5) \tab \emph{z} = \emph{Z} x \emph{a} \tab Relative start point (bias) \cr
@@ -72,18 +75,16 @@ When \code{boundary_collapse} is not \code{"fixed"}, the optional boundary param
 The parameterisation is \code{\link[=DDM]{DDM()}}'s with \code{beta} added, so a DDM design converts
 to this model by adding \code{beta ~ 1}, and \code{beta} fixed to 0 recovers the DDM.
 
-Note that the decay pulls the process toward the \emph{starting point}, following
-Smith and Ratcliff's own choice (their footnote 2). Decay toward zero is not
-an available alternative here, because zero is one of the response
-boundaries.
+The default decay anchor is the midpoint of the decision interval. The original
+start-point anchor remains available with \code{anchor = "start"}.
 
 Estimation cost is dominated by across-trial variability rather than by the
-diffusion: one Fokker-Planck march yields both response distributions, but
-because the decay is anchored at the starting point, \code{sv} and \code{SZ} each add a
-quadrature dimension whose nodes need their own march. With both switched on
-the model costs roughly \code{n_sv * n_SZ} solves per distinct parameter set; node
-counts are controlled by the options \code{emc2.bou_n_sv} and \code{emc2.bou_n_sz}.
-\code{st0} is a convolution and is nearly free.
+diffusion: one Fokker-Planck march yields both response distributions. With the
+default midpoint anchor, start-point variability is integrated by a uniform
+interval seed, so only drift nodes require separate marches. The legacy start
+anchor is available with \code{anchor = "start"}; it costs roughly
+\code{n_sv * n_SZ} solves per distinct parameter set. \code{st0} is a convolution
+and is nearly free.
 
 Smith, P. L., & Ratcliff, R. (2004). A comparison of sequential sampling
 models for two-choice reaction time. \emph{Psychological Review, 111}(2), 333-367.
