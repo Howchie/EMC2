@@ -508,14 +508,16 @@ inline double rlf_bernoulli(double t) {
 // positive.
 inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
                                               const RLF_Mesh& mesh,
-                                              std::vector<double>* g_scratch = nullptr) {
+                                              std::vector<double>* g_scratch =
+                                                nullptr,
+                                              bool diagnostics = true) {
   const int n = mesh.n;
   RLF_Operator op;
   op.n = n;
   op.width = mesh.width;
   op.dense.assign(static_cast<size_t>(n) * n, 0.0);
   op.upper_kill.assign(n, 0.0);
-  op.lower_censor.assign(n, 0.0);
+  if (diagnostics) op.lower_censor.assign(n, 0.0);
 
   const double alpha = m.alpha;
   const double eps = 2.0 - alpha;
@@ -739,7 +741,7 @@ inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
   // model does not have.  So nothing is subtracted here and the rate is only
   // recorded, as the pressure diagnostic that says whether the domain is deep
   // enough.
-  {
+  if (diagnostics) {
     const double a = mesh.face[0];
     const double ghost = a - mesh.width[0];
     for (int j = 0; j < n; ++j) {
@@ -751,17 +753,21 @@ inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
     }
   }
 
-  for (int j = 0; j < n; ++j) {
-    op.max_exit_rate = std::max(op.max_exit_rate, -at(j, j));
-  }
-  // Conservation: mass leaves only through the barrier, so the width-weighted
-  // column sums must equal minus the kill rate.
-  for (int j = 0; j < n; ++j) {
-    double col = 0.0;
-    for (int i = 0; i < n; ++i) col += mesh.width[i] * at(i, j);
-    op.conservation_error = std::max(
-      op.conservation_error,
-      std::abs(col / mesh.width[j] + op.upper_kill[j]));
+  if (diagnostics) {
+    for (int j = 0; j < n; ++j) {
+      op.max_exit_rate = std::max(op.max_exit_rate, -at(j, j));
+    }
+    // Conservation: mass leaves only through the barrier, so the
+    // width-weighted column sums must equal minus the kill rate.  This is an
+    // O(n^2) certification pass over the finished dense matrix; the production
+    // likelihood does not consume it.
+    for (int j = 0; j < n; ++j) {
+      double col = 0.0;
+      for (int i = 0; i < n; ++i) col += mesh.width[i] * at(i, j);
+      op.conservation_error = std::max(
+        op.conservation_error,
+        std::abs(col / mesh.width[j] + op.upper_kill[j]));
+    }
   }
   return op;
 }
@@ -1135,6 +1141,9 @@ struct RLF_Modes {
 struct RLF_KrylovWork {
   std::vector<double> shifted, basis, hessenberg, vector, projection;
   std::vector<double> reduced, eigvec, coefficient, lapack;
+  // LU of the reduced eigenbasis: the coefficient solve consumes it, so it
+  // cannot alias eigvec, and it is m x m once per rung of the Krylov search.
+  std::vector<double> factored;
   // Reusable face-pair kernel table for graded operator assembly.
   std::vector<double> operator_G;
   // H_m is consumed by the Schur factorisation, but the residual estimate
@@ -1223,9 +1232,21 @@ inline int rlf_arnoldi_extend(const RLF_ShiftedLU& lu, int n, int stride,
 // Turn the leading m x m block of the Hessenberg matrix into modal curves for
 // the three output functionals.  Everything here is O(m^3) or smaller, so it
 // can be repeated at several m against one factorisation and one basis.
+//
+// `diagnostics` buys the three quantities that certify a solve rather than
+// produce it: the eigenbasis condition estimate, the shift-and-invert defect
+// curve, and (in rlf_materialize_modes) the modal state the positivity probe
+// reconstructs the density from.  Only rlf_fast_path_safe and the R-facing
+// validation entry point read them, and the production graded/Richardson route
+// reaches neither -- rlf_store_result keeps the density and the survivor and
+// discards the rest.  They are not free: the defect alone is an m x m copy and
+// an LU per RUNG of the Krylov search, and the positivity probe materialises
+// the whole n x m basis.  So the production path turns them off and the
+// validation path leaves them on.
 inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
                              double beta, int n, int m, int stride,
-                             RLF_KrylovWork& work, RLF_Modes& modes) {
+                             RLF_KrylovWork& work, RLF_Modes& modes,
+                             bool diagnostics = true) {
   const int one = 1;
   // --- eigendecomposition, taken on H_m rather than on the reduced generator
   //
@@ -1245,7 +1266,7 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
         work.hessenberg[static_cast<size_t>(j) * stride + i];
     }
   }
-  work.hess_copy = work.reduced;
+  if (diagnostics) work.hess_copy = work.reduced;
   const double h_next = work.hessenberg[static_cast<size_t>(m - 1) * stride + m];
 
   modes.m = m;
@@ -1334,20 +1355,24 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
   work.coefficient.assign(m, 0.0);
   work.coefficient[0] = 1.0;
   work.pivot.resize(m);
-  std::vector<double> factored = work.eigvec;
+  // The factorisation is the eigenbasis solve's, not a diagnostic's; it is
+  // kept in the scratch so the m x m copy is not reallocated once per rung.
+  work.factored = work.eigvec;
   double eigen_norm = 0.0;
-  for (int j = 0; j < m; ++j) {
-    double column_sum = 0.0;
-    for (int i = 0; i < m; ++i) {
-      column_sum += std::abs(work.eigvec[static_cast<size_t>(j) * m + i]);
+  if (diagnostics) {
+    for (int j = 0; j < m; ++j) {
+      double column_sum = 0.0;
+      for (int i = 0; i < m; ++i) {
+        column_sum += std::abs(work.eigvec[static_cast<size_t>(j) * m + i]);
+      }
+      eigen_norm = std::max(eigen_norm, column_sum);
     }
-    eigen_norm = std::max(eigen_norm, column_sum);
   }
-  F77_CALL(dgetrf)(&m, &m, factored.data(), &m, work.pivot.data(), &info);
+  F77_CALL(dgetrf)(&m, &m, work.factored.data(), &m, work.pivot.data(), &info);
   if (info != 0) {
     throw std::runtime_error("rlf_solve: reduced eigenbasis is singular.");
   }
-  {
+  if (diagnostics) {
     // O(m^2) on a factorisation that is already paid for.  A blown-up estimate
     // means the modal expansion is a cancelling sum, which is a different
     // failure from an under-resolved Krylov space and is not fixed by more
@@ -1358,7 +1383,7 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
     work.iwork.resize(m);
     int cond_info = 0;
     F77_CALL(dgecon)(
-      &one_norm, &m, factored.data(), &m, &eigen_norm, &reciprocal,
+      &one_norm, &m, work.factored.data(), &m, &eigen_norm, &reciprocal,
       work.lapack.data(), work.iwork.data(), &cond_info, 1);
     modes.eigen_condition =
       (cond_info == 0 && reciprocal > 0.0) ? 1.0 / reciprocal : HUGE_VAL;
@@ -1366,7 +1391,7 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
   {
     const char none = 'N';
     F77_CALL(dgetrs)(
-      &none, &m, &one, factored.data(), &m, work.pivot.data(),
+      &none, &m, &one, work.factored.data(), &m, work.pivot.data(),
       work.coefficient.data(), &m, &info, 1);
   }
 
@@ -1425,7 +1450,11 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
   // This is what makes a single rung self-testing: without it the search can
   // only detect convergence by finding that two successive rungs agree, which
   // means the cheapest possible outcome is two eigensolves rather than one.
-  {
+  //
+  // It is a diagnostic, though, not a stopping rule (see rlf_build_modes), so
+  // the production path skips it: the m x m LU here runs once per rung and
+  // buys nothing that reaches the likelihood.
+  if (diagnostics) {
     work.residual_row.assign(m, 0.0);
     work.residual_row[m - 1] = 1.0;
     work.pivot.resize(m);
@@ -1454,6 +1483,14 @@ inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
 // censored-edge curve and the modal form of the state.  Runs off the
 // eigendecomposition the last rlf_reduce_modes left in `work`, so settling on
 // a dimension costs no second eigensolve.
+//
+// Both of those are diagnostics -- the censored curve feeds
+// lower_boundary_pressure and the modal state feeds the positivity probe -- so
+// the whole function is skipped on the production path.  The n x m basis it
+// materialises is the largest single write in the solve, and with it gone
+// RLF_Modes::density_extremes_at reads an empty basis and returns without
+// touching anything, which is the behaviour the probe's caller already
+// tolerates.
 inline void rlf_materialize_modes(const RLF_Operator& op, double h,
                                   double beta, int n, int m,
                                   RLF_KrylovWork& work, RLF_Modes& modes) {
@@ -1560,9 +1597,14 @@ inline void rlf_materialize_modes(const RLF_Operator& op, double h,
 // first for exactly this reason -- the finer grid is the one that can need
 // more vectors, so the reused dimension is an upper bound rather than a
 // guess.
+//
+// `diagnostics` is forwarded to rlf_reduce_modes and gates
+// rlf_materialize_modes entirely; see the note on the former for what it buys
+// and who reads it.
 inline RLF_Modes rlf_build_modes(const RLF_Operator& op, double h,
                                  const std::vector<double>& p0, double t_max,
-                                 RLF_KrylovWork& work, int m_fixed = 0) {
+                                 RLF_KrylovWork& work, int m_fixed = 0,
+                                 bool diagnostics = true) {
   const int n = op.n;
   const int m_cap = std::min(RLF_KRYLOV_MAX, n);
   if (!(m_cap > 1)) {
@@ -1610,7 +1652,8 @@ inline RLF_Modes rlf_build_modes(const RLF_Operator& op, double h,
     const bool invariant = grown < m;
     built = grown;
     m = grown;
-    rlf_reduce_modes(op, h, gamma, beta, n, m, stride, work, modes);
+    rlf_reduce_modes(op, h, gamma, beta, n, m, stride, work, modes,
+                     diagnostics);
 
     // The two functionals are judged in different currencies, because they
     // reach the likelihood in different ways.
@@ -1662,7 +1705,7 @@ inline RLF_Modes rlf_build_modes(const RLF_Operator& op, double h,
     have_previous = true;
     m = std::min(m + RLF_KRYLOV_STEP, m_cap);
   }
-  rlf_materialize_modes(op, h, beta, n, m, work, modes);
+  if (diagnostics) rlf_materialize_modes(op, h, beta, n, m, work, modes);
   rlf_last_krylov_dim = m;
   return modes;
 }
@@ -1678,11 +1721,12 @@ inline RLF_Modes rlf_build_modes(const RLF_Operator& op, double h,
 inline RLF_Result rlf_propagate(
     const RLF_Operator& op, double h, const std::vector<double>& p,
     double t_max, int n_out, const std::vector<double>* query_times,
-    RLF_KrylovWork* scratch, int m_fixed) {
+    RLF_KrylovWork* scratch, int m_fixed, bool diagnostics = true) {
   const int n = op.n;
   RLF_KrylovWork local;
   RLF_Modes modes = rlf_build_modes(
-    op, h, p, t_max, scratch != nullptr ? *scratch : local, m_fixed);
+    op, h, p, t_max, scratch != nullptr ? *scratch : local, m_fixed,
+    diagnostics);
 
   RLF_Result res;
   res.dx = h;
@@ -1692,7 +1736,7 @@ inline RLF_Result rlf_propagate(
   // Unlike the mass mismatch, which only sees the component of the Krylov
   // error that breaks the flux/survivor relation, this sees the whole defect,
   // so the two together separate a truncated subspace from a spatial problem.
-  {
+  if (diagnostics) {
     constexpr int RLF_RESIDUAL_PROBES = 10;
     for (int k = 1; k <= RLF_RESIDUAL_PROBES; ++k) {
       res.krylov_residual = std::max(
@@ -1703,13 +1747,18 @@ inline RLF_Result rlf_propagate(
   res.operator_conservation_error = op.conservation_error;
 
   // Exact antiderivative of the exit flux, for the flux/mass consistency
-  // check and for the censored lower-edge pressure.
+  // check and for the censored lower-edge pressure.  Both are diagnostics, and
+  // the flux one is the expensive kind -- it is a second modal reduction at
+  // EVERY output time, i.e. it scales with the number of response times the
+  // solve is answering rather than with the size of the propagator.
   double flux_offset = 0.0, censor_offset = 0.0;
-  const RLF_Curve cumulative_flux = modes.integrate(modes.flux, flux_offset);
-  const RLF_Curve cumulative_censor =
-    modes.integrate(modes.censor, censor_offset);
-  res.lower_boundary_pressure =
-    cumulative_censor.at(modes.re, modes.im, t_max) + censor_offset;
+  RLF_Curve cumulative_flux, cumulative_censor;
+  if (diagnostics) {
+    cumulative_flux = modes.integrate(modes.flux, flux_offset);
+    cumulative_censor = modes.integrate(modes.censor, censor_offset);
+    res.lower_boundary_pressure =
+      cumulative_censor.at(modes.re, modes.im, t_max) + censor_offset;
+  }
 
   // Output times: the requested queries, or a uniform grid over [0, t_max].
   std::vector<double> times;
@@ -1750,11 +1799,21 @@ inline RLF_Result rlf_propagate(
     survivor_prev = survivor;
     res.surv[i] = survivor;
     res.cdf[i] = 1.0 - survivor;
-    const double integrated =
-      RLF_Modes::reduce(cumulative_flux, weight) + flux_offset;
-    res.flux_mass_mismatch = std::max(
-      res.flux_mass_mismatch,
-      std::abs((1.0 - raw_survivor) - integrated));
+    if (diagnostics) {
+      const double integrated =
+        RLF_Modes::reduce(cumulative_flux, weight) + flux_offset;
+      res.flux_mass_mismatch = std::max(
+        res.flux_mass_mismatch,
+        std::abs((1.0 - raw_survivor) - integrated));
+    }
+    if (survivor <= 1e-305) {
+      for (size_t j = i + 1; j < count; ++j) {
+        res.pdf[j] = 0.0;
+        res.surv[j] = survivor;
+        res.cdf[j] = res.cdf[i];
+      }
+      break;
+    }
   }
 
   // Positivity probe, reported as the deepest trough as a fraction of the
@@ -1762,21 +1821,24 @@ inline RLF_Result rlf_propagate(
   // generator, so this measures Krylov truncation rather than a property of
   // the discretisation; a handful of geometrically spaced times covers the
   // transient and the tail for a few tens of microseconds.
-  constexpr int RLF_DENSITY_PROBES = 8;
-  double lowest = 0.0, highest = 0.0;
-  for (int k = 1; k <= RLF_DENSITY_PROBES; ++k) {
-    const double time =
-      t_max * std::pow(2.0, k - RLF_DENSITY_PROBES);
-    modes.density_extremes_at(time, lowest, highest);
+  if (diagnostics) {
+    constexpr int RLF_DENSITY_PROBES = 8;
+    double lowest = 0.0, highest = 0.0;
+    for (int k = 1; k <= RLF_DENSITY_PROBES; ++k) {
+      const double time =
+        t_max * std::pow(2.0, k - RLF_DENSITY_PROBES);
+      modes.density_extremes_at(time, lowest, highest);
+    }
+    res.min_density = highest > 0.0 ? lowest / highest : 0.0;
   }
-  res.min_density = highest > 0.0 ? lowest / highest : 0.0;
   return res;
 }
 
 inline RLF_Result rlf_solve_fixed_grid(
     const RLF_Model& m, double t_max, int M, int n_out, double lower_extent,
     const std::vector<double>* query_times = nullptr,
-    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0) {
+    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0,
+    bool diagnostics = true) {
   const double x_lo = -lower_extent;
   const double h = (m.b0 - x_lo) / M;
   const int n = M - 1;
@@ -1784,7 +1846,7 @@ inline RLF_Result rlf_solve_fixed_grid(
   std::vector<double> p;
   rlf_initial_density(m, x_lo, h, n, p);
   RLF_Result res = rlf_propagate(
-    op, h, p, t_max, n_out, query_times, scratch, m_fixed);
+    op, h, p, t_max, n_out, query_times, scratch, m_fixed, diagnostics);
   res.x_lo = x_lo;
   res.nx_used = M;
   return res;
@@ -1831,13 +1893,16 @@ inline void rlf_initial_density_mesh(const RLF_Model& m, const RLF_Mesh& mesh,
 inline RLF_Result rlf_solve_graded(
     const RLF_Model& m, double t_max, const RLF_Mesh& mesh, int n_out,
     const std::vector<double>* query_times = nullptr,
-    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0) {
+    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0,
+    bool diagnostics = true) {
   const RLF_Operator op = build_rlf_operator_graded(
-    m, mesh, scratch != nullptr ? &scratch->operator_G : nullptr);
+    m, mesh, scratch != nullptr ? &scratch->operator_G : nullptr,
+    diagnostics);
   std::vector<double> p;
   rlf_initial_density_mesh(m, mesh, p);
   RLF_Result res = rlf_propagate(
-    op, mesh.width.back(), p, t_max, n_out, query_times, scratch, m_fixed);
+    op, mesh.width.back(), p, t_max, n_out, query_times, scratch, m_fixed,
+    diagnostics);
   res.x_lo = mesh.face.front();
   res.nx_used = mesh.n;
   return res;
@@ -2370,6 +2435,15 @@ inline bool rlf_extrapolate(const RLF_Result& coarse, const RLF_Result& fine,
   return true;
 }
 
+// Whether the likelihood's own solve route computes the certification
+// diagnostics.  rlf_store_result keeps log f and log S and discards everything
+// else, so on this route they are dead work -- see rlf_reduce_modes for what is
+// skipped and what still reads it.  Left as a mutable global rather than a
+// constant so a debugging session can turn them back on for the production
+// route without a rebuild; the grid.adaptive branch below is unaffected and
+// always computes them.
+inline bool RLF_PRODUCTION_DIAGNOSTICS = false;
+
 inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
                             const std::vector<double>* query_times,
                             Entry& out, RLF_KrylovWork* scratch = nullptr) {
@@ -2414,10 +2488,11 @@ inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
     const RLF_Mesh fine_mesh = rlf_auto_mesh(model, t_max, nx_fine);
     const RLF_Mesh coarse_mesh = rlf_auto_mesh(model, t_max, nx);
     const RLF_Result fine = rlf_solve_graded(
-      model, t_max, fine_mesh, samples, query_times, scratch);
+      model, t_max, fine_mesh, samples, query_times, scratch, 0,
+      RLF_PRODUCTION_DIAGNOSTICS);
     const RLF_Result coarse = rlf_solve_graded(
       model, t_max, coarse_mesh, samples, query_times, scratch,
-      fine.krylov_dim);
+      fine.krylov_dim, RLF_PRODUCTION_DIAGNOSTICS);
     RLF_Result blended;
     const double ratio = static_cast<double>(fine_mesh.n) / coarse_mesh.n;
     const bool ok = rlf_extrapolate(
@@ -2429,7 +2504,8 @@ inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
 
   const RLF_Mesh mesh = rlf_auto_mesh(model, t_max, nx);
   const RLF_Result result =
-    rlf_solve_graded(model, t_max, mesh, samples, query_times, scratch);
+    rlf_solve_graded(model, t_max, mesh, samples, query_times, scratch, 0,
+                     RLF_PRODUCTION_DIAGNOSTICS);
   rlf_store_result(key, t_max, result, query_times == nullptr, out);
 }
 

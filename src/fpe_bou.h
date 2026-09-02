@@ -39,6 +39,9 @@
 #include <limits>
 #include <cfloat>
 #include <unordered_map>
+#if defined(__AVX512F__) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
 #include "fpe_models.h"
 #include "gh_quad.h"
 #include "gl_quad.h"
@@ -306,6 +309,28 @@ inline void bou_solve(const Key& p, double t_max, const Grid& gr, Entry& out) {
 //   scalar 0.855 s   4 lanes 0.458 s   8 lanes 0.365 s
 #if defined(__AVX512F__)
 constexpr size_t BOU_LANES = 8;
+template <size_t LANES> struct BOUSimd;
+template <> struct BOUSimd<8> {
+  using Vec = __m512d;
+  static inline Vec load(const double* p) { return _mm512_loadu_pd(p); }
+  static inline void store(double* p, Vec x) { _mm512_storeu_pd(p, x); }
+  static inline Vec set1(double x) { return _mm512_set1_pd(x); }
+  static inline Vec mul(Vec a, Vec b) { return _mm512_mul_pd(a, b); }
+  static inline Vec sub(Vec a, Vec b) { return _mm512_sub_pd(a, b); }
+  static inline Vec div(Vec a, Vec b) { return _mm512_div_pd(a, b); }
+};
+#elif defined(__AVX2__)
+constexpr size_t BOU_LANES = 4;
+template <size_t LANES> struct BOUSimd;
+template <> struct BOUSimd<4> {
+  using Vec = __m256d;
+  static inline Vec load(const double* p) { return _mm256_loadu_pd(p); }
+  static inline void store(double* p, Vec x) { _mm256_storeu_pd(p, x); }
+  static inline Vec set1(double x) { return _mm256_set1_pd(x); }
+  static inline Vec mul(Vec a, Vec b) { return _mm256_mul_pd(a, b); }
+  static inline Vec sub(Vec a, Vec b) { return _mm256_sub_pd(a, b); }
+  static inline Vec div(Vec a, Vec b) { return _mm256_div_pd(a, b); }
+};
 #else
 constexpr size_t BOU_LANES = 4;
 #endif
@@ -518,6 +543,31 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
     // left to amortise.
     auto factor = [&](double c, const double* dg, const double* sb,
                       const double* sp) {
+#if defined(__AVX512F__) || defined(__AVX2__)
+      // The Thomas dependency is along the spatial index, not across lanes.
+      // Keep the lane-independent recurrence in registers and perform one
+      // vector pass over all BOU_LANES rather than a scalar pass per lane.
+      using Simd = BOUSimd<BOU_LANES>;
+      using Vec = typename Simd::Vec;
+      const Vec one = Simd::set1(1.0);
+      const Vec cv = Simd::set1(c);
+      const Vec neg_cv = Simd::set1(-c);
+      const Vec d0 = Simd::sub(one,
+                               Simd::mul(cv, Simd::load(dg)));
+      Simd::store(DINV.data(), Simd::div(one, d0));
+      for (int i = 1; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * BOU_LANES;
+        const size_t p = static_cast<size_t>(i - 1) * BOU_LANES;
+        const Vec cp = Simd::mul(
+            Simd::mul(neg_cv, Simd::load(&sp[p])),
+            Simd::load(&DINV[p]));
+        Simd::store(&CPRIME[p], cp);
+        const Vec d = Simd::sub(
+            Simd::sub(one, Simd::mul(cv, Simd::load(&dg[o]))),
+            Simd::mul(Simd::mul(neg_cv, Simd::load(&sb[o])), cp));
+        Simd::store(&DINV[o], Simd::div(one, d));
+      }
+#else
       for (size_t l = 0; l < BOU_LANES; ++l) DINV[l] = 1.0 / (1.0 - c * dg[l]);
       for (int i = 1; i < M; ++i) {
         const size_t o = static_cast<size_t>(i) * BOU_LANES;
@@ -529,6 +579,7 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
           DINV[o + l] = 1.0 / ((d != 0.0) ? d : DBL_MIN);
         }
       }
+#endif
     };
 
     int n_steps = 0;

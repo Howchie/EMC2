@@ -55,11 +55,19 @@ inline void rou_configure_grid(fperace::FPE_Grid& g) {
 
 inline void rou_configure_cache(fperace::SolveCache& cache) {
   rou_configure_grid(cache.grid);
-  SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
-  if (sparse != R_NilValue && Rf_length(sparse) > 0) {
-    const int enabled = Rf_asLogical(sparse);
-    if (enabled != NA_LOGICAL) cache.sparse_raw_output = enabled;
-  }
+  auto opt_flag = [](const char* nm, bool& dst) {
+    SEXP v = Rf_GetOption1(Rf_install(nm));
+    if (v == R_NilValue || Rf_length(v) < 1) return;
+    const int x = Rf_asLogical(v);
+    if (x != NA_LOGICAL) dst = (x != 0);
+  };
+  opt_flag("emc2.rou_sparse_output", cache.sparse_raw_output);
+  // The established march remains the default at the shipped nx = 512.  The
+  // modal propagator removes time error and is often faster, but at this mesh
+  // its spatial error can lose a favourable cancellation with the march's time
+  // error, so enabling it silently would regress some existing likelihoods.
+  // options(emc2.rou_modal = TRUE) opts into the exact-in-time route.
+  opt_flag("emc2.rou_modal", cache.modal_enabled);
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +171,8 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
   std::vector<double> horizon;
   std::vector<std::vector<double>> query_times;
   std::vector<int> row_key_idx(n_rows, -1);
+  std::unordered_map<fperace::Key, int, fperace::KeyHash> key_index;
+  key_index.reserve(static_cast<size_t>(n_rows));
 
   for (int i = 0; i < n_rows; ++i) {
     if (!isok[i] || R_IsNA(p1_[i])) continue;
@@ -172,16 +182,16 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
     if (!fperace::rou_key_par(C.par_kind, p1_[i], p2_[i], p3_[i], B_[i], A_[i],
                               rou_bnd_row(C.bnd_kind, cols, i), p)) continue;
 
-    int g = -1;
-    for (size_t j = 0; j < keys.size(); ++j) {
-      if (keys[j] == p) { g = static_cast<int>(j); break; }
-    }
-    if (g < 0) {
+    auto found = key_index.find(p);
+    int g;
+    if (found == key_index.end()) {
+      g = static_cast<int>(keys.size());
+      key_index.emplace(p, g);
       keys.push_back(p);
       horizon.push_back(tt);
       query_times.push_back(std::vector<double>(1, tt));
-      g = static_cast<int>(keys.size()) - 1;
     } else {
+      g = found->second;
       if (tt > horizon[g]) horizon[g] = tt;
       query_times[g].push_back(tt);
     }

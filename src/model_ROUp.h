@@ -176,19 +176,25 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
     std::vector<double> horizon_s, horizon_t;
     std::vector<std::vector<double>> query_s, query_t;
     std::vector<int> row_s(n_rows, -1), row_t(n_rows, -1);
+    std::unordered_map<fperace::Key, int, fperace::KeyHash> index_s, index_t;
+    index_s.reserve(static_cast<size_t>(n_rows));
+    index_t.reserve(static_cast<size_t>(n_rows));
     auto add_key = [](const fperace::Key& p, double tt,
                       std::vector<fperace::Key>& keys,
                       std::vector<double>& horizons,
-                      std::vector<std::vector<double>>& queries) {
-      int g = -1;
-      for (size_t j = 0; j < keys.size(); ++j) {
-        if (keys[j] == p) { g = static_cast<int>(j); break; }
-      }
-      if (g < 0) {
+                      std::vector<std::vector<double>>& queries,
+                      std::unordered_map<fperace::Key, int,
+                                         fperace::KeyHash>& index) {
+      auto found = index.find(p);
+      int g;
+      if (found == index.end()) {
+        g = static_cast<int>(keys.size());
+        index.emplace(p, g);
         keys.push_back(p); horizons.push_back(tt);
         queries.push_back(std::vector<double>(1, tt));
-        return static_cast<int>(keys.size() - 1);
+        return g;
       }
+      g = found->second;
       horizons[g] = std::max(horizons[g], tt);
       queries[g].push_back(tt);
       return g;
@@ -202,8 +208,8 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
                            tau_T_[i], k_[i], B_[i], A_[i], s_[i],
                            roup_bnd_row(C.bnd_kind, cols, i),
                            ks, kt, hs, ht)) continue;
-      if (hs) row_s[i] = add_key(ks, tt, keys_s, horizon_s, query_s);
-      if (ht) row_t[i] = add_key(kt, tt, keys_t, horizon_t, query_t);
+      if (hs) row_s[i] = add_key(ks, tt, keys_s, horizon_s, query_s, index_s);
+      if (ht) row_t[i] = add_key(kt, tt, keys_t, horizon_t, query_t, index_t);
     }
     if (endpoint_queries != nullptr) {
       for (int i = 0; i < n_rows; ++i) {
@@ -250,6 +256,8 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
   std::vector<double> horizon;
   std::vector<std::vector<double>> query_times;
   std::vector<int> row_key_idx(n_rows, -1);
+  std::unordered_map<fperace::Key, int, fperace::KeyHash> key_index;
+  key_index.reserve(static_cast<size_t>(n_rows));
 
   for (int i = 0; i < n_rows; ++i) {
     if (!isok[i] || R_IsNA(v_S_[i])) continue;
@@ -260,16 +268,16 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
                                tau_T_[i], k_[i], B_[i], A_[i], s_[i],
                                roup_bnd_row(C.bnd_kind, cols, i), p)) continue;
 
-    int g = -1;
-    for (size_t j = 0; j < keys.size(); ++j) {
-      if (keys[j] == p) { g = static_cast<int>(j); break; }
-    }
-    if (g < 0) {
+    auto found = key_index.find(p);
+    int g;
+    if (found == key_index.end()) {
+      g = static_cast<int>(keys.size());
+      key_index.emplace(p, g);
       keys.push_back(p);
       horizon.push_back(tt);
       query_times.push_back(std::vector<double>(1, tt));
-      g = static_cast<int>(keys.size()) - 1;
     } else {
+      g = found->second;
       if (tt > horizon[g]) horizon[g] = tt;
       query_times[g].push_back(tt);
     }

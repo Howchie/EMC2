@@ -42,6 +42,7 @@
 #include <immintrin.h>
 #endif
 #include "fpe_models.h"
+#include "fpe_modal.h"
 
 
 namespace fperace {
@@ -267,71 +268,11 @@ inline void bern_pair(double P, double& wp, double& wm) {
   if (P > 0.0) { wp = w; wm = u; } else { wp = u; wm = w; }
 }
 
+// exp(x) for x <= 0, vectorised.  Defined in fpe_solver.h so that the modal
+// propagator (fpe_modal.h, which this header includes) can use the same
+// polynomial; see there for why it is written for non-positive arguments only.
 #if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
-// exp(x) for x <= 0 only.  Cephes-style: x = n*ln2 + r with |r| <= ln2/2, a
-// degree-13 Taylor polynomial on r (truncation ~4e-18 there), then scale by
-// 2^n through the exponent field.  Arguments below -708 flush to zero, which is
-// where fpe::bern()'s own +/-700 branches land as well.
-//
-// Only AVX-512F / AVX2 instructions are used -- no AVX512DQ -- so this compiles
-// wherever the surrounding lane march does.
-#if defined(__AVX512F__)
-inline __m512d exp_nonpos_v(__m512d x) {
-  const __m512d lim = _mm512_set1_pd(-708.0);
-  const __mmask8 flush = _mm512_cmp_pd_mask(x, lim, _CMP_LT_OQ);
-  x = _mm512_max_pd(x, lim);
-  const __m512d n =
-      _mm512_roundscale_pd(_mm512_mul_pd(x, _mm512_set1_pd(1.4426950408889634074)), 0x08);
-  __m512d r = _mm512_fnmadd_pd(n, _mm512_set1_pd(6.93147180559945286227e-01), x);
-  r = _mm512_fnmadd_pd(n, _mm512_set1_pd(2.31904681384629956e-17), r);
-  __m512d p = _mm512_set1_pd(1.6059043836821613e-10);   // 1/13!
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.0876756987868099e-09));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.5052108385441718e-08));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-07));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-06));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.4801587301587302e-05));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.9841269841269841e-04));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.3888888888888889e-03));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(8.3333333333333333e-03));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(4.1666666666666667e-02));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.6666666666666667e-01));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(5.0e-01));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
-  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
-  const __m512i ni = _mm512_cvtepi32_epi64(_mm512_cvttpd_epi32(n));
-  const __m512d s = _mm512_castsi512_pd(
-      _mm512_slli_epi64(_mm512_add_epi64(ni, _mm512_set1_epi64(1023)), 52));
-  return _mm512_mask_blend_pd(flush, _mm512_mul_pd(p, s), _mm512_setzero_pd());
-}
-#endif
-inline __m256d exp_nonpos_v(__m256d x) {
-  const __m256d lim = _mm256_set1_pd(-708.0);
-  const __m256d keep = _mm256_cmp_pd(x, lim, _CMP_GE_OQ);
-  x = _mm256_max_pd(x, lim);
-  const __m256d n = _mm256_round_pd(
-      _mm256_mul_pd(x, _mm256_set1_pd(1.4426950408889634074)),
-      _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-  __m256d r = _mm256_fnmadd_pd(n, _mm256_set1_pd(6.93147180559945286227e-01), x);
-  r = _mm256_fnmadd_pd(n, _mm256_set1_pd(2.31904681384629956e-17), r);
-  __m256d p = _mm256_set1_pd(1.6059043836821613e-10);
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.0876756987868099e-09));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.5052108385441718e-08));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-07));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-06));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.4801587301587302e-05));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.9841269841269841e-04));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.3888888888888889e-03));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(8.3333333333333333e-03));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(4.1666666666666667e-02));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.6666666666666667e-01));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(5.0e-01));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
-  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
-  const __m256i ni = _mm256_cvtepi32_epi64(_mm256_cvttpd_epi32(n));
-  const __m256d s = _mm256_castsi256_pd(
-      _mm256_slli_epi64(_mm256_add_epi64(ni, _mm256_set1_epi64x(1023)), 52));
-  return _mm256_and_pd(keep, _mm256_mul_pd(p, s));
-}
+using fpe::exp_nonpos_v;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -891,6 +832,15 @@ struct SolveCache {
   // sharing the generic solve entries and exact-key index.
   bool roup_local = false;
   bool sparse_raw_output = true;
+  // Whether a fixed-boundary key may be answered by the modal propagator rather
+  // than by the CN march.  It is opt-in because eliminating time error at the
+  // shipped spatial grid does not uniformly reduce total discretisation error.
+  bool modal_enabled = false;
+  fpe::FPE_ModalWork modal_work;
+  // How many keys each route answered, since the last new_particle().  These
+  // are used by the C++ diagnostics and benchmark harnesses to distinguish a
+  // genuinely modal workload from one that fell back to the march.
+  size_t modal_solves = 0, march_solves = 0;
   bool prepared = false;
   size_t n_entries = 0;
   std::vector<Entry> e;
@@ -905,6 +855,8 @@ struct SolveCache {
   // vectors in e are preserved across particles to avoid heap churn.
   void new_particle() {
     prepared = false;
+    modal_solves = 0;
+    march_solves = 0;
     for (size_t i = 0; i < n_entries; ++i) {
       e[i].t.clear();
       e[i].log_pdf.clear();
@@ -1215,6 +1167,7 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_common_clock(
       }
     };
 
+    bool early_exit = false;
     for (int k = 0; k < sched.steps[b]; ++k, ++done) {
       if (done < n_rann) {
         do_batch_step(0.5 * dtb, true);
@@ -1222,7 +1175,13 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_common_clock(
       } else {
         do_batch_step(dtb, false);
       }
+      bool all_extinct = true;
+      for (size_t l = 0; l < num_models; ++l) {
+        if (surv_prev[l] > 1e-305) { all_extinct = false; break; }
+      }
+      if (all_extinct) { early_exit = true; break; }
     }
+    if (early_exit) break;
   }
 
   return results;
@@ -1498,8 +1457,14 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
   // keeps the split path.
 #if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
   const bool fuse_rhs = !any_moving;
+  // The fixed-boundary factorisation has the same independent-lane structure
+  // as the moving-boundary one.  Keep this separate from `fuse_rhs`: the
+  // latter controls the CN RHS/solve fusion, while this flag controls whether
+  // static Thomas factors can be built in one SIMD pass below.
+  const bool vector_static_factors = !any_moving;
 #else
   const bool fuse_rhs = false;
+  const bool vector_static_factors = false;
 #endif
 
   // build_op_lanes() reads LANES models; pad the tail with the last real one so
@@ -1512,21 +1477,49 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
   for (size_t aidx = 0; aidx < max_actions; ++aidx) {
     alignas(64) double rhs_c[LANES] = {};
     bool active[LANES] = {};
+    bool any_active = false;
+    bool static_refactor = false;
     for (size_t l = 0; l < LANES; ++l) {
       active[l] = l < num_models &&
                   aidx < actions[l].size();
       if (active[l]) {
+        any_active = true;
         const Action& a = actions[l][aidx];
         rhs_c[l] = a.rhs_c;
         if (!is_moving[l] &&
             (!factor_live[l] || last_lhs[l] != a.lhs_c)) {
-          set_lane_factor(static_cast<int>(l), a.lhs_c);
-          last_lhs[l] = a.lhs_c;
-          factor_live[l] = true;
+          if (vector_static_factors) {
+            // Defer all static lanes until the active mask is known, then
+            // factor their independent Thomas recurrences together.  Lanes
+            // whose factor is already live are rebuilt from their current
+            // lhs_c as part of that same SIMD pass.
+            static_refactor = true;
+          } else {
+            set_lane_factor(static_cast<int>(l), a.lhs_c);
+            last_lhs[l] = a.lhs_c;
+            factor_live[l] = true;
+          }
         }
       } else if (factor_live[l]) {
         set_identity_factor(static_cast<int>(l));
         factor_live[l] = false;
+      }
+    }
+    if (!any_active) break;
+
+    if (vector_static_factors && static_refactor) {
+      alignas(64) double lhs_vec[LANES] = {};
+      for (size_t l = 0; l < LANES; ++l) {
+        // A zero coefficient gives the identity factor for inactive lanes.
+        // Every active lane is static in this branch, and using its current
+        // action coefficient also refreshes lanes whose old factor was live.
+        if (active[l]) lhs_vec[l] = actions[l][aidx].lhs_c;
+      }
+      set_all_lane_factors(lhs_vec);
+      for (size_t l = 0; l < LANES; ++l) {
+        if (!active[l]) continue;
+        last_lhs[l] = lhs_vec[l];
+        factor_live[l] = true;
       }
     }
 
@@ -1745,6 +1738,10 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
            g.cB * Q[static_cast<size_t>(M - 2) * LANES + l]);
       if (!(gt > 0.0)) gt = 0.0;
 
+      if (s_keep <= 1e-305) {
+        actions[l].resize(aidx + 1);
+      }
+
       if constexpr (SPARSE) {
         const std::vector<double>& qt = (*query_times)[l];
         const bool final_action = aidx + 1 == actions[l].size();
@@ -1913,6 +1910,355 @@ inline std::vector<OUQueryResult> fpe_solve_batch_roup_queries(
   return result;
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Lane-batched modal solve for FIXED-boundary OU keys.
+//
+// Same mathematics as fpe::fpe_modal_build() -- see fpe_modal.h for it -- with
+// the Lanczos recurrence interleaved across lanes in the structure-of-arrays
+// layout the CN march already uses.  That matters because the two halves of the
+// solve scale differently: the Lanczos is O(M) per step and vectorises across
+// keys exactly as the march does, while the QL reduction is O(m^2) per KEY and
+// does not (its deflation and shift decisions diverge lane by lane).  Running
+// the Lanczos per lane instead would leave an eight-key batch barely faster
+// than the march it replaces; interleaved, the batch is dominated by the
+// reductions and comes out three to four times faster.
+//
+// Every lane climbs the SAME ladder, and that costs nothing: the vectors are
+// produced for all lanes whether or not a given lane still wants them, so a
+// lane that converged at 16 while its neighbour needs 46 simply stops being
+// REDUCED, which is where the per-lane cost is.  Lanes that fail to symmetrise,
+// close on an invariant subspace, or run out of ladder are frozen by zeroing
+// their Lanczos vector, so they stay finite and cannot contaminate the shared
+// reductions.
+//
+// out[l].ok() reports whether lane l may be used; the caller marches the rest.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+template <class Model, size_t LANES>
+inline void fpe_modal_batch(const std::vector<Model>& models,
+                            const std::vector<std::vector<double>>& q0_vec,
+                            const std::vector<double>& t0_vec,
+                            const std::vector<double>& t_max_vec,
+                            const std::vector<std::vector<double>>& queries,
+                            const fpe::FPE_Mesh& g,
+                            fpe::FPE_ModalWork& sym,
+                            std::vector<fpe::FPE_ModalCurve>& out) {
+  const size_t n = models.size();
+  out.assign(n, fpe::FPE_ModalCurve());
+  if (n == 0 || n > LANES) return;
+  const int M = g.M;
+  const size_t stride = static_cast<size_t>(M) * LANES;
+
+  std::vector<double> V(stride, 0.0), VP(stride, 0.0), W(stride);
+  std::vector<double> PHIS(stride, 0.0), SUB(stride, 0.0);
+  std::vector<double> DINV(stride, 1.0), CPRIME(stride, 0.0);
+  alignas(64) double phif_hi[LANES] = {}, phif_lo[LANES] = {};
+  alignas(64) double beta0[LANES] = {}, gamma[LANES] = {}, bprev[LANES] = {};
+  int m_avail[LANES], last_judged[LANES];
+  bool live[LANES], done[LANES];
+  std::vector<double> alpha[LANES], beta[LANES], gfv[LANES], gsv[LANES];
+  std::vector<double> probe[LANES];
+  fpe::FPE_ModalLadder ladder[LANES];
+
+  const int m_cap = std::min(fpe::FPE_MODAL_MAX, M);
+  // `sym` is the caller's, so the M-sized symmetrisation buffers and the
+  // mesh-only logarithm table survive from one chunk to the next; `red` only
+  // ever holds m-sized vectors.
+  fpe::FPE_ModalWork red;
+
+  for (size_t l = 0; l < LANES; ++l) {
+    m_avail[l] = 0;
+    last_judged[l] = 0;
+    live[l] = false;
+    done[l] = true;                    // padding lanes are finished by default
+    if (l >= n) continue;
+    out[l].t0 = t0_vec[l];
+    const double horizon = std::max(t_max_vec[l] - t0_vec[l], 1e-9);
+    fpe::fpe_modal_probes(queries[l], t0_vec[l], probe[l]);
+    if (probe[l].empty()) { out[l].status = fpe::FPE_MODAL_SEED_UNUSABLE; continue; }
+
+    fpe::FPE_Op op;
+    build_op(models[l], 0.0, g, op);
+    const int st = fpe::fpe_modal_symmetrise(models[l], op, g, q0_vec[l], sym,
+                                             beta0[l], out[l].span,
+                                             out[l].surv0);
+    if (st != fpe::FPE_MODAL_OK) { out[l].status = st; continue; }
+    gamma[l] = fpe::FPE_MODAL_SHIFT * horizon;
+    fpe::fpe_modal_factor(op, gamma[l], M, sym);
+    for (int i = 0; i < M; ++i) {
+      const size_t o = static_cast<size_t>(i) * LANES + l;
+      V[o] = sym.v[i];
+      PHIS[o] = sym.phis[i];
+      SUB[o] = sym.sub[i];
+      DINV[o] = sym.dinv[i];
+      CPRIME[o] = sym.cprime[i];
+    }
+    phif_hi[l] = sym.phif[M - 1];
+    phif_lo[l] = sym.phif[M - 2];
+    live[l] = true;
+    done[l] = false;
+    alpha[l].reserve(m_cap);
+    beta[l].reserve(m_cap);
+    gfv[l].reserve(m_cap);
+    gsv[l].reserve(m_cap);
+    ladder[l].reset(probe[l].size());
+  }
+
+  bool any_live = false;
+  for (size_t l = 0; l < LANES; ++l) any_live = any_live || live[l];
+  if (!any_live) return;
+
+  int built = 0;
+  int m = std::min(fpe::FPE_MODAL_MIN, m_cap);
+  while (true) {
+    // --- extend every lane to the current rung
+    for (int j = built; j < m; ++j) {
+      alignas(64) double pf[LANES] = {}, ps[LANES] = {}, al[LANES] = {},
+                         bn[LANES] = {};
+      for (size_t l = 0; l < LANES; ++l) {
+        pf[l] = V[static_cast<size_t>(M - 1) * LANES + l] * phif_hi[l] +
+                V[static_cast<size_t>(M - 2) * LANES + l] * phif_lo[l];
+      }
+      for (int i = 0; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l) ps[l] += V[o + l] * PHIS[o + l];
+      }
+      // W = (I - gamma S)^-1 V, Thomas, recurrence carried in a register.
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+      {
+        using S = OUSimd<LANES>;
+        using Vv = typename S::Vec;
+        Vv y = S::mul(S::load(&V[0]), S::load(&DINV[0]));
+        S::store(&W[0], y);
+        for (int i = 1; i < M; ++i) {
+          const size_t o = static_cast<size_t>(i) * LANES;
+          y = S::mul(S::fnmadd(S::load(&SUB[o]), y, S::load(&V[o])),
+                     S::load(&DINV[o]));
+          S::store(&W[o], y);
+        }
+        Vv z = S::load(&W[static_cast<size_t>(M - 1) * LANES]);
+        for (int i = M - 2; i >= 0; --i) {
+          const size_t o = static_cast<size_t>(i) * LANES;
+          z = S::fnmadd(S::load(&CPRIME[o]), z, S::load(&W[o]));
+          S::store(&W[o], z);
+        }
+      }
+#else
+      for (size_t l = 0; l < LANES; ++l) W[l] = V[l] * DINV[l];
+      for (int i = 1; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l)
+          W[o + l] = (V[o + l] - SUB[o + l] * W[o - LANES + l]) * DINV[o + l];
+      }
+      for (int i = M - 2; i >= 0; --i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l)
+          W[o + l] -= CPRIME[o + l] * W[o + LANES + l];
+      }
+#endif
+      for (int i = 0; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l) al[l] += V[o + l] * W[o + l];
+      }
+      for (int i = 0; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l) {
+          const double u = W[o + l] - al[l] * V[o + l] - bprev[l] * VP[o + l];
+          W[o + l] = u;
+          bn[l] += u * u;
+        }
+      }
+      for (size_t l = 0; l < LANES; ++l) bn[l] = std::sqrt(bn[l]);
+
+      alignas(64) double rb[LANES] = {};
+      for (size_t l = 0; l < LANES; ++l) {
+        if (!live[l]) continue;
+        alpha[l].push_back(al[l]);
+        gfv[l].push_back(pf[l]);
+        gsv[l].push_back(ps[l]);
+        m_avail[l] = j + 1;
+        if (!(bn[l] > 1e-13) || !std::isfinite(bn[l])) {
+          // Invariant subspace: this lane is finished and exact.  Zero its
+          // vector so the shared sweeps keep producing zeros for it.
+          live[l] = false;
+          rb[l] = 0.0;
+          bprev[l] = 0.0;
+        } else {
+          beta[l].push_back(bn[l]);
+          rb[l] = 1.0 / bn[l];
+          bprev[l] = bn[l];
+        }
+      }
+      for (int i = 0; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * LANES;
+        for (size_t l = 0; l < LANES; ++l) {
+          VP[o + l] = V[o + l];
+          V[o + l] = W[o + l] * rb[l];
+        }
+      }
+    }
+    built = m;
+
+    // --- reduce and test the lanes that are still under examination.  This is
+    // the only per-lane work in the loop, which is why a lane that has already
+    // settled costs nothing to carry: its vectors keep being produced by the
+    // shared sweeps above whether it wants them or not.
+    bool more = false;
+    for (size_t l = 0; l < LANES; ++l) {
+      if (done[l]) continue;
+      const int mm = std::min(m, m_avail[l]);
+      if (mm <= last_judged[l]) { done[l] = true; continue; }
+      // A lane whose space closed on itself has no higher rung to climb to, so
+      // its test is final either way.
+      const bool invariant = m_avail[l] < m;
+      red.alpha.assign(alpha[l].begin(), alpha[l].begin() + mm);
+      red.beta = beta[l];
+      red.gf.assign(gfv[l].begin(), gfv[l].begin() + mm);
+      red.gs.assign(gsv[l].begin(), gsv[l].begin() + mm);
+      fpe::FPE_ModalCurve rung;
+      rung.t0 = t0_vec[l];
+      rung.surv0 = out[l].surv0;
+      rung.span = out[l].span;
+      last_judged[l] = mm;
+      if (!fpe::fpe_modal_reduce(red, mm, beta0[l], gamma[l], rung)) {
+        out[l].status = fpe::FPE_MODAL_QL_FAILED;
+        done[l] = true;
+        live[l] = false;
+        continue;
+      }
+      int status = fpe::FPE_MODAL_NOT_CONVERGED;
+      const fpe::FPE_ModalLadder::Verdict v =
+        ladder[l].test(rung, probe[l], invariant, m >= m_cap, status);
+      if (v == fpe::FPE_ModalLadder::ACCEPT) {
+        rung.status = fpe::FPE_MODAL_OK;
+        out[l] = rung;
+        done[l] = true;
+        live[l] = false;
+      } else if (v == fpe::FPE_ModalLadder::REFUSE) {
+        out[l].status = status;
+        done[l] = true;
+        live[l] = false;
+      } else {
+        more = true;
+      }
+    }
+    if (!more || m >= m_cap) break;
+    m = std::min(fpe::fpe_modal_next_rung(m), m_cap);
+  }
+
+  for (size_t l = 0; l < LANES; ++l) {
+    if (l < n && out[l].status != fpe::FPE_MODAL_OK) {
+      out[l].m = 0;
+      out[l].lam.clear();
+      out[l].cf.clear();
+      out[l].cs.clear();
+    }
+  }
+}
+
+// Write an accepted modal curve into a cache entry, evaluated exactly at the
+// times the caller asked for.
+//
+// The ladder judged the curve at a bounded set of probes, so this is where a
+// key with thousands of distinct response times gets checked at all of them:
+// the density must be positive and must not have been obtained by more than
+// FPE_MODAL_CANCEL of cancellation, or the entry is refused and the caller
+// marches the key instead.  A refusal here is cheap -- the alternative would be
+// a log likelihood of LOG_FLOOR at a trial whose true value is ordinary.
+//
+// Below the seed time the density is zero and the survivor is the mass the seed
+// already carries, which is the same convention fpe::grid_lookup() applies to a
+// marched grid.
+inline bool modal_fill_entry(const fpe::FPE_ModalCurve& mc, const Key& p,
+                             double t_max, const std::vector<double>& queries,
+                             Entry& out) {
+  if (!mc.ok()) return false;
+  std::vector<double> t = queries;
+  std::sort(t.begin(), t.end());
+  t.erase(std::unique(t.begin(), t.end()), t.end());
+  const size_t n = t.size();
+  std::vector<double> lp(n), ls(n);
+  double surv_prev = std::min(1.0, std::max(0.0, mc.surv0));
+  // t is sorted, so the times at or below the seed are a prefix; the rest go
+  // through one mode-major sweep rather than one modal sum each.
+  size_t lead = 0;
+  while (lead < n && !(t[lead] > mc.t0)) {
+    lp[lead] = LOG_FLOOR;
+    ls[lead] = safe_log(surv_prev);
+    ++lead;
+  }
+  std::vector<double> dt(n - lead), f, sv, amp;
+  for (size_t i = lead; i < n; ++i) dt[i - lead] = t[i] - mc.t0;
+  mc.at_many(dt, f, sv, amp);
+  for (size_t i = lead; i < n; ++i) {
+    const size_t j = i - lead;
+    if (!(f[j] > 0.0) || !std::isfinite(f[j]) || !(sv[j] > 0.0) ||
+        !std::isfinite(sv[j]) || amp[j] > fpe::FPE_MODAL_CANCEL) {
+      return false;
+    }
+    // The march clamps its survivor to be non-increasing and bounded by the
+    // seed mass; the modal survivor is monotone to Krylov accuracy, and
+    // clamping it the same way keeps a consumer's log/interpolation from ever
+    // seeing it drift the other way.
+    double s = sv[j];
+    if (s > surv_prev) s = surv_prev;
+    surv_prev = s;
+    lp[i] = safe_log(f[j]);
+    ls[i] = safe_log(s);
+  }
+  out.key = p;
+  out.t_max = t_max;
+  out.complete_grid = false;
+  out.t = std::move(t);
+  out.log_pdf = std::move(lp);
+  out.log_S = std::move(ls);
+  return true;
+}
+
+// Width dispatcher, matching fpe_solve_batch_ou()'s: a chunk narrower than the
+// widest vector wastes bandwidth on padding lanes it will discard, and the
+// Lanczos is bandwidth-bound.  A chunk of ONE goes through the scalar builder
+// instead of a one-in-eight vector one -- measured 79 us against 146 us,
+// because the SoA layout carries LANES times the traffic through a recurrence
+// that gains nothing from the extra lanes.
+template <class Model>
+inline void fpe_modal_batch_ou(const std::vector<Model>& models,
+                               const std::vector<std::vector<double>>& q0_vec,
+                               const std::vector<double>& t0_vec,
+                               const std::vector<double>& t_max_vec,
+                               const std::vector<std::vector<double>>& queries,
+                               const fpe::FPE_Mesh& g,
+                               fpe::FPE_ModalWork& scratch,
+                               std::vector<fpe::FPE_ModalCurve>& out) {
+  const size_t n = models.size();
+  if (n == 1) {
+    out.assign(1, fpe::FPE_ModalCurve());
+    std::vector<double> probe;
+    fpe::fpe_modal_probes(queries[0], t0_vec[0], probe);
+    if (probe.empty()) {
+      out[0].status = fpe::FPE_MODAL_SEED_UNUSABLE;
+      return;
+    }
+    fpe::FPE_Op op;
+    fpe::build_op(models[0], 0.0, g, op);
+    out[0] = fpe::fpe_modal_build(models[0], op, g, q0_vec[0], t0_vec[0],
+                                  std::max(t_max_vec[0] - t0_vec[0], 1e-9),
+                                  probe, scratch);
+    return;
+  }
+#if defined(__AVX512F__) && defined(__FMA__)
+  if (n <= 4) {
+    fpe_modal_batch<Model, 4>(models, q0_vec, t0_vec, t_max_vec, queries, g,
+                              scratch, out);
+    return;
+  }
+  fpe_modal_batch<Model, 8>(models, q0_vec, t0_vec, t_max_vec, queries, g,
+                            scratch, out);
+#else
+  fpe_modal_batch<Model, 4>(models, q0_vec, t0_vec, t_max_vec, queries, g,
+                            scratch, out);
+#endif
+}
+
 inline bool entry_has_queries(const Entry& entry,
                               const std::vector<double>& query_times) {
   if (entry.complete_grid) return true;
@@ -1974,6 +2320,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       pulse_keys.push_back(k_idx);
     } else {
       out_cache_indices[k_idx] = cache_get(C, keys[k_idx], horizons[k_idx]);
+      ++C.march_solves;
     }
   }
 
@@ -1982,6 +2329,28 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
   if (standard_keys.empty() && pulse_keys.empty()) return;
   fpe::FPE_Mesh mesh;
   mesh.build(C.grid.nx, C.grid.grade);
+
+  // Insert (or replace) one solved key.  Shared by the modal route and the
+  // march, which differ in how they produce an Entry and not in where it goes.
+  auto store_entry = [&](size_t k_idx, const Key& p, Entry&& entry) {
+    int existing = -1;
+    auto it = C.index.find(p);
+    if (it != C.index.end()) existing = it->second;
+    if (existing >= 0) {
+      C.e[existing] = std::move(entry);
+      out_cache_indices[k_idx] = existing;
+    } else if (C.n_entries < C.e.size()) {
+      const size_t idx = C.n_entries++;
+      C.e[idx] = std::move(entry);
+      C.index[p] = static_cast<int>(idx);
+      out_cache_indices[k_idx] = static_cast<int>(idx);
+    } else {
+      C.e.push_back(std::move(entry));
+      C.index[p] = static_cast<int>(C.e.size() - 1);
+      out_cache_indices[k_idx] = static_cast<int>(C.e.size() - 1);
+      C.n_entries = C.e.size();
+    }
+  };
 
   auto process_batches = [&](std::vector<size_t> group, auto make_model,
                              auto solve_full, auto solve_sparse) {
@@ -1997,7 +2366,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
     using Model = std::decay_t<decltype(
         make_model(keys[group[0]], horizons[group[0]]))>;
     for (size_t b = 0; b < group.size(); b += OU_BATCH_LANES) {
-      const size_t chunk_size = std::min(OU_BATCH_LANES, group.size() - b);
+      size_t chunk_size = std::min(OU_BATCH_LANES, group.size() - b);
       std::vector<Model> models(chunk_size);
       std::vector<std::vector<double>> q0_vec(chunk_size);
       std::vector<double> t0_vec(chunk_size);
@@ -2008,8 +2377,10 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       size_t num_chunk_queries = 0;
       size_t num_chunk_steps = 0;
 
+      std::vector<size_t> lane_key(chunk_size);
       for (size_t l = 0; l < chunk_size; ++l) {
         const size_t k_idx = group[b + l];
+        lane_key[l] = k_idx;
         const Key& p = keys[k_idx];
         models[l] = make_model(p, horizons[k_idx]);
         const double zlo = p.log_state ? p.zlo : 0.0;
@@ -2027,7 +2398,97 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
         }
       }
 
-      if (chunk_size > 1) {
+      // ~~~ modal route ~~~
+      //
+      // A fixed boundary makes the generator autonomous, and then the whole
+      // solve is exp((t - t0) L) q0 read through two functionals -- which is
+      // what fpe_modal_batch_ou() computes without discretising time at all.
+      // It is faster on long horizons and refined grids, and more accurate
+      // against the identical spatial discretisation because the march's
+      // O(dt^2) error is absent.  Against a spatially converged reference the
+      // result is parameter-dependent at the shipped nx: spatial and temporal
+      // errors can cancel, which is why this route is opt-in by default.
+      //
+      // It needs the times the answer is wanted at, both to judge convergence
+      // where it matters and because its output is those times rather than a
+      // grid, so it is attempted only on the sparse-query path.  Keys it
+      // refuses -- see fpe_modal.h for what makes it refuse -- fall through to
+      // the march below, which is why the chunk is compacted rather than
+      // abandoned.
+      if (query_times != nullptr && C.modal_enabled) {
+        bool all_static = true;
+        for (size_t l = 0; l < chunk_size; ++l)
+          if (!models[l].static_op()) all_static = false;
+        if (all_static) {
+          std::vector<fpe::FPE_ModalCurve> curves;
+          fpe_modal_batch_ou(models, q0_vec, t0_vec, t_max_vec, chunk_queries,
+                             mesh, C.modal_work, curves);
+          size_t kept = 0;
+          for (size_t l = 0; l < chunk_size; ++l) {
+            const size_t k_idx = lane_key[l];
+            Entry entry;
+            if (l < curves.size() &&
+                modal_fill_entry(curves[l], keys[k_idx], horizons[k_idx],
+                                 chunk_queries[l], entry)) {
+              ++C.modal_solves;
+              store_entry(k_idx, keys[k_idx], std::move(entry));
+              continue;
+            }
+            if (kept != l) {
+              models[kept] = std::move(models[l]);
+              q0_vec[kept] = std::move(q0_vec[l]);
+              t0_vec[kept] = t0_vec[l];
+              t_max_vec[kept] = t_max_vec[l];
+              nt_vec[kept] = nt_vec[l];
+              chunk_queries[kept] = std::move(chunk_queries[l]);
+              lane_key[kept] = k_idx;
+            }
+            ++kept;
+          }
+          if (kept == 0) continue;
+          if (kept != chunk_size) {
+            models.resize(kept);
+            q0_vec.resize(kept);
+            t0_vec.resize(kept);
+            t_max_vec.resize(kept);
+            nt_vec.resize(kept);
+            chunk_queries.resize(kept);
+            lane_key.resize(kept);
+            chunk_size = kept;
+            num_chunk_queries = 0;
+            num_chunk_steps = 0;
+            for (size_t l = 0; l < chunk_size; ++l) {
+              num_chunk_queries += chunk_queries[l].size();
+              num_chunk_steps += static_cast<size_t>(nt_vec[l]);
+            }
+          }
+        }
+      }
+
+      // A chunk of ONE is worth putting through the lane solver only when the
+      // operator MOVES.  The two routes solve the same march; what separates
+      // them is where each spends its time.
+      //
+      // With a fixed boundary the operator is built once and factorised once
+      // per time block, so the march is nothing but the Thomas recurrence --
+      // dependency-bound, so the three idle lanes buy no throughput, while the
+      // structure-of-arrays layout carries LANES times the memory traffic
+      // through it (eight M-by-LANES buffers against six M-vectors that fit in
+      // L1).  Measured: 0.94-0.96x, i.e. a 4-6% LOSS on a single fixed ROU key,
+      // at both nx = 512 output modes and every query count tried.
+      //
+      // With a collapsing boundary the operator is rebuilt at EVERY step, and
+      // that build is one exp() per face on the graded mesh.  build_op_lanes()
+      // answers those from a vector polynomial (exp_nonpos_v) where the scalar
+      // build_op() calls libm once per face, and the same holds for
+      // set_all_lane_factors() against the scalar elimination.  That is worth
+      // more than the wasted lanes cost: measured 1.19x on a single collapsing
+      // key, and it is what makes the tail chunk of a 9- or 17-key collapsing
+      // batch stop dominating the batch.
+      //
+      // ROUp is always moving, so it always takes the lane route.
+      const bool use_lanes = chunk_size > 1 || !models[0].static_op();
+      if (use_lanes) {
         std::vector<fpe::FPE_Result> batch_res;
         std::vector<OUQueryResult> query_res;
         // Sparse bookkeeping is cheaper only while requested times are a small
@@ -2045,7 +2506,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
         }
 
         for (size_t l = 0; l < chunk_size; ++l) {
-          const size_t k_idx = group[b + l];
+          const size_t k_idx = lane_key[l];
           const Key& p = keys[k_idx];
 
           Entry entry;
@@ -2070,28 +2531,13 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
             entry.grid_idx.build(entry.t);
           }
 
-          int existing = -1;
-          auto it = C.index.find(p);
-          if (it != C.index.end()) existing = it->second;
-
-          if (existing >= 0) {
-            C.e[existing] = std::move(entry);
-            out_cache_indices[k_idx] = existing;
-          } else if (C.n_entries < C.e.size()) {
-            const size_t idx = C.n_entries++;
-            C.e[idx] = std::move(entry);
-            C.index[p] = static_cast<int>(idx);
-            out_cache_indices[k_idx] = static_cast<int>(idx);
-          } else {
-            C.e.push_back(std::move(entry));
-            C.index[p] = static_cast<int>(C.e.size() - 1);
-            out_cache_indices[k_idx] = static_cast<int>(C.e.size() - 1);
-            C.n_entries = C.e.size();
-          }
+          store_entry(k_idx, p, std::move(entry));
+          ++C.march_solves;
         }
       } else {
-        const size_t k_idx = group[b];
+        const size_t k_idx = lane_key[0];
         out_cache_indices[k_idx] = cache_get(C, keys[k_idx], horizons[k_idx]);
+        ++C.march_solves;
       }
     }
   };

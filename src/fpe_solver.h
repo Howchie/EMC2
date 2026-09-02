@@ -34,6 +34,9 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 namespace fpe {
 
@@ -80,6 +83,74 @@ inline double bern_from_exp(double z, double e) {
 // so the upwind and downwind face weights cost one transcendental between them,
 // not two.
 inline double bern_neg(double bz, double z) { return bz + z; }
+
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+// exp(x) for x <= 0 only.  Cephes-style: x = n*ln2 + r with |r| <= ln2/2, a
+// degree-13 Taylor polynomial on r (truncation ~4e-18 there), then scale by
+// 2^n through the exponent field.  Arguments below -708 flush to zero, which is
+// where fpe::bern()'s own +/-700 branches land as well.
+//
+// Only AVX-512F / AVX2 instructions are used -- no AVX512DQ -- so this compiles
+// wherever the surrounding lane march does.
+#if defined(__AVX512F__)
+inline __m512d exp_nonpos_v(__m512d x) {
+  const __m512d lim = _mm512_set1_pd(-708.0);
+  const __mmask8 flush = _mm512_cmp_pd_mask(x, lim, _CMP_LT_OQ);
+  x = _mm512_max_pd(x, lim);
+  const __m512d n =
+      _mm512_roundscale_pd(_mm512_mul_pd(x, _mm512_set1_pd(1.4426950408889634074)), 0x08);
+  __m512d r = _mm512_fnmadd_pd(n, _mm512_set1_pd(6.93147180559945286227e-01), x);
+  r = _mm512_fnmadd_pd(n, _mm512_set1_pd(2.31904681384629956e-17), r);
+  __m512d p = _mm512_set1_pd(1.6059043836821613e-10);   // 1/13!
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.0876756987868099e-09));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.5052108385441718e-08));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-07));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.7557319223985893e-06));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(2.4801587301587302e-05));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.9841269841269841e-04));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.3888888888888889e-03));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(8.3333333333333333e-03));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(4.1666666666666667e-02));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.6666666666666667e-01));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(5.0e-01));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+  p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+  const __m512i ni = _mm512_cvtepi32_epi64(_mm512_cvttpd_epi32(n));
+  const __m512d s = _mm512_castsi512_pd(
+      _mm512_slli_epi64(_mm512_add_epi64(ni, _mm512_set1_epi64(1023)), 52));
+  return _mm512_mask_blend_pd(flush, _mm512_mul_pd(p, s), _mm512_setzero_pd());
+}
+#endif
+inline __m256d exp_nonpos_v(__m256d x) {
+  const __m256d lim = _mm256_set1_pd(-708.0);
+  const __m256d keep = _mm256_cmp_pd(x, lim, _CMP_GE_OQ);
+  x = _mm256_max_pd(x, lim);
+  const __m256d n = _mm256_round_pd(
+      _mm256_mul_pd(x, _mm256_set1_pd(1.4426950408889634074)),
+      _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  __m256d r = _mm256_fnmadd_pd(n, _mm256_set1_pd(6.93147180559945286227e-01), x);
+  r = _mm256_fnmadd_pd(n, _mm256_set1_pd(2.31904681384629956e-17), r);
+  __m256d p = _mm256_set1_pd(1.6059043836821613e-10);
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.0876756987868099e-09));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.5052108385441718e-08));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-07));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.7557319223985893e-06));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(2.4801587301587302e-05));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.9841269841269841e-04));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.3888888888888889e-03));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(8.3333333333333333e-03));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(4.1666666666666667e-02));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.6666666666666667e-01));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(5.0e-01));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
+  p = _mm256_fmadd_pd(p, r, _mm256_set1_pd(1.0));
+  const __m256i ni = _mm256_cvtepi32_epi64(_mm256_cvttpd_epi32(n));
+  const __m256d s = _mm256_castsi256_pd(
+      _mm256_slli_epi64(_mm256_add_epi64(ni, _mm256_set1_epi64x(1023)), 52));
+  return _mm256_and_pd(keep, _mm256_mul_pd(p, s));
+}
+#endif
+
 
 // Tridiagonal system (Thomas algorithm), split into factor and solve.
 //   sub[i] * x[i-1] + dia[i] * x[i] + sup[i] * x[i+1] = rhs[i]
@@ -769,6 +840,7 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
     // CN full step (c = step/2 = dt/2) share the same c, so the whole block runs
     // off a single elimination.
     if (stat) set_lhs(0.5 * dtb, *op_old);
+    bool early_exit = false;
     for (int k = 0; k < sched.steps[b]; ++k, ++done) {
       if (done < n_rann) {
         do_step(0.5 * dtb, true);
@@ -776,7 +848,12 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
       } else {
         do_step(dtb, false);
       }
+      if (surv_prev <= 1e-305) {
+        early_exit = true;
+        break;
+      }
     }
+    if (early_exit) break;
   }
 
   return res;

@@ -122,6 +122,11 @@ test_that("sparse finite-time output reproduces the full solver grid", {
     s = 1
   )
 
+  # Both routes on the march, so this tests the sparse bookkeeping and nothing
+  # else.  The modal propagator answers only the sparse path and carries no
+  # time-discretisation error at all, so with it live the two routes are not
+  # supposed to agree to 1e-13 -- see the modal tests below.
+  withr::local_options(emc2.rou_modal = FALSE)
   withr::local_options(emc2.rou_sparse_output = FALSE)
   full_pdf <- EMC2:::dROU(rt, pars)
   full_cdf <- EMC2:::pROU(rt, pars)
@@ -131,6 +136,104 @@ test_that("sparse finite-time output reproduces the full solver grid", {
 
   expect_equal(sparse_pdf, full_pdf, tolerance = 1e-13)
   expect_equal(sparse_cdf, full_cdf, tolerance = 1e-13)
+})
+
+# ---------------------------------------------------------------------------
+# Modal propagator (src/fpe_modal.h): the fixed-boundary route that replaces the
+# Crank-Nicolson march with exp((t - t0) L) q0 read through the same two
+# functionals.  It is exact in time, so the tests below pin it against a march
+# refined in dt rather than against the shipped one.
+# ---------------------------------------------------------------------------
+test_that("the modal propagator agrees with the march to the march's own accuracy", {
+  withr::local_options(emc2.rou_modal = TRUE)
+  rt <- c(0.15, 0.28, 0.44, 0.66, 0.95, 1.3, 1.6, 1.95)
+  pars <- cbind(
+    v = seq(1.0, 2.4, length.out = 8),
+    k = seq(0.4, 1.8, length.out = 8),
+    B = rep(c(0.9, 1.1), 4),
+    A = rep(c(0, 0.35), 4),
+    t0 = 0,
+    s = 1
+  )
+
+  modal_pdf <- EMC2:::dROU(rt, pars)
+  modal_cdf <- EMC2:::pROU(rt, pars)
+
+  march_pdf <- withr::with_options(
+    list(emc2.rou_modal = FALSE), EMC2:::dROU(rt, pars))
+  march_cdf <- withr::with_options(
+    list(emc2.rou_modal = FALSE), EMC2:::pROU(rt, pars))
+
+  # The two routes differ by the march's O(dt^2) error, which at the shipped
+  # dt is a few parts in 10^4 -- present, but far too small to be a modelling
+  # difference.
+  expect_equal(modal_pdf, march_pdf, tolerance = 5e-3)
+  expect_equal(modal_cdf, march_cdf, tolerance = 5e-3)
+
+  # And the modal answer is the one a refined march converges TOWARD: a march
+  # at a hundredth of the time step moves onto the modal values, not away from
+  # them.  This is the whole claim of the module, so it is asserted rather than
+  # assumed.
+  fine_pdf <- withr::with_options(
+    list(emc2.rou_modal = FALSE, emc2.fpe_dt = 4e-5), EMC2:::dROU(rt, pars))
+  fine_cdf <- withr::with_options(
+    list(emc2.rou_modal = FALSE, emc2.fpe_dt = 4e-5), EMC2:::pROU(rt, pars))
+  expect_lt(max(abs(log(modal_pdf / fine_pdf))),
+            max(abs(log(march_pdf / fine_pdf))))
+  expect_lt(max(abs(modal_cdf - fine_cdf)), max(abs(march_cdf - fine_cdf)))
+})
+
+test_that("the modal propagator gives the same answer batched and one key at a time", {
+  withr::local_options(emc2.rou_modal = TRUE)
+  rt <- c(0.2, 0.35, 0.5, 0.7, 0.9, 1.15, 1.45, 1.8)
+  pars <- cbind(
+    v = seq(1.1, 2.6, length.out = 8),
+    k = seq(0.3, 2.1, length.out = 8),
+    B = rep(c(0.8, 1.2), 4),
+    A = rep(c(0, 0.4), 4),
+    t0 = 0,
+    s = 1
+  )
+  # Eight keys share one SIMD chunk; one key takes the scalar builder.  The
+  # Lanczos recurrences are the same arithmetic in a different order, so this
+  # is a real check that the lane-batched build carries no lane bookkeeping
+  # error, not a tautology.
+  batched <- EMC2:::dROU(rt, pars)
+  scalar <- vapply(seq_along(rt), function(i) {
+    EMC2:::dROU(rt[i], pars[i, , drop = FALSE])
+  }, numeric(1))
+  expect_equal(batched, scalar, tolerance = 1e-8)
+
+  batched_c <- EMC2:::pROU(rt, pars)
+  scalar_c <- vapply(seq_along(rt), function(i) {
+    EMC2:::pROU(rt[i], pars[i, , drop = FALSE])
+  }, numeric(1))
+  expect_equal(batched_c, scalar_c, tolerance = 1e-8)
+})
+
+test_that("a collapsing boundary is left to the march", {
+  withr::local_options(emc2.rou_modal = TRUE)
+  # The modal route needs an autonomous generator, so a moving boundary must
+  # not take it -- and turning it off must therefore change nothing at all.
+  rt <- c(0.25, 0.5, 0.8, 1.2)
+  pars <- cbind(v = c(1.4, 1.8, 2.2, 2.6), k = 1.0, B = 1.0, A = 0.3,
+                t0 = 0, s = 1, Binf = 0.35, tau = 0.4, pw = 0)
+  on_pdf <- EMC2:::dROU(rt, pars, kind = "exponential")
+  off_pdf <- withr::with_options(
+    list(emc2.rou_modal = FALSE),
+    EMC2:::dROU(rt, pars, kind = "exponential"))
+  expect_identical(on_pdf, off_pdf)
+})
+
+test_that("the established march remains the default", {
+  withr::local_options(list(emc2.rou_modal = NULL))
+  rt <- c(0.25, 0.5, 0.8, 1.2)
+  pars <- cbind(v = c(1.4, 1.8, 2.2, 2.6), k = 1, B = 1, A = 0.3,
+                t0 = 0.15, s = 1)
+  default <- EMC2:::dROU(rt, pars)
+  march <- withr::with_options(
+    list(emc2.rou_modal = FALSE), EMC2:::dROU(rt, pars))
+  expect_identical(default, march)
 })
 
 test_that(".rfun_ROU respects emc2.cpp_rfun option and falls back to R simulator", {

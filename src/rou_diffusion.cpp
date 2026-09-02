@@ -86,17 +86,20 @@ inline bool roup_local_keys_cpp(int par_kind, double v_S, double transient,
 inline int roup_group_cpp(const fperace::Key& p, double tt,
                           std::vector<fperace::Key>& keys,
                           std::vector<double>& horizon,
-                          std::vector<std::vector<double>>& query_times) {
-  int g = -1;
-  for (size_t j = 0; j < keys.size(); ++j) {
-    if (keys[j] == p) { g = static_cast<int>(j); break; }
-  }
-  if (g < 0) {
+                          std::vector<std::vector<double>>& query_times,
+                          std::unordered_map<fperace::Key, int,
+                                             fperace::KeyHash>& index) {
+  auto found = index.find(p);
+  int g;
+  if (found == index.end()) {
+    g = static_cast<int>(keys.size());
+    index.emplace(p, g);
     keys.push_back(p);
     horizon.push_back(tt);
     query_times.push_back(std::vector<double>(1, tt));
-    return static_cast<int>(keys.size() - 1);
+    return g;
   }
+  g = found->second;
   horizon[g] = std::max(horizon[g], tt);
   query_times[g].push_back(tt);
   return g;
@@ -137,6 +140,20 @@ Rcpp::List rou_to_rate_vec(int par_kind, NumericVector p1, NumericVector p2,
 // Grouped exactly as the batch kernels group: distinct parameter tuples become
 // distinct solves, each taken to the largest time any of its rows needs.
 // ---------------------------------------------------------------------------
+// The standalone dROU/pROU entry points build their own cache rather than
+// reaching one through a ContextForRaceModels, so the two switches that change
+// what a solve DOES have to be read here as well as in rou_configure_cache().
+void rou_read_cache_options(fperace::SolveCache& C) {
+  auto flag = [](const char* nm, bool& dst) {
+    SEXP v = Rf_GetOption1(Rf_install(nm));
+    if (v == R_NilValue || Rf_length(v) < 1) return;
+    const int x = Rf_asLogical(v);
+    if (x != NA_LOGICAL) dst = (x != 0);
+  };
+  flag("emc2.rou_sparse_output", C.sparse_raw_output);
+  flag("emc2.rou_modal", C.modal_enabled);
+}
+
 // [[Rcpp::export]]
 Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k,
                            NumericVector B, NumericVector A, NumericVector t0,
@@ -156,33 +173,31 @@ Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k,
   NumericVector pdf(n, 0.0), cdf(n, 0.0);
   fperace::SolveCache C;
   C.grid = rou_grid(nx, dt_target, grade, tgrade);
-  SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
-  if (sparse != R_NilValue && Rf_length(sparse) > 0) {
-    const int enabled = Rf_asLogical(sparse);
-    if (enabled != NA_LOGICAL) C.sparse_raw_output = enabled;
-  }
+  rou_read_cache_options(C);
 
   // Pass 1: group and find each group's horizon.
   std::vector<fperace::Key> keys;
   std::vector<double> horizon;
   std::vector<std::vector<double>> query_times;
   std::vector<int> grp(n, -1);
+  std::unordered_map<fperace::Key, int, fperace::KeyHash> key_index;
+  key_index.reserve(static_cast<size_t>(n));
   for (int i = 0; i < n; ++i) {
     const double tt = rt[i] - t0[i];
     if (!R_finite(tt) || tt <= 0.0) continue;
     fperace::Key p;
     if (!fperace::rou_key(v[i], k[i], B[i], A[i], s[i],
                           rou_bnd_at(bkind, Binf, tau, pw, i), p)) continue;
-    int g = -1;
-    for (size_t j = 0; j < keys.size(); ++j) {
-      if (keys[j] == p) { g = static_cast<int>(j); break; }
-    }
-    if (g < 0) {
+    auto found = key_index.find(p);
+    int g;
+    if (found == key_index.end()) {
+      g = static_cast<int>(keys.size());
+      key_index.emplace(p, g);
       keys.push_back(p);
       horizon.push_back(tt);
       query_times.push_back(std::vector<double>(1, tt));
-      g = static_cast<int>(keys.size()) - 1;
     } else {
+      g = found->second;
       if (tt > horizon[g]) horizon[g] = tt;
       query_times[g].push_back(tt);
     }
@@ -533,16 +548,16 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
   C.par_kind = par_kind;
   C.roup_local = pooling == 1;
   C.grid = rou_grid(nx, dt_target, grade, tgrade);
-  SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
-  if (sparse != R_NilValue && Rf_length(sparse) > 0) {
-    const int enabled = Rf_asLogical(sparse);
-    if (enabled != NA_LOGICAL) C.sparse_raw_output = enabled;
-  }
+  rou_read_cache_options(C);
 
   std::vector<fperace::Key> keys, keys_s, keys_t;
   std::vector<double> horizon, horizon_s, horizon_t;
   std::vector<std::vector<double>> query_times, query_s, query_t;
   std::vector<int> grp(n, -1), grp_s(n, -1), grp_t(n, -1);
+  std::unordered_map<fperace::Key, int, fperace::KeyHash> index, index_s, index_t;
+  index.reserve(static_cast<size_t>(n));
+  index_s.reserve(static_cast<size_t>(n));
+  index_t.reserve(static_cast<size_t>(n));
   for (int i = 0; i < n; ++i) {
     const double tt = rt[i] - t0[i];
     if (!R_finite(tt) || tt <= 0.0) continue;
@@ -552,14 +567,14 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
       if (!roup_local_keys_cpp(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
                                k[i], B[i], A[i], s[i], bs, ks, kt, hs, ht))
         continue;
-      if (hs) grp_s[i] = roup_group_cpp(ks, tt, keys_s, horizon_s, query_s);
-      if (ht) grp_t[i] = roup_group_cpp(kt, tt, keys_t, horizon_t, query_t);
+      if (hs) grp_s[i] = roup_group_cpp(ks, tt, keys_s, horizon_s, query_s, index_s);
+      if (ht) grp_t[i] = roup_group_cpp(kt, tt, keys_t, horizon_t, query_t, index_t);
     } else {
       fperace::Key p;
       if (!fperace::roup_key_par(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
                                  k[i], B[i], A[i], s[i], bs, p))
         continue;
-      grp[i] = roup_group_cpp(p, tt, keys, horizon, query_times);
+      grp[i] = roup_group_cpp(p, tt, keys, horizon, query_times, index);
     }
   }
   for (auto* qv : {&query_times, &query_s, &query_t}) {
