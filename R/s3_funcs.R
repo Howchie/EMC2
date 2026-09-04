@@ -1283,11 +1283,19 @@ plot_design.emc <- function(x, data = NULL, factors = NULL, plot_factor = NULL, 
 #' @export
 mapped_pars.emc <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
                                   covariates=NULL, data = NULL, use_data = TRUE,
-                                  n_covariates = 10, ...){
-  if(is.null(p_vector)) p_vector <- credint(x, probs = .5)[[1]]
+                                  n_covariates = 10, group_design = NULL, ...){
+  if (is.null(group_design)) group_design <- get_group_design(x)
+  if(is.null(p_vector)) {
+    # With a group design the fitted coefficients live in theta_beta.  The
+    # ordinary mu summary is an implied population mean and therefore cannot
+    # show differences driven by a group-level factor.
+    selection <- if (is.null(group_design)) "mu" else "beta"
+    p_vector <- credint(x, selection = selection, probs = .5)[[1]]
+  }
   if (isTRUE(use_data) && is.null(data)) data <- get_data(x)
   design <- get_design(x)
   mapped_pars(design, p_vector, model = model, digits = digits, remove_subjects=remove_subjects,
+              group_design = group_design,
               covariates=covariates, data = data, use_data = use_data,
               n_covariates = n_covariates, ...)
 }

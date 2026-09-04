@@ -210,8 +210,9 @@ int bou_bnd_kind_from_type(const std::string& type_std) {
 }
 
 bool bou_anchor_at_z_from_type(const std::string& type_std) {
-  return type_std.find("BOU_START") != std::string::npos ||
-         type_std.find("_START") != std::string::npos;
+  return type_std.rfind("BOU", 0) == 0 &&
+         type_std.size() >= 6 &&
+         type_std.compare(type_std.size() - 6, 6, "_START") == 0;
 }
 
 // Raw-buffer variant for DDM to skip materialization and allocations.

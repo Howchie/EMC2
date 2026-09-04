@@ -639,10 +639,12 @@ plot_design.emc.prior <- function(x, data = NULL, factors = NULL, plot_factor = 
 #' @export
 mapped_pars.emc.prior <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
                                    covariates=NULL, data = NULL, use_data = TRUE,
-                                   n_covariates = 10, ...){
+                                   n_covariates = 10, group_design = NULL, ...){
+  if (is.null(group_design)) group_design <- get_group_design(x)
   if(is.null(p_vector)) p_vector <- x$theta_mu_mean
   design <- get_design(x)
   mapped_pars(design, p_vector, model = model, digits = digits, remove_subjects=remove_subjects,
+              group_design = group_design,
               covariates=covariates, data = data, use_data = use_data,
               n_covariates = n_covariates, ...)
 }

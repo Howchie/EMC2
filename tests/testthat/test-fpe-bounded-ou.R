@@ -138,16 +138,19 @@ test_that("st0 uses the DDM's lower-edge convention", {
   expect_gt(max(abs(ref - centred)), 1e-1)
 })
 
-test_that("the quadrature costs exactly n_sv * n_sz solves", {
+test_that("the quadrature costs exactly n_sv * n_sz solves under start anchor, and n_sv under midpoint", {
   tt <- seq(0.2, 2.0, by = 0.05)
   Ri <- rep(2L, length(tt))
   none <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 0, 0, 0.1, 0, 1, 0)
   expect_equal(none$n_solves, 1)
   st0only <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 0, 0, 0.1, 0.1, 1, 0)
   expect_equal(st0only$n_solves, 1)
-  both <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 1, 0.3, 0.1, 0.1, 1, 0,
-                                 n_sv = 5, n_sz = 3)
-  expect_equal(both$n_solves, 15)
+  both_mid <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 1, 0.3, 0.1, 0.1, 1, 0,
+                                     n_sv = 5, n_sz = 3)
+  expect_equal(both_mid$n_solves, 5)
+  both_start <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 1, 0.3, 0.1, 0.1, 1, 0,
+                                       n_sv = 5, n_sz = 3, anchor_at_z = TRUE)
+  expect_equal(both_start$n_solves, 15)
 })
 
 test_that("the simulator produces valid draws", {
@@ -270,11 +273,13 @@ test_that("the lane batch and the scalar march agree under collapse", {
     up <- EMC2:::bou_pdf_cdf_vec(tt, rep(2L, length(tt)), 1.0, 1.2, 0.45,
                                  0, 0, 0, 0, 1, 2,
                                  bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
-                                 nx = 384, dt_target = 1 / 2000, tgrade = 32)
+                                 nx = 384, dt_target = 1 / 2000, tgrade = 32,
+                                 anchor_at_z = TRUE)
     lo <- EMC2:::bou_pdf_cdf_vec(tt, rep(1L, length(tt)), 1.0, 1.2, 0.45,
                                  0, 0, 0, 0, 1, 2,
                                  bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
-                                 nx = 384, dt_target = 1 / 2000, tgrade = 32)
+                                 nx = 384, dt_target = 1 / 2000, tgrade = 32,
+                                 anchor_at_z = TRUE)
     ok <- rs$pdf_upper > 1e-4
     expect_lt(max(abs(up$pdf[ok] / rs$pdf_upper[ok] - 1)), tol[bk],
               label = sprintf("lane vs scalar, upper, bkind=%d", bk))
@@ -346,3 +351,26 @@ test_that("BOU(boundary_collapse=) reaches the C++ likelihood with the collapse 
   expect_identical(BOU()$c_name, "BOU")
   expect_identical(BOU(boundary_collapse = "weibull")$c_name, "BOU_BWEIB")
 })
+
+test_that("BOU anchor options ('midpoint' vs 'start') configure the model and likelihood", {
+  expect_identical(BOU()$c_name, "BOU")
+  expect_identical(BOU(anchor = "midpoint")$c_name, "BOU")
+  expect_identical(BOU(anchor = "start")$c_name, "BOU_START")
+  expect_identical(BOU(boundary_collapse = "exponential", anchor = "start")$c_name, "BOU_BEXP_START")
+  expect_identical(BOU(boundary_collapse = "weibull", anchor = "start")$c_name, "BOU_BWEIB_START")
+
+  # At beta = 0, anchor is irrelevant and both anchors agree
+  tt <- seq(0.2, 1.5, by = 0.2)
+  pm_b0 <- cbind(v = 1.5, a = 1.2, Z = 0.45, SZ = 0.2, sv = 0.5, t0 = 0.15, st0 = 0.05, s = 1, beta = 0)
+  Rf <- factor(rep("upper", length(tt)), levels = c("lower", "upper"))
+  d_mid_b0 <- EMC2:::dBOU(tt, Rf, pm_b0, anchor_at_z = FALSE)
+  d_start_b0 <- EMC2:::dBOU(tt, Rf, pm_b0, anchor_at_z = TRUE)
+  expect_equal(d_mid_b0, d_start_b0, tolerance = 1e-4)
+
+  # At beta > 0 and asymmetric Z with SZ > 0, the two anchors differ
+  pm_b2 <- cbind(v = 1.5, a = 1.2, Z = 0.3, SZ = 0.2, sv = 0.5, t0 = 0.15, st0 = 0.05, s = 1, beta = 2)
+  d_mid_b2 <- EMC2:::dBOU(tt, Rf, pm_b2, anchor_at_z = FALSE)
+  d_start_b2 <- EMC2:::dBOU(tt, Rf, pm_b2, anchor_at_z = TRUE)
+  expect_gt(max(abs(d_mid_b2 - d_start_b2)), 1e-3)
+})
+

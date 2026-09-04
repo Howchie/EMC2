@@ -114,9 +114,9 @@ minimal_group_design <- function(data, group_factors, group_data){
     input_data <- data[!duplicated(data[,colnames(data) != "trials"]),]
     input_group <- unique(group_data)
     out <- vector("list", nrow(input_group))
-    for(i in 1:length(out)){
+    for(i in seq_along(out)){
       tmp <- input_data
-      for(j in 1:length(group_factors)){
+      for(j in seq_along(group_factors)){
         tmp[,group_factors[j]] <- input_group[i,j]
       }
       tmp$subjects <- i

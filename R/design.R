@@ -1677,12 +1677,18 @@ update2version <- function(emc){
 # data-backed parameter discovery in `sampled_pars()` and `make_emc()` uses
 # exactly the same definition of an observed cell.
 .restrict_to_observed_factors <- function(mapping_data, design, data,
-                                          remove_subjects = TRUE) {
+                                          remove_subjects = TRUE,
+                                          extra_factors = NULL) {
   if (is.null(data)) return(mapping_data)
   if (!is.data.frame(data)) stop("data must be a data frame")
 
   observed_factors <- names(design$Ffactors)
   if (isTRUE(remove_subjects)) observed_factors <- setdiff(observed_factors, "subjects")
+  # Group-design predictors are part of the displayed mapping data even when
+  # they are not in the subject-level formulae.  Restrict them to observed
+  # combinations when the caller supplied those columns in `data`.
+  extra_factors <- intersect(extra_factors, names(data))
+  observed_factors <- unique(c(observed_factors, extra_factors))
   missing_factors <- setdiff(observed_factors, names(data))
   if (length(missing_factors) > 0) {
     stop("data is missing design factor(s): ", paste(missing_factors, collapse = ", "))
@@ -1784,6 +1790,138 @@ update2version <- function(emc){
   out
 }
 
+# Evaluate a stacked group-level beta vector for the subjects represented in a
+# mapping data frame.  Group-design matrices are stored for the subjects used
+# to fit the model, but mapped_pars() may construct a different set of
+# (pseudo-)subjects to display.  Rebuilding each block from its original
+# formula keeps the calculation aligned with the stored contrast coding while
+# allowing those display rows to carry new factor combinations.
+.group_design_subject_pars <- function(p_vector, mapping_data, group_design,
+                                       base_par_names, sampled_par_names = NULL) {
+  if (is.null(group_design) || length(base_par_names) == 0) return(p_vector)
+
+  if (is.data.frame(p_vector)) p_vector <- as.matrix(p_vector)
+  matrix_names <- NULL
+  if (length(dim(p_vector)) > 0) {
+    if (ncol(p_vector) == 1L) {
+      matrix_names <- rownames(p_vector)
+      p_vector <- p_vector[, 1L]
+    } else if (nrow(p_vector) == 1L) {
+      matrix_names <- colnames(p_vector)
+      p_vector <- p_vector[1L, ]
+    } else {
+      stop("p_vector must be a vector (or a one-row/one-column matrix) when used with group_design")
+    }
+  }
+  supplied_names <- names(p_vector)
+  if (is.null(supplied_names) && !is.null(matrix_names) &&
+      !identical(matrix_names, as.character(seq_along(matrix_names)))) {
+    supplied_names <- matrix_names
+  }
+  p_vector <- as.numeric(p_vector)
+
+  expanded_names <- add_group_par_names(base_par_names, group_design)
+  if (is.null(supplied_names)) {
+    if (length(p_vector) == length(expanded_names)) {
+      supplied_names <- expanded_names
+    } else if (length(p_vector) == length(base_par_names)) {
+      supplied_names <- base_par_names
+    } else if (!is.null(sampled_par_names) && length(p_vector) == length(sampled_par_names)) {
+      supplied_names <- sampled_par_names
+    } else {
+      stop("Unnamed p_vector must have length ", length(expanded_names),
+           " (or ", length(base_par_names), ") when used with group_design")
+    }
+  }
+  names(p_vector) <- supplied_names
+
+  if (is.null(mapping_data$subjects)) {
+    stop("mapping data must contain a subjects column when used with group_design")
+  }
+  subject_ids <- unique(as.character(mapping_data$subjects))
+  out <- matrix(NA_real_, nrow = length(subject_ids), ncol = length(base_par_names),
+                dimnames = list(subject_ids, base_par_names))
+
+  formulas <- attr(group_design, "Flist")
+  lhs_names <- if (length(formulas)) {
+    vapply(formulas, function(f) as.character(stats::terms(f)[[2L]]), character(1L))
+  } else character(0)
+
+  for (j in seq_along(base_par_names)) {
+    par_name <- base_par_names[[j]]
+    block <- group_design[[par_name]]
+    if (is.null(block)) {
+      if (!par_name %in% names(p_vector)) {
+        stop("p_vector is missing subject-level parameter '", par_name, "'")
+      }
+      values <- rep(unname(p_vector[[par_name]]), nrow(mapping_data))
+    } else {
+      if (!length(formulas) || !(par_name %in% lhs_names)) {
+        stop("Could not find the group-design formula for parameter '", par_name, "'")
+      }
+      f <- formulas[[match(par_name, lhs_names)]]
+      rhs_vars <- all.vars(stats::terms(f)[[3L]])
+      group_data <- attr(group_design, "data")
+
+      # The group-design object contains the matrix evaluated on the original
+      # subjects.  Reuse those rows whenever the display data contains the
+      # same predictor values.  Besides being cheaper, this preserves custom
+      # contrasts for group designs created before contrast metadata was
+      # stored on the object.
+      X <- NULL
+      if (!is.null(group_data) && nrow(block) == nrow(group_data) &&
+          all(rhs_vars %in% names(group_data))) {
+        key <- function(df, vars) {
+          if (!length(vars)) return(rep("", nrow(df)))
+          values <- lapply(df[, vars, drop = FALSE], as.character)
+          values <- lapply(values, function(value) {
+            value[is.na(value)] <- "<NA>"
+            value
+          })
+          do.call(paste, c(values, sep = "\r"))
+        }
+        rows <- match(key(mapping_data, rhs_vars), key(group_data, rhs_vars))
+        if (all(!is.na(rows))) X <- block[rows, , drop = FALSE]
+      }
+      if (is.null(X)) {
+        group_contrasts <- attr(group_design, "contrasts")
+        if (is.null(group_contrasts)) group_contrasts <- attr(block, "contrasts")
+        X <- build_design(f, mapping_data,
+                          contrasts.arg = group_contrasts)
+      }
+      target_names <- colnames(block)
+      if (ncol(X) != length(target_names)) {
+        stop("Group-design matrix for '", par_name, "' has ", ncol(X),
+             " columns for the mapping data, but the fitted design has ",
+             length(target_names), ".")
+      }
+      colnames(X) <- target_names
+
+      coefficients <- numeric(length(target_names))
+      names(coefficients) <- target_names
+      present <- intersect(target_names, names(p_vector))
+      coefficients[present] <- p_vector[present]
+      # A subject-level vector is a useful shorthand for an intercept-only
+      # group effect (and makes an unexpanded sampled_pars() vector map
+      # sensibly): use it for the intercept and set omitted slopes to zero.
+      intercept <- intersect(par_name, target_names)
+      if (length(intercept) && !(intercept[[1L]] %in% names(p_vector)) &&
+          par_name %in% names(p_vector)) {
+        coefficients[intercept[[1L]]] <- p_vector[[par_name]]
+      }
+      if (!length(present) && !length(intercept) && !(par_name %in% names(p_vector))) {
+        stop("p_vector is missing group-level coefficients for '", par_name, "'")
+      }
+      values <- as.vector(X %*% coefficients)
+    }
+    # A group-level mean is constant for all trial rows of a subject.  Keep
+    # one value per subject for get_pars_matrix_oo(), which uses subject names
+    # to expand it back to the trial rows.
+    out[, j] <- values[match(subject_ids, as.character(mapping_data$subjects))]
+  }
+  out
+}
+
 #' Parameter Mapping Back to the Design Factors
 #'
 #' Maps parameters of the cognitive model back to the experimental design. If p_vector
@@ -1794,7 +1932,12 @@ update2version <- function(emc){
 #'
 #' @param x an `emc`, `emc.prior` or `emc.design` object
 #' @param p_vector Optional. Specify parameter vector to get numeric mappings.
-#' Must be in the form of ``sampled_pars(design)``
+#' Must be in the form of ``sampled_pars(design)`` (or
+#' ``sampled_pars(design, group_design = group_design)`` when a group design
+#' is supplied).
+#' @param group_design Optional `emc.group_design` object. When supplied, group-
+#'   level coefficients are evaluated for the group-design covariates before
+#'   mapping the resulting subject-level parameters to the experimental design.
 #' @param model Optional model type (if not already specified in ``design``)
 #' @param digits Integer. Will round the output parameter values to this many decimals
 #' @param ... optional arguments
@@ -1830,7 +1973,7 @@ update2version <- function(emc){
 mapped_pars <- function(x, p_vector = NULL, model=NULL,
                         digits=3,remove_subjects=TRUE,
                         covariates=NULL, data = NULL, use_data = TRUE,
-                        n_covariates = 10, ...)
+                        n_covariates = 10, group_design = NULL, ...)
   # Show augmented data and corresponding mapped parameter
 {
   UseMethod("mapped_pars")
@@ -1841,7 +1984,7 @@ mapped_pars <- function(x, p_vector = NULL, model=NULL,
 mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                                    digits=3,remove_subjects=TRUE,
                                    covariates=NULL, data = NULL, use_data = TRUE,
-                                   n_covariates = 10, ...){
+                                   n_covariates = 10, group_design = NULL, ...){
   if(is.null(x)) return(NULL)
   if(is.null(x$Ffactors)){
     x <- x[[1]]
@@ -1866,14 +2009,20 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
     stop("Must specify model as not in design") else model <- design$model
   if (remove_subjects) design$Ffactors$subjects <- design$Ffactors$subjects[1]
   if (is.null(data)) data <- design_data
-  if(is.null(names(p_vector))) names(p_vector) <- names(sampled_pars(design))
   mapping_data <- minimal_design(
     design, covariates = Fcovariates, verbose = F, drop_R = F,
-    add_acc = F, drop_subjects = F, do_functions = F
+    add_acc = F, drop_subjects = F, do_functions = F,
+    group_design = group_design
   )
+  group_factors <- if (!is.null(group_design)) {
+    unique(unlist(lapply(attr(group_design, "Flist"), function(f) {
+      all.vars(stats::terms(f)[[3L]])
+    })))
+  } else character(0)
   if (isTRUE(use_data)) {
     mapping_data <- .restrict_to_observed_factors(mapping_data, design, data,
-                                                  remove_subjects = remove_subjects)
+                                                  remove_subjects = remove_subjects,
+                                                  extra_factors = group_factors)
   }
   # A covariate has no cell of its own in the factorial backbone, so give it one
   # from the supplied values or from the data.  Without this a trend driven by a
@@ -1884,6 +2033,24 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
     supplied = if (is.list(covariates)) covariates else NULL,
     remove_subjects = remove_subjects, n_covariates = n_covariates
   )
+
+  # A group design is defined over subjects, not over the trial-level factors
+  # in `design`.  `minimal_design(..., group_design = ...)` adds those
+  # subject-level predictors to the mapping rows (and creates one pseudo
+  # subject per group-design row when subjects were removed).  Repeated
+  # subjects are only an implementation detail in that case; collapse them
+  # to the distinct displayed cells before constructing the model data.
+  if (!is.null(group_design) && isTRUE(remove_subjects) && nrow(mapping_data) > 0) {
+    keep <- setdiff(names(mapping_data), c("subjects", "trials"))
+    if (length(keep) > 0) {
+      mapping_data <- mapping_data[!duplicated(mapping_data[, keep, drop = FALSE]), ,
+                                   drop = FALSE]
+      rownames(mapping_data) <- NULL
+    }
+  }
+  if (!is.null(group_design) && !is.factor(mapping_data$subjects)) {
+    mapping_data$subjects <- factor(mapping_data$subjects)
+  }
   unresolved <- setdiff(design$Fcovariates,
                         c(if (is.list(covariates)) names(covariates),
                           if (isTRUE(use_data)) names(data),
@@ -1898,7 +2065,19 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                        verbose = FALSE,
                        drop_unobserved = isTRUE(use_data) && !is.null(data))
   ok <- !(names(dadm) %in% c("subjects","trials","R","rt","winner"))
-  out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix_oo(p_vector,dadm, design$model()),digits))
+
+  # `get_pars_matrix_oo()` consumes subject-level design coefficients.  For a
+  # group design, first evaluate each group-design block at the group
+  # predictors attached to the mapping rows and multiply it by the supplied
+  # beta coefficients.  This is the deterministic counterpart of the
+  # subject-mean construction used by the standard sampler.
+  map_p <- p_vector
+  if (!is.null(group_design)) {
+    map_p <- .group_design_subject_pars(p_vector, mapping_data, group_design,
+                                        base_par_names = names(suppressMessages(sampled_pars(design))),
+                                        sampled_par_names = attr(dadm, "sampled_p_names"))
+  }
+  out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix_oo(map_p,dadm, design$model()),digits))
   if (model()$type=="SDT")  out <- out[dadm$lR!=levels(dadm$lR)[length(levels(dadm$lR))],]
   if (model()$type=="DDM")  out <- out[,!(names(out) %in% c("lR","lM"))]
   if (any(names(out)=="RACE") && remove_RACE)

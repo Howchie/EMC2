@@ -17,6 +17,7 @@ mapped_pars(
   data = NULL,
   use_data = TRUE,
   n_covariates = 10,
+  group_design = NULL,
   ...
 )
 
@@ -30,6 +31,7 @@ mapped_pars(
   data = NULL,
   use_data = TRUE,
   n_covariates = 10,
+  group_design = NULL,
   ...
 )
 
@@ -43,6 +45,7 @@ mapped_pars(
   data = NULL,
   use_data = TRUE,
   n_covariates = 10,
+  group_design = NULL,
   ...
 )
 
@@ -56,6 +59,7 @@ mapped_pars(
   data = NULL,
   use_data = TRUE,
   n_covariates = 10,
+  group_design = NULL,
   ...
 )
 }
@@ -63,7 +67,13 @@ mapped_pars(
 \item{x}{an \code{emc}, \code{emc.prior} or \code{emc.design} object}
 
 \item{p_vector}{Optional. Specify parameter vector to get numeric mappings.
-Must be in the form of \code{sampled_pars(design)}}
+Must be in the form of \code{sampled_pars(design)} (or
+\code{sampled_pars(design, group_design = group_design)} when a group design
+is supplied).}
+
+\item{group_design}{Optional \code{emc.group_design} object. When supplied,
+group-level coefficients are evaluated for the group-design covariates before
+mapping the resulting subject-level parameters to the experimental design.}
 
 \item{model}{Optional model type (if not already specified in \code{design})}
 

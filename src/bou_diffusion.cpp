@@ -66,7 +66,7 @@ Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R,
                            int nx = 256, double dt_target = 1e-3,
                            double grade = 1.0, double tgrade = 8.0,
                            int n_sv = 5, int n_sz = 5, int n_st0 = 7,
-                           bool anchor_at_z = true, double anchor_fix = NA_REAL,
+                           bool anchor_at_z = false, double anchor_fix = NA_REAL,
                            bool want_cdf = true) {
   const int n = rt.size();
   NumericVector pdf(n), cdf(n);
@@ -147,7 +147,7 @@ Rcpp::DataFrame rbou_cpp(int n, NumericVector v, NumericVector a,
                          NumericVector tau = NumericVector::create(),
                          NumericVector pw = NumericVector::create(),
                          double dt = 1e-4, double t_max = 30.0,
-                         bool anchor_at_z = true, double anchor_fix = NA_REAL) {
+                         bool anchor_at_z = false, double anchor_fix = NA_REAL) {
   NumericVector rt(n);
   IntegerVector resp(n);
 

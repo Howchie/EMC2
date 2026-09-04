@@ -169,6 +169,10 @@ group_design <- function(formula, data, subject_design, contrasts = NULL){
   class(design_matrices) <- "emc.group_design"
   attr(design_matrices, "Flist") <- formula
   attr(design_matrices, "data") <- summary_data
+  # Keep the contrast specifications so downstream display helpers (notably
+  # mapped_pars()) can evaluate the group design for new factor combinations
+  # with exactly the same coding used during fitting.
+  attr(design_matrices, "contrasts") <- contrasts
   return(design_matrices)
 }
 

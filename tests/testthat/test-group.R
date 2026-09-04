@@ -33,3 +33,26 @@ test_that("groups", {
   expect_snapshot(credint(pri, selection = "beta"))
   expect_snapshot(init_chains(emc, particles = 10, cores_per_chain = 1)[[1]]$samples)
 })
+
+test_that("mapped_pars evaluates group-level predictors", {
+  p <- sampled_pars(subj_design, group_design = group_des)
+  p[] <- 0
+  p[c("v", "v_S1", "v_S1_age", "v_S1_group1")] <- c(1, 2, 0, 1)
+
+  mapped <- mapped_pars(pri, p)
+  expect_true("group" %in% names(mapped))
+  expect_setequal(unique(as.character(mapped$group)), c("A", "B"))
+
+  # Priors carry the group design, so the default path should include its
+  # predictors even when no coefficient vector is supplied explicitly.
+  expect_true("group" %in% names(mapped_pars(pri)))
+
+  # The group coefficient changes v_S1, which changes v differently for the
+  # two groups even though `group` is absent from the subject-level formulae.
+  left <- mapped[mapped$S == "left", , drop = FALSE]
+  expect_equal(length(unique(left$v)), 2L)
+
+  mapped_A <- mapped_pars(pri, p,
+                          data = forstmann[forstmann$group == "A", , drop = FALSE])
+  expect_setequal(unique(as.character(mapped_A$group)), "A")
+})
