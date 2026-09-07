@@ -21,7 +21,23 @@ struct DesignEntry {
   std::vector<char> coef_in_pre_sum; // length K; whether this design column contributes to pre-sum
   // 0-based row map for a compressed design matrix; empty means identity.
   std::vector<int> expand_idx;
+  // Every trial reads the SAME design row, so this design's output column is
+  // row-constant whenever all of its coefficient columns are. Computed once in
+  // init_design_plan; see the row-constant notes on ParamTable::col_const.
+  bool single_cell = false;
+  // Design-CELL structure: this design reads n_cells distinct rows, so its
+  // output column takes at most n_cells distinct values laid out by
+  // expand_idx.  cell_rep[c] is the first trial row that reads design row c
+  // (-1 when no trial does).  single_cell is the n_cells == 1 case.
+  bool cell_usable = false;
+  int n_cells = 0;
+  std::vector<int> cell_rep;
 };
+
+// Above this many design cells the gather stops paying for itself and the
+// per-cell scratch would not fit on the stack; such designs take the plain
+// per-row path.
+static const int EMC2_PT_MAX_CELLS = 256;
 
 // View-based ParamTable: one base matrix + active column indices
 // Invariants:
@@ -41,6 +57,106 @@ struct ParamTable {
 
   // fast look-up map
   std::unordered_map<std::string,int> name_to_base_idx;
+
+  // ---------------------------------------------------------------------
+  // Row-constant column tracking.
+  //
+  // A parameter column carries only DESIGN-CELL information, but the whole
+  // per-particle prologue (map -> transform -> bounds) runs at TRIAL
+  // resolution. For the common intercept-only parameter that means n_trials
+  // scalar std::exp calls and n_trials bound comparisons per particle to
+  // produce one distinct number. col_const[j] records "base column j currently
+  // holds one repeated value", which lets those three stages collapse to O(1)
+  // plus a std::fill.
+  //
+  // The flags are MAINTAINED, never sniffed: reset_base_to_zero marks
+  // everything constant, the fill_* helpers mark each column they scalar-fill,
+  // and map_from_designs recomputes the flag for every output it writes.
+  // Columns touched by none of those (the invariant-parameter lane) correctly
+  // keep the flag they were given on the template particle, because their
+  // contents are likewise carried over.
+  //
+  // Tracking is opt-in (const_init) and is enabled only when nothing outside
+  // this pipeline writes into `base` -- i.e. when there is no TrendRuntime,
+  // whose apply_base_for_op does exactly that.
+  std::vector<char> col_const;
+  // Per base column: the design_plan index whose expand map lays this column's
+  // distinct values out across trials, or -1 for no usable cell structure.
+  // This is the general case of which col_const is the n_cells == 1 corner:
+  // a column with n_cells distinct values needs n_cells transcendentals and
+  // n_cells bound comparisons, not n_trials of each.
+  std::vector<int> col_cell;
+  bool track_const = false;
+
+  void const_init() {
+    col_const.assign(base.ncol(), 1);
+    col_cell.assign(base.ncol(), -1);
+    track_const = true;
+  }
+  inline bool col_is_const(int j) const {
+    const bool flagged =
+      track_const && j >= 0 && j < (int)col_const.size() && col_const[j];
+#ifdef EMC2_PT_CONST_CHECK
+    if (flagged) const_check_column(j);
+#endif
+    return flagged;
+  }
+  inline void const_mark(int j, bool is_const) {
+    if (track_const && j >= 0 && j < (int)col_const.size()) {
+      col_const[j] = is_const ? 1 : 0;
+      col_cell[j] = -1;
+    }
+  }
+
+  // The design entry whose cell map governs column j, or nullptr.  A
+  // row-constant column answers nullptr: its own O(1) path is cheaper.
+  inline const DesignEntry* col_cell_entry(int j) const {
+    if (!track_const || j < 0 || j >= (int)col_cell.size()) return nullptr;
+    if (col_const[j] || col_cell[j] < 0) return nullptr;
+    const DesignEntry& e = design_plan[col_cell[j]];
+#ifdef EMC2_PT_CONST_CHECK
+    cell_check_column(j, e);
+#endif
+    return &e;
+  }
+
+#ifdef EMC2_PT_CONST_CHECK
+  // Assertion build (-DEMC2_PT_CONST_CHECK): every time a row-constant claim is
+  // about to be ACTED on, re-scan the column and stop on disagreement. Checking
+  // at the point of use rather than at the end of the prologue matters: a wrong
+  // flag makes the very next transform fill the column from row 0, after which
+  // a whole-table scan would find it consistent and pass.
+  void cell_check_column(int j, const DesignEntry& e) const {
+    const double* col = &base(0, j);
+    for (int r = 0; r < n_trials; ++r) {
+      const int rep = e.cell_rep[e.expand_idx[r]];
+      const bool same = (col[r] == col[rep]) ||
+                        (Rcpp::NumericVector::is_na(col[r]) &&
+                         Rcpp::NumericVector::is_na(col[rep]));
+      if (!same) {
+        Rcpp::stop("ParamTable cell check: column '%s' is flagged cell-constant "
+                   "but row %d holds %g against its cell representative row %d's %g",
+                   Rcpp::as<std::string>(base_names[j]).c_str(), r, col[r], rep,
+                   col[rep]);
+      }
+    }
+  }
+
+  void const_check_column(int j) const {
+    const double* col = &base(0, j);
+    const double v0 = col[0];
+    for (int r = 1; r < n_trials; ++r) {
+      const bool same = (col[r] == v0) ||
+                        (Rcpp::NumericVector::is_na(col[r]) &&
+                         Rcpp::NumericVector::is_na(v0));
+      if (!same) {
+        Rcpp::stop("ParamTable const check: column '%s' is flagged row-constant "
+                   "but row %d holds %g against row 0's %g",
+                   Rcpp::as<std::string>(base_names[j]).c_str(), r, col[r], v0);
+      }
+    }
+  }
+#endif
 
   // keep track of parameters that have an intercept-only design
   std::vector<char> design_is_self_intercept;
@@ -103,6 +219,9 @@ struct ParamTable {
   void set_column_by_name(const std::string& nm,
                           const Rcpp::NumericVector& col) {
     int base_idx = base_index_for(nm);
+        // Arbitrary external write: conservatively drop this column's
+        // row-constant claim rather than inspect the incoming vector.
+        const_mark(base_idx, false);
         base(_, base_idx) = col;
         return;
   }
@@ -175,6 +294,10 @@ struct ParamTable {
       entry.split_lower = 0.0;
       entry.split_upper = 1.0;
       entry.expand_idx.clear();
+      entry.single_cell = false;
+      entry.cell_usable = false;
+      entry.n_cells = 0;
+      entry.cell_rep.clear();
 
       if (designs[i] == R_NilValue) continue;
 
@@ -243,6 +366,33 @@ struct ParamTable {
         }
       }
 
+      // Row-constant capability: does every trial read the same design row?
+      // With a compressed design that is a constant expand vector; without one
+      // it is a single-row design (or a single-trial table).
+      if (!entry.expand_idx.empty()) {
+        bool same = true;
+        const int first = entry.expand_idx[0];
+        for (int r = 1; r < T; ++r) {
+          if (entry.expand_idx[r] != first) { same = false; break; }
+        }
+        entry.single_cell = same;
+      } else {
+        entry.single_cell = (design.nrow() == 1) || (T <= 1);
+      }
+
+      // Cell structure: worth exploiting only for a compressed design that
+      // genuinely has fewer rows than trials, and only up to the scratch cap.
+      if (!entry.single_cell && !entry.expand_idx.empty() &&
+          design.nrow() < T && design.nrow() <= EMC2_PT_MAX_CELLS) {
+        entry.n_cells = design.nrow();
+        entry.cell_rep.assign(entry.n_cells, -1);
+        for (int r = 0; r < T; ++r) {
+          const int c = entry.expand_idx[r];
+          if (entry.cell_rep[c] < 0) entry.cell_rep[c] = r;
+        }
+        entry.cell_usable = true;
+      }
+
       entry.valid = true;
     }
   }
@@ -289,6 +439,21 @@ struct ParamTable {
   // Per-particle twin of materialize_by_param_names: the caller allocates the
   // matrix and resolves names ONCE per likelihood call, so refilling per
   // particle is a plain memcpy with no R-heap allocation.
+  // As materialize_into, but only for the listed output columns.  The mixed
+  // (censored/truncated) race path re-materialises the whole parameter matrix
+  // for every particle; the columns whose designs carry no sampled coefficient
+  // hold the same natural-scale values for every particle, so after the first
+  // fill they are pure memcpy waste.
+  void materialize_into_subset(Rcpp::NumericMatrix& out,
+                               const std::vector<int>& base_idx_order,
+                               const std::vector<int>& which_out_cols) const {
+    for (std::size_t k = 0; k < which_out_cols.size(); ++k) {
+      const int j = which_out_cols[k];
+      std::memcpy(&out(0, j), &base(0, base_idx_order[j]),
+                  static_cast<size_t>(n_trials) * sizeof(double));
+    }
+  }
+
   void materialize_into(Rcpp::NumericMatrix& out,
                         const std::vector<int>& base_idx_order) const {
     const int k = (int)base_idx_order.size();
@@ -514,6 +679,100 @@ struct ParamTable {
       NumericMatrix design = designs[i];   // still a light handle
       const int K = design.ncol();
 
+      // ---- Row-constant fast path -------------------------------------
+      // If every trial reads the same design row and every coefficient column
+      // is itself row-constant, the whole output column is one number: settle
+      // it from a single representative row and fill. This is what removes the
+      // n_trials-long accumulate passes for intercept-only parameters, which
+      // are the majority of parameters in a typical design.
+      if (track_const) {
+        bool all_coef_const = true;
+        for (int j = 0; j < K; ++j) {
+          const int cidx = entry.coef_idx[j];
+          if (cidx < 0) continue;
+          if (!col_is_const(cidx)) { all_coef_const = false; break; }
+        }
+        const bool out_const = entry.single_cell && all_coef_const;
+        col_const[out_idx] = out_const ? 1 : 0;
+        col_cell[out_idx] = -1;   // re-established below if the cell path is taken
+        if (out_const) {
+          const int drow = entry.expand_idx.empty() ? 0 : entry.expand_idx[0];
+          double* outc = &base(0, out_idx);
+          // uses_self reads the pre-clear value of the output column, which is
+          // constant here, so one saved scalar stands in for the whole copy.
+          const double self_val = entry.uses_self ? outc[0] : 0.0;
+          double pre = 0.0, post = 0.0;
+          for (int j = 0; j < K; ++j) {
+            const int cidx = entry.coef_idx[j];
+            if (cidx < 0) continue;
+            const double cv = (entry.uses_self && cidx == out_idx) ? self_val
+                                                                  : base(0, cidx);
+            const double contrib = cv * design(drow, j);
+            if (entry.split_transform && entry.coef_in_pre_sum[j]) pre += contrib;
+            else post += contrib;
+          }
+          const double v = entry.split_transform
+            ? apply_split_transform_scalar(pre, entry.split_code,
+                                           entry.split_lower, entry.split_upper) + post
+            : post;
+          std::fill(outc, outc + T, v);
+          continue;
+        }
+
+        // ---- Cell fast path ---------------------------------------------
+        // Not one value, but n_cells of them: evaluate the linear combination
+        // once per design row and scatter.  Replaces K full-length
+        // multiply-accumulate passes (plus the zeroing pass) with n_cells * K
+        // scalar operations and one gather, and leaves the column tagged so
+        // the transform and the bound check can work at cell resolution too.
+        if (entry.cell_usable && all_coef_const) {
+          const int n_cells = entry.n_cells;
+          double post_val[EMC2_PT_MAX_CELLS];
+          double pre_val[EMC2_PT_MAX_CELLS];
+          double self_val[EMC2_PT_MAX_CELLS];
+          double* outc = &base(0, out_idx);
+          const int* ex = entry.expand_idx.data();
+          for (int c = 0; c < n_cells; ++c) { post_val[c] = 0.0; pre_val[c] = 0.0; }
+          // uses_self reads the pre-clear output column; it is governed by this
+          // same map (only this design writes this column), so cell c's self
+          // value is the one at cell c's representative row.  Snapshot them
+          // before the scatter overwrites the column.
+          if (entry.uses_self) {
+            for (int c = 0; c < n_cells; ++c) {
+              const int rep = entry.cell_rep[c];
+              self_val[c] = (rep >= 0) ? outc[rep] : 0.0;
+            }
+          }
+          // Loop order and accumulation order deliberately mirror the general
+          // per-row path below, coefficient-major into a zeroed accumulator, so
+          // the two routes fold the same products in the same sequence.
+          for (int j = 0; j < K; ++j) {
+            const int cidx = entry.coef_idx[j];
+            if (cidx < 0) continue;
+            const bool is_self = entry.uses_self && cidx == out_idx;
+            const double cv = is_self ? 0.0 : base(0, cidx);
+            double* acc = (entry.split_transform && entry.coef_in_pre_sum[j])
+              ? pre_val : post_val;
+            const double* dcol = &design(0, j);
+            if (is_self) {
+              for (int c = 0; c < n_cells; ++c) acc[c] += self_val[c] * dcol[c];
+            } else {
+              for (int c = 0; c < n_cells; ++c) acc[c] += cv * dcol[c];
+            }
+          }
+          if (entry.split_transform) {
+            for (int c = 0; c < n_cells; ++c) {
+              post_val[c] = apply_split_transform_scalar(
+                pre_val[c], entry.split_code, entry.split_lower,
+                entry.split_upper) + post_val[c];
+            }
+          }
+          for (int r = 0; r < T; ++r) outc[r] = post_val[ex[r]];
+          col_cell[out_idx] = i;
+          continue;
+        }
+      }
+
       // Preserve self column if needed
       std::vector<double> self_copy;
       double* out = &base(0, out_idx);
@@ -541,9 +800,15 @@ struct ParamTable {
               : &base(0, cidx);
 
           double* acc = entry.coef_in_pre_sum[j] ? pre_acc.data() : post_acc.data();
-          for (int r = 0; r < T; ++r) {
-            const int drow = entry.expand_idx.empty() ? r : entry.expand_idx[r];
-            acc[r] += coef[r] * design(drow, j);
+          // Hoist the design column pointer and lift the expand_idx.empty()
+          // test out of the inner loop: design(drow, j) otherwise costs an
+          // Rcpp bounds check and an i + nrow*j multiply per element.
+          const double* dcol = &design(0, j);
+          if (entry.expand_idx.empty()) {
+            for (int r = 0; r < T; ++r) acc[r] += coef[r] * dcol[r];
+          } else {
+            const int* ex = entry.expand_idx.data();
+            for (int r = 0; r < T; ++r) acc[r] += coef[r] * dcol[ex[r]];
           }
         }
 
@@ -562,10 +827,12 @@ struct ParamTable {
             ? self_copy.data()
               : &base(0, cidx);
 
-          for (int r = 0; r < T; ++r) {
-            const int drow = entry.expand_idx.empty() ? r : entry.expand_idx[r];
-            double v = coef[r] * design(drow, j);
-            out[r] += v;
+          const double* dcol = &design(0, j);
+          if (entry.expand_idx.empty()) {
+            for (int r = 0; r < T; ++r) out[r] += coef[r] * dcol[r];
+          } else {
+            const int* ex = entry.expand_idx.data();
+            for (int r = 0; r < T; ++r) out[r] += coef[r] * dcol[ex[r]];
           }
         }
       }
@@ -585,6 +852,8 @@ struct ParamTable {
 
   // Zero the entire base matrix
   void reset_base_to_zero() {
+    // Every column becomes one repeated value (zero).
+    if (track_const) std::fill(col_const.begin(), col_const.end(), 1);
     const int n = n_trials;
     const int p = base.ncol();
     for (int j = 0; j < p; ++j) {
@@ -612,6 +881,7 @@ struct ParamTable {
       }
       int j = it->second;
       double val = p_vector[i];
+      const_mark(j, true);
       double* col = &base(0, j);
       for (int r = 0; r < n_trials; ++r) {
         col[r] = val;
@@ -638,6 +908,7 @@ struct ParamTable {
         int base_idx = pm_col_to_base_idx[j];
         if (base_idx < 0) continue;
         double val = particles(row, j);
+        const_mark(base_idx, true);
         double* col = &base(0, base_idx);
         for (int r = 0; r < n_trials; ++r) col[r] = val;
       }
@@ -648,8 +919,10 @@ struct ParamTable {
       // invariant skip, so only the non-invariant columns get exp-transformed.
       const int n_inv = static_cast<int>(invariant_base_indices.size());
       std::vector<double> saved(static_cast<size_t>(n_inv) * n_trials);
+      std::vector<char> saved_const(static_cast<size_t>(n_inv), 0);
       for (int k = 0; k < n_inv; ++k) {
         const int bidx = invariant_base_indices[k];
+        saved_const[k] = col_is_const(bidx) ? 1 : 0;
         for (int r = 0; r < n_trials; ++r)
           saved[static_cast<size_t>(k) * n_trials + r] = base(r, bidx);
       }
@@ -661,12 +934,16 @@ struct ParamTable {
         int base_idx = pm_col_to_base_idx[j];
         if (base_idx < 0 || inv_set.count(base_idx)) continue;
         double val = particles(row, j);
+        const_mark(base_idx, true);
         double* col = &base(0, base_idx);
         for (int r = 0; r < n_trials; ++r) col[r] = val;
       }
-      // Restore natural-scale invariant values.
+      // Restore natural-scale invariant values, and with them the row-constant
+      // claims they carried: reset_base_to_zero above marked every column
+      // constant, which is wrong for a restored multi-cell column.
       for (int k = 0; k < n_inv; ++k) {
         const int bidx = invariant_base_indices[k];
+        const_mark(bidx, saved_const[k] != 0);
         for (int r = 0; r < n_trials; ++r)
           base(r, bidx) = saved[static_cast<size_t>(k) * n_trials + r];
       }
@@ -686,13 +963,20 @@ struct ParamTable {
       const std::vector<std::pair<int, int>>& fill_pm_to_base)
   {
     const int T = n_trials;
+    // Both loops leave their column holding a single repeated value; invariant
+    // columns appear in neither list and keep the flag (and the contents) they
+    // were given on the template particle.
     for (std::size_t k = 0; k < zero_base_idx.size(); ++k) {
-      double* col = &base(0, zero_base_idx[k]);
+      const int b = zero_base_idx[k];
+      const_mark(b, true);
+      double* col = &base(0, b);
       std::fill(col, col + T, 0.0);
     }
     for (std::size_t k = 0; k < fill_pm_to_base.size(); ++k) {
       const double val = particles(row, fill_pm_to_base[k].first);
-      double* col = &base(0, fill_pm_to_base[k].second);
+      const int b = fill_pm_to_base[k].second;
+      const_mark(b, true);
+      double* col = &base(0, b);
       std::fill(col, col + T, val);
     }
   }

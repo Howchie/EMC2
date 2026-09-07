@@ -143,7 +143,15 @@ marginal_warm_backoff <- function(state, attempted, used) {
 # proposal by a numerically stable row-wise log-sum-exp.
 marginal_ll_from_grid <- function(log_terms) {
   if (is.list(log_terms) && !is.null(log_terms$ll)) return(log_terms$ll)
-  m <- apply(log_terms, 1L, max, na.rm = TRUE)
+  # A pmax fold over the K columns, rather than apply(..., 1L, max): apply()
+  # splits the matrix into nrow() row vectors and calls max() on each.  K is the
+  # number of quadrature nodes, so this is a handful of vectorised passes.
+  m <- rep(-Inf, nrow(log_terms))
+  for (k in seq_len(ncol(log_terms))) {
+    col <- log_terms[, k]
+    col[is.na(col)] <- -Inf
+    m <- pmax(m, col)
+  }
   m[!is.finite(m)] <- -Inf
   fin <- is.finite(m)
   res <- rep(-Inf, nrow(log_terms))
@@ -853,7 +861,11 @@ reject_sample_iteration <- function(samples, j) {
     obj <- samples[[nm]]
     d <- dim(obj)
     if (is.null(d)) next
-    if (length(d) == 2 && d[2] >= j && d[1] != d[2]) {
+    # d[1] != d[2] was the same "looks like a fixed square matrix" guess as the
+    # one extend_obj used to make; no sample store holds a square 2-D element,
+    # and skipping one that happened to be square would leave iteration j
+    # holding NA after a rejection.
+    if (length(d) == 2 && d[2] >= j) {
       samples[[nm]][, j] <- samples[[nm]][, j - 1]
     } else if (length(d) == 3 && d[3] >= j) {
       samples[[nm]][, , j] <- samples[[nm]][, , j - 1]
@@ -1418,24 +1430,40 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
 }
 
 extend_sampler <- function(sampler, n_samples, stage) {
-  # Extend each stored sample array along its final dimension.
+  # Extend each stored sample array along its final dimension.  Which arrays
+  # those are is decided structurally, by comparing the final dimension against
+  # the iteration count BEFORE this call -- so capture it first.
+  n_iter <- length(sampler$samples$stage)
   sampler$samples$stage <- c(sampler$samples$stage, rep(stage, n_samples))
-  if(any(sampler$nuisance)) sampler$sampler_nuis$samples <- rapply(sampler$sampler_nuis$samples, f = function(x) extend_obj(x, n_samples), how = "replace")
-  sampler$samples <- rapply(sampler$samples, f = function(x) extend_obj(x, n_samples), how = "replace")
+  if(any(sampler$nuisance)) sampler$sampler_nuis$samples <- rapply(sampler$sampler_nuis$samples, f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
+  sampler$samples <- rapply(sampler$samples, f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
   return(sampler)
 }
 
-extend_obj <- function(obj, n_extend){
+# An array in a sample store is an iteration array iff its LAST dimension is
+# the iteration axis, i.e. it currently has exactly n_iter slices.  Every
+# sample_store_* variant (standard, factor, infnt_factor, SEM, diag_gamma, and
+# the base alpha/subj_ll pair) builds its arrays that way.
+is_iteration_array <- function(obj, n_iter){
+  d <- dim(obj)
+  if(is.null(d) || length(d) < 2L) return(FALSE)
+  isTRUE(d[length(d)] == n_iter)
+}
+
+extend_obj <- function(obj, n_extend, n_iter = NULL){
   old_dim <- dim(obj)
   n_dimensions <- length(old_dim)
   if(is.null(old_dim) | n_dimensions == 1) return(obj)
-  if(n_dimensions == 2){
-    if(nrow(obj) == ncol(obj)){
-      if(nrow(obj) > 1){
-        if(mean(abs(abs(rowSums(obj/max(obj))) - abs(colSums(obj/max(obj))))) < .01) return(obj)
-      }
-    }
-  }
+  # Anything that is not an iteration array is left alone.  This used to be
+  # decided by inspecting the NUMBERS in the array -- a square matrix whose
+  # scaled row and column sums nearly agreed was taken for a fixed covariance
+  # and skipped.  That test only ever fired when the parameter count happened
+  # to equal the iteration count, its max(obj) normaliser was unguarded (an
+  # all-zero or all-NA slice gives NaN, and `if (NaN < .01)` is an error rather
+  # than FALSE, killing a run at a random iteration count), and a false positive
+  # on a genuine sample array would silently stop that array growing until the
+  # next fill_samples wrote past its end.
+  if(!is.null(n_iter) && !is_iteration_array(obj, n_iter)) return(obj)
   new_dim <- c(rep(0, (n_dimensions -1)), n_extend)
   extended <- array(NA_real_, dim = old_dim +  new_dim, dimnames = dimnames(obj))
   # Extending only the final dimension means the complete old array is a
@@ -1751,7 +1779,10 @@ merge_group_level <- function(tmu, tmu_nuis, tvar, tvar_nuis, is_nuisance, subj_
   tvar_out[!is_nuisance, !is_nuisance] <- tvar
 
   subj_mu_out <- matrix(NA, ncol = ncol(subj_mu), nrow = length(tmu_out))
-  subj_mu_out[is_nuisance,] <- do.call(cbind, rep(list(c(tmu_nuis)), ncol(subj_mu)))
+  # matrix() recycles the column directly; the do.call(cbind, rep(list(...)))
+  # this replaces built an n_subjects-long list of copies first.
+  subj_mu_out[is_nuisance,] <- matrix(c(tmu_nuis), nrow = sum(is_nuisance),
+                                      ncol = ncol(subj_mu))
   subj_mu_out[!is_nuisance,] <- subj_mu
   return(list(tmu = tmu_out, tvar = tvar_out, subj_mu = subj_mu_out))
 }

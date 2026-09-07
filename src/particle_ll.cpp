@@ -277,6 +277,7 @@ struct PtMapper {
   // allocation on the LogicalRules / mixed-race / pw hot paths).
   Rcpp::NumericMatrix mat_buf;
   std::vector<int> mat_base_idx;
+  std::vector<int> mat_variant_cols;   // output columns that can change per particle
   bool mat_ready = false;
 
   // Once-per-likelihood-call plans for the three per-particle steps whose cost
@@ -289,6 +290,7 @@ struct PtMapper {
   std::vector<std::pair<int,int>> plan_fill_pairs;// (particle col, base col)
   std::vector<BoundSpec> bound_specs_variant;     // bounds that can change per particle
   Rcpp::LogicalVector bound_seed;                 // invariant bounds' verdict
+  Rcpp::LogicalVector bound_buf;                  // per-particle verdict, reused
   bool bound_plan_ready = false;
 
   // Build the i > 0 plans.  Only valid without a trend runtime, which is also
@@ -319,15 +321,25 @@ struct PtMapper {
         if (bidx >= 0 && bidx < n_base) is_inv_base[static_cast<size_t>(bidx)] = 1;
       }
     }
-    plan_zero_base_idx.clear();
-    for (int j = 0; j < n_base; ++j) {
-      if (!is_inv_base[static_cast<size_t>(j)]) plan_zero_base_idx.push_back(j);
-    }
+    // A column that is about to be scalar-filled from the particle row does not
+    // need zeroing first: it appeared in BOTH lists, so every sampled
+    // parameter's column was memset to zero and then immediately overwritten in
+    // full. Build the fill list first and exclude its targets from the zero
+    // list.
     plan_fill_pairs.clear();
+    std::vector<char> is_filled_base(static_cast<size_t>(n_base), 0);
     for (std::size_t j = 0; j < pm_col_to_base_idx.size(); ++j) {
       const int bidx = pm_col_to_base_idx[j];
       if (bidx < 0 || is_inv_base[static_cast<size_t>(bidx)]) continue;
+      if (is_filled_base[static_cast<size_t>(bidx)]) continue;  // first writer wins
+      is_filled_base[static_cast<size_t>(bidx)] = 1;
       plan_fill_pairs.emplace_back(static_cast<int>(j), bidx);
+    }
+    plan_zero_base_idx.clear();
+    for (int j = 0; j < n_base; ++j) {
+      if (is_inv_base[static_cast<size_t>(j)]) continue;
+      if (is_filled_base[static_cast<size_t>(j)]) continue;
+      plan_zero_base_idx.push_back(j);
     }
 
     plan_ready = true;
@@ -350,6 +362,10 @@ struct PtMapper {
     bound_seed = invariant_specs.empty()
       ? Rcpp::LogicalVector(table.n_trials, true)
       : c_do_bound_pt(table, invariant_specs);
+    // One buffer for every subsequent particle's verdict: c_do_bound_pt_from
+    // otherwise allocated an R LogicalVector and cloned the seed per particle.
+    // Safe because no caller holds on to a verdict across particles.
+    bound_buf = Rcpp::LogicalVector(table.n_trials);
     bound_plan_ready = true;
   }
 
@@ -382,7 +398,8 @@ struct PtMapper {
       return ok;
     }
     if (bound_plan_ready) {
-      return c_do_bound_pt_from(table, bound_specs_variant, bound_seed);
+      c_do_bound_pt_from_into(table, bound_specs_variant, bound_seed, bound_buf);
+      return bound_buf;
     }
     return c_do_bound_pt(table, bound_specs);
   }
@@ -398,9 +415,23 @@ struct PtMapper {
       }
       mat_buf = Rcpp::NumericMatrix(table.n_trials, k);
       Rcpp::colnames(mat_buf) = keep_names;
+      // Invariant base columns keep their natural-scale values for the whole
+      // likelihood call (that is what the invariant lane means), so only the
+      // rest need re-copying after the first particle.  No caller mutates this
+      // buffer -- the correlated paths clone it before touching it.
+      std::unordered_set<int> inv(invariant_base_idx_vec.begin(),
+                                  invariant_base_idx_vec.end());
+      mat_variant_cols.clear();
+      for (int j = 0; j < k; ++j) {
+        if (!use_invariants || inv.find(mat_base_idx[j]) == inv.end()) {
+          mat_variant_cols.push_back(j);
+        }
+      }
       mat_ready = true;
+      table.materialize_into(mat_buf, mat_base_idx);
+      return mat_buf;
     }
-    table.materialize_into(mat_buf, mat_base_idx);
+    table.materialize_into_subset(mat_buf, mat_base_idx, mat_variant_cols);
     return mat_buf;
   }
 };
@@ -441,6 +472,11 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
       m.pm_col_to_base_idx[j] = it->second;
     }
   }
+
+  // Row-constant column tracking is only sound while nothing outside the
+  // design/transform pipeline writes into `base`; TrendRuntime::apply_base_for_op
+  // does exactly that, so the trend lane keeps the general code.
+  if (trend.isNull()) m.table.const_init();
 
   if (!trend.isNull()) {
     m.trend_plan.reset(new TrendPlan(trend, data));
@@ -1169,6 +1205,59 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   return lls;
 }
 
+// Run the per-particle parameter prologue on its own: refill from the particle
+// row, map the designs, apply the transforms, check the bounds -- everything
+// calc_ll_oo does before it reaches a model kernel.
+//
+// Two uses, both outside the hot path:
+//   * BENCHMARK.  Timing this against calc_ll_oo gives the prologue's share of a
+//     likelihood call with no instrumentation compiled into the sampler at all.
+//     `n_ok` is returned unconditionally so the work cannot be optimised away.
+//   * TEST.  With return_pars = true it hands back the natural-scale parameter
+//     columns and the bound verdicts this lane produced, so they can be checked
+//     against get_pars_c_batch_wrapper_oo -- an independent implementation of
+//     the same mapping that takes none of the planned/invariant/row-constant
+//     short cuts.
+//
+// [[Rcpp::export]]
+Rcpp::List pt_prologue_oo(NumericMatrix particle_matrix, DataFrame data,
+                          NumericVector constants, List designs, List bounds,
+                          List transforms, List pretransforms,
+                          CharacterVector p_types,
+                          Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                          bool return_pars = false) {
+  const int n_particles = particle_matrix.nrow();
+  const int n_trials = data.nrow();
+  PtMapper pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
+                               transforms, pretransforms, trend, p_types,
+                               n_trials, n_particles);
+  IntegerVector n_ok(n_particles);
+  const int k = p_types.size();
+  NumericVector pars_out;
+  LogicalMatrix ok_out;
+  if (return_pars) {
+    pars_out = NumericVector(static_cast<R_xlen_t>(n_trials) * k * n_particles);
+    pars_out.attr("dim") = IntegerVector::create(n_trials, k, n_particles);
+    pars_out.attr("dimnames") = List::create(R_NilValue, p_types, R_NilValue);
+    ok_out = LogicalMatrix(n_trials, n_particles);
+  }
+  for (int i = 0; i < n_particles; ++i) {
+    Rcpp::LogicalVector ok = pt.prepare(i);
+    int c = 0;
+    for (int j = 0; j < n_trials; ++j) if (ok[j]) ++c;
+    n_ok[i] = c;
+    if (return_pars) {
+      NumericMatrix m = pt.materialize_reusable();
+      std::copy(m.begin(), m.end(),
+                pars_out.begin() + static_cast<R_xlen_t>(i) * n_trials * k);
+      for (int j = 0; j < n_trials; ++j) ok_out(j, i) = ok[j];
+    }
+  }
+  return List::create(Rcpp::_["n_ok"] = n_ok,
+                      Rcpp::_["pars"] = return_pars ? (SEXP)pars_out : R_NilValue,
+                      Rcpp::_["ok"] = return_pars ? (SEXP)ok_out : R_NilValue);
+}
+
 // [[Rcpp::export]]
 NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                             List designs, String type, List bounds, List transforms, List pretransforms,
@@ -1566,11 +1655,16 @@ double c_log_likelihood_race(
     }
     if (use_shared) shared->pc_col = pc_col; // cache for subsequent particles
   }
-  // Per-particle check: pC column present but all values zero → treat as absent
+  // Per-particle check: pC column present but all values zero → treat as absent.
+  // The loop breaks on the FIRST non-zero, so the common case (pContaminant
+  // pinned at 0, and intercept-only wherever it is sampled) is the one that
+  // scans every row -- hoist the column pointer out of the Rcpp bounds check.
   if (use_pC) {
+    const double* pc_ptr = pars.begin() + static_cast<std::ptrdiff_t>(pc_col) * pars.nrow();
+    const int n_pars_rows = pars.nrow();
     bool all_zero = true;
-    for (int i = 0; i < pars.nrow(); ++i) {
-      if (pars(i, pc_col) != 0.0) {
+    for (int i = 0; i < n_pars_rows; ++i) {
+      if (pc_ptr[i] != 0.0) {
         all_zero = false;
         break;
       }
@@ -1601,16 +1695,31 @@ double c_log_likelihood_race(
   }
   use_pG = guess.active();
   if (use_pG) {
+    const double* pg_ptr = pars.begin() + static_cast<std::ptrdiff_t>(pg_col) * pars.nrow();
+    const int n_pars_rows = pars.nrow();
     bool all_zero = true;
-    for (int i = 0; i < pars.nrow(); ++i) {
-      if (pars(i, pg_col) != 0.0) { all_zero = false; break; }
+    for (int i = 0; i < n_pars_rows; ++i) {
+      if (pg_ptr[i] != 0.0) { all_zero = false; break; }
     }
     if (all_zero) use_pG = false;
   }
 
   int n_unique_trials = n_trials / n_lR;
-  // Use std::vector to avoid per-particle R-heap allocation overhead.
-  std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+  // Use std::vector to avoid per-particle R-heap allocation overhead, and take
+  // it from the shared state when there is one so the allocation itself is
+  // hoisted out of the particle loop as well.
+  std::vector<double> ll_unique_local;
+  std::vector<double>* ll_unique_store = &ll_unique_local;
+  if (use_shared) {
+    if (static_cast<int>(shared->ll_unique_buf.size()) != n_unique_trials) {
+      shared->ll_unique_buf.resize(static_cast<size_t>(n_unique_trials));
+    }
+    std::fill(shared->ll_unique_buf.begin(), shared->ll_unique_buf.end(), min_ll);
+    ll_unique_store = &shared->ll_unique_buf;
+  } else {
+    ll_unique_local.assign(static_cast<size_t>(n_unique_trials), min_ll);
+  }
+  std::vector<double>& ll_unique = *ll_unique_store;
   // Raw pointer into pars matrix: col-major layout, element (row,col) = pars_cm_ptr[col*n_trials+row]
   const double* pars_cm_ptr = pars.begin();
 

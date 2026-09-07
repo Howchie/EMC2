@@ -2797,6 +2797,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pt_prologue_oo
+Rcpp::List pt_prologue_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, List bounds, List transforms, List pretransforms, CharacterVector p_types, Rcpp::Nullable<Rcpp::List> trend, bool return_pars);
+RcppExport SEXP _EMC2_pt_prologue_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP trendSEXP, SEXP return_parsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type particle_matrix(particle_matrixSEXP);
+    Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
+    Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
+    Rcpp::traits::input_parameter< List >::type bounds(boundsSEXP);
+    Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
+    Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
+    Rcpp::traits::input_parameter< bool >::type return_pars(return_parsSEXP);
+    rcpp_result_gen = Rcpp::wrap(pt_prologue_oo(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend, return_pars));
+    return rcpp_result_gen;
+END_RCPP
+}
 // calc_ll_oo_pw
 NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
 RcppExport SEXP _EMC2_calc_ll_oo_pw(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
@@ -3505,6 +3525,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_TrendEngine_apply_pretransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_pretransform_bases, 2},
     {"_EMC2_TrendEngine_apply_posttransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_posttransform_bases, 2},
     {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 12},
+    {"_EMC2_pt_prologue_oo", (DL_FUNC) &_EMC2_pt_prologue_oo, 10},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
     {"_EMC2_get_pars_c_batch_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_batch_wrapper_oo, 11},

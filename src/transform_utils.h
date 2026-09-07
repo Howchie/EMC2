@@ -23,6 +23,14 @@ void c_do_transform_pt(ParamTable& pt,
 
 Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt, const std::vector<BoundSpec>& specs);
 
+// As c_do_bound_pt_from, but folds into a caller-owned buffer instead of
+// allocating an R LogicalVector (and cloning the seed) per particle. `out` must
+// already be sized to pt.base.nrow(); it is overwritten from `seed`.
+void c_do_bound_pt_from_into(const ParamTable& pt,
+                             const std::vector<BoundSpec>& specs,
+                             const Rcpp::LogicalVector& seed,
+                             Rcpp::LogicalVector& out);
+
 Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
                                        const std::vector<BoundSpec>& specs,
                                        const Rcpp::LogicalVector& seed);

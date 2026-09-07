@@ -547,20 +547,37 @@ create_eff_proposals <- function(emc, n_cores){
 sub_blocking <- function(emc, n_blocks){
   covs <- lapply(emc, FUN = function(x){return(x$chains_var)})
   out <- array(0, dim = dim(covs[[1]][[1]]))
-  for(i in 1:length(covs)){
-    cov_tmp <- covs[[1]]
-    for(j in 1:length(cov_tmp)){
-      out <- out + cov2cor(cov_tmp[[1]])
+  n_summed <- 0L
+  # Average the per-subject correlation matrices over every chain AND every
+  # subject.  Both loop indices used to be pinned at 1, so `out` was
+  # n_chains * n_subjects copies of chain 1 / subject 1 and the clustering below
+  # saw a single subject from a single chain instead of the pooled structure.
+  for(i in seq_along(covs)){
+    cov_tmp <- covs[[i]]
+    for(j in seq_along(cov_tmp)){
+      out <- out + cov2cor(cov_tmp[[j]])
+      n_summed <- n_summed + 1L
     }
   }
+  if(n_summed == 0L) stop("sub_blocking: no chain covariance matrices to block on")
+  out <- out/n_summed
   shared_ll_idx <- attr(emc[[1]]$data, "shared_ll_idx")
   min_comp <- 0
   components <- c()
   for(ll in unique(shared_ll_idx)){
     idx <- ll == shared_ll_idx
-    distance <-as.dist(1- abs(out[idx, idx]/out[1,1]))
-    clusts <- hclust(distance)
-    sub_comps <- min_comp + cutree(clusts, k = n_blocks) # This could go wrong if one group has just one member
+    n_members <- sum(idx)
+    if(n_members <= 1L){
+      # hclust needs at least two members; a singleton is its own block.
+      sub_comps <- stats::setNames(rep(min_comp + 1L, n_members),
+                                   dimnames(out)[[1]][idx])
+    } else {
+      distance <- as.dist(1 - abs(out[idx, idx, drop = FALSE]))
+      clusts <- hclust(distance)
+      # cutree() silently returns fewer groups than asked when the group has
+      # fewer members than n_blocks; clamp so the block labels stay contiguous.
+      sub_comps <- min_comp + cutree(clusts, k = min(n_blocks, n_members))
+    }
     min_comp <- max(sub_comps)
     components <- c(components, sub_comps)
   }
@@ -1103,6 +1120,13 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
 }
 
 # Cores this chain may use right now, never fewer than its own static share.
+#
+# Deliberately NOT cached.  Caching the listing for even a fraction of a second
+# was tried and reverted: the reallocation contract is that a released core is
+# visible to the next caller, the pool's own tests assert exactly that, and the
+# listing is tens of microseconds against a ~100 ms iteration.  If a networked
+# tmpdir ever makes it expensive, the fix is to move the arena to a local
+# directory, not to answer with a stale count.
 .emc_cores_now <- function(core_ctl, base) {
   if (is.null(core_ctl)) return(base)
   unfinished <- core_ctl$n_chains - length(list.files(core_ctl$dir))

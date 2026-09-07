@@ -751,6 +751,23 @@ SIMD_STATUS="unavailable"
 SIMD_STATE="off"
 SIMD_DETAIL="off (probe failed)"
 
+# Header dependency tracking (-MMD -MP). R's own build rules record no
+# dependency of an object file on the headers it includes, so editing a header
+# rebuilds only the .cpp files whose timestamps changed and every other
+# translation unit silently keeps an object built against the old declarations.
+# For a package whose hot paths are header-only (ParamTable.h, model_*.h) that
+# is an ODR/layout mismatch and a segfault at a random address, not a build
+# error. Probing keeps the flags off for toolchains that do not understand them.
+DEP_CXXFLAGS=""
+DEP_CFLAGS=""
+DEP_STATUS="unavailable"
+
+# Opt-in extra preprocessor flags, for diagnostic builds that should not need a
+# source edit. Used by the assertion build of the ParamTable row-constant
+# tracking:
+#   EMC2_EXTRA_CPPFLAGS=-DEMC2_PT_CONST_CHECK R CMD INSTALL --library=... .
+EXTRA_CPPFLAGS="${EMC2_EXTRA_CPPFLAGS:-}"
+
 probe_omp() {
   cat > "$workdir/omp_probe.cpp" <<'EOF'
 #include <omp.h>
@@ -805,6 +822,31 @@ EOF
   fi
   return 1
 }
+
+probe_depend() {
+  cat > "$workdir/dep_probe.cpp" <<'EOF'
+#include "dep_probe.h"
+int main(void) { return DEP_PROBE_OK; }
+EOF
+  cat > "$workdir/dep_probe.h" <<'EOF'
+#define DEP_PROBE_OK 0
+EOF
+  # -MMD must emit dep_probe.d beside the object and must not disturb the
+  # compile itself; both are checked.
+  ( cd "$workdir" && "$CXX_BIN" $CXX_STD $R_CXXFLAGS -MMD -MP \
+      -c dep_probe.cpp -o dep_probe.o 2>/dev/null ) || return 1
+  [ -f "$workdir/dep_probe.d" ] || return 1
+  grep -q 'dep_probe\.h' "$workdir/dep_probe.d" || return 1
+  return 0
+}
+
+if probe_depend; then
+  DEP_STATUS="available"
+  DEP_CXXFLAGS="-MMD -MP"
+  DEP_CFLAGS="-MMD -MP"
+else
+  echo "configure: note: compiler does not emit header dependencies with -MMD -MP; incremental builds will not track header edits (run 'rm src/*.o' after editing a header)" >&2
+fi
 
 if probe_omp; then
   OMP_STATUS="available"
@@ -864,7 +906,7 @@ case "$MARCH_CXXFLAGS" in
   -march=native) MARCH_TARGET="native" ;;
   -march=*)      MARCH_TARGET="${MARCH_CXXFLAGS#-march=}" ;;
 esac
-CONFIG_META="profile=${BUILD_PROFILE} march=${MARCH_TARGET} openmp=${OMP_STATUS} openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE} make-jobs=${MAKE_JOBS}"
+CONFIG_META="profile=${BUILD_PROFILE} march=${MARCH_TARGET} openmp=${OMP_STATUS} openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE} header-deps=${DEP_STATUS} make-jobs=${MAKE_JOBS}"
 echo "configure: EMC2 build configuration"
 echo "  build profile : $BUILD_PROFILE"
 echo "  march         : $march_meta"
@@ -872,6 +914,8 @@ echo "  compiler      : $CXX_FULL"
 echo "  R CXXFLAGS    : $R_CXXFLAGS"
 echo "  OpenMP        : $OMP_STATUS (compile/link flags only via --enable-openmp)"
 echo "  OpenMP SIMD   : $SIMD_DETAIL"
+echo "  header deps   : $DEP_STATUS"
+if [ -n "$EXTRA_CPPFLAGS" ]; then echo "  extra CPPFLAGS: $EXTRA_CPPFLAGS"; fi
 echo "  parallel build : $parallel_build_detail"
 
 # ---------------------------------------------------------------------------
@@ -890,6 +934,9 @@ sed \
   -e "s|@OMP_CXXFLAGS@|${OMP_CXXFLAGS}|g" \
   -e "s|@OMP_LIBS@|${OMP_LIBS}|g" \
   -e "s|@SIMD_CXXFLAGS@|${SIMD_CXXFLAGS}|g" \
+  -e "s|@DEP_CXXFLAGS@|${DEP_CXXFLAGS}|g" \
+  -e "s|@DEP_CFLAGS@|${DEP_CFLAGS}|g" \
+  -e "s|@EXTRA_CPPFLAGS@|${EXTRA_CPPFLAGS}|g" \
   -e "s|@MAKE_JOBS@|${MAKE_JOBS}|g" \
   -e "s|@CONFIG_META@|${CONFIG_META}|g" \
   src/Makevars.in > "$workdir/Makevars" || {

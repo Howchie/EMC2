@@ -9,6 +9,20 @@ SIMD_CXXFLAGS ?=
 
 PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5 $(SIMD_CXXFLAGS)
 
+# Header dependency tracking. R's rules record no dependency of an object on
+# the headers it includes, so a header edit silently leaves every untouched
+# translation unit built against the old declarations (an ODR/layout mismatch,
+# not a build error). Rtools is GCC, which always supports -MMD -MP, so this
+# needs no probe here; the Unix side probes it in ./configure.
+PKG_CXXFLAGS += -MMD -MP
+PKG_CFLAGS += -MMD -MP
+# Including .d files introduces make targets, and R's shlib run supplies NO
+# explicit goal -- it relies on the default one (`all`, defined in shlib.mk,
+# which make reads AFTER this file). Without the pin below the first target of
+# the first .d becomes the default goal and the build stops after one object.
+.DEFAULT_GOAL := all
+-include $(wildcard *.d)
+
 # -fno-finite-math-only is REQUIRED: -ffast-math would otherwise assume no NaN/Inf
 # and break the ±Inf/NaN censoring comparisons (NA_REAL is a NaN). See src/Makevars.
 ifeq ($(BUILD_PROFILE),legacy)

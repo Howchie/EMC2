@@ -130,6 +130,7 @@ struct ModelSharedState {
   std::vector<int> idx_time_only;   // time-accumulator mask (finite rows only)
   std::vector<int> n_resp;          // per-unique-trial guessable accumulator count (excl. time, nogo)
   std::vector<double> alt_res_buf;  // scratch for timed-race f_T and S_W
+  std::vector<double> ll_unique_buf; // per-unique-trial log-likelihood accumulator
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;

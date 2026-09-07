@@ -641,6 +641,10 @@ calc_ll_oo <- function(particle_matrix, data, constants, designs, type, bounds, 
     .Call(`_EMC2_calc_ll_oo`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise)
 }
 
+pt_prologue_oo <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend = NULL, return_pars = FALSE) {
+    .Call(`_EMC2_pt_prologue_oo`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend, return_pars)
+}
+
 calc_ll_oo_pw <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL) {
     .Call(`_EMC2_calc_ll_oo_pw`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }

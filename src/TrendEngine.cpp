@@ -272,6 +272,7 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
   pretransform_ops.clear();
   posttransform_ops.clear();
   premap_trend_params.clear();
+  premap_target_params.clear();
   pretransform_trend_params.clear();
   posttransform_trend_params.clear();
   all_trend_params.clear();
@@ -322,6 +323,10 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
         if (phase == TrendPhase::Pretransform)  pretransform_trend_params.insert(pn);
         if (phase == TrendPhase::Posttransform) posttransform_trend_params.insert(pn);
       }
+    }
+
+    if (phase == TrendPhase::Premap) {
+      premap_target_params.insert(name_i);
     }
 
     // Which kinds of input does this op use?
@@ -464,7 +469,11 @@ Rcpp::LogicalVector TrendPlan::premap_design_mask(const Rcpp::List& designs) con
 
   for (int i = 0; i < n; ++i) {
     string nm = as<string>(dnames[i]);
-    mask[i] = (premap_trend_params.find(nm) != premap_trend_params.end());
+    // A premap trend needs its target design mapped first.  Checking only the
+    // trend-coefficient names misses parameterisations without a self column
+    // (e.g. `v ~ 0 + S`), so the target set is included as well.
+    mask[i] = (premap_trend_params.find(nm) != premap_trend_params.end()) ||
+      (premap_target_params.find(nm) != premap_target_params.end());
   }
 
   return mask;

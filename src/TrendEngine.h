@@ -90,6 +90,10 @@ struct TrendPlan {
   std::vector<TrendOpSpec> posttransform_ops;
 
   std::unordered_set<std::string> premap_trend_params;
+  // Design outputs whose mapped values are the targets of premap trends.
+  // These outputs must be mapped before the trend is applied, even when the
+  // design has no self/intercept column (for example, `v ~ 0 + S`).
+  std::unordered_set<std::string> premap_target_params;
   std::unordered_set<std::string> pretransform_trend_params;
   std::unordered_set<std::string> posttransform_trend_params;
   std::unordered_set<std::string> all_trend_params;

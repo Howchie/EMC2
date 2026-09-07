@@ -25,6 +25,176 @@
   invisible(NULL)
 }
 
+# --- framed message transport ------------------------------------------------
+#
+# serialize()/unserialize() cannot be pointed straight at a FIFO.  A read from a
+# pipe returns whatever happens to have arrived, and R treats that short read as
+# a hard error -- "error reading from connection" -- rather than asking for the
+# rest.  Sending a message as serialize(msg, con) was therefore a race the whole
+# time: it emits a run of small writes, unserialize() issues a matching run of
+# reads, and any read that outran the writer killed the worker in mid-message.
+# The master, still writing into a pipe with no reader left, then took the
+# SIGPIPE.  Both halves usually won the race, because a message below the 64 kB
+# pipe buffer lands there before the worker is scheduled -- but a busy box loses
+# it at 3 kB, and above the buffer the master has to interleave, so it stops
+# being a race and starts being a certainty.  Two chunk sizes make it certain on
+# their own: unserialize() asks for a whole XDR chunk at a time, 64,768 bytes
+# for a double vector and 32,384 for an integer one, against reads that never
+# return more than one 8 kB connection buffer.
+#
+# Messages are framed instead: an 8-byte little-endian payload length followed
+# by the serialised bytes, both moved by loops that expect short reads and short
+# writes.  Serialisation itself happens in memory, where it is exact, and the
+# connection only ever sees raw bytes.  This is also about twice as fast as the
+# old path on a typical iteration message, which made many more, smaller writes.
+#
+# Correctness does not rest on the framing being right.  A desynchronised stream
+# fails the length sanity check or fails to unserialise, both of which return
+# NULL, and every caller treats a NULL reply as "recompute this share here".
+
+# Request size for a read; a pipe returns what it has, so this is only a ceiling.
+.EMC_WPOOL_READ_CHUNK <- 65536L
+# PIPE_BUF.  A blocking write this size completes in one go, so a partial write
+# needs a signal to land in a window that is only a few microseconds wide.
+.EMC_WPOOL_WRITE_CHUNK <- 4096L
+# No pool message comes near this.  It exists so a desynchronised stream cannot
+# talk the reader into allocating on a garbage length.
+.EMC_WPOOL_MAX_FRAME <- 2^31
+
+# Record why a transport call failed so the degradation warning can name it.
+.emc_wpool_transport_fail <- function(msg) {
+  .emc_pool_state$last_transport_error <- msg
+  FALSE
+}
+
+.emc_wpool_transport_error <- function(default) {
+  msg <- .emc_pool_state$last_transport_error
+  if (is.null(msg) || !nzchar(msg)) default else msg
+}
+
+# writeBin() reports a short write as a warning and returns nothing, so promote
+# that warning: a half-written frame is a dead channel, not a slow one.
+.emc_wpool_put_bytes <- function(con, bytes) {
+  n <- length(bytes)
+  from <- 1
+  while (from <= n) {
+    to <- min(n, from + .EMC_WPOOL_WRITE_CHUNK - 1)
+    withCallingHandlers(
+      writeBin(bytes[from:to], con),
+      warning = function(w) stop(conditionMessage(w), call. = FALSE))
+    from <- to + 1
+  }
+  invisible(NULL)
+}
+
+# NULL means the bytes did not arrive: an empty read is the pipe closing, which
+# is how both a clean shutdown and a dead worker present themselves.
+.emc_wpool_get_bytes <- function(con, n) {
+  if (n <= 0) return(raw(0))
+  out <- raw(n)
+  got <- 0
+  while (got < n) {
+    chunk <- tryCatch(
+      readBin(con, "raw", min(n - got, .EMC_WPOOL_READ_CHUNK)),
+      error = function(e) { .emc_wpool_transport_fail(conditionMessage(e)); NULL })
+    if (is.null(chunk)) return(NULL)
+    k <- length(chunk)
+    if (k == 0L) {
+      .emc_wpool_transport_fail(if (got == 0) {
+        "the other end of the pipe closed"
+      } else "the pipe closed part-way through a message")
+      return(NULL)
+    }
+    out[(got + 1):(got + k)] <- chunk
+    got <- got + k
+  }
+  out
+}
+
+.emc_wpool_send <- function(con, obj) {
+  payload <- serialize(obj, NULL)
+  header <- writeBin(as.double(length(payload)), raw(), size = 8,
+                     endian = "little")
+  tryCatch({
+    .emc_wpool_put_bytes(con, header)
+    .emc_wpool_put_bytes(con, payload)
+    flush(con)
+    TRUE
+  }, error = function(e) .emc_wpool_transport_fail(conditionMessage(e)))
+}
+
+.emc_wpool_recv <- function(con) {
+  header <- .emc_wpool_get_bytes(con, 8)
+  if (is.null(header)) return(NULL)
+  n <- readBin(header, "double", 1L, size = 8, endian = "little")
+  if (!is.finite(n) || n < 0 || n > .EMC_WPOOL_MAX_FRAME) {
+    .emc_wpool_transport_fail("implausible message length on the pipe")
+    return(NULL)
+  }
+  payload <- .emc_wpool_get_bytes(con, n)
+  if (is.null(payload)) return(NULL)
+  tryCatch(unserialize(payload), error = function(e) {
+    .emc_wpool_transport_fail(conditionMessage(e))
+    NULL
+  })
+}
+
+# How long to wait for a worker's reply before treating it as wedged.
+#
+# The pool's recovery paths all key on a worker EXITING: a dead worker closes
+# its pipe, the read returns zero bytes and the master recomputes that share
+# serially.  A worker that is alive and stuck emits no such signal, and the
+# master's blocking read then waits forever -- a fit that looks like it is
+# running, with a frozen progress bar and no indication of which subject is
+# responsible.  That is not hypothetical: a single PDE solve diverging at the
+# edge of the RLF/FPE parameter space has wedged a sampler before, and those
+# solvers sit on this path.
+#
+# The deadline is deliberately loose: 20x the median observed receive time,
+# floored at two minutes, so a merely slow iteration can never trip it.
+# options(emc2.worker_timeout = <seconds>) overrides it; Inf disables it.
+.EMC_WPOOL_TIMEOUT_FLOOR <- 120
+.EMC_WPOOL_TIMEOUT_COLD <- 600
+
+.emc_wpool_deadline <- function() {
+  opt <- getOption("emc2.worker_timeout", NA_real_)
+  if (!is.na(opt)) return(as.numeric(opt))
+  h <- .emc_pool_state$iter_receive_times
+  if (is.null(h) || !length(h)) return(.EMC_WPOOL_TIMEOUT_COLD)
+  max(.EMC_WPOOL_TIMEOUT_FLOOR, 20 * stats::median(h))
+}
+
+.emc_wpool_record_receive <- function(seconds) {
+  h <- c(.emc_pool_state$iter_receive_times, seconds)
+  .emc_pool_state$iter_receive_times <- utils::tail(h, 32L)
+  invisible(NULL)
+}
+
+# Wait for the next completion token on the shared non-blocking `done` channel.
+# Returns the worker index, NA_integer_ if a worker we are still waiting on has
+# died, or -1L if `deadline` seconds elapse with every pending worker still
+# alive (i.e. one of them is wedged).  Same spin-then-back-off schedule as the
+# dynamic likelihood queue.
+.emc_wpool_await_done <- function(pool, pending, deadline) {
+  started <- proc.time()[["elapsed"]]
+  idle <- 0L
+  wait <- 0
+  repeat {
+    tok <- tryCatch(readBin(pool$done$rc, "raw", 1L),
+                    error = function(e) raw(0))
+    if (length(tok)) return(as.integer(tok[1L]))
+    idle <- idle + 1L
+    if ((idle %% 64L) == 0L) {
+      for (w in which(pending)) {
+        pid <- .emc_wpool_job_pid(pool$jobs[[w]])
+        if (!is.null(pid) && !.emc_wpool_pid_alive(pid)) return(NA_integer_)
+      }
+      if (proc.time()[["elapsed"]] - started > deadline) return(-1L)
+    }
+    if (idle > 16L) { Sys.sleep(wait); wait <- min(max(wait * 2, 5e-5), 2e-3) }
+  }
+}
+
 # Spawn requires an installed namespace and serialisable context. Development
 # namespaces and custom trend kernels use fork, where external pointers survive.
 .emc_wpool_backend <- function(ctx) {
@@ -89,8 +259,11 @@
   # kill(pid, 0) reports TRUE for a zombie retained by the clean template.
   # Treat that process as dead so a missing completion token triggers the
   # serial correctness fallback instead of an infinite FIFO wait.
-  stat <- tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
-                   error = function(e) character())
+  # A process that exits between the signal probe and this read is normal, and
+  # readLines() warns as well as errors when the file has gone.
+  stat <- suppressWarnings(
+    tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
+             error = function(e) character()))
   if (length(stat)) {
     tail <- sub("^.*\\) ", "", stat)
     state <- strsplit(tail, " ", fixed = TRUE)[[1L]][1L]
@@ -172,10 +345,11 @@
       if (is.null(template) || !isTRUE(template$alive)) {
         stop("clean worker template is not available")
       }
-      serialize(list(command = "spawn", idx = idx, req = req, ans = ans),
-                template$wc)
-      flush(template$wc)
-      reply <- unserialize(template$rc)
+      if (!.emc_wpool_send(template$wc, list(command = "spawn", idx = idx,
+                                             req = req, ans = ans))) {
+        stop(.emc_wpool_transport_error("template stopped accepting requests"))
+      }
+      reply <- .emc_wpool_recv(template$rc)
       if (!isTRUE(reply$ok) || length(reply$pids) != n) {
         stop(if (is.null(reply$error)) "template could not fork workers" else reply$error)
       }
@@ -301,7 +475,7 @@
   wc <- fifo(req, "wb", blocking = TRUE)
   close(f)
   rc <- fifo(ans, "rb", blocking = TRUE)
-  ready <- tryCatch(unserialize(rc), error = function(e) NULL)
+  ready <- .emc_wpool_recv(rc)
   if (!isTRUE(ready$ready)) return(NULL)
   job$pid <- as.integer(ready$pid)
   success <- TRUE
@@ -472,9 +646,19 @@
 
 .emc_wpool_stop_workers <- function(pool) {
   if (is.null(pool)) return(invisible(NULL))
-  # Send shutdown to every worker; surviving workers may still await its token.
+  # Send shutdown to every worker still there; surviving workers may still await
+  # its token.  Writing into a pipe whose worker has already gone earns a
+  # SIGPIPE, and R prints that to stderr from a signal handler where no
+  # tryCatch() can reach it, so check first rather than explain the noise
+  # afterwards.  Skipping a worker that is in fact alive costs nothing: closing
+  # the pipe below gives it the same end-of-stream the token would have.
   for (w in seq_len(length(pool$wcs))) {
-    try({ serialize(NULL, pool$wcs[[w]]); flush(pool$wcs[[w]]) }, silent = TRUE)
+    pid <- if (w <= length(pool$jobs)) {
+      .emc_wpool_job_pid(pool$jobs[[w]])
+    } else NA_integer_
+    if (is.na(pid) || .emc_wpool_pid_alive(pid)) {
+      .emc_wpool_send(pool$wcs[[w]], NULL)
+    }
   }
   for (cn in c(pool$wcs, pool$rcs)) try(close(cn), silent = TRUE)
   if (!identical(pool$backend, "spawn")) {
@@ -486,7 +670,7 @@
 .emc_wpool_template_stop <- function(template) {
   if (is.null(template)) return(invisible(NULL))
   if (isTRUE(template$alive)) {
-    try({ serialize(NULL, template$wc); flush(template$wc) }, silent = TRUE)
+    .emc_wpool_send(template$wc, NULL)
   }
   for (cn in list(template$wc, template$rc)) try(close(cn), silent = TRUE)
   .emc_wpool_terminate_jobs(list(template$job), wait = TRUE, terminate = FALSE)
@@ -524,7 +708,7 @@
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE)
             if (!is.null(done)) try(close(done), silent = TRUE) }, add = TRUE)
   repeat {
-    msg <- tryCatch(unserialize(rc), error = function(e) NULL)
+    msg <- .emc_wpool_recv(rc)
     if (is.null(msg)) break                     # shutdown or master disconnect
     out <- tryCatch(.emc_wpool_compute(msg, ctx),
                     error = function(e) list(failed = conditionMessage(e)))
@@ -541,8 +725,7 @@
                       error = function(e) FALSE)) break
       }
     }
-    if (!tryCatch({ serialize(out, wc); flush(wc); TRUE },
-                  error = function(e) FALSE)) break
+    if (!.emc_wpool_send(wc, out)) break
     # One-shot wrapper jobs (currently the clean loo process) compute exactly
     # one request, return it, and exit so their allocator/native state cannot
     # accumulate work from later requests.
@@ -559,11 +742,10 @@
   wc <- fifo(boot$ans, "wb", blocking = TRUE)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
           add = TRUE)
-  serialize(list(ready = TRUE, pid = Sys.getpid()), wc)
-  flush(wc)
+  .emc_wpool_send(wc, list(ready = TRUE, pid = Sys.getpid()))
   jobs <- list()
   repeat {
-    command <- tryCatch(unserialize(rc), error = function(e) NULL)
+    command <- .emc_wpool_recv(rc)
     if (is.null(command)) break
     reply <- tryCatch({
       if (!identical(command$command, "spawn")) stop("unknown template command")
@@ -587,8 +769,7 @@
       jobs[keys] <- made
       list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)))
     }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
-    if (!tryCatch({ serialize(reply, wc); flush(wc); TRUE },
-                  error = function(e) FALSE)) break
+    if (!.emc_wpool_send(wc, reply)) break
   }
   if (length(jobs)) {
     for (job in jobs) try(tools::pskill(job$pid), silent = TRUE)
@@ -654,13 +835,10 @@
   }
   on.exit(.emc_wpool_stop(pool), add = TRUE)
 
-  sent <- tryCatch({
-    serialize(list(kind = "loo", notify = FALSE, w = 1L), pool$wcs[[1L]])
-    flush(pool$wcs[[1L]])
-    TRUE
-  }, error = function(e) FALSE)
+  sent <- .emc_wpool_send(pool$wcs[[1L]],
+                          list(kind = "loo", notify = FALSE, w = 1L))
   if (!sent) return(NULL)
-  res <- tryCatch(unserialize(pool$rcs[[1L]]), error = function(e) NULL)
+  res <- .emc_wpool_recv(pool$rcs[[1L]])
   if (is.null(res) || !is.null(res$failed) || is.null(res$value)) return(NULL)
   if (length(res$warnings) && exists(".loo_warn_store")) {
     .loo_warn_store$msgs <- c(.loo_warn_store$msgs, res$warnings)
@@ -672,6 +850,18 @@
   # Workers receive the shared group draw as serialised bytes; the master
   # fallback already has the decoded object.
   if (is.null(shared)) shared <- unserialize(msg$shared)
+  # Only the covariance crosses the pipe; its factorisation is rebuilt here.
+  # `.chol_factor()` returns the root *and* its inverse, so the cache is three
+  # P x P matrices where the covariance alone is one, and the wire is the
+  # scarce resource: a blocking FIFO moves ~16 MB/s, while chol() runs at
+  # GFLOP/s.  The trade only improves with P (wire is O(P^2), chol O(P^3)/3,
+  # and they do not cross until P is in the thousands).  Every worker starts
+  # from the identical matrix and makes the identical LAPACK call, so the
+  # factors are bit-for-bit the ones the master would have sent.
+  group_chol <- shared$group_chol
+  if (is.null(group_chol) && !is.null(shared$group_var)) {
+    group_chol <- build_group_chol_cache(shared$group_var, shared$idx_list)
+  }
   subs <- msg$subs
   props <- matrix(0, ctx$n_pars + 1L, length(subs))
   pm <- vector("list", length(subs))
@@ -689,13 +879,12 @@
       prev_ll = msg$prev_ll[k], parameters = NULL, model = ctx$model,
       stage = ctx$stage, type = ctx$type, tune = ctx$tune,
       marginalise = ctx$marginalise, r_cores = ctx$r_cores,
-      chol_cache = ctx$chol_caches[[s]], group_chol = shared$group_chol,
+      chol_cache = ctx$chol_caches[[s]], group_chol = group_chol,
       current_alpha = msg$alpha[, k],
       population_mu = msg$population_mu[, k],
-      # build_group_chol_cache() retains the exact covariance in `ref` for its
-      # cache-validity check.  Reuse it here instead of sending the same P x P
-      # matrix a second time in the shared payload.
-      population_var = shared$group_chol$ref
+      # The same matrix new_particle() will compare the cache's `ref` against,
+      # so one copy serves both and the cache always hits.
+      population_var = shared$group_var
     )
     times[k] <- sum(proc.time()[c("user.self", "sys.self")]) - t0
     props[, k] <- c(out$proposal, out$ll)
@@ -730,14 +919,13 @@
 
   sent <- logical(n_workers)
   for (w in seq_len(n_workers)) {
-    sent[w] <- tryCatch({
-      serialize(list(kind = "ll", s = s, component = component,
-                     proposals = proposals[idx == w, , drop = FALSE]),
-                pool$wcs[[w]])
-      flush(pool$wcs[[w]])
-      TRUE
-    }, error = function(e) { .emc_wpool_degraded(conditionMessage(e)); FALSE })
-    if (!sent[w]) break
+    sent[w] <- .emc_wpool_send(
+      pool$wcs[[w]], list(kind = "ll", s = s, component = component,
+                          proposals = proposals[idx == w, , drop = FALSE]))
+    if (!sent[w]) {
+      .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))
+      break
+    }
   }
 
   # Drain every sent worker after a failed round so stale replies cannot answer
@@ -745,7 +933,7 @@
   out <- numeric(n)
   ok <- all(sent)
   for (w in which(sent)) {
-    res <- tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+    res <- .emc_wpool_recv(pool$rcs[[w]])
     if (is.null(res) || !is.null(res$failed) ||
         length(res$ll) != sum(idx == w)) {
       ok <- FALSE
@@ -794,14 +982,14 @@
     rows
   }
   send <- function(w, rows) {
-    tryCatch({
-      serialize(list(kind = "ll", s = s, component = component,
-                     notify = TRUE, w = w,
-                     proposals = proposals[rows, , drop = FALSE]),
-                pool$wcs[[w]])
-      flush(pool$wcs[[w]])
-      TRUE
-    }, error = function(e) { .emc_wpool_degraded(conditionMessage(e)); FALSE })
+    ok <- .emc_wpool_send(
+      pool$wcs[[w]], list(kind = "ll", s = s, component = component,
+                          notify = TRUE, w = w,
+                          proposals = proposals[rows, , drop = FALSE]))
+    if (!ok) {
+      .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))
+    }
+    ok
   }
   # Poll the non-blocking completion channel so worker death cannot hang the
   # master. Spin briefly, then back off while checking worker liveness.
@@ -830,7 +1018,7 @@
     for (i in seq_len(n_out)) {
       w <- await()
       if (is.na(w)) break
-      tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+      .emc_wpool_recv(pool$rcs[[w]])
     }
     .emc_pool_state$ll_pool$alive <- FALSE
     NULL
@@ -849,7 +1037,7 @@
     # alignment is lost; no later result is trustworthy.
     if (is.na(w) || w < 1L || w > k || is.null(pending[[w]])) return(fail())
     rows <- pending[[w]]
-    res <- tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+    res <- .emc_wpool_recv(pool$rcs[[w]])
     if (is.null(res) || !is.null(res$failed) || length(res$ll) != length(rows)) {
       pending[w] <- list(NULL)
       return(fail())
@@ -995,64 +1183,140 @@
   rownames(population_mu) <- rownames(pars$alpha)
   alpha <- pars$alpha
   shared_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
-  shared <- list(group_chol = group_chol)
-  shared_raw <- serialize(shared, NULL)
+  # Send the covariance, not its factorisation.  `build_group_chol_cache()`
+  # holds the root and its inverse alongside the matrix itself, so the full
+  # cache is three P x P matrices per worker per iteration; the covariance is
+  # one, and each worker rebuilds the rest in microseconds.  See
+  # .emc_wpool_compute_particle().  The master keeps the cache it already built
+  # so the recompute fallback below pays nothing for this.
+  shared <- list(group_var = group_chol$ref, idx_list = group_chol$idx_list,
+                 group_chol = group_chol)
+  # A dead pool computes every share in the master from `shared` itself, so the
+  # wire copy would be built and thrown away on every iteration of a fit that
+  # has no workers at all.
+  was_alive <- isTRUE(pool$alive)
+  shared_raw <- if (was_alive) {
+    serialize(shared[c("group_var", "idx_list")], NULL)
+  } else raw(0)
   shared_elapsed <- if (profile) {
     proc.time()[["elapsed"]] - shared_started
   } else NA_real_
-  msgs <- lapply(part, function(subs) {
+  # `notify`/`w` ask the worker to announce completion on the shared,
+  # non-blocking `done` channel before it writes its (possibly large) reply.
+  # That is what lets the master wait with a deadline instead of blocking on one
+  # worker's pipe forever; see .emc_wpool_await_done().
+  watch <- !is.null(pool$done)
+  msgs <- lapply(seq_along(part), function(w) {
+    subs <- part[[w]]
     list(subs = subs, shared = shared_raw,
          alpha = alpha[, subs, drop = FALSE],
          population_mu = population_mu[, subs, drop = FALSE],
-         pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs])
+         pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
+         notify = watch, w = w)
   })
-  was_alive <- isTRUE(pool$alive)
   sent <- rep(FALSE, pool$n)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   if (was_alive) {
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
-      sent[w] <- tryCatch({
-        serialize(msgs[[w]], pool$wcs[[w]]); flush(pool$wcs[[w]]); TRUE
-      }, error = function(e) {
-        .emc_wpool_degraded(conditionMessage(e)); FALSE
-      })
-      if (!sent[w]) pool$alive <- FALSE
+      sent[w] <- .emc_wpool_send(pool$wcs[[w]], msgs[[w]])
+      if (!sent[w]) {
+        .emc_wpool_degraded(
+          .emc_wpool_transport_error("send to a worker failed"))
+        pool$alive <- FALSE
+      }
     }
   }
   send_elapsed <- if (profile) {
     proc.time()[["elapsed"]] - send_started
   } else NA_real_
-  receive_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
-  for (w in seq_len(pool$n)) {
+  receive_started <- proc.time()[["elapsed"]]
+  # Sends are issued to every worker before any receive, and a send blocks until
+  # that worker drains its pipe, so worker n starts a little after workers
+  # 1..n-1 have each taken their message.  At current message sizes that skew is
+  # far below the LPT partition's granularity; noted here so it is not
+  # rediscovered later as a mystery imbalance.
+  store <- function(w, res) {
     subs <- part[[w]]
-    if (!length(subs)) next
-    res <- if (sent[w]) {
-      tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
-    } else NULL
-    # A dead or erroring worker must not lose an iteration: recompute its share
-    # here.  Same function, same streams, so the result is identical.
-    if (is.null(res) || !is.null(res$failed)) {
-      if (sent[w] && is.null(res)) {
-        # No reply means the transport or the worker itself is gone, so there
-        # is nothing left to send to and the rest of the block is serial.
-        .emc_wpool_degraded("worker gave no reply")
-        pool$alive <- FALSE
-      }
-      # A reported `failed` is different: the worker caught an error in the
-      # work and is still listening.  Recompute this share, but do not condemn
-      # the whole block over one subject's bad iteration -- if it is
-      # deterministic the master's own call raises it properly.
-      res <- .emc_wpool_compute(msgs[[w]], ctx, shared = shared)
-    }
-    props[, subs] <- res$props
-    times[subs] <- res$times
-    pm_settings[subs] <- res$pm
-    seeds[subs] <- res$seeds
+    props[, subs] <<- res$props
+    times[subs] <<- res$times
+    pm_settings[subs] <<- res$pm
+    seeds[subs] <<- res$seeds
   }
-  receive_elapsed <- if (profile) {
-    proc.time()[["elapsed"]] - receive_started
-  } else NA_real_
+  # A `failed` reply is not a dead worker: it caught an error in the work and is
+  # still listening.  Recompute that share here -- same function, same streams,
+  # so the result is identical -- but do not condemn the whole block over one
+  # subject's bad iteration; if the error is deterministic the master's own call
+  # raises it properly.
+  recompute <- function(w) .emc_wpool_compute(msgs[[w]], ctx, shared = shared)
+
+  pending <- sent & vapply(part, length, integer(1)) > 0L
+  if (watch && any(pending)) {
+    deadline <- .emc_wpool_deadline()
+    while (any(pending)) {
+      w <- .emc_wpool_await_done(pool, pending, deadline)
+      if (is.na(w) || w < 1L || w > pool$n || !pending[w]) {
+        if (identical(w, -1L)) {
+          # Every worker we are still waiting on is alive and has produced
+          # nothing for `deadline` seconds: one of them is wedged.  Name it and
+          # the subjects it holds -- that is the diagnosis a frozen progress bar
+          # cannot give -- then kill it so the recomputation below raises the
+          # underlying error properly.
+          stuck <- which(pending)
+          .emc_wpool_degraded(sprintf(
+            "worker%s %s produced no reply within %.0f s (subject%s %s)",
+            if (length(stuck) > 1L) "s" else "", paste(stuck, collapse = ", "),
+            deadline, if (length(unlist(part[stuck])) > 1L) "s" else "",
+            paste(unlist(part[stuck]), collapse = ", ")))
+          for (k in stuck) {
+            pid <- .emc_wpool_job_pid(pool$jobs[[k]])
+            if (!is.null(pid) && !is.na(pid)) try(tools::pskill(pid), silent = TRUE)
+          }
+        } else if (is.na(w)) {
+          .emc_wpool_degraded("worker gave no reply")
+        } else {
+          .emc_wpool_degraded("lost alignment on the worker completion channel")
+        }
+        # Nothing further on these pipes can be trusted or waited on.
+        pool$alive <- FALSE
+        for (k in which(pending)) store(k, recompute(k))
+        pending[] <- FALSE
+        break
+      }
+      res <- .emc_wpool_recv(pool$rcs[[w]])
+      if (is.null(res) || !is.null(res$failed)) {
+        if (is.null(res)) {
+          .emc_wpool_degraded("worker gave no reply")
+          pool$alive <- FALSE
+        }
+        res <- recompute(w)
+      }
+      store(w, res)
+      pending[w] <- FALSE
+    }
+    # Shares that were never sent (a failed send already retired the pool).
+    for (w in seq_len(pool$n)) {
+      if (length(part[[w]]) && !sent[w]) store(w, recompute(w))
+    }
+  } else {
+    for (w in seq_len(pool$n)) {
+      subs <- part[[w]]
+      if (!length(subs)) next
+      res <- if (sent[w]) .emc_wpool_recv(pool$rcs[[w]]) else NULL
+      if (is.null(res) || !is.null(res$failed)) {
+        if (sent[w] && is.null(res)) {
+          # No reply means the transport or the worker itself is gone, so there
+          # is nothing left to send to and the rest of the block is serial.
+          .emc_wpool_degraded("worker gave no reply")
+          pool$alive <- FALSE
+        }
+        res <- recompute(w)
+      }
+      store(w, res)
+    }
+  }
+  receive_elapsed <- proc.time()[["elapsed"]] - receive_started
+  if (was_alive) .emc_wpool_record_receive(receive_elapsed)
   private_bytes <- if (profile) {
     sum(vapply(msgs, function(msg) {
       msg$shared <- NULL

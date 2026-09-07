@@ -68,9 +68,9 @@ test_that("workers survive a block, compute, and shut down", {
   # Round trip twice, to show the workers persist rather than being one-shot.
   for (k in 1:2) {
     for (w in 1:2) {
-      serialize(list(subs = w, echo = k), pool$wcs[[w]]); flush(pool$wcs[[w]])
+      EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w, echo = k))
     }
-    got <- lapply(1:2, function(w) unserialize(pool$rcs[[w]]))
+    got <- lapply(1:2, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
     # No real ctx, so compute() errors and the worker reports it rather than dying.
     expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
   }
@@ -155,12 +155,120 @@ test_that("messages larger than the pipe buffer still round-trip", {
   skip_if(is.null(pool), "could not fork a pool here")
   on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
 
-  big <- list(subs = 1L, group_chol = matrix(0, 400, 400))
-  expect_gt(length(serialize(big, NULL)), 65536L)
-  expect_silent({ serialize(big, pool$wcs[[1]]); flush(pool$wcs[[1]]) })
-  # No real ctx, so the worker reports an error -- but it received the whole
-  # message, which is the point.
-  expect_false(is.null(unserialize(pool$rcs[[1]])$failed))
+  # Size alone is not what used to break this.  unserialize() on a connection
+  # asks for a whole XDR chunk at a time, so a double vector past 8096 elements
+  # (64,768 bytes) short-read and killed the worker mid-message however the rest
+  # of the message was shaped -- an alpha block for a wide group_design gets
+  # there long before anything looks large.  Cover both shapes and both sides.
+  cases <- list(
+    small = list(subs = 1L, pad = 1:10),
+    doubles = list(subs = 1L, group_chol = matrix(0, 400, 400)),
+    # sample.int(), not seq_len(): a compact ALTREP sequence serialises to a few
+    # bytes and would never reach the integer path the bug lived on.
+    integers = list(subs = 1L, pad = sample.int(1000L, 200000L, replace = TRUE)),
+    just_over = list(subs = 1L, pad = numeric(8097)),
+    mixed = list(subs = 1L, a = matrix(rnorm(40000), 200),
+                 b = sample.int(1000L, 50000L, replace = TRUE),
+                 c = serialize(matrix(0, 300, 300), NULL))
+  )
+  expect_gt(length(serialize(cases$doubles, NULL)), 65536L)
+  for (nm in names(cases)) {
+    expect_true(EMC2:::.emc_wpool_send(pool$wcs[[1]], cases[[nm]]), label = nm)
+    # No real ctx, so the worker reports an error -- but it received the whole
+    # message and is still listening, which is the point.
+    expect_false(is.null(EMC2:::.emc_wpool_recv(pool$rcs[[1]])$failed),
+                 label = nm)
+  }
+})
+
+test_that("the frame helpers survive short reads and short writes", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  # Straight at the transport, with no pool around it: a FIFO hands back at most
+  # one 8 kB buffer per read, so anything bigger arrives in pieces.
+  dir <- tempfile("emc_frame_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  path <- file.path(dir, "p")
+  skip_if(system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE) != 0)
+
+  obj <- list(x = matrix(rnorm(160000), 400),
+              i = sample.int(1000L, 120000L, replace = TRUE),
+              s = "tail marker")
+  child <- parallel::mcparallel({
+    wc <- fifo(path, "wb", blocking = TRUE)
+    # Two frames back to back, to show the reader stops at the frame boundary
+    # rather than swallowing whatever else is in the pipe.
+    EMC2:::.emc_wpool_send(wc, obj)
+    EMC2:::.emc_wpool_send(wc, list(second = TRUE))
+    close(wc)
+    invisible(NULL)
+  }, detached = FALSE)
+  rc <- fifo(path, "rb", blocking = TRUE)
+  first <- EMC2:::.emc_wpool_recv(rc)
+  second <- EMC2:::.emc_wpool_recv(rc)
+  eof <- EMC2:::.emc_wpool_recv(rc)
+  close(rc)
+  suppressWarnings(parallel::mccollect(child, wait = TRUE))
+
+  expect_identical(first, obj)
+  expect_identical(second, list(second = TRUE))
+  expect_null(eof)   # the writer closed; recv reports it rather than hanging
+})
+
+test_that("a message that arrives in pieces is still read whole", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  # The real failure was never about size on its own.  serialize() on a
+  # connection emits a run of small writes, unserialize() a matching run of
+  # reads, and any read that outran the writer was a hard error -- so a message
+  # only had to be split across two scheduling slices to kill the worker, which
+  # is why 3 kB messages died as readily as 3 MB ones once the box was busy.
+  dir <- tempfile("emc_frame_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  path <- file.path(dir, "p")
+  skip_if(system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE) != 0)
+
+  obj <- list(a = matrix(rnorm(300), 30),
+              b = sample.int(1000L, 200L, replace = TRUE), pm = as.list(1:20))
+  payload <- serialize(obj, NULL)
+  frame <- c(writeBin(as.double(length(payload)), raw(), size = 8,
+                      endian = "little"), payload)
+  child <- parallel::mcparallel({
+    wc <- fifo(path, "wb", blocking = TRUE)
+    cuts <- unique(c(seq(1, length(frame), length.out = 8), length(frame) + 1))
+    for (i in seq_len(length(cuts) - 1L)) {
+      writeBin(frame[floor(cuts[i]):(floor(cuts[i + 1L]) - 1L)], wc)
+      flush(wc)
+      Sys.sleep(0.02)
+    }
+    close(wc)
+    invisible(NULL)
+  }, detached = FALSE)
+  rc <- fifo(path, "rb", blocking = TRUE)
+  got <- EMC2:::.emc_wpool_recv(rc)
+  close(rc)
+  suppressWarnings(parallel::mccollect(child, wait = TRUE))
+  expect_identical(got, obj)
+})
+
+test_that("a garbled frame length is refused rather than allocated on", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  dir <- tempfile("emc_frame_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  path <- file.path(dir, "p")
+  skip_if(system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE) != 0)
+
+  child <- parallel::mcparallel({
+    wc <- fifo(path, "wb", blocking = TRUE)
+    writeBin(as.double(2^40), wc, size = 8, endian = "little")
+    flush(wc); close(wc); invisible(NULL)
+  }, detached = FALSE)
+  rc <- fifo(path, "rb", blocking = TRUE)
+  got <- EMC2:::.emc_wpool_recv(rc)
+  close(rc)
+  suppressWarnings(parallel::mccollect(child, wait = TRUE))
+  expect_null(got)
 })
 
 test_that("fitting leaves the caller's generator as it found it", {
@@ -379,8 +487,8 @@ test_that("real workers survive being recycled and still compute", {
   }
   expect_true(dir.exists(pool$dir))
 
-  for (w in 1:2) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
-  got <- lapply(1:2, function(w) unserialize(pool$rcs[[w]]))
+  for (w in 1:2) EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w))
+  got <- lapply(1:2, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
   expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
 })
 
@@ -398,8 +506,8 @@ test_that("growing the pool keeps the workers that were already running", {
   # Shrinking is not a thing: workers are only ever added within a block.
   expect_equal(EMC2:::.emc_wpool_grow(pool, 1, list(tag = "ctx"))$n, 4)
 
-  for (w in 1:4) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
-  got <- lapply(1:4, function(w) unserialize(pool$rcs[[w]]))
+  for (w in 1:4) EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w))
+  got <- lapply(1:4, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
   expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
 })
 
@@ -480,8 +588,7 @@ test_that("a dead pool is rebuilt at a recycle point when forking works again", 
 
 test_that("the population covariance is reused from the shared cache", {
   population_var <- diag(2)
-  gchol <- list(ref = population_var, chol = chol(diag(2)), logdet = 0)
-  shared <- list(group_chol = gchol)
+  shared <- list(group_var = population_var, idx_list = list(c(TRUE, TRUE)))
   raw <- serialize(shared, NULL)
   expect_identical(unserialize(raw), shared)
   # The per-worker message carries the bytes, not another copy of the object,
@@ -490,7 +597,27 @@ test_that("the population covariance is reused from the shared cache", {
               population_mu = matrix(0, 2, 2), pm = list(NULL, NULL),
               prev_ll = c(0, 0), seeds = list(NULL, NULL))
   expect_type(msg$shared, "raw")
-  expect_identical(unserialize(msg$shared)$group_chol$ref, population_var)
+  expect_identical(unserialize(msg$shared)$group_var, population_var)
+})
+
+test_that("only the covariance goes on the wire, never its factorisation", {
+  # `.chol_factor()` keeps the root and its inverse, so the cache a worker needs
+  # is three P x P matrices while the covariance it is derived from is one.
+  # Sending the small one is worth several times its own size in pipe traffic
+  # on a wide model, so the wire shape is pinned here rather than left to drift.
+  set.seed(4)
+  p <- 12L
+  A <- matrix(rnorm(p * p), p, p)
+  population_var <- crossprod(A) + diag(p)
+  idx_list <- list(rep(TRUE, p))
+  cache <- EMC2:::build_group_chol_cache(population_var, idx_list)
+  wire <- serialize(list(group_var = population_var, idx_list = idx_list), NULL)
+  expect_lt(length(wire), length(serialize(cache, NULL)) / 2)
+  # ... and it is enough: the worker's reconstruction is the master's object.
+  expect_identical(
+    EMC2:::build_group_chol_cache(unserialize(wire)$group_var,
+                                  unserialize(wire)$idx_list),
+    cache)
 })
 
 test_that("compute() accepts a pre-decoded shared part and an encoded one", {
@@ -500,8 +627,16 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
   ctx <- list(n_pars = 1L, data = list(a = 1), model = NULL, stage = "sample",
               type = "standard", tune = list(), marginalise = NULL,
               r_cores = 1L, chol_caches = list(a = NULL))
-  shared <- list(group_chol = list(ref = matrix(9), x = 1))
-  msg <- list(subs = "a", shared = serialize(shared, NULL),
+  # The two forms deliberately differ: the master already holds the built cache
+  # and hands it over, while the worker is sent the covariance alone and has to
+  # rebuild it.  Both must arrive at the same arguments.
+  population_var <- matrix(9)
+  idx_list <- list(TRUE)
+  cache <- EMC2:::build_group_chol_cache(population_var, idx_list)
+  shared <- list(group_var = population_var, idx_list = idx_list,
+                 group_chol = cache)
+  msg <- list(subs = "a",
+              shared = serialize(shared[c("group_var", "idx_list")], NULL),
               alpha = matrix(3, 1, 1), population_mu = matrix(7, 1, 1),
               pm = list(NULL),
               prev_ll = 0, seeds = list(get(".Random.seed", envir = globalenv())))
@@ -520,10 +655,10 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
       safe_new_particle = fake, .package = "EMC2"
     )
     expect_null(seen$parameters)
-    expect_equal(seen$group_chol$x, 1)
+    expect_identical(seen$group_chol, cache)
     expect_equal(seen$current_alpha, 3)
     expect_equal(seen$population_mu, 7)
-    expect_equal(seen$population_var, matrix(9))
+    expect_equal(seen$population_var, population_var)
   }
 })
 

@@ -42,7 +42,7 @@
 #   make-jobs = configured MAKE_JOBS integer (0 disables injection)
 #
 # Generated configuration:
-#   profile=legacy march=native openmp=available openmp-simd-probe=available openmp-simd=on make-jobs=32
+#   profile=legacy march=native openmp=available openmp-simd-probe=available openmp-simd=on header-deps=available make-jobs=32
 # =============================================================================
 
 # --- Parallel compilation (configure-selected job count) --------------------
@@ -67,6 +67,31 @@ MARCH_CXXFLAGS = -march=native
 # -std=gnu++17 must appear after R's CXX (which embeds -std=gnu++20 on recent R)
 # so that C++17 remains the effective standard, matching the historical build.
 PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5  -fopenmp-simd
+
+# --- Header dependency tracking (configure-probed) --------------------------
+# R's build rules give an object file no dependency on the headers it includes.
+# Without this block, editing ParamTable.h or any model_*.h recompiles only the
+# .cpp files whose own timestamps changed; every other translation unit keeps an
+# object built against the previous declarations. Because most of this package's
+# hot path is header-only, that is an ODR/layout mismatch -- a segfault at a
+# random address that reads like a bug in the edited code, or worse, a benchmark
+# that silently measures a half-old binary. -MMD writes a per-object .d listing
+# the headers it read; -MP adds phony targets for them so a deleted or renamed
+# header is not a hard "No rule to make target" error.
+#
+# `wildcard` (rather than $(OBJECTS:.o=.d)) keeps make from trying to *build*
+# .d files that do not exist yet: on a clean tree every object is compiled
+# anyway, and from the second build on the files are there to be included.
+DEP_CXXFLAGS = -MMD -MP
+DEP_CFLAGS = -MMD -MP
+PKG_CXXFLAGS += $(DEP_CXXFLAGS)
+PKG_CFLAGS += $(DEP_CFLAGS)
+# Including .d files introduces make targets, and R's shlib run supplies NO
+# explicit goal -- it relies on the default one (`all`, defined in shlib.mk,
+# which make reads AFTER this file). Without the pin below the first target of
+# the first .d becomes the default goal and the build stops after one object.
+.DEFAULT_GOAL := all
+-include $(wildcard *.d)
 
 # USE_FAST_PNORM selects the fast standard-normal CDF approximation used by the
 # Wald/RDM kernels. It is the current default and stays enabled in every profile
@@ -109,6 +134,12 @@ endif
 # These apply to both C and C++ so the bundled GSL C sources see their headers.
 # The C++-only flags above are NOT inherited by the bundled GSL C sources.
 PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -Igsl_bundled -DRCPP_NO_R_HEADERS_CHECK -DARMA_DONT_PRINT_FAST_MATH_WARNING -DR_NO_REMAP
+
+# Opt-in diagnostic defines, set by ./configure from $EMC2_EXTRA_CPPFLAGS. The
+# one that exists today is -DEMC2_PT_CONST_CHECK, which re-scans every column
+# whose row-constant flag is about to be acted on and stops on disagreement:
+#   EMC2_EXTRA_CPPFLAGS=-DEMC2_PT_CONST_CHECK R CMD INSTALL --library=... .
+PKG_CPPFLAGS += 
 
 # --- Link libraries -----------------------------------------------------------
 # GSL is compiled in via gsl_bundled.c, so no -lgsl/-lgslcblas is required.

@@ -92,6 +92,33 @@ test_that("premap trend works", {
   expect_snapshot(init_chains(LNR_premap, particles = 3, cores_per_chain = 1)[[1]]$samples)
 })
 
+# A premap trend must also work when the target has no self/intercept column.
+# This is a common parameterisation for condition-specific drift (e.g.,
+# `m ~ 0 + S`).  The target design has to be evaluated before the trend;
+# otherwise the second mapping pass clears the trend contribution.
+design_premap_no_intercept <- design(
+  data = dat,
+  trend = make_trend(
+    par_names = "m",
+    cov_names = list("covariate1"),
+    kernels = "lin_incr",
+    phase = "premap"
+  ),
+  formula = list(m ~ 0 + S, s ~ 1, t0 ~ 1),
+  contrasts = list(S = ADmat),
+  matchfun = matchfun,
+  model = LNR
+)
+
+test_that("premap trend works without a target intercept", {
+  p <- sampled_pars(design_premap_no_intercept)
+  p[] <- 0
+  p["m.w"] <- 2
+  mapped <- mapped_pars(design_premap_no_intercept, p, digits = 8)
+  expect_gt(length(unique(mapped$m)), 1L)
+  expect_true(length(unique(mapped$covariate1)) > 1L)
+})
+
 trend_pretrans <- make_trend(
   par_names = c("m", "s"),
   cov_names = list("covariate1", "covariate2"),

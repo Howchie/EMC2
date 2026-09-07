@@ -104,8 +104,43 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
     const double max_v  = bs.max_val;
     const int n_exc     = bs.n_exception;
 
+    // Hoisted column pointer: base(i, col_idx) otherwise costs an Rcpp bounds
+    // check and an i + nrow*j multiply per element.
+    const double* col = &base(0, col_idx);
+
+    // A row-constant column is in or out of bounds for every trial at once.
+    if (pt.col_is_const(col_idx)) {
+      const double val = col[0];
+      bool ok = (val > min_v && val < max_v);
+      for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+      if (!ok) for (int i = 0; i < nrows; ++i) result[i] = false;
+      continue;
+    }
+
+    // A cell-structured column takes at most n_cells distinct values, so the
+    // verdict is settled by n_cells comparisons; and when they all pass (the
+    // usual case) the spec cannot change any row and is skipped entirely.
+    if (const DesignEntry* ce = pt.col_cell_entry(col_idx)) {
+      bool ok_cell[EMC2_PT_MAX_CELLS];
+      bool any_bad = false;
+      for (int c = 0; c < ce->n_cells; ++c) {
+        const int rep = ce->cell_rep[c];
+        if (rep < 0) { ok_cell[c] = true; continue; }   // no trial reads this cell
+        const double val = col[rep];
+        bool ok = (val > min_v && val < max_v);
+        for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+        ok_cell[c] = ok;
+        if (!ok) any_bad = true;
+      }
+      if (any_bad) {
+        const int* ex = ce->expand_idx.data();
+        for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) result[i] = false;
+      }
+      continue;
+    }
+
     for (int i = 0; i < nrows; ++i) {
-      const double val = base(i, col_idx);
+      const double val = col[i];
       bool ok = (val > min_v && val < max_v);
       for (int e = 0; !ok && e < n_exc; ++e) {
         ok = (val == bs.exception_val[e]);
@@ -119,9 +154,10 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
   return result;
 }
 
-Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
-                                       const std::vector<BoundSpec>& specs,
-                                       const Rcpp::LogicalVector& seed)
+void c_do_bound_pt_from_into(const ParamTable& pt,
+                             const std::vector<BoundSpec>& specs,
+                             const Rcpp::LogicalVector& seed,
+                             Rcpp::LogicalVector& result)
 {
   // As c_do_bound_pt, but seeded with an already-computed partial result.
   // Callers use this to fold in only the *variant* bound specs per particle,
@@ -129,10 +165,12 @@ Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
   const Rcpp::NumericMatrix& base = pt.base;
   const int nrows = base.nrow();
 
-  // Must clone: Rcpp vectors are reference-semantic over the underlying SEXP,
-  // so constructing from `seed` directly would mutate the caller's cache.
-  Rcpp::LogicalVector result =
-    (seed.size() == nrows) ? Rcpp::clone(seed) : Rcpp::LogicalVector(nrows, true);
+  int* res = result.begin();
+  if (seed.size() == nrows) {
+    std::copy(seed.begin(), seed.end(), res);
+  } else {
+    std::fill(res, res + nrows, TRUE);
+  }
 
   for (std::size_t j = 0; j < specs.size(); ++j) {
     const BoundSpec& bs = specs[j];
@@ -141,15 +179,53 @@ Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
     const double max_v   = bs.max_val;
     const int n_exc      = bs.n_exception;
 
-    for (int i = 0; i < nrows; ++i) {
-      if (!result[i]) continue;
-      const double val = base(i, col_idx);
+    const double* col = &base(0, col_idx);
+
+    // A row-constant column is in or out of bounds for every trial at once:
+    // in bounds, the spec cannot change any verdict and is skipped entirely.
+    if (pt.col_is_const(col_idx)) {
+      const double val = col[0];
       bool ok = (val > min_v && val < max_v);
       for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
-      if (!ok) result[i] = false;
+      if (!ok) std::fill(res, res + nrows, FALSE);
+      continue;
+    }
+
+    if (const DesignEntry* ce = pt.col_cell_entry(col_idx)) {
+      bool ok_cell[EMC2_PT_MAX_CELLS];
+      bool any_bad = false;
+      for (int c = 0; c < ce->n_cells; ++c) {
+        const int rep = ce->cell_rep[c];
+        if (rep < 0) { ok_cell[c] = true; continue; }
+        const double val = col[rep];
+        bool ok = (val > min_v && val < max_v);
+        for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+        ok_cell[c] = ok;
+        if (!ok) any_bad = true;
+      }
+      if (any_bad) {
+        const int* ex = ce->expand_idx.data();
+        for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) res[i] = FALSE;
+      }
+      continue;
+    }
+
+    for (int i = 0; i < nrows; ++i) {
+      if (!res[i]) continue;
+      const double val = col[i];
+      bool ok = (val > min_v && val < max_v);
+      for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+      if (!ok) res[i] = FALSE;
     }
   }
+}
 
+Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
+                                       const std::vector<BoundSpec>& specs,
+                                       const Rcpp::LogicalVector& seed)
+{
+  Rcpp::LogicalVector result(pt.base.nrow());
+  c_do_bound_pt_from_into(pt, specs, seed, result);
   return result;
 }
 
@@ -166,14 +242,53 @@ void c_do_transform_pt(ParamTable& pt,
     const double up = sp.upper;
 
     double* col = &pt.base(0, col_idx);
+    // A transform is a pointwise function, so it preserves row-constancy: one
+    // std::exp / pnorm settles the whole column. This is the single biggest
+    // item in the per-particle prologue -- intercept-only parameters otherwise
+    // pay n_trials scalar libm calls per particle to produce one number.
+    const bool cst = pt.col_is_const(col_idx);
+    // A pointwise function preserves cell structure as well as row-constancy,
+    // so a column with n_cells distinct values needs n_cells transcendentals
+    // and one gather rather than n_trials transcendentals.
+    const DesignEntry* ce = cst ? nullptr : pt.col_cell_entry(col_idx);
 
     switch (c) {
     case EXP: {
+      if (cst) {
+        const double v = lw + std::exp(col[0]);
+        std::fill(col, col + nrow, v);
+        break;
+      }
+      if (ce) {
+        double v[EMC2_PT_MAX_CELLS];
+        for (int k = 0; k < ce->n_cells; ++k) {
+          const int rep = ce->cell_rep[k];
+          v[k] = (rep >= 0) ? lw + std::exp(col[rep]) : 0.0;
+        }
+        const int* ex = ce->expand_idx.data();
+        for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+        break;
+      }
       for (int i = 0; i < nrow; ++i) col[i] = lw + std::exp(col[i]);
       break;
     }
     case PNORM: {
       const double range = up - lw;
+      if (cst) {
+        const double v = lw + range * pnorm_std(col[0]);
+        std::fill(col, col + nrow, v);
+        break;
+      }
+      if (ce) {
+        double v[EMC2_PT_MAX_CELLS];
+        for (int k = 0; k < ce->n_cells; ++k) {
+          const int rep = ce->cell_rep[k];
+          v[k] = (rep >= 0) ? lw + range * pnorm_std(col[rep]) : 0.0;
+        }
+        const int* ex = ce->expand_idx.data();
+        for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+        break;
+      }
       for (int i = 0; i < nrow; ++i) {
         col[i] = lw + range * pnorm_std(col[i]);
       }

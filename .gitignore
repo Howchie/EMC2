@@ -39,6 +39,7 @@ tests/testthat/_snaps/*.new.md
 
 # Compiled artefacts and the symbol index R generates during a build.
 src/*.o
+src/*.d
 src/*.so
 src/*.dll
 src/symbols.rds
