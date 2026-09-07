@@ -331,19 +331,28 @@ test_that("finite rho reaches the sampled likelihood adapter", {
     if (!is.finite(rt) || !any(dadm$winner[idx])) {
       term <- 1
       for (i in idx) {
-        fi <- rho_cpp_p(Inf, pars[i, "mu"], pars[i, "sigma"],
+        .s2 <- log1p(pars[i, "cv"]^2)
+        .mu <- log(pars[i, "mean"]) - .s2 / 2
+        .sigma <- sqrt(.s2)
+        fi <- rho_cpp_p(Inf, .mu, .sigma,
                         pars[i, "b"], pars[i, "A"], pars[i, "k"], pars[i, "ell"],
                         1L, .5, 2)
         term <- term * (1 - fi)
       }
     } else {
       w <- idx[which(dadm$winner[idx])]
-      f <- rho_cpp_d(rt - pars[w, "t0"], pars[w, "mu"], pars[w, "sigma"],
+      .s2 <- log1p(pars[w, "cv"]^2)
+      .mu <- log(pars[w, "mean"]) - .s2 / 2
+      .sigma <- sqrt(.s2)
+      f <- rho_cpp_d(rt - pars[w, "t0"], .mu, .sigma,
                      pars[w, "b"], pars[w, "A"], pars[w, "k"], pars[w, "ell"],
                      1L, .5, 2)
       term <- f
       for (i in setdiff(idx, w)) {
-        fi <- rho_cpp_p(rt - pars[i, "t0"], pars[i, "mu"], pars[i, "sigma"],
+        .s2 <- log1p(pars[i, "cv"]^2)
+        .mu <- log(pars[i, "mean"]) - .s2 / 2
+        .sigma <- sqrt(.s2)
+        fi <- rho_cpp_p(rt - pars[i, "t0"], .mu, .sigma,
                         pars[i, "b"], pars[i, "A"], pars[i, "k"], pars[i, "ell"],
                         1L, .5, 2)
         term <- term * (1 - fi)

@@ -218,8 +218,8 @@ bawd_norm_sets <- list(
 )
 
 bawd_logn_sets <- list(
-  c(mu = 0.7, sigma = 0.5, b = 1, A = 0.5, k = 1.5, ell = 0.6),
-  c(mu = 0.4, sigma = 0.35, b = 0.7, A = 0, k = 2, ell = 0.5)
+  c(mean = 0.7, cv = 0.5, b = 1, A = 0.5, k = 1.5, ell = 0.6),
+  c(mean = 0.4, cv = 0.35, b = 0.7, A = 0, k = 2, ell = 0.5)
 )
 
 # Times spanning unsaturated (u < T_sat(A)), partially saturated, and fully
@@ -252,14 +252,14 @@ test_that("the lognormal launch matches an independent R reference", {
   for (p in bawd_logn_sets) {
     u <- regime_times(p)
     ref_p <- vapply(u, function(x)
-      ref_F_logn(x, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
+      ref_F_logn(x, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]], p[["k"]],
                  p[["ell"]]), numeric(1))
     ref_d <- vapply(u, function(x)
-      ref_f_logn(x, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
+      ref_f_logn(x, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]], p[["k"]],
                  p[["ell"]]), numeric(1))
-    got_p <- cpp_p(u, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
+    got_p <- cpp_p(u, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]], p[["k"]],
                    p[["ell"]], 1L)
-    got_d <- cpp_d(u, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
+    got_d <- cpp_d(u, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]], p[["k"]],
                    p[["ell"]], 1L)
     expect_equal(got_p, ref_p, tolerance = 1e-7)
     expect_equal(got_d, ref_d, tolerance = 1e-7)
@@ -281,12 +281,12 @@ test_that("Monte Carlo agrees for both launch distributions", {
     expect_true(all(T[!is.infinite(T)] > 0))
   }
   for (p in bawd_logn_sets[1]) {
-    qms <- ln_musigma(p[["mu"]], p[["sigma"]])   # fixture holds (mean, cv)
+    qms <- ln_musigma(p[["mean"]], p[["cv"]])   # fixture holds (mean, cv)
     V <- rlnorm(N, qms[["mu"]], qms[["sigma"]])
     z <- runif(N, 0, p[["A"]])
     T <- mapply(function(vv, zz) ref_fp(vv, zz, p[["b"]], p[["k"]], p[["ell"]]),
                 V, z)
-    p_inf <- 1 - cpp_p(Inf, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]],
+    p_inf <- 1 - cpp_p(Inf, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]],
                        p[["k"]], p[["ell"]], 1L)
     expect_true(is.finite(p_inf))
     expect_true(all(T[!is.infinite(T)] > 0))
@@ -345,10 +345,10 @@ test_that("integrate(f) reproduces F through both seams", {
     tm <- EMC2:::bawd_tmax(p[["A"]], p[["b"]], p[["k"]], p[["ell"]])
     for (u in c(0.2 * tm, 0.95 * tm, tm)) {
       num <- integrate(function(x)
-        cpp_d(x, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
+        cpp_d(x, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]], p[["k"]],
               p[["ell"]], 1L), 1e-10, u, rel.tol = 1e-10)$value
       expect_equal(num,
-                   cpp_p(u, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]],
+                   cpp_p(u, p[["mean"]], p[["cv"]], p[["b"]], p[["A"]],
                          p[["k"]], p[["ell"]], 1L),
                    tolerance = 1e-8)
     }
@@ -581,7 +581,7 @@ test_that("dfun/pfun use the same launch distribution as the c_name", {
 # intrinsic omissions; the truncation and censoring branches are exercised
 # structurally below and against the BAwL oracle.
 ref_race_ll <- function(dadm, pars, launch, min_ll = log(1e-10)) {
-  nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+  nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
     if (launch == 1L)
@@ -820,7 +820,7 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), 1e4), levels = c("left", "right"))
   for (launch in c(0L, 1L)) {
-    nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+    nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
     pars <- cbind(0.7, 0.6, 0.8, 0.3, 0.1, 1.2, 0.5)
     colnames(pars) <- c(nm, "B", "A", "t0", "k", "ell")
     pars <- pars[rep(1, length(lR)), ]

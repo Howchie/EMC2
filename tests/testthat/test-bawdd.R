@@ -87,9 +87,16 @@ test_that("BAwDD compiled simulator accepts row-wise alpha", {
 test_that("alpha > 1 with ell > 0 matches the reference CDF for every launch", {
   skip_on_cran()
   A <- 0.4; b <- 1.2; k <- 0.9; ell <- 0.25
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
   cases <- list(
-    list(launch = 1L, p1 = 0.3, p2 = 0.5,
-         Sbar = function(v) stats::pnorm((log(v) - 0.3) / 0.5, lower.tail = FALSE)),
+    list(launch = 1L, p1 = ln_mean, p2 = ln_cv,
+         Sbar = local({
+           mu <- 0.3
+           sigma <- 0.5
+           function(v) stats::pnorm((log(v) - mu) / sigma,
+                                    lower.tail = FALSE)
+         })),
     list(launch = 3L, p1 = 2, p2 = 1.5,
          Sbar = local({
            scale <- 1.5 / gamma(1 + 1 / 2)
@@ -119,10 +126,13 @@ test_that("alpha > 1 with ell > 0 matches the reference CDF for every launch", {
 test_that("alpha < 1 and the rho = 1 seam are unchanged by the rho < 1 branch", {
   skip_on_cran()
   A <- 0.4; b <- 1.2; k <- 0.9; ell <- 0.25
-  Sbar <- function(v) stats::pnorm((log(v) - 0.3) / 0.5, lower.tail = FALSE)
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
+  Sbar <- function(v) stats::pnorm((log(v) - 0.3) / 0.5,
+                                   lower.tail = FALSE)
   for (a in c(0.25, 0.5, 0.9, 1)) {
     for (tt in c(0.8, .bawdd_ref_times(A, b, k, ell, a))) {
-      got <- EMC2:::pbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k, ell = ell, alpha = a)
+      got <- EMC2:::pbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k, ell = ell, alpha = a)
       expect_equal(got, .bawdd_ref_cdf(tt, A, b, k, ell, a, Sbar), tolerance = 1e-8)
     }
   }
@@ -130,7 +140,7 @@ test_that("alpha < 1 and the rho = 1 seam are unchanged by the rho < 1 branch", 
   # t = 0.8 is still pre-saturation, so run the sweep past T_sat_A as well --
   # the frozen branch is the only place the sign of rho - 1 shows up at all.
   eps <- 10^-(4:11)
-  P <- function(a, tt) EMC2:::pbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5,
+  P <- function(a, tt) EMC2:::pbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv,
                                      k = k, ell = ell, alpha = a)
   for (tt in c(0.8, 4.1, 12)) {
     lo <- vapply(1 - eps, P, numeric(1), tt = tt)
@@ -146,9 +156,11 @@ test_that("alpha < 1 and the rho = 1 seam are unchanged by the rho < 1 branch", 
 test_that("the density is the derivative of the CDF for alpha > 1 with ell > 0", {
   skip_on_cran()
   A <- 0.4; b <- 1.2; k <- 0.9; ell <- 0.25
-  P <- function(tt, a) EMC2:::pbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5,
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
+  P <- function(tt, a) EMC2:::pbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv,
                                      k = k, ell = ell, alpha = a)
-  D <- function(tt, a) EMC2:::dbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5,
+  D <- function(tt, a) EMC2:::dbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv,
                                      k = k, ell = ell, alpha = a)
   # Fourth-order stencil on a t-relative step.  Late in the tail the density is
   # ~1e-8 against a CDF of ~1, so a central difference on a fixed small h is
@@ -170,19 +182,21 @@ test_that("the density is the derivative of the CDF for alpha > 1 with ell > 0",
 test_that("alpha is finite and well behaved across its whole range", {
   skip_on_cran()
   A <- 0.4; b <- 1.2; k <- 0.9; ell <- 0.25
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
   as <- 10^seq(-3, 4, length.out = 22)
   p <- vapply(as, function(a)
-    EMC2:::pbawdd(1, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k, ell = ell, alpha = a), numeric(1))
+    EMC2:::pbawdd(1, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k, ell = ell, alpha = a), numeric(1))
   d <- vapply(as, function(a)
-    EMC2:::dbawdd(1, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k, ell = ell, alpha = a), numeric(1))
+    EMC2:::dbawdd(1, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k, ell = ell, alpha = a), numeric(1))
   expect_true(all(is.finite(p)) && all(p > 0) && all(p < 1))
   expect_true(all(is.finite(d)) && all(d > 0))
   expect_true(all(diff(p) > 0))  # slower decay always helps
   # alpha = Inf is the no-decay limit the sequence converges to (as 1/alpha,
   # so take the limit far enough out to see it).
-  expect_equal(EMC2:::pbawdd(1, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k,
+  expect_equal(EMC2:::pbawdd(1, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k,
                              ell = ell, alpha = 1e6),
-               EMC2:::pbawdd(1, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k,
+               EMC2:::pbawdd(1, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k,
                              ell = ell, alpha = Inf),
                tolerance = 1e-4)
 })
@@ -191,18 +205,20 @@ test_that("the simulator reaches threshold for alpha > 1 with ell > 0", {
   skip_on_cran()
   set.seed(20260827)
   A <- 0.4; B <- 0.8; b <- B + A; k <- 0.9; ell <- 0.25
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
   N <- 60000
   for (a in c(1.5, 3)) {
-    pars <- cbind(mean = rep(0.3, N), cv = 0.5, B = B, A = A, t0 = 0, k = k,
+    pars <- cbind(mean = rep(ln_mean, N), cv = ln_cv, B = B, A = A, t0 = 0, k = k,
                   ell = ell, alpha = a, eta = 0, b = b)
     out <- EMC2:::rbawdd_cpp(pars, "a", rep(TRUE, N), 1L, TRUE)
     hit <- is.finite(out$rt)
-    p_inf <- EMC2:::pbawdd(Inf, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k, ell = ell, alpha = a)
+    p_inf <- EMC2:::pbawdd(Inf, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k, ell = ell, alpha = a)
     expect_gt(mean(hit), 0.5)          # not the all-omission behaviour it had
     # Binomial standard errors, so compare absolute deviations, not relative.
     expect_lt(abs(mean(hit) - p_inf), 4 * sqrt(p_inf * (1 - p_inf) / N))
     for (tt in c(0.6, 1.2)) {
-      ana <- EMC2:::pbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k, ell = ell, alpha = a)
+      ana <- EMC2:::pbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k, ell = ell, alpha = a)
       expect_lt(abs(mean(hit & out$rt <= tt) - ana),
                 4 * sqrt(ana * (1 - ana) / N))
     }
@@ -242,16 +258,18 @@ test_that("the saturation-solve memo is transparent to evaluation order", {
   # Past T_sat_A, so the memoised saturation boundary really is in the answer:
   # below it the frozen branch contributes nothing and y_0/y_A go unread.
   tt <- stats::runif(n, 3, 40)
-  batched <- EMC2:::dbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k,
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
+  batched <- EMC2:::dbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k,
                            ell = ell, alpha = alpha)
   one_at_a_time <- vapply(rev(seq_len(n)), function(i)
-    EMC2:::dbawdd(tt[i], A = A, b = b, p1 = 0.3, p2 = 0.5, k = k[i],
+    EMC2:::dbawdd(tt[i], A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k[i],
                   ell = ell, alpha = alpha[i]), numeric(1))
   expect_identical(batched, rev(one_at_a_time))
-  expect_identical(EMC2:::pbawdd(tt, A = A, b = b, p1 = 0.3, p2 = 0.5, k = k,
+  expect_identical(EMC2:::pbawdd(tt, A = A, b = b, p1 = ln_mean, p2 = ln_cv, k = k,
                                  ell = ell, alpha = alpha),
                    vapply(seq_len(n), function(i)
-                     EMC2:::pbawdd(tt[i], A = A, b = b, p1 = 0.3, p2 = 0.5,
+                     EMC2:::pbawdd(tt[i], A = A, b = b, p1 = ln_mean, p2 = ln_cv,
                                    k = k[i], ell = ell, alpha = alpha[i]),
                      numeric(1)))
 })
@@ -261,11 +279,13 @@ test_that("more distinct geometries than the memo holds still match the referenc
   # Far more keys than the table has slots, so most rows evict; the answers
   # must come from the closed form either way.
   A <- 0.4; b <- 1.2; k <- 0.9; ell <- 0.25
+  ln_mean <- exp(0.3 + 0.5^2 / 2)
+  ln_cv <- sqrt(expm1(0.5^2))
   Sbar <- function(v) stats::pnorm((log(v) - 0.3) / 0.5, lower.tail = FALSE)
   alpha <- seq(0.4, 6, length.out = 300)
   u <- 6  # past T_sat_A for every alpha on this grid
-  got <- EMC2:::pbawdd(rep(u, length(alpha)), A = A, b = b, p1 = 0.3,
-                       p2 = 0.5, k = k, ell = ell, alpha = alpha)
+  got <- EMC2:::pbawdd(rep(u, length(alpha)), A = A, b = b, p1 = ln_mean,
+                       p2 = ln_cv, k = k, ell = ell, alpha = alpha)
   expect_true(all(is.finite(got)) && all(diff(got) > 0))
   for (i in c(1L, 87L, 150L, 251L, 300L))
     expect_equal(got[i], .bawdd_ref_cdf(u, A, b, k, ell, alpha[i], Sbar),

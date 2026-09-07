@@ -6,9 +6,8 @@
 # Reports the per-iteration split from `options(emc2.sampler_profile = TRUE)`.
 # The two numbers to read together are `response_wait` and `worker_max`: when
 # they are close the pool is bound by the work, and when `request_send` is a
-# large share it is bound by the wire instead -- the master pushes the shared
-# group state down one pipe per worker, and a blocking R FIFO moves only about
-# 16-27 MB/s, so a wide model can spend most of an iteration in the broadcast.
+# large share it is bound by the wire instead.  The shared group state is now
+# written once to a file; each request carries only its path.
 #
 # Two traps, both of which have cost real time here:
 #
@@ -80,7 +79,7 @@ cat(sprintf("  %-17s %8.2f ms  (slowest worker's own work)\n",
             "worker_max", 1000 * f(pr$worker_max)))
 cat(sprintf("  %-17s %8.2f ms  (summed over workers)\n",
             "worker_sum", 1000 * f(pr$worker_sum)))
-cat(sprintf("\nshared per worker  %9.0f B\n", f(pr$shared_bytes)))
+cat(sprintf("\nshared file        %9.0f B\n", f(pr$shared_bytes)))
 cat(sprintf("private per iter   %9.0f B\n", f(pr$private_bytes)))
 cat(sprintf("wire per iteration %9.0f B  (%.2f MB)\n",
             f(pr$wire_bytes), f(pr$wire_bytes) / 1024^2))

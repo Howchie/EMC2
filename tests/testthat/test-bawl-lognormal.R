@@ -49,6 +49,10 @@ ref_f_logn <- function(t, A, b, mu, sigma, k) {
 # integrals below stay in (mu, sigma), so convert at the call boundary.
 ln_meancv <- function(mu, sigma)
   c(mean = unname(exp(mu + sigma^2 / 2)), cv = unname(sqrt(expm1(sigma^2))))
+ln_musigma <- function(mean, cv) {
+  s2 <- log1p(unname(cv)^2)
+  c(mu = unname(log(mean) - s2 / 2), sigma = unname(sqrt(s2)))
+}
 cpp_p_logn <- function(t, A, b, mu, sigma, k) {
   mc <- ln_meancv(mu, sigma)
   EMC2:::pleakyba(t, A, b, mc[["mean"]], mc[["cv"]], k, TRUE, 1L)
@@ -222,10 +226,14 @@ test_that("the lognormal BAwL simulators produce valid draws", {
 # nothing is shared with the compiled path except the parameter values, so this
 # covers design, Ttransform, column order, adapter dispatch and race assembly.
 bawl_logn_ref_ll <- function(dadm, pars, min_ll = log(1e-10)) {
-  Fu <- function(i, u) ref_F_logn(u, pars[i, "A"], pars[i, "b"],
-                                  pars[i, "mu"], pars[i, "sigma"], pars[i, "k"])
-  fu <- function(i, u) ref_f_logn(u, pars[i, "A"], pars[i, "b"],
-                                  pars[i, "mu"], pars[i, "sigma"], pars[i, "k"])
+  Fu <- function(i, u) {
+    q <- ln_musigma(pars[i, "mean"], pars[i, "cv"])
+    ref_F_logn(u, pars[i, "A"], pars[i, "b"], q[["mu"]], q[["sigma"]], pars[i, "k"])
+  }
+  fu <- function(i, u) {
+    q <- ln_musigma(pars[i, "mean"], pars[i, "cv"])
+    ref_f_logn(u, pars[i, "A"], pars[i, "b"], q[["mu"]], q[["sigma"]], pars[i, "k"])
+  }
   n_lR <- length(levels(dadm$lR))
   lt <- numeric(nrow(dadm) / n_lR)
   for (j in seq_along(lt)) {
@@ -277,9 +285,9 @@ bawl_logn_ll <- function(fx, p) {
 test_that("the compiled lognormal BAwL likelihood matches the R reference", {
   skip_on_cran()
   fx <- suppressMessages(bawl_logn_fixture(
-    list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    list(mean ~ lM, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
     c(mG = log(1), mK = log(1))))
-  p <- c(mu = 0.9, mu_lMTRUE = 0.4, sigma = log(0.6), B = log(0.8),
+  p <- c(mean = 0.9, mean_lMTRUE = 0.4, cv = log(0.6), B = log(0.8),
          A = log(0.3), t0 = log(0.15), k = log(0.8))
   p <- p[names(sampled_pars(fx$des))]
   got <- bawl_logn_ll(fx, p)
@@ -295,9 +303,9 @@ test_that("the lognormal likelihood is sensitive to every free parameter", {
   # the launch parameters (the failure mode a plain finite-value check misses).
   skip_on_cran()
   fx <- suppressMessages(bawl_logn_fixture(
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
     c(mG = log(1), mK = log(1))))
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(0.8))
   base <- bawl_logn_ll(fx, p)
   for (nm in names(p)) {
@@ -313,10 +321,10 @@ test_that("data simulated from the lognormal model round-trips through the likel
   dat$subjects <- droplevels(dat$subjects)
   des <- design(data = dat, model = function() BAwL(drift_distribution = "lognormal"),
                 matchfun = matchfun,
-                formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
-                constants = c(mu = 0))
+                formula = list(mean ~ lM, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+                constants = c(mean = 0))
   p <- sampled_pars(des, doMap = FALSE)
-  p[] <- c(mu_lMTRUE = 0.8, sigma = log(0.5), B = log(0.9), A = log(0.3),
+  p[] <- c(mean_lMTRUE = 0.8, cv = log(0.5), B = log(0.9), A = log(0.3),
            t0 = log(0.2), k = log(0.5))[names(p)]
   set.seed(7)
   sim <- suppressMessages(make_data(p, design = des, n_trials = 100))
@@ -339,7 +347,7 @@ test_that("data simulated from the lognormal model round-trips through the likel
                           trend = model$trend)
   expect_true(is.finite(ll))
   # The data-generating values must beat a clearly wrong launch location.
-  q <- p; q["mu_lMTRUE"] <- 0
+  q <- p; q["mean_lMTRUE"] <- 0
   ll_wrong <- EMC2:::calc_ll_oo(matrix(q, nrow = 1, dimnames = list(NULL, names(q))),
                                 dadm, constants = attr(dadm, "constants"),
                                 designs = designs, type = model$c_name,
@@ -357,27 +365,27 @@ test_that("the lognormal evidence scale is fixed by mu, B or A but not sigma", {
   # A += log c; sigma is dimensionless and does NOT identify it, which is why
   # the normal model's constants = c(sv = log(1)) has no lognormal analogue.
   fx <- suppressMessages(bawl_logn_fixture(
-    list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
+    list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
     c(mG = log(1), mK = log(1))))
-  p <- c(mu = 0.9, mu_lMTRUE = 0.4, sigma = log(0.6), B = log(0.8),
+  p <- c(mean = 0.9, mean_lMTRUE = 0.4, cv = log(0.6), B = log(0.8),
          B_Eneutral = 0.1, B_Eaccuracy = 0.3, A = log(0.3), t0 = log(0.15),
          k = log(0.8))
   p <- p[names(sampled_pars(fx$des))]
   base <- bawl_logn_ll(fx, p)
   for (lc in c(-0.7, 0.35, 1.2)) {
     q <- p
-    q[c("mu", "B", "A")] <- q[c("mu", "B", "A")] + lc
+    q[c("mean", "B", "A")] <- q[c("mean", "B", "A")] + lc
     expect_equal(bawl_logn_ll(fx, q), base, tolerance = 1e-10)
   }
   # Any single leg of that direction on its own must move the likelihood,
   # otherwise the constraint would not be removing anything.
-  for (nm in c("mu", "B", "A")) {
+  for (nm in c("mean", "B", "A")) {
     q <- p; q[nm] <- q[nm] + 0.35
     expect_false(isTRUE(all.equal(bawl_logn_ll(fx, q), base)))
   }
   # The rescaling shifts intercepts only, so contrast coefficients are
   # unaffected by it and stay identified whichever intercept is pinned.
-  for (nm in c("mu_lMTRUE", "B_Eneutral", "B_Eaccuracy", "sigma")) {
+  for (nm in c("mean_lMTRUE", "B_Eneutral", "B_Eaccuracy", "cv")) {
     q <- p; q[nm] <- q[nm] + 0.15
     expect_false(isTRUE(all.equal(bawl_logn_ll(fx, q), base)))
   }
@@ -390,7 +398,8 @@ test_that("the lognormal launch composes with the kill and guess clocks", {
   m0 <- BAwL(drift_distribution = "lognormal")
   mk <- BAwL(drift_distribution = "lognormal", erlang_type = "local_kill")
   mg <- BAwL(drift_distribution = "lognormal", erlang_type = "local_guess")
-  pars <- cbind(mu = 0.4, sigma = 0.5, B = 1, A = 0.3, t0 = 0.2, k = 0.6,
+  mc <- ln_meancv(0.4, 0.5)
+  pars <- cbind(mean = mc[["mean"]], cv = mc[["cv"]], B = 1, A = 0.3, t0 = 0.2, k = 0.6,
                 lambda_g = 0, lambda_k = 0, b = 1.3)
   pars_k <- pars; pars_k[, "lambda_k"] <- 2
   pars_g <- pars; pars_g[, "lambda_g"] <- 2

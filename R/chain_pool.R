@@ -139,6 +139,77 @@
   })
 }
 
+# The shared group covariance is identical for every worker in an iteration.
+# Keep its serialised bytes in one file and put only the path in each request.
+# Write to a private temporary name and rename it into place: workers can only
+# observe a complete file, even on a filesystem where opening a path races with
+# the writer.  The caller owns the final path and removes it after all replies
+# (or serial fallbacks) have finished using the decoded object.
+.emc_wpool_shared_write <- function(dir, bytes) {
+  if (!is.character(dir) || length(dir) != 1L || !dir.exists(dir)) {
+    .emc_wpool_transport_fail("shared broadcast directory is unavailable")
+    return(NULL)
+  }
+  if (!is.raw(bytes)) {
+    .emc_wpool_transport_fail("shared broadcast payload is not raw bytes")
+    return(NULL)
+  }
+  if (length(bytes) > .EMC_WPOOL_MAX_FRAME ||
+      length(bytes) > .Machine$integer.max) {
+    .emc_wpool_transport_fail("shared broadcast payload is too large")
+    return(NULL)
+  }
+  path <- tempfile(pattern = "shared_", tmpdir = dir, fileext = ".bin")
+  tmp <- paste0(path, ".tmp")
+  con <- NULL
+  complete <- FALSE
+  on.exit({
+    if (!is.null(con)) try(close(con), silent = TRUE)
+    if (!complete) unlink(c(path, tmp))
+  }, add = TRUE)
+  tryCatch({
+    con <- file(tmp, open = "wb")
+    withCallingHandlers(
+      writeBin(bytes, con),
+      warning = function(w) stop(conditionMessage(w), call. = FALSE))
+    flush(con)
+    close(con)
+    con <- NULL
+    if (!file.rename(tmp, path)) {
+      stop("could not publish shared broadcast file", call. = FALSE)
+    }
+    complete <- TRUE
+    path
+  }, error = function(e) {
+    .emc_wpool_transport_fail(conditionMessage(e))
+    NULL
+  })
+}
+
+# Read a published shared payload and validate the complete file before
+# unserialising it.  A missing/truncated file is a worker-local failure; the
+# surrounding worker handler reports it and the master recomputes that share
+# from its already-decoded cache.
+.emc_wpool_shared_read <- function(path) {
+  if (!is.character(path) || length(path) != 1L || !nzchar(path)) {
+    stop("invalid shared broadcast path", call. = FALSE)
+  }
+  size <- file.info(path)$size
+  if (length(size) != 1L || is.na(size) || !is.finite(size) || size < 0 ||
+      size > .EMC_WPOOL_MAX_FRAME || size > .Machine$integer.max) {
+    stop("invalid shared broadcast file", call. = FALSE)
+  }
+  con <- file(path, open = "rb")
+  on.exit(try(close(con), silent = TRUE), add = TRUE)
+  payload <- .emc_wpool_get_bytes(con, as.integer(size))
+  if (is.null(payload) || length(payload) != as.integer(size)) {
+    stop("shared broadcast file was truncated", call. = FALSE)
+  }
+  tryCatch(unserialize(payload), error = function(e) {
+    stop(conditionMessage(e), call. = FALSE)
+  })
+}
+
 # How long to wait for a worker's reply before treating it as wedged.
 #
 # The pool's recovery paths all key on a worker EXITING: a dead worker closes
@@ -847,9 +918,16 @@
 }
 
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
-  # Workers receive the shared group draw as serialised bytes; the master
-  # fallback already has the decoded object.
-  if (is.null(shared)) shared <- unserialize(msg$shared)
+  # Workers receive a path to the shared group draw; the master fallback already
+  # has the decoded object.  Keep the raw-byte form as a compatibility path for
+  # direct callers and older serialized messages.
+  if (is.null(shared)) {
+    shared <- if (!is.null(msg$shared_file)) {
+      .emc_wpool_shared_read(msg$shared_file)
+    } else {
+      unserialize(msg$shared)
+    }
+  }
   # Only the covariance crosses the pipe; its factorisation is rebuilt here.
   # `.chol_factor()` returns the root *and* its inverse, so the cache is three
   # P x P matrices where the covariance alone is one, and the wire is the
@@ -1173,7 +1251,7 @@
 
   # Only the population covariance and its factors are common to every worker.
   # The current random effects and subject-specific population means are sliced
-  # by assignment, so collectively they cross one pipe rather than every pipe.
+  # by assignment, so each subject slice crosses only its assigned request pipe.
   # This retains per-iteration LPT balancing without its former O(workers * N)
   # subject-state broadcast.  Gibbs-only fields (tvinv, a_half, factor state,
   # etc.) never enter a particle message.
@@ -1183,10 +1261,11 @@
   rownames(population_mu) <- rownames(pars$alpha)
   alpha <- pars$alpha
   shared_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
-  # Send the covariance, not its factorisation.  `build_group_chol_cache()`
+  # Publish the covariance, not its factorisation.  `build_group_chol_cache()`
   # holds the root and its inverse alongside the matrix itself, so the full
   # cache is three P x P matrices per worker per iteration; the covariance is
-  # one, and each worker rebuilds the rest in microseconds.  See
+  # one.  The bytes are written once below and each worker receives only the
+  # path; it rebuilds the rest in microseconds.  See
   # .emc_wpool_compute_particle().  The master keeps the cache it already built
   # so the recompute fallback below pays nothing for this.
   shared <- list(group_var = group_chol$ref, idx_list = group_chol$idx_list,
@@ -1198,6 +1277,20 @@
   shared_raw <- if (was_alive) {
     serialize(shared[c("group_var", "idx_list")], NULL)
   } else raw(0)
+  shared_file <- NULL
+  # The file is removed only after every response or serial recomputation has
+  # completed.  This also covers interrupts and errors while a worker is being
+  # retired, so a surviving worker cannot observe a missing payload halfway
+  # through the iteration.
+  on.exit(if (!is.null(shared_file)) unlink(shared_file), add = TRUE)
+  if (was_alive) {
+    shared_file <- .emc_wpool_shared_write(pool$dir, shared_raw)
+    if (is.null(shared_file)) {
+      .emc_wpool_degraded(.emc_wpool_transport_error(
+        "could not publish the shared broadcast"))
+      pool$alive <- FALSE
+    }
+  }
   shared_elapsed <- if (profile) {
     proc.time()[["elapsed"]] - shared_started
   } else NA_real_
@@ -1208,7 +1301,7 @@
   watch <- !is.null(pool$done)
   msgs <- lapply(seq_along(part), function(w) {
     subs <- part[[w]]
-    list(subs = subs, shared = shared_raw,
+    list(subs = subs, shared_file = shared_file,
          alpha = alpha[, subs, drop = FALSE],
          population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
@@ -1216,7 +1309,8 @@
   })
   sent <- rep(FALSE, pool$n)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
-  if (was_alive) {
+  sendable <- was_alive && !is.null(shared_file)
+  if (sendable) {
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
       sent[w] <- .emc_wpool_send(pool$wcs[[w]], msgs[[w]])
@@ -1320,10 +1414,16 @@
   private_bytes <- if (profile) {
     sum(vapply(msgs, function(msg) {
       msg$shared <- NULL
+      msg$shared_file <- NULL
       length(serialize(msg, NULL))
     }, integer(1)))
   } else NA_real_
-  active_workers <- sum(vapply(part, length, integer(1)) > 0L)
+  shared_path_bytes <- if (profile && !is.null(shared_file)) {
+    active <- vapply(part, length, integer(1)) > 0L
+    sum(vapply(msgs[active], function(msg) {
+      length(serialize(list(shared_file = msg$shared_file), NULL))
+    }, integer(1)))
+  } else if (profile) 0 else NA_real_
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
        alive = pool$alive,
        profile = if (profile) list(
@@ -1335,7 +1435,9 @@
          worker_sum = sum(times),
          shared_bytes = length(shared_raw),
          private_bytes = private_bytes,
-         wire_bytes = active_workers * length(shared_raw) + private_bytes
+         wire_bytes = if (!is.null(shared_file)) {
+           length(shared_raw) + shared_path_bytes + private_bytes
+         } else private_bytes
        ) else NULL)
 }
 

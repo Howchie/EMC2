@@ -202,8 +202,9 @@ test_that("the R and C++ simulators agree distributionally with pbawd across gam
   lR <- factor(rep(c("left", "right"), 500), levels = c("left", "right"))
   for (gamma in c(0.5, 2 / 3, 0.75, 1)) {
     for (launch in c(0L, 1L)) {
-      nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
-      pars <- cbind(0.7, 0.6, 0.8, 0.3, 0.1, 1.2, 0.5)
+      nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
+      pars <- cbind(mean = 0.7, cv = 0.6, B = 0.8, A = 0.3, t0 = 0.1,
+                    k = 1.2, ell = 0.5)
       colnames(pars) <- c(nm, "B", "A", "t0", "k", "ell")
       pars <- pars[rep(1, length(lR)), ]
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
@@ -254,22 +255,29 @@ test_that(".bawd_hit_time matches an independent root-finding oracle", {
 # ---------------------------------------------------------------------------
 
 ref_race_ll_gamma <- function(dadm, pars, launch, gamma, min_ll = log(1e-10)) {
-  nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+  nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
+  ln_pair <- function(i) {
+    m <- unname(pars[i, "mean"]); cv <- unname(pars[i, "cv"])
+    s2 <- log1p(cv^2)
+    c(mu = log(m) - s2 / 2, sigma = sqrt(s2))
+  }
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
-    if (launch == 1L)
-      gi_ref_F_logn(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+    if (launch == 1L) {
+      q <- ln_pair(i)
+      gi_ref_F_logn(u, q[["mu"]], q[["sigma"]], pars[i, "b"], pars[i, "A"],
                     pars[i, "k"], pars[i, "ell"], gamma)
-    else
+    } else
       gi_ref_F_normal(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
                       pars[i, "k"], pars[i, "ell"], gamma)
   }
   fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
-    if (launch == 1L)
-      gi_ref_f_logn(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+    if (launch == 1L) {
+      q <- ln_pair(i)
+      gi_ref_f_logn(u, q[["mu"]], q[["sigma"]], pars[i, "b"], pars[i, "A"],
                     pars[i, "k"], pars[i, "ell"], gamma)
-    else
+    } else
       gi_ref_f_normal(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
                       pars[i, "k"], pars[i, "ell"], gamma)
   }
@@ -292,7 +300,7 @@ ref_race_ll_gamma <- function(dadm, pars, launch, gamma, min_ll = log(1e-10)) {
 # it isolates c_name -> adapter routing from finite-difference error at seams.
 ref_race_ll_kernel <- function(dadm, pars, launch, gamma,
                                min_ll = log(1e-10)) {
-  nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+  nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
     EMC2:::pbawd(t = u, A = pars[i, "A"], b = pars[i, "b"],
@@ -356,8 +364,8 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
 
   # Lognormal launch, gamma = 1/2.
   fx_ln <- bawd_gamma_ll_fixture(function() BAwD(gamma = 0.5),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
-  p_ln <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
+  p_ln <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
             t0 = log(0.15), k = log(0.8),
             ell = log(0.5))[names(sampled_pars(fx_ln$des))]
   ll_gam <- bawd_gamma_ll(fx_ln, p_ln)
@@ -372,7 +380,7 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
   # likelihood -- this is what pins the c_name -> ctx.bawd_gamma hop; equal
   # values would mean the suffix never reached the adapter.
   fx0 <- bawd_gamma_ll_fixture(BAwD,
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
   ll0 <- bawd_gamma_ll(fx0, p_ln)
   expect_true(is.finite(ll0))
   expect_gt(abs(ll_gam - ll0), 1e-3)
@@ -380,7 +388,7 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
 
   # Lognormal launch, gamma = 2/3 (the newly added interior regime).
   fx_23 <- bawd_gamma_ll_fixture(function() BAwD(gamma = 2 / 3),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
   p_23 <- p_ln
   ll_23 <- bawd_gamma_ll(fx_23, p_23)
   expect_true(is.finite(ll_23))
@@ -424,10 +432,10 @@ test_that("make_data with gamma one-half produces omissions and finite fits", {
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
   des <- suppressMessages(design(
     data = dat, model = function() BAwD(gamma = 0.5), matchfun = matchfun,
-    formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+    formula = list(mean ~ lM, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
                    ell ~ 1),
-    contrasts = list(mu = list(lM = ADmat))))
-  p <- c(mu = 1.2, mu_lMd = 0.8, sigma = log(0.5), B = log(0.7),
+    contrasts = list(mean = list(lM = ADmat))))
+  p <- c(mean = 1.2, mean_lMd = 0.8, cv = log(0.5), B = log(0.7),
          A = log(0.3), t0 = log(0.15), k = log(0.7),
          ell = log(1.0))[names(sampled_pars(des))]
 
@@ -461,8 +469,8 @@ test_that("make_data with gamma one-half produces omissions and finite fits", {
   expect_equal(EMC2:::bawd_tmax(0.3, 1.1, 0.8, 1, 1), Inf)
   des1 <- suppressMessages(design(
     data = dat, model = function() BAwD(gamma = 1), matchfun = matchfun,
-    formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
-    contrasts = list(mu = list(lM = ADmat)), constants = c(ell = log(1))))
+    formula = list(mean ~ lM, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    contrasts = list(mean = list(lM = ADmat)), constants = c(ell = log(1))))
   p1 <- p[names(sampled_pars(des1))]
   sim1 <- make_data(p1, design = des1, n_trials = 60)
   expect_true(any(is.infinite(sim1$rt)))

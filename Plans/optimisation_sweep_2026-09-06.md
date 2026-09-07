@@ -90,10 +90,11 @@ Correctness, at every step:
   (another 2.2x on the send) and **rejected**: `theta_var` is not exactly
   symmetric, so it would silently move every draw. See Commit 10.
 * **Broadcasting the shared blob through a file rather than `n_workers` pipes**
-  — measured at 4.5 ms against 41 ms for the pipes on 32 workers, i.e. another
-  ~37 ms per iteration on a wide model, and *not* done: it is a transport change
-  with new failure modes in the code the SIGPIPE fix has just been through. The
-  number is recorded under Commit 10 so it need not be re-derived.
+  — implemented after the isolated measurement (4.5 ms against 41 ms for the
+  covariance pipes on 32 workers). The master publishes one complete payload
+  file per iteration and sends only its path; workers report missing or
+  truncated files through the existing serial-recompute path. The path is
+  removed after all replies, including failed-worker fallbacks, are settled.
 
 ---
 
@@ -693,17 +694,20 @@ unchanged at failed=94 / error=16 over the same 49 tests.
   matrix, hence the factor, hence every draw. A guard on exact symmetry would
   simply never fire.
 
+### File broadcast — **DONE 2026-09-07**
+
+The shared covariance/index payload is written once to an atomic temporary-file
+rename in the pool directory. Each worker request carries only that path, and
+the master unlinks it after all replies or serial recomputations have finished.
+Workers validate the file size and complete read before unserialising; a missing
+or truncated file is a worker-local failure, so the existing master-side
+recompute and pool-degradation logic remains the safety net. No file is created
+for a dead or single-worker pool. The focused worker-pool suite covers the
+round-trip, missing-file recovery, cache reconstruction, reallocation, and both
+fork and spawn fit paths.
+
 ### Still on the table
 
-* **Broadcast the blob through a file instead of `n_workers` pipes.** The blob
-  is identical for every worker, so the master's cost is O(workers) where it
-  could be O(1); the pipe ordering already gives the happens-before, so writing
-  the file before any send needs no new synchronisation. Measured in isolation
-  on 32 workers: pipes with the old payload 151 ms, pipes with the covariance
-  41 ms (what is shipped), **file broadcast 4.5 ms**. That is another ~37 ms per
-  iteration on the wide model. Not done: it is a real change to the transport,
-  with new failure modes, in exactly the code the SIGPIPE fix has just been
-  through. Recorded so the number is not re-derived.
 * Sends are issued to all workers before any receive, and a send blocks until
   that worker drains the pipe. Worker `n` therefore starts after workers
   `1..n-1` have each taken their message, which slightly violates the

@@ -542,7 +542,10 @@ test_that("the C++ and R simulators agree with each other and with the CDF", {
   # The two paths consume the RNG stream differently (rlnorm vs
   # exp(mu + sigma * norm_rand)), so only the distributions may be compared.
   fin <- is.finite(cpp$rt)
-  expect_equal(mean(fin), mean(is.finite(rr$rt)), tolerance = 0.03)
+  # Compare on an absolute scale: the two independent RNG streams can differ
+  # by a few percentage points, and expect_equal() interprets tolerance
+  # relatively (too strictly near a probability of 0.2).
+  expect_lt(abs(mean(fin) - mean(is.finite(rr$rt))), 0.03)
   # The winner's RT is the min of two iid first passages, so its CDF is
   # 1 - (1 - F)^2 with F the single-accumulator CDF.
   qs <- stats::quantile(cpp$rt[fin], c(0.25, 0.5, 0.75))

@@ -88,12 +88,22 @@ ref_fp_bawf <- function(V, z, b, k, rho = Inf) {
 
 d_bawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE,
                    rho = Inf, log_out = FALSE) {
+  if (launch == 1L) {
+    s2 <- p2^2
+    p1 <- exp(p1 + s2 / 2)
+    p2 <- sqrt(expm1(s2))
+  }
   EMC2:::dbawf(t, A, b, p1, p2, k, launch = as.integer(launch),
                posdrift = posdrift, log_out = log_out,
                rho = if (is.finite(rho)) rho else 0)
 }
 p_bawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE,
                    rho = Inf, log_out = FALSE) {
+  if (launch == 1L) {
+    s2 <- p2^2
+    p1 <- exp(p1 + s2 / 2)
+    p2 <- sqrt(expm1(s2))
+  }
   EMC2:::pbawf(t, A, b, p1, p2, k, launch = as.integer(launch),
                posdrift = posdrift, log_out = log_out,
                rho = if (is.finite(rho)) rho else 0)
@@ -332,7 +342,8 @@ test_that("the constructor wires drift_distribution and rho consistently", {
 
 test_that("Ttransform reports the endpoint and the omission boundary", {
   m <- BAwF()
-  pars <- cbind(mu = c(1, 1), sigma = c(0.5, 0.5), B = c(0.9, 1.8),
+  pars <- cbind(mean = c( exp(1 + 0.5^2 / 2), exp(1 + 0.5^2 / 2)),
+                cv = c(sqrt(expm1(0.5^2)), sqrt(expm1(0.5^2))), B = c(0.9, 1.8),
                 A = c(0.3, 0.3), t0 = c(0.2, 0.2), k = c(1.25, 1.25))
   out <- m$Ttransform(pars, NULL)
   expect_equal(out[, "b"], pars[, "B"] + pars[, "A"])
@@ -343,7 +354,8 @@ test_that("Ttransform reports the endpoint and the omission boundary", {
 })
 
 test_that("dfun/pfun use the same launch distribution as the c_name", {
-  pars <- cbind(mean = 1, cv = 0.5, v = 1, sv = 0.5, b = 1.2, A = 0.3,
+  pars <- cbind(mean = exp(1 + 0.5^2 / 2), cv = sqrt(expm1(0.5^2)),
+                v = 1, sv = 0.5, b = 1.2, A = 0.3,
                 t0 = 0.15, k = 1.1)
   rt <- 0.4
   expect_equal(BAwF()$dfun(rt, pars),
@@ -360,16 +372,29 @@ test_that("dfun/pfun use the same launch distribution as the c_name", {
 
 ref_race_ll_bawf <- function(dadm, pars, launch, rho = Inf,
                              min_ll = log(1e-10)) {
-  nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+  nm <- if (launch == 1L) c("mean", "cv") else c("v", "sv")
+  ln_pair <- function(i) {
+    m <- unname(pars[i, "mean"]); cv <- unname(pars[i, "cv"])
+    s2 <- log1p(cv^2)
+    c(mu = log(m) - s2 / 2, sigma = sqrt(s2))
+  }
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
-    ref_F_bawf(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
-               pars[i, "k"], rho, launch)
+    if (launch == 1L) {
+      q <- ln_pair(i)
+      ref_F_bawf(u, q[["mu"]], q[["sigma"]], pars[i, "b"], pars[i, "A"],
+                 pars[i, "k"], rho, launch)
+    } else ref_F_bawf(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+                      pars[i, "k"], rho, launch)
   }
   fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
-    ref_f_bawf(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
-               pars[i, "k"], rho, launch)
+    if (launch == 1L) {
+      q <- ln_pair(i)
+      ref_f_bawf(u, q[["mu"]], q[["sigma"]], pars[i, "b"], pars[i, "A"],
+                 pars[i, "k"], rho, launch)
+    } else ref_f_bawf(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
+                      pars[i, "k"], rho, launch)
   }
   n_lR <- length(levels(dadm$lR))
   n_tr <- nrow(dadm) / n_lR
@@ -425,11 +450,11 @@ bawf_dat <- function(n = 60) {
 test_that("the compiled race likelihood matches the R reference", {
   skip_on_cran()
   dat <- bawf_dat()
-  p <- c(mu = 0.9, sigma = log(0.6), v = 3, sv = log(1), B = log(0.8),
+  p <- c(mean = 0.9, cv = log(0.6), v = 3, sv = log(1), B = log(0.8),
          A = log(0.3), t0 = log(0.15), k = log(0.8))
   fx <- list(
     ln = suppressMessages(bawf_mk(BAwF,
-      list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat)),
+      list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat)),
     no = suppressMessages(bawf_mk(function() BAwF("normal"),
       list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), c(sv = log(1)), dat)))
   for (which in c("ln", "no")) {
@@ -466,8 +491,8 @@ test_that("a p_types reordering is caught by the column contract", {
   skip_on_cran()
   dat <- bawf_dat()
   fx <- suppressMessages(bawf_mk(BAwF,
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat))
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat))
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(0.8))
   swapped <- names(BAwF()$p_types)
   swapped[1:2] <- swapped[2:1]
@@ -482,8 +507,8 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat$rt[1:8] <- Inf                 # intrinsic omissions
   dat$R[1:8] <- NA                   # with an unknown response
   fx <- suppressMessages(bawf_mk(BAwF,
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat))
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat))
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(0.8))
   got <- bawf_ll(fx, p[names(sampled_pars(fx$des))])
   expect_true(is.finite(got))
@@ -496,7 +521,7 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat2 <- dat
   dat2$rt[1:8] <- 0.15 + 1 / 0.8 + 5
   fx2 <- suppressMessages(bawf_mk(BAwF,
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat2))
+    list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1), NULL, dat2))
   expect_true(is.finite(bawf_ll(fx2, p[names(sampled_pars(fx2$des))])))
 })
 
@@ -506,7 +531,8 @@ test_that("omissions past t0 + T_max stay well posed", {
 
 test_that("the C++ and R simulators agree with each other and with the CDF", {
   skip_on_cran()
-  pars <- cbind(mu = 1.0, sigma = 0.5, b = 1.2, A = 0.4, t0 = 0.15, k = 1.2)
+  pars <- cbind(mean = exp(1 + 0.5^2 / 2), cv = sqrt(expm1(0.5^2)),
+                b = 1.2, A = 0.4, t0 = 0.15, k = 1.2)
   n <- 1000
   pm <- pars[rep(1, 2 * n), , drop = FALSE]
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
@@ -534,8 +560,8 @@ test_that("make_data produces omissions the design can be fit back through", {
   dat <- bawf_dat(40)
   des <- suppressMessages(design(
     data = dat, model = BAwF, matchfun = function(d) d$S == d$lR,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1)))
-  p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
+    formula = list(mean ~ 1, cv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1)))
+  p <- c(mean = 0.9, cv = log(0.6), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(0.8))
   set.seed(3)
   sim <- make_data(p, design = des, n_trials = 60)

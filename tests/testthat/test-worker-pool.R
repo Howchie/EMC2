@@ -271,6 +271,66 @@ test_that("a garbled frame length is refused rather than allocated on", {
   expect_null(got)
 })
 
+test_that("the shared broadcast has one complete file round trip", {
+  skip_on_os("windows")
+  dir <- tempfile("emc_shared_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  shared <- list(group_var = diag(3), idx_list = list(c(TRUE, FALSE, TRUE)))
+  path <- EMC2:::.emc_wpool_shared_write(dir, serialize(shared, NULL))
+  expect_true(file.exists(path))
+  expect_identical(EMC2:::.emc_wpool_shared_read(path), shared)
+  unlink(path)
+  expect_false(file.exists(path))
+})
+
+test_that("an iteration shares one path and cleans it after replies", {
+  skip_on_os("windows")
+  dir <- tempfile("emc_shared_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  set.seed(19)
+  sent_paths <- character()
+  recv <- function(...) list(props = matrix(0, 3L, 1L), pm = list(NULL),
+                             seeds = list(get(".Random.seed", envir = globalenv())),
+                             times = 1)
+  send <- function(con, msg) {
+    sent_paths <<- c(sent_paths, msg$shared_file)
+    expect_true(file.exists(msg$shared_file))
+    TRUE
+  }
+  pool <- list(n = 2L, dir = dir, jobs = list(), wcs = list(1, 2),
+               rcs = list(1, 2), alive = TRUE, done = NULL)
+  pars <- list(alpha = matrix(0, 2L, 2L), subj_mu = matrix(0, 2L, 2L),
+               tvar = diag(2))
+  cache <- EMC2:::build_group_chol_cache(diag(2), list(c(TRUE, TRUE)))
+  ctx <- list(n_pars = 2L, type = "standard")
+  res <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_iter(
+      pool, ctx, list(1L, 2L), pars, cache, list(NULL, NULL), c(0, 0),
+      list(get(".Random.seed", envir = globalenv()),
+           get(".Random.seed", envir = globalenv()))),
+    .emc_wpool_send = send, .emc_wpool_recv = recv, .package = "EMC2"
+  )
+  expect_true(res$alive)
+  expect_length(unique(sent_paths), 1L)
+  expect_false(file.exists(sent_paths[[1L]]))
+})
+
+test_that("a worker reports a missing shared file and keeps listening", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  missing <- file.path(pool$dir, "not-published.bin")
+  bad <- list(kind = "particle", shared_file = missing,
+              notify = FALSE, w = 1L)
+  for (i in 1:2) {
+    expect_true(EMC2:::.emc_wpool_send(pool$wcs[[1]], bad))
+    got <- EMC2:::.emc_wpool_recv(pool$rcs[[1]])
+    expect_match(got$failed, "shared broadcast")
+  }
+})
+
 test_that("fitting leaves the caller's generator as it found it", {
   old <- RNGkind()
   on.exit(RNGkind(old[1], old[2], old[3]), add = TRUE)
@@ -591,8 +651,8 @@ test_that("the population covariance is reused from the shared cache", {
   shared <- list(group_var = population_var, idx_list = list(c(TRUE, TRUE)))
   raw <- serialize(shared, NULL)
   expect_identical(unserialize(raw), shared)
-  # The per-worker message carries the bytes, not another copy of the object,
-  # so the shared part is walked once however many workers there are.
+  # The raw-byte form remains a valid direct-message compatibility path; normal
+  # iterations publish these bytes once and put only a file path on each wire.
   msg <- list(subs = 1:2, shared = raw, alpha = matrix(0, 2, 2),
               population_mu = matrix(0, 2, 2), pm = list(NULL, NULL),
               prev_ll = c(0, 0), seeds = list(NULL, NULL))
@@ -620,7 +680,7 @@ test_that("only the covariance goes on the wire, never its factorisation", {
     cache)
 })
 
-test_that("compute() accepts a pre-decoded shared part and an encoded one", {
+test_that("compute() accepts pre-decoded, encoded, and file shared parts", {
   # The master's fallback path already holds the decoded object; the workers
   # only ever have the bytes.  Both must reach the same arguments.
   seen <- new.env(parent = emptyenv())
@@ -635,6 +695,10 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
   cache <- EMC2:::build_group_chol_cache(population_var, idx_list)
   shared <- list(group_var = population_var, idx_list = idx_list,
                  group_chol = cache)
+  dir <- tempfile("emc_shared_"); dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  shared_file <- EMC2:::.emc_wpool_shared_write(
+    dir, serialize(shared[c("group_var", "idx_list")], NULL))
   msg <- list(subs = "a",
               shared = serialize(shared[c("group_var", "idx_list")], NULL),
               alpha = matrix(3, 1, 1), population_mu = matrix(7, 1, 1),
@@ -648,10 +712,16 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
     seen$population_var <- population_var
     list(proposal = 0, ll = 0, pm_settings = NULL)
   }
-  for (sh in list(NULL, shared)) {
+  msg_file <- msg
+  msg_file$shared <- NULL
+  msg_file$shared_file <- shared_file
+  msgs <- list(msg, msg_file)
+  for (i in seq_along(msgs)) {
+    current <- msgs[[i]]
     seen$parameters <- NULL; seen$group_chol <- NULL
     testthat::with_mocked_bindings(
-      EMC2:::.emc_wpool_compute(msg, ctx, shared = sh),
+      EMC2:::.emc_wpool_compute(current, ctx,
+                                shared = if (i == 1L) NULL else shared),
       safe_new_particle = fake, .package = "EMC2"
     )
     expect_null(seen$parameters)

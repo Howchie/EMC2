@@ -331,8 +331,12 @@ struct PtMapper {
     for (std::size_t j = 0; j < pm_col_to_base_idx.size(); ++j) {
       const int bidx = pm_col_to_base_idx[j];
       if (bidx < 0 || is_inv_base[static_cast<size_t>(bidx)]) continue;
-      if (is_filled_base[static_cast<size_t>(bidx)]) continue;  // first writer wins
       is_filled_base[static_cast<size_t>(bidx)] = 1;
+      // Keep every writer, in particle-matrix order.  Constants can be
+      // appended with a name that is also present in the sampled matrix; the
+      // general refill path applies those duplicate columns in order, so the
+      // last value wins.  Dropping later writers silently replaced constants
+      // with sampled values (e.g. pContaminant/pGuess).
       plan_fill_pairs.emplace_back(static_cast<int>(j), bidx);
     }
     plan_zero_base_idx.clear();
