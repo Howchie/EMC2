@@ -3,11 +3,14 @@
 #   Rscript WorkingTests/bench_worker_pool.R
 #   NSUBJ=32 CORES=32 WIDE=1 Rscript WorkingTests/bench_worker_pool.R
 #
-# Reports the per-iteration split from `options(emc2.sampler_profile = TRUE)`.
-# The two numbers to read together are `response_wait` and `worker_max`: when
-# they are close the pool is bound by the work, and when `request_send` is a
-# large share it is bound by the wire instead.  The shared group state is now
-# written once to a file; each request carries only its path.
+# Reports the per-iteration split from the sampler profile option, through the
+# one reporting path in R/profile_schema.R.  The two numbers to read together
+# are `response_wait` and `worker_cpu_max` -- the slowest *worker's* whole
+# assigned partition, not the slowest single subject, which is what this script
+# used to print under the name `worker_max`.  When they are close the pool is
+# bound by the work, and when `request_send` is a large share it is bound by
+# the wire instead.  The shared group state is written once to a file; each
+# request carries only its path.
 #
 # Two traps, both of which have cost real time here:
 #
@@ -56,30 +59,17 @@ emc <- make_emc(dat, des, n_chains = 1, compress = TRUE)
 cat(sprintf("subjects=%d  trials/subj=%d  P=%d  iters=%d  cores=%d\n",
             NS, NT, length(sampled_pars(des)), NIT, CORES))
 
-options(emc2.sampler_profile = TRUE)
+# `_expensive` additionally sizes each serialised request and reads the process
+# tree's private memory; both are opt-in because measuring them costs an extra
+# object walk and a /proc read per iteration.
+options(emc2.sampler_profile = TRUE, emc2.sampler_profile_expensive = TRUE)
 el <- system.time(
   emc <- run_emc(emc, stage = "preburn", stop_criteria = list(iter = NIT),
                  cores_for_chains = 1, cores_per_chain = CORES,
                  verbose = FALSE, verboseProgress = FALSE))
 
-pr <- attr(emc[[1]]$samples, "sampler_profile")
-if (is.null(pr) || !nrow(pr)) stop("no profile recorded")
-pr <- pr[-1, , drop = FALSE]          # the first iteration pays pool start-up
-f <- function(x) if (all(is.na(x))) NA_real_ else mean(x, na.rm = TRUE)
-tot <- f(pr$total)
-
-cat(sprintf("\nworkers          %d\n", max(pr$workers)))
-cat(sprintf("wall %.2f s   iteration %.2f ms\n", el[["elapsed"]], 1000 * tot))
-for (nm in c("gibbs", "group_cache", "particle", "fill",
-             "shared_serialize", "request_send", "response_wait")) {
-  v <- f(pr[[nm]])
-  cat(sprintf("  %-17s %8.2f ms  %5.1f%%\n", nm, 1000 * v, 100 * v / tot))
-}
-cat(sprintf("  %-17s %8.2f ms  (slowest worker's own work)\n",
-            "worker_max", 1000 * f(pr$worker_max)))
-cat(sprintf("  %-17s %8.2f ms  (summed over workers)\n",
-            "worker_sum", 1000 * f(pr$worker_sum)))
-cat(sprintf("\nshared file        %9.0f B\n", f(pr$shared_bytes)))
-cat(sprintf("private per iter   %9.0f B\n", f(pr$private_bytes)))
-cat(sprintf("wire per iteration %9.0f B  (%.2f MB)\n",
-            f(pr$wire_bytes), f(pr$wire_bytes) / 1024^2))
+# One schema, one formatter: everything printed below is declared in
+# R/profile_schema.R, so a field added there appears here without this script
+# learning its name, its units or where it nests.
+EMC2:::.emc_profile_report(attr(emc[[1]]$samples, "sampler_profile"),
+                           elapsed = el[["elapsed"]])

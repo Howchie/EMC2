@@ -599,6 +599,12 @@ run_stage <- function(pmwgs,
     eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
     chains_var = chains_var, chol_caches = chol_caches
   )
+  # Optional low-level timing for architecture benchmarks.  Fields, types and
+  # the reporting path are declared once in R/profile_schema.R; the resulting
+  # data frame is attached to `samples` so profiling works inside the chain
+  # processes without shared global state.
+  sampler_profile <- .emc_profile_enabled()
+  startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
   # Never start more workers than there are subjects to give them: `mclapply`
   # caps itself at `length(X)`, and without the same cap a wide core budget on
   # a small study pays for workers that would be handed nothing.
@@ -647,6 +653,10 @@ run_stage <- function(pmwgs,
     }
   }
 
+  startup_elapsed <- if (sampler_profile) {
+    proc.time()[["elapsed"]] - startup_started
+  } else NA_real_
+
   # Extend only after startup.  This ordering still helps the fork fallback;
   # clean-process workers are isolated from both the old and extended arrays.
   start_iter <- pmwgs$samples$idx
@@ -660,12 +670,18 @@ run_stage <- function(pmwgs,
     recycle_every <- recycle_default
   }
 
-  # Optional low-level timing for architecture benchmarks.  It is deliberately
-  # opt-in: measuring serialised private-message sizes requires one additional
-  # object walk per worker.  The resulting data frame is attached to `samples`
-  # so profiling works inside the chain processes without shared global state.
-  sampler_profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
+  # Rejections are counted for the whole process, so read the running totals at
+  # the start of each iteration and report the difference.  Only "gibbs" is
+  # taken from here: particle rejections happen inside the workers and travel
+  # back in their replies, and reading both would double-count the shares the
+  # master recomputes itself.
+  gibbs_rejects <- .emc_reject_counts("gibbs")
+  # Reading smaps for a whole pool costs more than a fast iteration does, so
+  # the memory probe is sampled rather than run every iteration.  The report
+  # takes the mean and the peak over the iterations that carry a reading.
+  mem_every <- max(1L, as.integer(
+    getOption("emc2.sampler_profile_memory_every", 10L)))
 
   # Main iteration loop
   for (i in 1:iter) {
@@ -684,6 +700,7 @@ run_stage <- function(pmwgs,
       error = identity
     )
     if (inherits(pars_attempt, c("error", "try-error"))) {
+      .emc_reject_record(pars_attempt, "gibbs")
       pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
       if(any(nuisance)){
         pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
@@ -697,6 +714,7 @@ run_stage <- function(pmwgs,
         error = identity
       )
       if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
+        .emc_reject_record(pars_nuis_attempt, "gibbs")
         pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
         pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
         next
@@ -819,34 +837,76 @@ run_stage <- function(pmwgs,
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
     if (sampler_profile) {
+      # Stop the iteration clock before any profiler-only work.  Sizing the
+      # requests and reading the process tree's memory cost tens of
+      # milliseconds on a wide fit, and charging that to `total` makes the
+      # profiler the largest unexplained component of its own report.
+      iteration_total <- proc.time()[["elapsed"]] - iteration_started
       pp <- if (is.null(pool_profile)) list() else pool_profile
-      profile_rows[[i]] <- data.frame(
+      # `n_particles` is what the subject actually ran with after adaptation,
+      # not the nominal setting, which is why it is read back here rather than
+      # taken from `tune`.
+      n_part <- vapply(pm_settings, function(x) {
+        if (is.null(x$n_particles)) NA_real_ else as.numeric(x$n_particles)
+      }, numeric(1))
+      # Sample the first and last iteration too, so a short run still carries a
+      # reading and the peak covers the end of the block.
+      mem <- if (.emc_profile_expensive() &&
+                 (i == 1L || i == iter || i %% mem_every == 0L)) {
+        # The whole tree, template included: a forked template holds the
+        # context every worker shares, and leaving it out attributes its pages
+        # to nobody.
+        .emc_profile_memory(if (is.null(wpool)) NULL else c(
+          vapply(wpool$jobs, .emc_wpool_job_pid, integer(1)),
+          .emc_wpool_job_pid(wpool$template$job)))
+      } else list(bytes = NA_real_, method = NA_character_)
+      profile_rows[[i]] <- do.call(.emc_profile_row, c(list(
         iteration = j,
-        total = proc.time()[["elapsed"]] - iteration_started,
+        stage = stage,
+        subjects = pmwgs$n_subjects,
+        workers = if (is.null(wpool)) 0L else wpool$n,
+        workers_active = pp$workers_active,
+        particles_max = if (all(is.na(n_part))) NA_real_ else max(n_part, na.rm = TRUE),
+        particles_sum = if (all(is.na(n_part))) NA_real_ else sum(n_part, na.rm = TRUE),
+        total = iteration_total,
         gibbs = gibbs_elapsed,
         group_cache = cache_elapsed,
         recycle = recycle_elapsed,
         grow = grow_elapsed,
-        particle = if (is.null(pp$elapsed)) NA_real_ else pp$elapsed,
+        startup = if (i == 1L) startup_elapsed else NA_real_,
+        particle = pp$elapsed,
         fill = fill_elapsed,
-        shared_serialize = if (is.null(pp$shared_serialize)) NA_real_ else pp$shared_serialize,
-        request_send = if (is.null(pp$send)) NA_real_ else pp$send,
-        response_wait = if (is.null(pp$receive)) NA_real_ else pp$receive,
-        worker_max = if (is.null(pp$worker_max)) NA_real_ else pp$worker_max,
-        worker_sum = if (is.null(pp$worker_sum)) NA_real_ else pp$worker_sum,
-        shared_bytes = if (is.null(pp$shared_bytes)) NA_real_ else pp$shared_bytes,
-        private_bytes = if (is.null(pp$private_bytes)) NA_real_ else pp$private_bytes,
-        wire_bytes = if (is.null(pp$wire_bytes)) NA_real_ else pp$wire_bytes,
-        workers = if (is.null(wpool)) 0L else wpool$n
-      )
+        shared_serialize = pp$shared_serialize,
+        request_send = pp$send,
+        response_wait = pp$receive,
+        subject_cpu_max = pp$subject_cpu_max,
+        subject_cpu_sum = pp$subject_cpu_sum,
+        worker_cpu_max = pp$worker_cpu_max,
+        worker_cpu_sum = pp$worker_cpu_sum,
+        worker_elapsed_max = pp$worker_elapsed_max,
+        worker_elapsed_sum = pp$worker_elapsed_sum,
+        dispatch_first = pp$dispatch_first,
+        dispatch_last = pp$dispatch_last,
+        finish_first = pp$finish_first,
+        finish_last = pp$finish_last,
+        queue_delay_max = pp$queue_delay_max,
+        queue_delay_mean = pp$queue_delay_mean,
+        shared_bytes = pp$shared_bytes,
+        private_bytes = pp$private_bytes,
+        wire_bytes = pp$wire_bytes,
+        private_memory = mem$bytes,
+        private_memory_method = mem$method,
+        fallback_workers = pp$fallback_workers,
+        fallback_subjects = pp$fallback_subjects,
+        degraded = pp$degraded),
+        .emc_reject_row_fields(pp$rejects, "particle"),
+        .emc_reject_row_fields(.emc_reject_delta(gibbs_rejects, "gibbs"), "gibbs")))
+      gibbs_rejects <- .emc_reject_counts("gibbs")
     }
   }
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   if (sampler_profile) {
-    profile_rows <- profile_rows[!vapply(profile_rows, is.null, logical(1))]
-    attr(pmwgs$samples, "sampler_profile") <- if (length(profile_rows)) {
-      do.call(rbind, profile_rows)
-    } else data.frame()
+    attr(pmwgs$samples, "sampler_profile") <- .emc_profile_bind(profile_rows)
   }
   if (verboseProgress) close(pb)
   return(pmwgs)
@@ -897,6 +957,13 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     error = identity
   )
   if (inherits(attempt, c("error", "try-error"))) {
+    # Counting only: the rejection policy is unchanged.  Repeating the previous
+    # state is what preserves the PMwG invariant under *numerical* rejection,
+    # but this catch also swallows infrastructure and programming failures, and
+    # a fit that quietly copies the old state every iteration looks like fast,
+    # well-mixing sampling from the outside.  Recording the class is what makes
+    # that visible without changing what happens next.
+    .emc_reject_record(attempt, "particle")
     old <- if (is.null(current_alpha)) parameters$alpha[, s] else current_alpha
     return(reject_particle(old, prev_ll, pm_settings))
   }

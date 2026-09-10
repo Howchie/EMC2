@@ -945,6 +945,12 @@
   pm <- vector("list", length(subs))
   seeds <- vector("list", length(subs))
   times <- numeric(length(subs))
+  # The master cannot see how long a worker's own request took, only how long
+  # it waited for the reply, and those differ by the queue delay plus whatever
+  # else the worker was descheduled for.  Report both ends from here.
+  t_recv <- Sys.time()
+  w_started <- proc.time()
+  rejects_before <- .emc_reject_counts("particle")
   for (k in seq_along(subs)) {
     s <- subs[k]
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
@@ -969,7 +975,15 @@
     pm[[k]] <- out$pm_settings
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
   }
-  list(props = props, pm = pm, seeds = seeds, times = times)
+  w_spent <- proc.time() - w_started
+  list(props = props, pm = pm, seeds = seeds, times = times,
+       # `times` is per subject and excludes this function's own overhead;
+       # `cpu`/`elapsed` cover the whole request, so the difference between
+       # them is the worker's own housekeeping rather than the master's.
+       t_recv = t_recv, t_done = Sys.time(),
+       cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
+       elapsed = unname(w_spent[["elapsed"]]),
+       rejects = .emc_reject_delta(rejects_before, "particle"))
 })
 
 # With one subject, distribute proposal rows across persistent workers. Likelihood
@@ -1308,12 +1322,27 @@
          notify = watch, w = w)
   })
   sent <- rep(FALSE, pool$n)
+  # Per-worker telemetry.  `dispatch_at`/`finish_at` are master elapsed seconds
+  # relative to the start of this iteration; `dispatch_wall` is wall clock,
+  # because the queue delay is the gap between two *different* processes and
+  # `proc.time()` is measured from each process's own start.
+  dispatch_at <- finish_at <- rep(NA_real_, pool$n)
+  dispatch_wall <- rep(Sys.time()[NA], pool$n)
+  worker_cpu <- worker_elapsed <- queue_delay <- rep(NA_real_, pool$n)
+  fallback_workers <- 0L
+  fallback_subjects <- 0L
+  rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                             .EMC_REJECT_CLASSES)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   sendable <- was_alive && !is.null(shared_file)
   if (sendable) {
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
       sent[w] <- .emc_wpool_send(pool$wcs[[w]], msgs[[w]])
+      if (profile && sent[w]) {
+        dispatch_at[w] <- proc.time()[["elapsed"]] - iter_started
+        dispatch_wall[w] <- Sys.time()
+      }
       if (!sent[w]) {
         .emc_wpool_degraded(
           .emc_wpool_transport_error("send to a worker failed"))
@@ -1330,12 +1359,33 @@
   # 1..n-1 have each taken their message.  At current message sizes that skew is
   # far below the LPT partition's granularity; noted here so it is not
   # rediscovered later as a mystery imbalance.
-  store <- function(w, res) {
+  store <- function(w, res, source = "worker") {
     subs <- part[[w]]
     props[, subs] <<- res$props
     times[subs] <<- res$times
     pm_settings[subs] <<- res$pm
     seeds[subs] <<- res$seeds
+    if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
+    # A pool that was already dead on entry (a single worker, or Windows) runs
+    # every share in the master by design; that is the serial route, not a
+    # fallback, and counting it would report a healthy fit as failing.
+    if (identical(source, "master") && was_alive) {
+      fallback_workers <<- fallback_workers + 1L
+      fallback_subjects <<- fallback_subjects + length(subs)
+    }
+    if (!profile) return(invisible(NULL))
+    finish_at[w] <<- proc.time()[["elapsed"]] - iter_started
+    if (!is.null(res$cpu)) worker_cpu[w] <<- res$cpu
+    if (!is.null(res$elapsed)) worker_elapsed[w] <<- res$elapsed
+    # Only a genuine worker reply measures a queue: a share recomputed in the
+    # master was never queued, and recording its "delay" would report the
+    # failure-handling path as though the pool had been slow to pick work up.
+    if (identical(source, "worker") && !is.null(res$t_recv) &&
+        !is.na(dispatch_wall[w])) {
+      queue_delay[w] <<- as.numeric(difftime(res$t_recv, dispatch_wall[w],
+                                             units = "secs"))
+    }
+    invisible(NULL)
   }
   # A `failed` reply is not a dead worker: it caught an error in the work and is
   # still listening.  Recompute that share here -- same function, same streams,
@@ -1373,30 +1423,33 @@
         }
         # Nothing further on these pipes can be trusted or waited on.
         pool$alive <- FALSE
-        for (k in which(pending)) store(k, recompute(k))
+        for (k in which(pending)) store(k, recompute(k), source = "master")
         pending[] <- FALSE
         break
       }
       res <- .emc_wpool_recv(pool$rcs[[w]])
+      source <- "worker"
       if (is.null(res) || !is.null(res$failed)) {
         if (is.null(res)) {
           .emc_wpool_degraded("worker gave no reply")
           pool$alive <- FALSE
         }
         res <- recompute(w)
+        source <- "master"
       }
-      store(w, res)
+      store(w, res, source = source)
       pending[w] <- FALSE
     }
     # Shares that were never sent (a failed send already retired the pool).
     for (w in seq_len(pool$n)) {
-      if (length(part[[w]]) && !sent[w]) store(w, recompute(w))
+      if (length(part[[w]]) && !sent[w]) store(w, recompute(w), source = "master")
     }
   } else {
     for (w in seq_len(pool$n)) {
       subs <- part[[w]]
       if (!length(subs)) next
       res <- if (sent[w]) .emc_wpool_recv(pool$rcs[[w]]) else NULL
+      source <- "worker"
       if (is.null(res) || !is.null(res$failed)) {
         if (sent[w] && is.null(res)) {
           # No reply means the transport or the worker itself is gone, so there
@@ -1405,25 +1458,36 @@
           pool$alive <- FALSE
         }
         res <- recompute(w)
+        source <- "master"
       }
-      store(w, res)
+      store(w, res, source = source)
     }
   }
   receive_elapsed <- proc.time()[["elapsed"]] - receive_started
   if (was_alive) .emc_wpool_record_receive(receive_elapsed)
-  private_bytes <- if (profile) {
+  # Sizing a message means serialising it a second time purely to measure it,
+  # so it stays behind the expensive switch rather than being paid for by every
+  # profiled run.
+  measure_wire <- .emc_profile_expensive()
+  private_bytes <- if (measure_wire) {
     sum(vapply(msgs, function(msg) {
       msg$shared <- NULL
       msg$shared_file <- NULL
       length(serialize(msg, NULL))
     }, integer(1)))
   } else NA_real_
-  shared_path_bytes <- if (profile && !is.null(shared_file)) {
+  shared_path_bytes <- if (measure_wire && !is.null(shared_file)) {
     active <- vapply(part, length, integer(1)) > 0L
     sum(vapply(msgs[active], function(msg) {
       length(serialize(list(shared_file = msg$shared_file), NULL))
     }, integer(1)))
-  } else if (profile) 0 else NA_real_
+  } else if (measure_wire) 0 else NA_real_
+  # The workload actually assigned to each worker, which is what a scheduler
+  # change has to move.  `max(times)` is the slowest single *subject*: with
+  # several subjects per worker the two differ by roughly that ratio, and using
+  # the per-subject figure as "the slowest worker" made every subject after the
+  # first in a partition look like transport overhead.
+  worker_load <- vapply(part, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
        alive = pool$alive,
        profile = if (profile) list(
@@ -1431,14 +1495,39 @@
          shared_serialize = shared_elapsed,
          send = send_elapsed,
          receive = receive_elapsed,
-         worker_max = if (length(times)) max(times) else 0,
-         worker_sum = sum(times),
-         shared_bytes = length(shared_raw),
+         subject_cpu_max = if (length(times)) max(times) else 0,
+         subject_cpu_sum = sum(times),
+         worker_cpu_max = if (length(worker_load)) max(worker_load) else 0,
+         worker_cpu_sum = sum(worker_cpu, na.rm = TRUE),
+         worker_elapsed_max = if (all(is.na(worker_elapsed))) NA_real_ else {
+           max(worker_elapsed, na.rm = TRUE)
+         },
+         worker_elapsed_sum = sum(worker_elapsed, na.rm = TRUE),
+         workers_active = sum(vapply(part, length, integer(1)) > 0L),
+         dispatch_first = .emc_range_or_na(dispatch_at, min),
+         dispatch_last = .emc_range_or_na(dispatch_at, max),
+         finish_first = .emc_range_or_na(finish_at, min),
+         finish_last = .emc_range_or_na(finish_at, max),
+         queue_delay_max = .emc_range_or_na(queue_delay, max),
+         queue_delay_mean = .emc_range_or_na(queue_delay, mean),
+         fallback_workers = fallback_workers,
+         fallback_subjects = fallback_subjects,
+         degraded = as.integer(was_alive && !isTRUE(pool$alive)),
+         rejects = rejects,
+         shared_bytes = if (measure_wire) length(shared_raw) else NA_real_,
          private_bytes = private_bytes,
-         wire_bytes = if (!is.null(shared_file)) {
+         wire_bytes = if (!measure_wire) NA_real_ else if (!is.null(shared_file)) {
            length(shared_raw) + shared_path_bytes + private_bytes
          } else private_bytes
        ) else NULL)
+}
+
+# `max(numeric(0))` warns and returns -Inf, and `max(all-NA, na.rm = TRUE)` does
+# the same; a profile column should read NA there instead of an infinity that
+# then propagates through every mean taken over it.
+.emc_range_or_na <- function(x, f) {
+  x <- x[!is.na(x)]
+  if (!length(x)) NA_real_ else as.numeric(f(x))
 }
 
 # --- partitioning -----------------------------------------------------------

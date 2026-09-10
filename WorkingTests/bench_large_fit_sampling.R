@@ -86,7 +86,9 @@ sampler <- suppressMessages(make_emc(
   dat, des, n_chains = 1, compress = TRUE, rt_resolution = 0.02
 ))[[1L]]
 
-options(emc2.sampler_profile = profile_enabled, emc2.worker_backend = "spawn")
+options(emc2.sampler_profile = profile_enabled,
+        emc2.sampler_profile_expensive = profile_enabled,
+        emc2.worker_backend = "spawn")
 if (!is.null(recycle)) options(emc2.worker_recycle = recycle)
 pool_state <- get(".emc_pool_state", envir = asNamespace("EMC2"))
 pool_state$last_error <- NULL
@@ -115,4 +117,8 @@ result <- list(
 )
 saveRDS(result, out_file)
 print(result[setdiff(names(result), c("profile", "final_alpha", "final_ll"))])
-if (!is.null(profile)) print(colMeans(profile[vapply(profile, is.numeric, logical(1))], na.rm = TRUE))
+# Same schema and same formatter as WorkingTests/bench_worker_pool.R, so the
+# two benchmarks cannot disagree about what a field is called or what it means.
+if (!is.null(profile)) {
+  EMC2:::.emc_profile_report(profile, elapsed = result$elapsed)
+}
