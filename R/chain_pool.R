@@ -2013,8 +2013,11 @@
   # the per-subject figure as "the slowest worker" made every subject after the
   # first in a partition look like transport overhead.
   worker_load <- vapply(part, function(subs) sum(times[subs]), numeric(1))
+  # `rejects` is outside the profile block on purpose: a failure that was not
+  # numerical rejection has to be visible in an ordinary run, not only in a
+  # profiled one, and it is four integers.
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       alive = pool$alive,
+       alive = pool$alive, rejects = rejects,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,

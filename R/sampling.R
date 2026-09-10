@@ -677,6 +677,13 @@ run_stage <- function(pmwgs,
   # back in their replies, and reading both would double-count the shares the
   # master recomputes itself.
   gibbs_rejects <- .emc_reject_counts("gibbs")
+  # Totals for the whole stage, so R/failure_policy.R can report once at the
+  # end from the master rather than per iteration from a forked worker.
+  stage_rejects <- list(
+    particle = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                               .EMC_REJECT_CLASSES),
+    gibbs = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                            .EMC_REJECT_CLASSES))
   # Reading smaps for a whole pool costs more than a fast iteration does, so
   # the memory probe is sampled rather than run every iteration.  The report
   # takes the mean and the peak over the iterations that carry a reading.
@@ -700,7 +707,10 @@ run_stage <- function(pmwgs,
       error = identity
     )
     if (inherits(pars_attempt, c("error", "try-error"))) {
-      .emc_reject_record(pars_attempt, "gibbs")
+      cls <- .emc_reject_record(pars_attempt, "gibbs")
+      if (identical(.emc_failure_action(cls), "abort")) {
+        .emc_failure_abort(cls, "gibbs", pars_attempt)
+      }
       pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
       if(any(nuisance)){
         pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
@@ -714,7 +724,10 @@ run_stage <- function(pmwgs,
         error = identity
       )
       if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
-        .emc_reject_record(pars_nuis_attempt, "gibbs")
+        cls <- .emc_reject_record(pars_nuis_attempt, "gibbs")
+        if (identical(.emc_failure_action(cls), "abort")) {
+          .emc_failure_abort(cls, "gibbs", pars_nuis_attempt)
+        }
         pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
         pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
         next
@@ -799,6 +812,11 @@ run_stage <- function(pmwgs,
       wpool_streams <- it$seeds
       wpool$alive <- it$alive
       pool_profile <- it$profile
+      # Particle failures happen in the workers and travel back here; the
+      # master's own counter never sees them.
+      if (!is.null(it$rejects)) {
+        stage_rejects$particle <- stage_rejects$particle + it$rejects
+      }
       # Re-balance from what the subjects actually cost this iteration: trial
       # counts are only a proxy, and the adaptive particle number drifts.
       # Floor rather than discard: a subject whose CPU time lands under the
@@ -836,6 +854,12 @@ run_stage <- function(pmwgs,
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
+    # The group step runs in the master, so its failures are on this process's
+    # counter.  Read the difference every iteration, not only when profiling:
+    # the stage summary has to be able to say what happened in an ordinary run.
+    gibbs_delta <- .emc_reject_delta(gibbs_rejects, "gibbs")
+    gibbs_rejects <- .emc_reject_counts("gibbs")
+    stage_rejects$gibbs <- stage_rejects$gibbs + gibbs_delta
     if (sampler_profile) {
       # Stop the iteration clock before any profiler-only work.  Sizing the
       # requests and reading the process tree's memory cost tens of
@@ -900,10 +924,13 @@ run_stage <- function(pmwgs,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded),
         .emc_reject_row_fields(pp$rejects, "particle"),
-        .emc_reject_row_fields(.emc_reject_delta(gibbs_rejects, "gibbs"), "gibbs")))
-      gibbs_rejects <- .emc_reject_counts("gibbs")
+        .emc_reject_row_fields(gibbs_delta, "gibbs")))
     }
   }
+  # One report per stage, from the master, where a warning cannot go with a
+  # forked process.  Silent unless something that was not numerical rejection
+  # was answered by repeating the previous state.
+  .emc_failure_report_stage(stage_rejects, stage)
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   if (sampler_profile) {
     attr(pmwgs$samples, "sampler_profile") <- .emc_profile_bind(profile_rows)
@@ -963,7 +990,13 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # a fit that quietly copies the old state every iteration looks like fast,
     # well-mixing sampling from the outside.  Recording the class is what makes
     # that visible without changing what happens next.
-    .emc_reject_record(attempt, "particle")
+    cls <- .emc_reject_record(attempt, "particle")
+    # R/failure_policy.R decides.  Under the default the answer is the same one
+    # this has always given -- repeat the previous state -- and the difference
+    # is that a failure which was not numerical rejection now says so.
+    if (identical(.emc_failure_action(cls), "abort")) {
+      .emc_failure_abort(cls, "particle", attempt)
+    }
     old <- if (is.null(current_alpha)) parameters$alpha[, s] else current_alpha
     return(reject_particle(old, prev_ll, pm_settings))
   }

@@ -111,9 +111,18 @@ test_that("rejection counters accumulate per source and difference correctly", {
   expect_true(all(.emc_reject_counts("particle") == 0L))
 
   before <- .emc_reject_counts("particle")
-  .emc_reject_record(simpleError("chol failed"), "particle")
-  .emc_reject_record(simpleError("chol failed"), "particle")
-  .emc_reject_record(simpleError("could not find function \"g\""), "gibbs")
+  # Numerical rejection is ordinary and says nothing; the programming failure
+  # is announced, because counting one without saying so is exactly what
+  # R/failure_policy.R exists to stop.  Recording and announcing are wired
+  # together here on purpose, so a future refactor cannot separate them.
+  announced <- .emc_profile_state$announced
+  on.exit(.emc_profile_state$announced <- announced, add = TRUE)
+  .emc_profile_state$announced <- NULL
+  expect_silent(.emc_reject_record(simpleError("chol failed"), "particle"))
+  expect_silent(.emc_reject_record(simpleError("chol failed"), "particle"))
+  expect_warning(
+    .emc_reject_record(simpleError("could not find function \"g\""), "gibbs"),
+    "programming")
   expect_identical(unname(.emc_reject_counts("particle")["numerical"]), 2L)
   # Sources are independent: a Gibbs failure must not inflate the particle
   # count, since run_stage() reads only one of them and the workers report the

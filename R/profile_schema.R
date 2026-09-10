@@ -440,6 +440,10 @@
     msgs[[key]] <- tryCatch(conditionMessage(cond), error = function(e) "")
     .emc_profile_state$reject_msgs <- msgs
   }
+  # Counting is still all this does to the sampler.  Announcing is the policy's
+  # job and lives in R/failure_policy.R; it is called from here so that no
+  # caller can count a failure without the policy having seen it.
+  .emc_failure_announce(cls, source, cond)
   invisible(cls)
 }
 
@@ -452,6 +456,12 @@
 
 # Counters live in the process that caught the error, so a worker's counts must
 # travel back in its reply.  Snapshot before the work, difference after.
+# Every source's totals at once, in the shape `.emc_failure_summary()` reads.
+.emc_reject_counts_all <- function() {
+  counts <- .emc_profile_state$rejects
+  if (is.null(counts)) list() else counts
+}
+
 .emc_reject_delta <- function(before, source = "particle") {
   .emc_reject_counts(source) - before
 }
