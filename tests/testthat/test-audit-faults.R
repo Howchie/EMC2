@@ -466,9 +466,9 @@ test_that("a published broadcast is readable and is removed by its owner", {
 # --- teardown ---------------------------------------------------------------
 
 test_that("teardown is idempotent and survives a degraded pool", {
-  # Finding 3: a failed recycle returns a pool without its template, directory
-  # or job handles, and the normal shutdown route must still not raise.
-  # Repeated teardown is the audit's own listed case.
+  # Repeated teardown is the audit's own listed case, and a degraded pool is
+  # still an owner: cleanup has to work on one that has lost its workers.
+  # Whether a failed recycle keeps the rest of its handles is the test below.
   expect_silent(EMC2:::.emc_wpool_stop(NULL))
   bare <- audit_fake_pool(0L, alive = FALSE)
   expect_silent(EMC2:::.emc_wpool_stop(bare))
@@ -540,28 +540,331 @@ test_that("a startup that fails part-way leaves no untracked children", {
 
 # --- connection exhaustion --------------------------------------------------
 
-test_that("the pool's connection appetite is bounded and knowable", {
+test_that("a width the connection table cannot hold is capped, not half-built", {
   # The audit: "Check available R connections/file descriptors before growing:
   # this pool consumes separate request/reply connections for each worker plus
-  # template/completion channels.  Allocate a feasible worker count and queue
+  # template/completion channels ... Allocate a feasible worker count and queue
   # the remaining work instead of discovering the limit part-way through
   # startup."
-  #
-  # R's connection table is a fixed size, and every worker costs two entries
-  # plus the template's two and the completion channel.  Pin the accounting so
-  # a grow policy can be written against it.
   skip_on_os("windows")
-  before <- nrow(showConnections(all = FALSE))
+  # The "say it once" flag is process-global, so leave it as this test found it
+  # or a later test loses a warning it was entitled to.
+  pool_state <- EMC2:::.emc_pool_state
+  was_warned <- pool_state$conn_warned
+  on.exit(pool_state$conn_warned <- was_warned, add = TRUE)
+  # The accounting the policy rests on: two connections per worker, and the
+  # table really is a fixed number of slots.
+  expect_identical(EMC2:::.EMC_WPOOL_CONN_PER_WORKER, 2L)
+  before <- nrow(showConnections(all = TRUE))
   cons <- list()
   on.exit(for (cn in cons) try(close(cn), silent = TRUE), add = TRUE)
   f <- tempfile()
   writeLines("x", f)
   on.exit(unlink(f), add = TRUE)
   for (i in 1:8) cons[[i]] <- file(f, "rb")
-  expect_equal(nrow(showConnections(all = FALSE)) - before, 8L)
+  expect_equal(nrow(showConnections(all = TRUE)) - before, 8L)
   for (cn in cons) close(cn)
   cons <- list()
-  expect_equal(nrow(showConnections(all = FALSE)), before)
+  expect_equal(nrow(showConnections(all = TRUE)), before)
+
+  # With room, the requested width is the width.
+  expect_identical(EMC2:::.emc_wpool_feasible_workers(4L), 4L)
+
+  pool_state$conn_warned <- NULL
+  # With partial room, the width is cut to what fits and the cut is announced
+  # once -- the remaining subjects are queued onto the workers that exist, so
+  # results are unaffected.
+  capped <- NULL
+  expect_warning({
+    capped <- with_mocked_bindings(EMC2:::.emc_wpool_feasible_workers(64L),
+                                   .emc_wpool_conn_limit = function() 30L,
+                                   .package = "EMC2")
+  }, "limited to")
+  expect_lt(capped, 64L)
+  expect_gt(capped, 0L)
+  expect_lte(capped * 2L, 30L)
+  # Announced once, not once per block.
+  expect_silent(with_mocked_bindings(EMC2:::.emc_wpool_feasible_workers(64L),
+                                     .emc_wpool_conn_limit = function() 30L,
+                                     .package = "EMC2"))
+  pool_state$conn_warned <- NULL
+
+  # With no room, no pool is started at all: the failure that mattered was
+  # discovering the limit after some workers had already been forked.  It still
+  # says so -- a silent refusal is a fit that runs serially for no visible
+  # reason.
+  started <- "unset"
+  expect_warning({
+    started <- with_mocked_bindings(
+      EMC2:::.emc_wpool_start(8L, list(n_pars = 2)),
+      .emc_wpool_conn_limit = function() 8L, .package = "EMC2")
+  }, "limited to 0 workers")
+  expect_null(started)
+})
+
+# --- ownership through failure (finding 3) ----------------------------------
+
+test_that("a failed recycle keeps the handles it will be cleaned up by", {
+  # Finding 3.  On the clean backend a failed respawn used to return a bare
+  # stub -- no template, no directory, no jobs -- which threw away the only
+  # handle on a live R process.  `.emc_wpool_stop()` then found nothing to stop
+  # and the template outlived the fit, and a later recycle had no template to
+  # recover with.  A dead pool is still an owner.
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  old <- options(emc2.worker_backend = "spawn")
+  on.exit(options(old), add = TRUE)
+  ctx <- list(kind = "ll", n_pars = 2L, data = list(), model = NULL)
+  pool <- EMC2:::.emc_wpool_start(2L, ctx)
+  skip_if(is.null(pool), "no worker pool available here")
+  skip_if(!identical(pool$backend, "spawn"), "not on the clean backend here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+
+  dir <- pool$dir
+  template_pid <- EMC2:::.emc_wpool_job_pid(pool$template$job)
+  expect_true(EMC2:::.emc_wpool_pid_alive(template_pid))
+
+  dead <- suppressWarnings(with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(pool, 2L, 1L, ctx),
+    .emc_wpool_spawn = function(...) NULL, .package = "EMC2"))
+  expect_false(dead$alive)
+  # Everything that cleanup needs, and everything a later recycle needs.
+  expect_identical(dead$dir, dir)
+  expect_identical(dead$backend, "spawn")
+  expect_false(is.null(dead$template))
+  expect_false(is.null(dead$done))
+  expect_identical(dead$ctx_file, pool$ctx_file)
+  expect_true(dir.exists(dir))
+  expect_gt(dead$generation, pool$generation)
+  # And the backoff, so a dead pool does not retry every period.
+  expect_gt(dead$rebuild_fails, 0L)
+  expect_gt(dead$rebuild_skip, 0L)
+
+  # The normal shutdown route now actually reaches the template.
+  expect_no_error(EMC2:::.emc_wpool_stop(dead))
+  deadline <- proc.time()[["elapsed"]] + 20
+  while (EMC2:::.emc_wpool_pid_alive(template_pid) &&
+         proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
+  expect_false(EMC2:::.emc_wpool_pid_alive(template_pid))
+  expect_false(dir.exists(dir))
+  pool <- dead
+})
+
+test_that("workers whose reaper has died are terminated by their owner", {
+  # The other half of finding 3.  A spawned worker is the *template's* child,
+  # so only the template can collect it, and normally that is exactly what
+  # happens -- waiting for it in the master would wait for something the master
+  # cannot cause.  But a template that is killed outright never runs its exit
+  # handler, and then nobody reaps its workers: each is a retained R process
+  # holding a whole likelihood context.  The pool holds their pids, so it can
+  # end them itself.
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  old <- options(emc2.worker_backend = "spawn")
+  on.exit(options(old), add = TRUE)
+  ctx <- list(kind = "ll", n_pars = 2L, data = list(), model = NULL)
+  pool <- EMC2:::.emc_wpool_start(2L, ctx)
+  skip_if(is.null(pool), "no worker pool available here")
+  skip_if(!identical(pool$backend, "spawn"), "not on the clean backend here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+
+  pids <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
+  expect_true(all(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  # SIGKILL, so the template's own cleanup never runs.
+  template_pid <- EMC2:::.emc_wpool_job_pid(pool$template$job)
+  tools::pskill(template_pid, tools::SIGKILL)
+  deadline <- proc.time()[["elapsed"]] + 20
+  while (EMC2:::.emc_wpool_pid_alive(template_pid) &&
+         proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
+  skip_if(EMC2:::.emc_wpool_pid_alive(template_pid), "template would not die")
+  # The workers outlive it, which is the leak.
+  expect_true(any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  suppressWarnings(EMC2:::.emc_wpool_stop_workers(pool))
+  deadline <- proc.time()[["elapsed"]] + 20
+  while (any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
+         proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
+  expect_false(any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+})
+
+test_that("teardown does not wait on a reap it cannot perform", {
+  # The measured cost of getting the previous test wrong: waiting for spawned
+  # workers to disappear waits for the template to collect them, which cannot
+  # happen while the master is inside its own teardown.  It burned the whole
+  # escalation deadline on every block boundary and every recycle.
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  old <- options(emc2.worker_backend = "spawn")
+  on.exit(options(old), add = TRUE)
+  ctx <- list(kind = "ll", n_pars = 2L, data = list(), model = NULL)
+  pool <- EMC2:::.emc_wpool_start(2L, ctx)
+  skip_if(is.null(pool), "no worker pool available here")
+  skip_if(!identical(pool$backend, "spawn"), "not on the clean backend here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+  elapsed <- system.time(
+    suppressWarnings(EMC2:::.emc_wpool_stop_workers(pool)))[["elapsed"]]
+  # Generous: the point is that this is not the two-second escalation deadline.
+  expect_lt(elapsed, 1)
+})
+
+# --- generation retirement (finding 5) --------------------------------------
+
+test_that("a retired generation is emptied, not merely skipped later", {
+  # C4 made a stale record recognisable; retiring is throwing it away before
+  # the replacement workers are given anything to do, so that "records waiting"
+  # and "this iteration's workers have answered" cannot be confused.
+  skip_on_os("windows")
+  dir <- tempfile("emc_done_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  done <- EMC2:::.emc_wpool_done_open(dir)
+  skip_if(is.null(done), "no FIFO available here")
+  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
+          add = TRUE)
+  pool <- audit_fake_pool(2L)
+  pool$done <- done
+  pool$generation <- 5L
+
+  expect_identical(EMC2:::.emc_wpool_retire(pool), 0L)
+  writeBin(c(EMC2:::.emc_wpool_done_encode(1L, 4L, 1L),
+             EMC2:::.emc_wpool_done_encode(2L, 4L, 2L),
+             EMC2:::.emc_wpool_done_encode(1L, 4L, 3L)), done$wc)
+  flush(done$wc)
+  expect_identical(EMC2:::.emc_wpool_retire(pool), 3L)
+  expect_null(EMC2:::.emc_wpool_done_take(done))
+
+  # A record that was still being written when its worker died goes too:
+  # nobody is going to finish it.
+  writeBin(EMC2:::.emc_wpool_done_encode(1L, 4L, 4L)[1:7], done$wc)
+  flush(done$wc)
+  expect_identical(EMC2:::.emc_wpool_retire(pool), 0L)
+  expect_identical(length(done$buf$bytes), 0L)
+  # And the partial bytes are not left to be mistaken for the front of the next
+  # record.
+  writeBin(EMC2:::.emc_wpool_done_encode(2L, 5L, 5L), done$wc)
+  flush(done$wc)
+  rec <- EMC2:::.emc_wpool_done_take(done)
+  expect_identical(rec$w, 2L)
+  expect_identical(rec$request, 5L)
+})
+
+test_that("growing the pool retires what the previous generation left", {
+  skip_on_os("windows")
+  skip_on_cran()
+  old <- options(emc2.worker_backend = "fork")
+  on.exit(options(old), add = TRUE)
+  pool <- EMC2:::.emc_wpool_start(2L, list(n_pars = 2))
+  skip_if(is.null(pool), "no pool available here")
+  skip_if(is.null(pool$done), "no completion channel here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+
+  writeBin(EMC2:::.emc_wpool_done_encode(1L, pool$generation, 1L),
+           pool$done$wc)
+  flush(pool$done$wc)
+  grown <- EMC2:::.emc_wpool_grow(pool, 3L, list(n_pars = 2))
+  skip_if(identical(grown$n, pool$n), "the pool could not grow here")
+  pool <- grown
+  expect_gt(grown$generation, 1L)
+  expect_null(EMC2:::.emc_wpool_done_take(grown$done))
+})
+
+test_that("exactly one result updates the iteration", {
+  # "A missing/incomplete result is never committed ... exactly one result
+  # updates the iteration."  A duplicate completion record for a worker whose
+  # share has already been stored means channel and reply alignment is lost,
+  # and no later result on those pipes is trustworthy.  What must not happen is
+  # a second write over a subject that is already answered.
+  skip_on_os("windows")
+  dir <- tempfile("emc_once_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  done <- EMC2:::.emc_wpool_done_open(dir)
+  skip_if(is.null(done), "no FIFO available here")
+  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
+          add = TRUE)
+
+  set.seed(23)
+  seed <- get(".Random.seed", envir = globalenv())
+  gen <- 11L
+  pool <- list(n = 2L, dir = dir, jobs = list(NULL, NULL), wcs = list(1, 2),
+               rcs = list(1, 2), alive = TRUE, done = done, generation = gen)
+  pars <- list(alpha = matrix(0, 2L, 2L), subj_mu = matrix(0, 2L, 2L),
+               tvar = diag(2))
+  cache <- EMC2:::build_group_chol_cache(diag(2), list(c(TRUE, TRUE)))
+  ctx <- list(n_pars = 2L, type = "standard")
+
+  # Worker 1 answers, and then answers again. The second record arrives while
+  # worker 2 is still outstanding, which is exactly when a stale reply could be
+  # credited to a live share.
+  request <- NULL
+  send <- function(con, msg, ...) {
+    request <<- msg$request
+    writeBin(EMC2:::.emc_wpool_done_encode(1L, gen, msg$request,
+                                           EMC2:::.EMC_WPOOL_ST_OK), done$wc)
+    flush(done$wc)
+    TRUE
+  }
+  from_worker <- function(...) {
+    list(props = matrix(1, 3L, 1L), pm = list(NULL), seeds = list(seed),
+         times = 1)
+  }
+  # The master's own recomputation is distinguishable from a worker reply, so
+  # the test can say which one landed where.
+  in_master <- function(...) {
+    list(props = matrix(2, 3L, 1L), pm = list(NULL), seeds = list(seed),
+         times = 1)
+  }
+  res <- suppressWarnings(with_mocked_bindings(
+    EMC2:::.emc_wpool_iter(pool, ctx, list(1L, 2L), pars, cache,
+                           list(NULL, NULL), c(0, 0), list(seed, seed)),
+    .emc_wpool_send = send, .emc_wpool_recv = from_worker,
+    .emc_wpool_compute = in_master, .package = "EMC2"))
+
+  # Two sends, so two records for worker 1: the second is the duplicate.
+  expect_false(res$alive)
+  # Subject 1 was answered by the worker and never overwritten; subject 2 was
+  # recomputed in the master. One value each, from one source each.
+  expect_identical(unname(res$props[, 1L]), rep(1, 3L))
+  expect_identical(unname(res$props[, 2L]), rep(2, 3L))
+  expect_identical(EMC2:::.emc_pool_state$last_error,
+                   "lost alignment on the worker completion channel")
+})
+
+# --- donated cores (implementation contract) --------------------------------
+
+test_that("donated cores are released only after the workers have stopped", {
+  # "Release donated cores only after their workers have stopped."  The pool is
+  # stopped by run_stage()'s own exit handler, so what has to hold is that the
+  # release is registered in the *outer* frame: registered inside run_stage it
+  # would hand the budget back while this chain's workers were still running,
+  # and the sibling that took it would oversubscribe the machine.
+  ctl <- EMC2:::.emc_core_ctl(2L, 1L, cores_for_chains = 2L)
+  skip_if(is.null(ctl), "no core arena here")
+  on.exit(unlink(ctl$dir, recursive = TRUE), add = TRUE)
+  order <- character(0)
+  sampler <- list(init = TRUE, n_pars = 4L)
+  invisible(with_mocked_bindings(
+    EMC2:::run_stages(sampler, stage = "preburn", iter = 1L, n_cores = 1L,
+                      core_ctl = ctl, verbose = FALSE,
+                      verboseProgress = FALSE),
+    run_stage = function(...) {
+      order <<- c(order, "workers stopped")
+      sampler
+    },
+    .emc_core_release = function(...) {
+      order <<- c(order, "cores released")
+      invisible(NULL)
+    },
+    .package = "EMC2"))
+  expect_identical(order, c("workers stopped", "cores released"))
 })
 
 test_that("a resource failure during startup degrades rather than erroring", {

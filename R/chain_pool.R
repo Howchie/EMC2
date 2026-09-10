@@ -753,6 +753,11 @@
       (!isTRUE(allow_one) && n_workers <= 1L)) return(NULL)
   if (Sys.info()[["sysname"]] == "Windows") return(NULL)
   if (!nzchar(Sys.which("mkfifo"))) return(NULL)
+  # After the platform checks, so a machine with no pool at all does not report
+  # a connection problem it does not have -- and before anything is created, so
+  # a width the connection table cannot hold is never half-built.
+  n_workers <- .emc_wpool_feasible_workers(n_workers)
+  if (n_workers < 1L || (!isTRUE(allow_one) && n_workers <= 1L)) return(NULL)
 
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
@@ -923,11 +928,81 @@
   list(rc = rc, wc = wc, buf = buf)
 }
 
+# --- ownership and retirement -----------------------------------------------
+
+# Everything the retired generation left on the completion channel.
+#
+# The channel is deliberately retained across a recycle, so it is the one place
+# where a record written by workers that no longer exist can outlive them.  The
+# generation field lets the master recognise such a record; retiring the
+# generation is throwing them away before the replacement workers are given any
+# work, so that "records waiting" and "this iteration's workers have answered"
+# cannot be confused.  A partial record goes too: whoever was part-way through
+# writing it is gone.
+.emc_wpool_retire <- function(pool) {
+  if (is.null(pool) || is.null(pool$done)) return(0L)
+  n <- 0L
+  repeat {
+    if (is.null(.emc_wpool_done_take(pool$done))) break
+    n <- n + 1L
+  }
+  pool$done$buf$bytes <- raw(0)
+  if (n) {
+    .emc_pool_state$retired_records <-
+      (if (is.null(.emc_pool_state$retired_records)) 0L
+       else .emc_pool_state$retired_records) + n
+  }
+  n
+}
+
+# R's connection table is a fixed number of slots, and this pool takes two per
+# worker plus the completion channel and the template handshake.  A wide core
+# budget can therefore exhaust it -- 64 workers is 132 connections against a
+# default limit of 128 -- and the failure would land part-way through startup,
+# after some workers had already been forked.
+#
+# Allocate a feasible width instead and let the partition give the remaining
+# subjects to the workers that do exist.  That is the same work, queued.
+.EMC_WPOOL_CONN_PER_WORKER <- 2L
+.EMC_WPOOL_CONN_OVERHEAD <- 6L   # completion channel (2), template (2), slack (2)
+
+.emc_wpool_conn_limit <- function() {
+  limit <- suppressWarnings(as.integer(
+    Sys.getenv("R_MAX_NUM_CONNECTIONS", "128")))
+  if (is.na(limit) || limit <= 0L) 128L else limit
+}
+
+.emc_wpool_feasible_workers <- function(n_workers) {
+  n_workers <- as.integer(n_workers)
+  # One is checked too: growing by one repeatedly reaches the same limit as
+  # asking for the whole width at once.
+  if (is.na(n_workers) || n_workers < 1L) return(n_workers)
+  open <- tryCatch(nrow(showConnections(all = TRUE)),
+                   error = function(e) NA_integer_)
+  if (is.na(open)) return(n_workers)
+  room <- .emc_wpool_conn_limit() - open - .EMC_WPOOL_CONN_OVERHEAD
+  feasible <- room %/% .EMC_WPOOL_CONN_PER_WORKER
+  if (feasible >= n_workers) return(n_workers)
+  feasible <- max(0L, as.integer(feasible))
+  .emc_pool_state$conn_capped <- TRUE
+  if (!isTRUE(.emc_pool_state$conn_warned)) {
+    .emc_pool_state$conn_warned <- TRUE
+    warning(sprintf(
+      paste0("EMC2 worker pool limited to %d workers instead of %d: R allows ",
+             "%d open connections and this pool needs %d per worker. Results ",
+             "are unaffected. Raise R_MAX_NUM_CONNECTIONS to use more."),
+      feasible, n_workers, .emc_wpool_conn_limit(),
+      .EMC_WPOOL_CONN_PER_WORKER), call. = FALSE, immediate. = TRUE)
+  }
+  feasible
+}
+
 # Grow the pool into cores released by completed chains. Per-subject streams make
 # changing worker count and assignment deterministic.
 .emc_wpool_grow <- function(pool, n_total, ctx) {
   n_total <- as.integer(n_total)
   if (is.null(pool) || !isTRUE(pool$alive) || is.na(n_total)) return(pool)
+  n_total <- min(n_total, pool$n + .emc_wpool_feasible_workers(n_total - pool$n))
   n_new <- n_total - pool$n
   if (n_new <= 0L) return(pool)
 
@@ -948,7 +1023,10 @@
     return(pool)
   }
 
-  # Keep the existing completion FIFO so added workers join the same queue.
+  # Keep the existing completion FIFO so added workers join the same queue --
+  # and, because it is kept, empty it: this is a new generation, and nothing
+  # written under the old one answers work that has not been sent yet.
+  .emc_wpool_retire(pool)
   list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, spawned$jobs),
        wcs = c(pool$wcs, spawned$wcs), rcs = c(pool$rcs, spawned$rcs),
        alive = TRUE, grow_fails = 0L, grow_skip = 0L,
@@ -977,7 +1055,8 @@
     return(pool)
   }
 
-  if (identical(pool$backend, "spawn") && !is.null(pool$template)) {
+  if (identical(pool$backend, "spawn") && !is.null(pool$template) &&
+      isTRUE(pool$template$alive)) {
     .emc_wpool_stop_workers(pool)
     unlink(file.path(pool$dir,
                      c(sprintf("req%d", seq_len(target)),
@@ -990,6 +1069,9 @@
       pool$rcs <- spawned$rcs
       pool$alive <- TRUE
       pool$generation <- .emc_wpool_next_generation()
+      # The replaced workers may have left records on the channel this pool
+      # keeps; retire them before the replacements are given anything to do.
+      .emc_wpool_retire(pool)
       pool
     }
   } else {
@@ -997,18 +1079,30 @@
     fresh <- .emc_wpool_start(target, ctx)
   }
   if (is.null(fresh)) {
-    # Workers are already gone; return a dead pool so the master recomputes this
-    # work serially with identical streams. Close the completion FIFO before
-    # discarding it.
-    if (!is.null(pool$done)) {
-      for (cn in pool$done[c("rc", "wc")]) try(close(cn), silent = TRUE)
-    }
+    # Finding 3.  The workers are gone, and the pool is dead until a later
+    # recycle can rebuild it -- but a dead pool is still an owner.  This used to
+    # return a bare stub with `dir = NULL` and no template, which discarded the
+    # only handle on a live R process: `.emc_wpool_stop()` would then find
+    # nothing to stop, and the template and its directory outlived the fit.  It
+    # also removed the clean-backend recovery route, because a recycle needs the
+    # template it had just thrown away.
+    #
+    # So keep everything and change only what is actually different: no workers,
+    # not alive, and a new generation, so that a record written by the workers
+    # that just died is recognisable on the completion channel this pool still
+    # owns.
     if (!dead) .emc_wpool_degraded("could not re-fork the pool when recycling")
     fails <- if (is.null(pool$rebuild_fails)) 1L else pool$rebuild_fails + 1L
-    return(list(n = target, dir = NULL, jobs = list(), wcs = list(),
-                rcs = list(), alive = FALSE,
-                generation = .emc_wpool_next_generation(),
-                rebuild_fails = fails, rebuild_skip = min(fails, 8L)))
+    pool$n <- target
+    pool$jobs <- list()
+    pool$wcs <- list()
+    pool$rcs <- list()
+    pool$alive <- FALSE
+    pool$generation <- .emc_wpool_next_generation()
+    .emc_wpool_retire(pool)
+    pool$rebuild_fails <- fails
+    pool$rebuild_skip <- min(fails, 8L)
+    return(pool)
   }
   fresh
 }
@@ -1019,8 +1113,13 @@
   # its token.  Writing into a pipe whose worker has already gone earns a
   # SIGPIPE, and R prints that to stderr from a signal handler where no
   # tryCatch() can reach it, so check first rather than explain the noise
-  # afterwards.  Skipping a worker that is in fact alive costs nothing: closing
-  # the pipe below gives it the same end-of-stream the token would have.
+  # afterwards.
+  #
+  # The token is the graceful half and it does work -- a worker that receives it
+  # leaves its serve loop and stops answering.  What it does not do, and what
+  # closing the pipes below does not do either, is end the process: R opens a
+  # blocking read FIFO for reading and writing, so there is no end-of-stream to
+  # see.  Ending the process is the backend-specific escalation below.
   for (w in seq_len(length(pool$wcs))) {
     pid <- if (w <= length(pool$jobs)) {
       .emc_wpool_job_pid(pool$jobs[[w]])
@@ -1030,7 +1129,28 @@
     }
   }
   for (cn in c(pool$wcs, pool$rcs)) try(close(cn), silent = TRUE)
-  if (!identical(pool$backend, "spawn")) {
+  if (identical(pool$backend, "spawn")) {
+    # What the token and the closed pipes actually achieve, measured rather
+    # than assumed: the worker leaves its serve loop and stops answering, but
+    # its *process* does not end.  A `mcparallel` child persists until it is
+    # collected, and a spawned worker is the template's child, not ours -- only
+    # the template can collect it.  Waiting for it here waits for something
+    # this process cannot cause, and costs the full deadline every teardown.
+    #
+    # So: when the template is alive, leave it to do its job.  When it is not
+    # -- a failed recycle, or a template already stopped -- nobody will, and a
+    # worker with no reaper is a retained R process holding a whole context.
+    # Signal it, and do not wait: `waitpid` is not ours to call, and once it is
+    # killed and unparented init reaps it.  These are pids this pool holds
+    # handles for; nothing here searches for a process by name.
+    tpid <- if (is.null(pool$template)) NA_integer_ else {
+      .emc_wpool_job_pid(pool$template$job)
+    }
+    orphaned <- !isTRUE(pool$template$alive) || !.emc_wpool_pid_alive(tpid)
+    if (orphaned) {
+      .emc_wpool_terminate_jobs(pool$jobs, wait = FALSE, terminate = TRUE)
+    }
+  } else {
     .emc_wpool_terminate_jobs(pool$jobs, wait = TRUE, terminate = TRUE)
   }
   invisible(NULL)
@@ -1148,19 +1268,35 @@
       old <- old[!vapply(old, is.null, logical(1))]
       if (length(old)) parallel::mccollect(old, wait = TRUE)
       jobs[keys] <- NULL
-      made <- vector("list", length(keys))
-      for (w in seq_along(keys)) {
-        made[[w]] <- local({
-          i <- w
-          parallel::mcparallel(
-            .emc_wpool_serve(command$req[i], command$ans[i], ctx,
-                             inherited = list(rc, wc)),
-            detached = FALSE
-          )
-        })
+      # Finding 4.  Each child is tracked the moment it exists, not after the
+      # loop: a fork that fails on the fourth of eight used to leave the first
+      # three outside `jobs`, so the template's own exit handler -- the only
+      # thing that reaps them -- did not know they were its.  Cleanup has to own
+      # a child at the moment it is acquired, and a partial spawn has to roll
+      # back rather than leave half a pool running.
+      made <- tryCatch({
+        for (w in seq_along(keys)) {
+          jobs[[keys[w]]] <- local({
+            i <- w
+            parallel::mcparallel(
+              .emc_wpool_serve(command$req[i], command$ans[i], ctx,
+                               inherited = list(rc, wc)),
+              detached = FALSE
+            )
+          })
+        }
+        jobs[keys]
+      }, error = function(e) e)
+      if (inherits(made, "error")) {
+        born <- jobs[keys]
+        born <- born[!vapply(born, is.null, logical(1))]
+        if (length(born)) {
+          for (job in born) try(tools::pskill(job$pid), silent = TRUE)
+          try(parallel::mccollect(born, wait = TRUE), silent = TRUE)
+        }
+        jobs[keys] <- NULL
+        stop(conditionMessage(made))
       }
-      names(made) <- keys
-      jobs[keys] <- made
       list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)))
     }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
     if (!.emc_wpool_send(wc, reply)) break
@@ -1788,17 +1924,24 @@
                       if (length(idle) > 1L) "s" else "",
                       paste(idle, collapse = ", "))
             } else ""))
-          for (k in stuck) {
-            pid <- .emc_wpool_job_pid(pool$jobs[[k]])
-            if (!is.null(pid) && !is.na(pid)) try(tools::pskill(pid), silent = TRUE)
-          }
+          # Kill *and reap*: a forked worker that is signalled and never
+          # collected is a zombie for the rest of the block.  Ownership is the
+          # point -- these are jobs this pool holds handles for, not pids found
+          # by searching for a process name.
+          .emc_wpool_terminate_jobs(pool$jobs[stuck], wait = TRUE,
+                                    terminate = TRUE)
         } else if (identical(rec$code, "dead") || is.na(w)) {
           .emc_wpool_degraded("worker gave no reply")
         } else {
           .emc_wpool_degraded("lost alignment on the worker completion channel")
         }
-        # Nothing further on these pipes can be trusted or waited on.
+        # Nothing further on these pipes can be trusted or waited on.  Retire
+        # the generation before recomputing rather than after: a record that
+        # arrives while the master is redoing this work belongs to an
+        # assignment that has already been abandoned, and leaving it in the
+        # channel only defers the confusion to whoever reads next.
         pool$alive <- FALSE
+        .emc_wpool_retire(pool)
         for (k in which(pending)) store(k, recompute(k), source = "master")
         pending[] <- FALSE
         break
