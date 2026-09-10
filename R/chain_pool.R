@@ -1210,6 +1210,21 @@
 
 .emc_wpool_serve <- function(req, ans, ctx, inherited = NULL) {
   for (cn in inherited) try(close(cn), silent = TRUE)
+  # Do not outlive whoever owns this worker.  The clean backend's template
+  # kills its children when the master disconnects, but a fork-backend worker
+  # is the master's own child and nothing ends it if the master is killed
+  # outright -- `kill -9` left every worker running, reparented to init and
+  # blocked on a pipe forever, each holding a whole likelihood context.
+  #
+  # The request is registered after the fork, so the parent can die in between:
+  # re-check afterwards, because a signal that was never armed will never
+  # arrive.  Reparenting is the observable consequence, whatever adopts it.
+  # -1 means the parent died between the fork and the request, so no signal is
+  # coming and this worker has nobody to serve; 0 means the platform has no
+  # equivalent and behaviour is unchanged.
+  if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L)) {
+    return(invisible(NULL))
+  }
   rc <- fifo(req, "rb", blocking = TRUE)
   wc <- fifo(ans, "wb", blocking = TRUE)
   done <- NULL
@@ -1258,9 +1273,12 @@
           add = TRUE)
   .emc_wpool_send(wc, list(ready = TRUE, pid = Sys.getpid()))
   jobs <- list()
+  # Set when the loop ends because the master disconnected rather than because
+  # it asked for a shutdown; see the cleanup after the loop.
+  orphaned <- FALSE
   repeat {
     command <- .emc_wpool_recv(rc)
-    if (is.null(command)) break
+    if (is.null(command)) { orphaned <- TRUE; break }
     reply <- tryCatch({
       if (!identical(command$command, "spawn")) stop("unknown template command")
       keys <- as.character(command$idx)
@@ -1299,11 +1317,24 @@
       }
       list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)))
     }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
-    if (!.emc_wpool_send(wc, reply)) break
+    if (!.emc_wpool_send(wc, reply)) { orphaned <- TRUE; break }
   }
   if (length(jobs)) {
     for (job in jobs) try(tools::pskill(job$pid), silent = TRUE)
     try(parallel::mccollect(jobs, wait = TRUE), silent = TRUE)
+  }
+  # The master is gone -- end-of-stream on its request pipe is what that means
+  # -- so nobody else is using the pool directory, and nobody else is going to
+  # remove it.  A master killed outright leaves its whole R temp tree behind,
+  # and this directory is the expensive part of it: `context.rds` holds the
+  # model and the data.  Only on the disconnect path: a template that was told
+  # to shut down is being torn down by a master that will remove the directory
+  # itself.
+  if (orphaned) {
+    dir <- dirname(boot$req)
+    if (is.character(dir) && length(dir) == 1L && nzchar(dir)) {
+      try(unlink(dir, recursive = TRUE), silent = TRUE)
+    }
   }
   invisible(NULL)
 }

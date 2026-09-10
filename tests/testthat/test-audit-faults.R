@@ -909,7 +909,7 @@ test_that("an interrupted iteration still removes its shared broadcast", {
   expect_false(file.exists(path))
 })
 
-test_that("a worker outlives neither its parent's exit nor its own shutdown token", {
+test_that("an orderly teardown leaves no worker behind", {
   skip_on_os("windows")
   skip_on_cran()
   skip_if(!nzchar(Sys.which("mkfifo")))
@@ -928,6 +928,78 @@ test_that("a worker outlives neither its parent's exit nor its own shutdown toke
     Sys.sleep(0.02)
   }
   expect_true(all(!vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+})
+
+test_that("a worker does not outlive the process that owns it", {
+  # The audit's "interrupt/parent exit" case, taken literally: not an orderly
+  # teardown, but the master being killed outright.
+  #
+  # The clean backend cascades on its own -- the master dies, its end of the
+  # template's request pipe closes, the template sees end-of-stream and kills
+  # what it forked.  The fork backend has no intermediary: its workers are the
+  # master's own children, blocked on a request pipe, and `kill -9` used to
+  # leave every one of them running, reparented to init and holding a whole
+  # likelihood context.  `devtools::load_all()` selects that backend, so this
+  # is not an exotic configuration.
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  skip_if(!dir.exists("/proc"), "needs /proc to watch the processes")
+  rscript <- file.path(R.home("bin"), "Rscript")
+  skip_if(!file.exists(rscript), "no Rscript here")
+
+  lib <- dirname(getNamespaceInfo("EMC2", "path"))
+  out <- tempfile(fileext = ".rds")
+  script <- tempfile(fileext = ".R")
+  on.exit(unlink(c(out, script)), add = TRUE)
+  writeLines(c(
+    sprintf(".libPaths(c(%s, .libPaths()))", shQuote(lib)),
+    "suppressPackageStartupMessages(library(EMC2))",
+    "options(emc2.worker_backend = 'fork')",
+    "pool <- EMC2:::.emc_wpool_start(2L, list(n_pars = 2))",
+    sprintf("saveRDS(list(master = Sys.getpid(), workers = vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))), %s)",
+            shQuote(out)),
+    "repeat Sys.sleep(0.2)"), script)
+  started <- system2(rscript, c("--vanilla", shQuote(script)),
+                     stdout = FALSE, stderr = FALSE, wait = FALSE)
+  skip_if(!identical(as.integer(started), 0L), "could not start the child")
+
+  deadline <- proc.time()[["elapsed"]] + 60
+  while (!file.exists(out) && proc.time()[["elapsed"]] < deadline) Sys.sleep(0.1)
+  skip_if(!file.exists(out), "the child never reported its pool")
+  Sys.sleep(0.5)
+  info <- readRDS(out)
+  on.exit({
+    for (pid in c(info$workers, info$master)) {
+      suppressWarnings(try(tools::pskill(pid, tools::SIGKILL), silent = TRUE))
+    }
+  }, add = TRUE)
+  skip_if(!length(info$workers) || anyNA(info$workers), "no fork pool here")
+  expect_true(all(vapply(info$workers, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  # SIGKILL: no handler runs, no `on.exit`, no shutdown token. Whatever ends
+  # the workers has to be the kernel.
+  tools::pskill(info$master, tools::SIGKILL)
+  deadline <- proc.time()[["elapsed"]] + 30
+  repeat {
+    left <- vapply(info$workers, EMC2:::.emc_wpool_pid_alive, logical(1))
+    if (!any(left) || proc.time()[["elapsed"]] > deadline) break
+    Sys.sleep(0.05)
+  }
+  expect_false(EMC2:::.emc_wpool_pid_alive(info$master))
+  expect_false(any(vapply(info$workers, EMC2:::.emc_wpool_pid_alive, logical(1))))
+})
+
+test_that("arming parent-death reports what the platform actually did", {
+  # 1 armed with the parent present, -1 armed but already orphaned, 0 where the
+  # platform has no equivalent.  The caller must not read 0 as "orphaned" and
+  # exit a worker on a machine that simply cannot make the guarantee.
+  got <- EMC2:::emc_arm_parent_death()
+  expect_true(got %in% c(-1L, 0L, 1L))
+  if (identical(Sys.info()[["sysname"]], "Linux")) {
+    # This process has a live parent, so on Linux it is armed and not orphaned.
+    expect_identical(got, 1L)
+  }
 })
 
 # --- stale generation replies -----------------------------------------------

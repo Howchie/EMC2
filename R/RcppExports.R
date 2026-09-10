@@ -685,6 +685,17 @@ gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }
 
+#' Ask the kernel to signal this process when its parent dies
+#'
+#' @return 1 if armed and the parent is still there, -1 if armed but the
+#'   parent had already gone (the caller should exit rather than wait for a
+#'   signal that will not come), 0 where the platform has no equivalent and
+#'   the caller should carry on as before.
+#' @noRd
+emc_arm_parent_death <- function() {
+    .Call(`_EMC2_emc_arm_parent_death`)
+}
+
 rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, n_out = 400L, adaptive = TRUE, lower_extent = NA_real_) {
     .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, n_out, adaptive, lower_extent)
 }
