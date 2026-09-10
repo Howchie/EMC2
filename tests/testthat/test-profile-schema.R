@@ -196,3 +196,104 @@ test_that("tree memory is measured, and labelled with how", {
     expect_true(is.na(mem$bytes) || mem$bytes > 0)
   }
 })
+
+test_that("the process tree is walked downward, and memory follows it", {
+  skip_on_os("windows")
+  if (!dir.exists("/proc")) skip("process tree walking needs /proc")
+  self <- Sys.getpid()
+  expect_true(self %in% .emc_profile_tree_pids())
+  # A pid with no visible descendants comes back unchanged rather than making
+  # the walk fail, and a missing root contributes nothing.
+  expect_identical(.emc_profile_tree_pids(2147483647L), 2147483647L)
+  expect_identical(.emc_profile_tree_pids(NA_integer_), integer(0))
+
+  # A fit's memory is not held by the processes the caller has handles for:
+  # run_emc() forks a process per chain, each starts a worker template, and the
+  # template forks the workers.  Two levels is the minimum that distinguishes a
+  # real walk from one that only ever looks at direct children.
+  f <- tempfile()
+  job <- parallel::mcparallel({
+    grand <- parallel::mcparallel(Sys.sleep(30))
+    writeLines(as.character(grand$pid), f)
+    Sys.sleep(30)
+  })
+  deadline <- Sys.time() + 10
+  while (!file.exists(f) && Sys.time() < deadline) Sys.sleep(0.05)
+  expect_true(file.exists(f))
+  grand_pid <- as.integer(readLines(f)[[1L]])
+
+  tree <- .emc_profile_tree_pids()
+  expect_true(job$pid %in% tree)
+  expect_true(grand_pid %in% tree)
+  # Downward only: the child's tree is the grandchild, not us.
+  from_child <- .emc_profile_tree_pids(job$pid)
+  expect_true(grand_pid %in% from_child)
+  expect_false(self %in% from_child)
+
+  own <- .emc_profile_memory()
+  whole <- .emc_profile_memory(tree = TRUE)
+  if (!is.na(own$bytes) && !is.na(whole$bytes)) {
+    # Under PSS these are not the same measurement of the same thing: forking
+    # makes previously private pages shared, so `own` drops as the tree grows
+    # while `whole` accounts for all of it.
+    expect_gt(whole$bytes, own$bytes)
+    # The observer is not part of what it observes.  A benchmark that forks the
+    # fit and watches from outside would otherwise report its own pages too.
+    outside <- .emc_profile_memory(job$pid, tree = TRUE, include_self = FALSE)
+    inside <- .emc_profile_memory(job$pid, tree = TRUE, include_self = TRUE)
+    expect_gt(inside$bytes, outside$bytes)
+  }
+  expect_true(is.na(.emc_profile_memory(NULL, include_self = FALSE)$bytes))
+  # A process leaving between the /proc listing and the read is the ordinary
+  # case, not an exceptional one, so polling a live tree must stay silent.
+  expect_no_warning(.emc_profile_memory(tree = TRUE))
+
+  tools::pskill(grand_pid)
+  tools::pskill(job$pid)
+  # Reaping a job we just killed: "did not deliver a result" is the expected
+  # outcome, not something for the test log.
+  suppressWarnings(try(parallel::mccollect(job, wait = FALSE, timeout = 2),
+                       silent = TRUE))
+  unlink(f)
+})
+
+
+test_that("a reparented pool template is claimed back by its master record", {
+  skip_on_os("windows")
+  if (!dir.exists("/proc")) skip("process tree walking needs /proc")
+  # The default worker backend starts each template with
+  # `system2(..., wait = FALSE)`, whose shell exits at once, so init adopts the
+  # template and neither it nor the workers it forks is a descendant of the fit
+  # any more.  A parent-link walk therefore misses most of a fit's processes,
+  # and most of its memory.  What makes them findable is the ownership record
+  # the pool writes into the template's command line.
+  pidfile <- tempfile()
+  tag <- sprintf("EMC2-worker-pool[%s|master=%d]", basename(tempdir()),
+                 Sys.getpid())
+  expr <- sprintf(
+    "EMC2.worker<-'%s'; writeLines(as.character(Sys.getpid()), '%s'); Sys.sleep(60)",
+    tag, pidfile)
+  status <- system2(file.path(R.home("bin"), "Rscript"),
+                    c("--vanilla", "-e", shQuote(expr)),
+                    stdout = FALSE, stderr = FALSE, wait = FALSE)
+  skip_if_not(identical(as.integer(status), 0L), "could not start a stand-in template")
+  deadline <- Sys.time() + 30
+  while (!file.exists(pidfile) && Sys.time() < deadline) Sys.sleep(0.1)
+  skip_if_not(file.exists(pidfile), "stand-in template never reported its pid")
+  template <- as.integer(readLines(pidfile)[[1L]])
+  on.exit({
+    suppressWarnings(try(tools::pskill(template), silent = TRUE))
+    unlink(pidfile)
+  }, add = TRUE)
+
+  # Not a descendant: that is the whole problem.
+  expect_false(template %in% .emc_profile_tree_pids(adopt = FALSE))
+  expect_true(template %in% .emc_profile_tree_pids())
+  # Claimed by ownership, not by name: a template recording somebody else's
+  # master must not be counted against this tree.
+  expect_false(template %in% .emc_profile_tree_pids(Sys.getpid() + 1000000L))
+  # And the memory reading follows the same set.
+  narrow <- .emc_profile_memory(tree = TRUE, adopt = FALSE)
+  wide <- .emc_profile_memory(tree = TRUE)
+  if (!is.na(narrow$bytes) && !is.na(wide$bytes)) expect_gt(wide$bytes, narrow$bytes)
+})

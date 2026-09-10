@@ -209,33 +209,142 @@
 # that answers "how much memory does this fit need".  Linux exposes it in
 # smaps_rollup; elsewhere we report RSS and say so, rather than reporting a
 # number whose meaning depends on the platform without labelling it.
-.emc_profile_memory <- function(pids = NULL) {
-  self <- Sys.getpid()
-  pids <- unique(c(self, as.integer(pids[!is.na(pids)])))
+# Every process a fit is actually using, root included.
+#
+# Two mechanisms have to be followed, because the pool uses both.  Chain
+# processes are forked, so they are ordinary descendants and a walk over
+# /proc's parent links finds them.  Worker pool *templates* are not: the
+# default backend starts them with `system2(wait = FALSE)`, whose shell exits
+# immediately, so init adopts the template and the fit's own subtree no longer
+# contains it or any of the workers it forks.  On an eight-subject fit that is
+# most of the processes and most of the memory.
+#
+# The pool publishes the ownership we need: `.emc_wpool_template_start` puts
+# `EMC2-worker-pool[<dir>|master=<pid>]` in the template's command line, and
+# the workers inherit it by forking.  `adopt` claims exactly the templates
+# whose recorded master is already in the tree, so this is reading an
+# ownership record rather than guessing from a process name.
+#
+# Linux only; elsewhere the caller's own pid list is all there is.
+.emc_profile_tree_pids <- function(root = Sys.getpid(), adopt = TRUE) {
+  root <- as.integer(root)
+  root <- root[!is.na(root)]
+  if (!length(root) || !dir.exists("/proc")) return(root)
+  all <- suppressWarnings(as.integer(list.files("/proc")))
+  all <- all[!is.na(all)]
+  if (!length(all)) return(root)
+
+  # A process can exit between listing /proc and reading its stat file.  That
+  # is the normal case, not an exceptional one, so it must be silent: the
+  # connection warning would otherwise be emitted once per departed worker.
+  stat <- lapply(all, function(pid) {
+    tryCatch(suppressWarnings(
+      readLines(file.path("/proc", pid, "stat"), n = 1L, warn = FALSE)),
+      error = function(e) character())
+  })
+  # The comm field is parenthesised and may itself contain spaces and
+  # brackets, so split after the *last* ')' rather than on whitespace.
+  parent <- vapply(stat, function(line) {
+    if (!length(line)) return(NA_integer_)
+    fields <- strsplit(trimws(substring(line, regexpr("\\)[^)]*$", line) + 1L)),
+                       "[ ]+")[[1L]]
+    if (length(fields) < 2L) return(NA_integer_)
+    suppressWarnings(as.integer(fields[2L]))
+  }, integer(1))
+  comm <- vapply(stat, function(line) {
+    if (!length(line)) return(NA_character_)
+    open <- regexpr("(", line, fixed = TRUE)
+    close <- regexpr("\\)[^)]*$", line)
+    if (open < 1L || close <= open) return(NA_character_)
+    substring(line, open + 1L, close - 1L)
+  }, character(1))
+
+  # Bounded: each pass adds at least one process or stops, and the process
+  # table is finite, so this cannot spin on a cycle in a corrupted /proc.
+  descend <- function(out) {
+    frontier <- out
+    for (depth in seq_along(all)) {
+      kids <- setdiff(all[!is.na(parent) & parent %in% frontier], out)
+      if (!length(kids)) break
+      out <- c(out, kids)
+      frontier <- kids
+    }
+    out
+  }
+  out <- descend(root)
+  if (!isTRUE(adopt)) return(unique(out))
+
+  # Only R processes can be pool templates, and reading a command line for
+  # every process on a busy machine costs more than the walk itself.
+  cand <- all[!is.na(comm) & comm %in% c("R", "Rscript", "exec") & !(all %in% out)]
+  if (!length(cand)) return(unique(out))
+  owner <- vapply(cand, function(pid) {
+    raw <- tryCatch(suppressWarnings(
+      readBin(file.path("/proc", pid, "cmdline"), "raw", 16384L)),
+      error = function(e) raw())
+    if (!length(raw)) return(NA_integer_)
+    txt <- rawToChar(raw[raw != as.raw(0L)])
+    hit <- regmatches(txt, regexpr("EMC2-worker-pool\\[[^]]*\\|master=[0-9]+\\]", txt))
+    if (!length(hit)) return(NA_integer_)
+    suppressWarnings(as.integer(sub(".*master=([0-9]+)\\]$", "\\1", hit[[1L]])))
+  }, integer(1))
+  adopted <- cand[!is.na(owner) & owner %in% out]
+  if (!length(adopted)) return(unique(out))
+  unique(descend(c(out, adopted)))
+}
+
+# `include_self = FALSE` measures somebody else's tree.  The sampler asking
+# about its own workers is part of the answer and keeps the default; a
+# benchmark that forks the whole fit and watches it from outside is not, and
+# adding the observer's pages to the reading would inflate every number it
+# prints by whatever the observer happens to be holding.
+.emc_profile_memory <- function(pids = NULL, tree = FALSE, include_self = TRUE,
+                                adopt = TRUE) {
+  pids <- as.integer(pids[!is.na(pids)])
+  if (isTRUE(include_self)) pids <- c(Sys.getpid(), pids)
+  pids <- unique(pids)
+  # One /proc scan for the whole root set, not one per root: the walk already
+  # takes a vector, and scanning the process table repeatedly is most of the
+  # cost of polling a live tree.
+  if (isTRUE(tree)) pids <- .emc_profile_tree_pids(pids, adopt = adopt)
+  if (!length(pids)) return(list(bytes = NA_real_, method = NA_character_))
   rollup <- file.path("/proc", pids, "smaps_rollup")
   have <- file.exists(rollup)
   if (any(have)) {
     kb <- vapply(rollup[have], function(f) {
-      lines <- tryCatch(readLines(f, warn = FALSE), error = function(e) character())
+      # `file.exists` above and this read are not one operation: a worker can
+      # exit in between, and while the error is caught the connection warning
+      # is not, so a tree poll would print one line per departed process.
+      lines <- tryCatch(suppressWarnings(readLines(f, warn = FALSE)),
+                        error = function(e) character())
       hit <- grep("^Pss:", lines, value = TRUE)
       if (!length(hit)) return(NA_real_)
       as.numeric(sub("^Pss:\\s*([0-9]+).*$", "\\1", hit[1L]))
     }, numeric(1))
     if (any(!is.na(kb))) {
-      return(list(bytes = sum(kb, na.rm = TRUE) * 1024, method = "pss"))
+      # A pid that has already exited is not a gap in the reading: it holds no
+      # memory, and leaving it out is right.  A process that is still there and
+      # whose rollup could not be read is a gap, and the sum is then short by
+      # an unknown amount, which is worth saying.
+      short <- sum(is.na(kb))
+      return(list(bytes = sum(kb, na.rm = TRUE) * 1024,
+                  method = if (short) "pss-partial" else "pss"))
     }
   }
   status <- file.path("/proc", pids, "status")
   have <- file.exists(status)
   if (any(have)) {
     kb <- vapply(status[have], function(f) {
-      lines <- tryCatch(readLines(f, warn = FALSE), error = function(e) character())
+      lines <- tryCatch(suppressWarnings(readLines(f, warn = FALSE)),
+                        error = function(e) character())
       hit <- grep("^VmRSS:", lines, value = TRUE)
       if (!length(hit)) return(NA_real_)
       as.numeric(sub("^VmRSS:\\s*([0-9]+).*$", "\\1", hit[1L]))
     }, numeric(1))
     if (any(!is.na(kb))) {
-      return(list(bytes = sum(kb, na.rm = TRUE) * 1024, method = "rss-sum"))
+      short <- sum(is.na(kb))
+      return(list(bytes = sum(kb, na.rm = TRUE) * 1024,
+                  method = if (short) "rss-sum-partial" else "rss-sum"))
     }
   }
   if (.Platform$OS.type == "unix") {
