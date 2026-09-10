@@ -70,7 +70,7 @@ test_that("workers survive a block, compute, and shut down", {
     for (w in 1:2) {
       EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w, echo = k))
     }
-    got <- lapply(1:2, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
+    got <- lapply(1:2, function(w) EMC2:::.emc_wpool_reply(pool, w))
     # No real ctx, so compute() errors and the worker reports it rather than dying.
     expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
   }
@@ -176,7 +176,7 @@ test_that("messages larger than the pipe buffer still round-trip", {
     expect_true(EMC2:::.emc_wpool_send(pool$wcs[[1]], cases[[nm]]), label = nm)
     # No real ctx, so the worker reports an error -- but it received the whole
     # message and is still listening, which is the point.
-    expect_false(is.null(EMC2:::.emc_wpool_recv(pool$rcs[[1]])$failed),
+    expect_false(is.null(EMC2:::.emc_wpool_reply(pool, 1L)$failed),
                  label = nm)
   }
 })
@@ -292,7 +292,10 @@ test_that("an iteration shares one path and cleans it after replies", {
   recv <- function(...) list(props = matrix(0, 3L, 1L), pm = list(NULL),
                              seeds = list(get(".Random.seed", envir = globalenv())),
                              times = 1)
-  send <- function(con, msg) {
+  # `...` so the mock survives the transport growing arguments: a request now
+  # carries a deadline, and a stub that refused it would fail this test for a
+  # reason that has nothing to do with what it is checking.
+  send <- function(con, msg, ...) {
     sent_paths <<- c(sent_paths, msg$shared_file)
     expect_true(file.exists(msg$shared_file))
     TRUE
@@ -326,7 +329,7 @@ test_that("a worker reports a missing shared file and keeps listening", {
               notify = FALSE, w = 1L)
   for (i in 1:2) {
     expect_true(EMC2:::.emc_wpool_send(pool$wcs[[1]], bad))
-    got <- EMC2:::.emc_wpool_recv(pool$rcs[[1]])
+    got <- EMC2:::.emc_wpool_reply(pool, 1L)
     expect_match(got$failed, "shared broadcast")
   }
 })
@@ -548,7 +551,7 @@ test_that("real workers survive being recycled and still compute", {
   expect_true(dir.exists(pool$dir))
 
   for (w in 1:2) EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w))
-  got <- lapply(1:2, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
+  got <- lapply(1:2, function(w) EMC2:::.emc_wpool_reply(pool, w))
   expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
 })
 
@@ -567,7 +570,7 @@ test_that("growing the pool keeps the workers that were already running", {
   expect_equal(EMC2:::.emc_wpool_grow(pool, 1, list(tag = "ctx"))$n, 4)
 
   for (w in 1:4) EMC2:::.emc_wpool_send(pool$wcs[[w]], list(subs = w))
-  got <- lapply(1:4, function(w) EMC2:::.emc_wpool_recv(pool$rcs[[w]]))
+  got <- lapply(1:4, function(w) EMC2:::.emc_wpool_reply(pool, w))
   expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
 })
 

@@ -17,39 +17,170 @@
 
 RNGkind("L'Ecuyer-CMRG")
 
-# --- the completion-token width (finding 1) ---------------------------------
+# --- the completion record's width (finding 1) ------------------------------
 
-test_that("the completion token is one byte, so worker IDs above 255 alias", {
-  # Finding 1.  `.emc_wpool_serve()` writes `as.raw(msg$w)` and
-  # `.emc_wpool_await_done()` reads one byte, while `.emc_wpool_ll()` guards the
-  # dynamic queue at .EMC_WPOOL_MAX_DYN_WORKERS = 255.  `.emc_wpool_iter()`
-  # enables notification whenever `pool$done` exists, without the equivalent
-  # guard, so a wide enough subject pool can encode worker 256 as byte 0 and
-  # take the "lost alignment" recovery path.
+test_that("the completion record carries a worker ID that does not alias", {
+  # Finding 1.  The announcement used to be `as.raw(msg$w)`, read back one byte
+  # at a time, and the dynamic queue capped itself at 255 workers to stay inside
+  # it.  `.emc_wpool_iter()` enabled notification whenever `pool$done` existed
+  # with no equivalent guard, so a wide enough subject pool encoded worker 256
+  # as byte 0 and took the "lost alignment" recovery path -- retiring a healthy
+  # pool.
   #
   # Simulated ID space, per the audit: the question is how a width is encoded,
   # and forking 256 R sessions to ask it would make the test unrunnable exactly
   # where it matters.
-  expect_identical(EMC2:::.EMC_WPOOL_MAX_DYN_WORKERS, 255L)
-  for (w in c(1L, 127L, 255L)) {
-    expect_identical(as.integer(as.raw(w)), w, info = paste("worker", w))
-  }
-  # 256 and 257 do not survive the round trip; they alias onto 0 and 1.
-  for (w in c(256L, 257L)) {
-    aliased <- suppressWarnings(as.integer(as.raw(w)))
-    expect_false(identical(aliased, w), info = paste("worker", w))
-  }
-  expect_warning(as.raw(256L), "out-of-range")
-
-  # Reachability, so this is not mistaken for a live hazard: pool width is
-  # bounded by min(n_subjects, cores), so reaching worker 256 needs both 256+
-  # subjects and 256+ cores.  It is latent on ordinary hardware and rides along
-  # free in C4's single wire-format revision.
   #
-  # C4 replaces this with a wide worker ID carried alongside a pool generation,
-  # a request ID and a status.  When it lands, the two expectations above
-  # invert: as_wide_id(256) must round-trip.
-  succeed()
+  # This is what the one-byte token could not do:
+  for (w in c(256L, 257L, 1000L)) {
+    aliased <- suppressWarnings(as.integer(as.raw(w)))
+    expect_false(identical(aliased, w), info = paste("one byte, worker", w))
+  }
+  # And this is what the record does.  255/256 are the boundary the audit names;
+  # the rest are there so a future narrowing shows up as a failure here.
+  for (w in c(1L, 127L, 255L, 256L, 257L, 65535L, 65536L, 2147483647L)) {
+    rec <- EMC2:::.emc_wpool_done_decode(EMC2:::.emc_wpool_done_encode(w))
+    expect_identical(rec$w, w, info = paste("worker", w))
+  }
+  # The cap the encoding forced is gone with it.
+  expect_false(exists(".EMC_WPOOL_MAX_DYN_WORKERS", envir = asNamespace("EMC2"),
+                      inherits = FALSE))
+})
+
+test_that("the completion record carries generation, request and status", {
+  # The other three fields exist so that a record can be disbelieved.  Before
+  # them, a reply from a pool that had already been retired was indistinguishable
+  # from a current worker's, which is how a retired worker could answer for a
+  # live one (finding 5).
+  rec <- EMC2:::.emc_wpool_done_decode(
+    EMC2:::.emc_wpool_done_encode(300L, generation = 7L, request = 90001L,
+                                  status = EMC2:::.EMC_WPOOL_ST_FAILED))
+  expect_identical(rec$w, 300L)
+  expect_identical(rec$generation, 7L)
+  expect_identical(rec$request, 90001L)
+  expect_identical(rec$status, EMC2:::.EMC_WPOOL_ST_FAILED)
+  expect_identical(rec$code, "record")
+
+  # Fixed width, and far below PIPE_BUF: several workers share one FIFO, so a
+  # record that varied in length would desynchronise the channel for all of them.
+  for (args in list(list(1L), list(2L, 3L, 4L), list(NA_integer_, NULL, "x"))) {
+    bytes <- do.call(EMC2:::.emc_wpool_done_encode, args)
+    expect_identical(length(bytes), EMC2:::.EMC_WPOOL_DONE_BYTES)
+  }
+  expect_lt(EMC2:::.EMC_WPOOL_DONE_BYTES, 4096L)
+  # A request that predates the fields encodes as 0 rather than short.
+  bare <- EMC2:::.emc_wpool_done_decode(EMC2:::.emc_wpool_done_encode(5L))
+  expect_identical(bare$generation, 0L)
+  expect_identical(bare$request, 0L)
+
+  # The three statuses are distinct, and START is not a completion: a worker
+  # that has collected its request and a worker that has finished it are
+  # different answers to "is this making progress".
+  st <- c(EMC2:::.EMC_WPOOL_ST_START, EMC2:::.EMC_WPOOL_ST_OK,
+          EMC2:::.EMC_WPOOL_ST_FAILED)
+  expect_identical(length(unique(st)), 3L)
+  expect_true(all(st > 0L & st < 256L))
+})
+
+test_that("a partially arrived record is not decoded until it is whole", {
+  # The record is written in one call, and a write that size is atomic on a
+  # pipe -- but the reader is non-blocking, and a non-blocking read may return
+  # less than was written.  A protocol that depends on it not doing so is one
+  # that works until it does not, so the reader buffers.
+  dir <- tempfile("emc_done_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  done <- EMC2:::.emc_wpool_done_open(dir)
+  skip_if(is.null(done), "no FIFO available here")
+  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
+          add = TRUE)
+
+  full <- EMC2:::.emc_wpool_done_encode(258L, generation = 2L, request = 11L)
+  # Nothing at all: no record.
+  expect_null(EMC2:::.emc_wpool_done_take(done))
+  # A prefix: still no record, and the bytes are kept rather than dropped.
+  writeBin(full[1:9], done$wc)
+  flush(done$wc)
+  expect_null(EMC2:::.emc_wpool_done_take(done))
+  writeBin(full[10:EMC2:::.EMC_WPOOL_DONE_BYTES], done$wc)
+  flush(done$wc)
+  rec <- EMC2:::.emc_wpool_done_take(done)
+  expect_false(is.null(rec))
+  expect_identical(rec$w, 258L)
+  expect_identical(rec$generation, 2L)
+
+  # Two records arriving together are returned one at a time, in order.
+  writeBin(c(EMC2:::.emc_wpool_done_encode(1L, 2L, 12L),
+             EMC2:::.emc_wpool_done_encode(2L, 2L, 13L)), done$wc)
+  flush(done$wc)
+  first <- EMC2:::.emc_wpool_done_take(done)
+  second <- EMC2:::.emc_wpool_done_take(done)
+  expect_identical(c(first$w, second$w), c(1L, 2L))
+  expect_identical(c(first$request, second$request), c(12L, 13L))
+  expect_null(EMC2:::.emc_wpool_done_take(done))
+})
+
+test_that("a record from a retired generation is not mistaken for a live one", {
+  # Finding 5's half that belongs to the wire format: the master must be able to
+  # tell a late record from a pool it has already replaced.  Retiring that
+  # generation's pending work is C5.
+  dir <- tempfile("emc_done_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  done <- EMC2:::.emc_wpool_done_open(dir)
+  skip_if(is.null(done), "no FIFO available here")
+  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
+          add = TRUE)
+
+  pool <- audit_fake_pool(2L)
+  pool$done <- done
+  pool$generation <- 4L
+  before <- EMC2:::.emc_pool_state$stale_records
+  before <- if (is.null(before)) 0L else before
+
+  # One stale record, then the current one. The stale one must be counted and
+  # skipped, and the wait must return the live one.
+  writeBin(c(EMC2:::.emc_wpool_done_encode(1L, generation = 3L, request = 8L),
+             EMC2:::.emc_wpool_done_encode(2L, generation = 4L, request = 9L)),
+           done$wc)
+  flush(done$wc)
+  rec <- EMC2:::.emc_wpool_await_record(pool, function() integer(0), 5)
+  expect_identical(rec$code, "record")
+  expect_identical(rec$w, 2L)
+  expect_identical(rec$generation, 4L)
+  expect_identical(EMC2:::.emc_pool_state$stale_records, before + 1L)
+
+  # Nothing further: the wait is bounded rather than blocking on a channel that
+  # will never speak again.
+  started <- proc.time()[["elapsed"]]
+  out <- EMC2:::.emc_wpool_await_record(pool, function() integer(0), 0.2)
+  expect_identical(out$code, "timeout")
+  expect_lt(proc.time()[["elapsed"]] - started, 20)
+})
+
+test_that("a pool that replaces its workers replaces its generation", {
+  # A generation that never changes is a field, not a fence.
+  skip_on_os("windows")
+  old <- options(emc2.worker_backend = "fork")
+  on.exit(options(old), add = TRUE)
+  pool <- EMC2:::.emc_wpool_start(2L, list(n_pars = 2))
+  skip_if(is.null(pool), "no pool available here")
+  # Reaping workers that were told to shut down: "did not deliver a result" is
+  # the expected outcome, not something for the test log.
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+  expect_gt(pool$generation, 0L)
+  # Recycling stops the old workers on its way; reaping them is where the
+  # "did not deliver a result" notice comes from, and it is not what this is
+  # testing. Degradation on a failed recycle has its own test in
+  # test-worker-pool.R.
+  fresh <- suppressWarnings(
+    EMC2:::.emc_wpool_recycle(pool, 2L, 1L, list(n_pars = 2)))
+  # Strictly greater, and not a restart at 1: recycling on the clean backend
+  # keeps the completion channel, so a generation that started over would accept
+  # a record written by the workers it just replaced.
+  expect_gt(fresh$generation, pool$generation)
+  pool <- fresh
 })
 
 # --- partial payloads and worker death (finding 2) --------------------------
@@ -127,6 +258,179 @@ test_that("a reply larger than the pipe buffer round-trips whole", {
     expect_identical(got$value, obj, info = paste("n =", n))
     expect_gt(got$bytes, 8L * n - 1L)
   }
+})
+
+test_that("a message too large for one frame is segmented, not refused", {
+  # "Keep safety limits on allocation/frames, but distinguish them from
+  # task-size limits."  The 2 GiB guard exists so a desynchronised stream cannot
+  # talk the reader into allocating on garbage; it is not a statement that a
+  # larger message is illegitimate.  A payload past the segment size is split,
+  # and the split is invisible to both callers.
+  obj <- list(x = seq_len(4000L) + 0.5, tag = "segmented")
+  small <- with_mocked_bindings(
+    audit_frame_roundtrip(obj),
+    .EMC_WPOOL_MAX_SEGMENT = 1024, .package = "EMC2")
+  expect_true(small$ok)
+  expect_identical(small$value, obj)
+
+  # Segmenting costs one 8-byte header per segment and nothing else, so the
+  # wire size says how many segments there were.
+  whole <- audit_frame_roundtrip(obj)
+  expect_identical(whole$value, obj)
+  expect_gt(small$bytes, whole$bytes)
+  expect_equal((small$bytes - whole$bytes) %% 8, 0)
+
+  # A message that fits in one segment is written exactly as it was before
+  # segmentation existed: one 8-byte positive length, then the payload.
+  raw_all <- readBin(audit_truncated_frame(obj, .Machine$integer.max), "raw",
+                     whole$bytes)
+  expect_equal(readBin(raw_all[1:8], "double", 1L, size = 8, endian = "little"),
+               whole$bytes - 8)
+})
+
+test_that("the reader reassembles segments and refuses a garbage length", {
+  # Hand-built streams, so the reader is tested against the format rather than
+  # against the writer agreeing with itself.
+  obj <- list(a = 1:50, b = "marker")
+  payload <- serialize(obj, NULL)
+  half <- floor(length(payload) / 2)
+  write_stream <- function(chunks) {
+    f <- tempfile()
+    con <- file(f, "wb")
+    for (ch in chunks) {
+      if (is.numeric(ch)) {
+        writeBin(as.double(ch), con, size = 8L, endian = "little")
+      } else writeBin(ch, con)
+    }
+    close(con)
+    f
+  }
+  read_stream <- function(f) {
+    con <- file(f, "rb")
+    on.exit({ try(close(con), silent = TRUE); unlink(f) }, add = TRUE)
+    EMC2:::.emc_wpool_recv(con)
+  }
+
+  # Two segments: a negative length says another follows.
+  f <- write_stream(list(-half, payload[1:half],
+                         length(payload) - half,
+                         payload[(half + 1L):length(payload)]))
+  expect_identical(read_stream(f), obj)
+
+  # Three segments. (A zero-length continuation is not expressible -- -0 is 0,
+  # which reads as a final segment -- and the writer never emits one, so the
+  # sign convention costs nothing.)
+  third <- floor(length(payload) / 3)
+  f <- write_stream(list(-third, payload[1:third],
+                         -third, payload[(third + 1L):(2L * third)],
+                         length(payload) - 2L * third,
+                         payload[(2L * third + 1L):length(payload)]))
+  expect_identical(read_stream(f), obj)
+
+  # A continuation that never ends is a truncated stream, not a hang.
+  f <- write_stream(list(-half, payload[1:half]))
+  expect_null(read_stream(f))
+
+  # A length past the frame guard is refused before anything is allocated for
+  # it, on both signs.
+  for (len in c(EMC2:::.EMC_WPOOL_MAX_FRAME + 1,
+                -(EMC2:::.EMC_WPOOL_MAX_FRAME + 1), NaN, Inf)) {
+    f <- write_stream(list(len, payload[1:8]))
+    expect_null(read_stream(f), info = paste("length", len))
+  }
+})
+
+# --- bounded I/O (finding 2) ------------------------------------------------
+
+test_that("a reply that never arrives is bounded rather than waited on", {
+  # Finding 2.  The pool timed the wait for a completion token and then entered
+  # a blocking framed receive, so a worker that announced completion and stalled
+  # part-way through its reply could still hang the chain.  A length header and
+  # short-read loops solve framing; they do not make I/O bounded.
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  dir <- tempfile("emc_bound_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  path <- file.path(dir, "p")
+  skip_if(system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE) != 0)
+  rc <- fifo(path, "rb", blocking = FALSE)
+  wc <- fifo(path, "wb", blocking = FALSE)
+  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
+          add = TRUE)
+
+  # Nothing at all.
+  started <- proc.time()[["elapsed"]]
+  expect_null(EMC2:::.emc_wpool_recv(rc, deadline = 0.3))
+  expect_lt(proc.time()[["elapsed"]] - started, 20)
+
+  # A header, then silence: the stall the finding describes.  The payload gets
+  # its own deadline rather than inheriting whatever was left of the header's.
+  payload <- serialize(list(a = 1:100), NULL)
+  writeBin(as.double(length(payload)), wc, size = 8L, endian = "little")
+  writeBin(payload[1:16], wc)
+  flush(wc)
+  started <- proc.time()[["elapsed"]]
+  expect_null(EMC2:::.emc_wpool_recv(rc, deadline = 0.3))
+  expect_lt(proc.time()[["elapsed"]] - started, 20)
+  expect_match(EMC2:::.emc_pool_state$last_transport_error, "rest of the reply")
+})
+
+test_that("a dead peer ends a receive without waiting out the deadline", {
+  # Liveness and progress are different questions, and the receive asks both:
+  # a worker that has exited is not going to answer, whatever the deadline says.
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  dir <- tempfile("emc_bound_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  path <- file.path(dir, "p")
+  skip_if(system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE) != 0)
+  rc <- fifo(path, "rb", blocking = FALSE)
+  wc <- fifo(path, "wb", blocking = FALSE)
+  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
+          add = TRUE)
+
+  started <- proc.time()[["elapsed"]]
+  expect_null(EMC2:::.emc_wpool_recv(rc, deadline = 600,
+                                     alive = function() FALSE))
+  # 600 s was the deadline; the liveness test is what ended it.
+  expect_lt(proc.time()[["elapsed"]] - started, 30)
+  expect_match(EMC2:::.emc_pool_state$last_transport_error, "exited")
+})
+
+test_that("a worker announces that it collected the request before computing", {
+  # ST_START is the progress signal that a live pid cannot give: "collected the
+  # request and is working" and "never collected it" are different failures.
+  skip_on_os("windows")
+  old <- options(emc2.worker_backend = "fork")
+  on.exit(options(old), add = TRUE)
+  pool <- EMC2:::.emc_wpool_start(2L, list(n_pars = 2))
+  skip_if(is.null(pool), "no pool available here")
+  skip_if(is.null(pool$done), "no completion channel here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
+          add = TRUE)
+
+  gen <- pool$generation
+  expect_true(EMC2:::.emc_wpool_request(
+    pool, 1L, list(subs = 1L, notify = TRUE, w = 1L, generation = gen,
+                   request = 4242L)))
+  # There is no real context, so the work fails -- which is the point: the
+  # worker still announces the pick-up first, and the completion still says what
+  # happened, so the master learns of the failure from the channel rather than
+  # by reading the reply.
+  first <- EMC2:::.emc_wpool_await_record(pool, function() 1L, 30)
+  second <- EMC2:::.emc_wpool_await_record(pool, function() 1L, 30)
+  expect_identical(first$code, "record")
+  expect_identical(first$status, EMC2:::.EMC_WPOOL_ST_START)
+  expect_identical(first$w, 1L)
+  expect_identical(first$request, 4242L)
+  expect_identical(first$generation, gen)
+  expect_identical(second$status, EMC2:::.EMC_WPOOL_ST_FAILED)
+  expect_identical(second$request, 4242L)
+  # And the reply itself is still there to be read.
+  res <- EMC2:::.emc_wpool_reply(pool, 1L)
+  expect_false(is.null(res$failed))
 })
 
 # --- publication failure ----------------------------------------------------
@@ -325,28 +629,53 @@ test_that("a worker outlives neither its parent's exit nor its own shutdown toke
 
 # --- stale generation replies -----------------------------------------------
 
-test_that("stale generation replies are rejected", {
-  # Finding 5's other half.  A late completion token from a retired worker can
+test_that("a late record from a retired worker is distinguishable", {
+  # Finding 5's other half.  A late completion record from a retired worker can
   # still be sitting in the `done` channel, which is deliberately retained
-  # across a recycle -- so after recycling, a token can name a worker index
+  # across a recycle -- so after recycling, a record can name a worker index
   # that now belongs to a different process.
   #
-  # There is nothing to test yet: the framed record carries a worker index and
-  # nothing else, so a stale token is indistinguishable from a current one.
-  # C4 adds the pool generation and request ID that make the distinction
-  # expressible, and C5 retires a whole generation before accepting new work.
-  # This is the test that gates them.
-  skip("requires C4's generation field in the framed completion record")
+  # Under the one-byte token these two were byte-identical and nothing could be
+  # done about it.  They are now different records, which is what makes
+  # retiring a generation expressible at all.  Acting on that -- draining the
+  # retired generation's pending work before accepting new work -- is C5.
+  same_index <- function(gen) {
+    EMC2:::.emc_wpool_done_encode(3L, generation = gen, request = 1L)
+  }
+  expect_false(identical(same_index(1L), same_index(2L)))
+  expect_identical(same_index(2L), same_index(2L))
+  # And the same request answered twice by two generations decodes to two
+  # different records rather than one repeated one.
+  a <- EMC2:::.emc_wpool_done_decode(same_index(1L))
+  b <- EMC2:::.emc_wpool_done_decode(same_index(2L))
+  expect_identical(a$w, b$w)
+  expect_false(identical(a$generation, b$generation))
 })
 
-test_that("a late token from a retired worker is currently indistinguishable", {
-  # The same finding, stated as something that passes today, so the defect is
-  # recorded rather than merely skipped.  A completion token is one byte and
-  # carries no generation, so two tokens from different pool generations are
-  # byte-identical.
-  token_from <- function(worker) as.raw(worker)
-  expect_identical(token_from(3L), token_from(3L))
-  # After C4, a token must also carry the generation it was issued in, and
-  # these two must differ.
-  succeed()
+test_that("a record for a settled request is not credited to the next one", {
+  # The request id is the same defence one level down: within a single pool
+  # generation, a worker whose share was recomputed in the master can still
+  # answer afterwards, and that answer belongs to an iteration that is already
+  # finished.
+  dir <- tempfile("emc_done_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  done <- EMC2:::.emc_wpool_done_open(dir)
+  skip_if(is.null(done), "no FIFO available here")
+  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
+          add = TRUE)
+  pool <- audit_fake_pool(2L)
+  pool$done <- done
+  pool$generation <- 1L
+
+  writeBin(c(EMC2:::.emc_wpool_done_encode(1L, 1L, 100L),
+             EMC2:::.emc_wpool_done_encode(1L, 1L, 101L)), done$wc)
+  flush(done$wc)
+  # Both records are current for this generation, so the channel returns both;
+  # it is the request id that lets the caller tell which iteration each answers.
+  first <- EMC2:::.emc_wpool_await_record(pool, function() integer(0), 5)
+  second <- EMC2:::.emc_wpool_await_record(pool, function() integer(0), 5)
+  expect_identical(first$request, 100L)
+  expect_identical(second$request, 101L)
+  expect_false(identical(first$request, second$request))
 })
