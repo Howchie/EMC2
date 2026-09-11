@@ -43,6 +43,51 @@ if (identical(mode, "history")) {
   quit(save = "no")
 }
 
+if (identical(mode, "concat")) {
+  # How the sample store's block joins scale.
+  #
+  # `run_emc` concatenates the accumulated history with each new block, so total
+  # copying grows quadratically in blocks. This prints what that costs against
+  # what appending into owned growable capacity would cost -- i.e. what C14's
+  # representation change would be worth, which is the number that decides
+  # whether it is worth putting an allocated/committed distinction in front of
+  # every place that reads these arrays.
+  P <- as.integer(Sys.getenv("EMC_P", "8"))
+  N <- as.integer(Sys.getenv("EMC_N", "140"))
+  step <- as.integer(Sys.getenv("EMC_STEP", "100"))
+  set.seed(20260911)
+  block <- function(n) list(
+    alpha = array(rnorm(P * N * n), c(P, N, n)),
+    subj_ll = matrix(rnorm(N * n), N, n),
+    theta_mu = matrix(rnorm(P * n), P, n),
+    theta_var = array(rnorm(P * P * n), c(P, P, n)))
+  cat(sprintf("\nP=%d  subjects=%d  block=%d iterations\n", P, N, step))
+  cat(sprintf("%8s %12s %12s %10s\n", "blocks", "joined_s", "one_copy_s", "overhead"))
+  for (B in c(5L, 10L, 20L, 30L)) {
+    acc <- block(step)
+    joined <- system.time({
+      for (i in seq_len(B - 1L)) {
+        objs <- list(acc, block(step))
+        keys <- unique(unlist(lapply(objs, names)))
+        acc <- do.call(mapply, c(EMC2:::.emc_join_iteration,
+                                 lapply(objs, "[", keys)))
+      }
+    })[["elapsed"]]
+    # The floor: every block copied exactly once, which is what appending into
+    # capacity would cost.
+    one <- system.time({
+      acc2 <- block(step)
+      for (i in seq_len(B - 1L)) {
+        nxt <- block(step)
+        acc2$alpha <- array(c(acc2$alpha, nxt$alpha),
+                            c(P, N, dim(acc2$alpha)[3] + step))
+      }
+    })[["elapsed"]]
+    cat(sprintf("%8d %12.2f %12.2f %9.1fx\n", B, joined, one, joined / one))
+  }
+  quit(save = "no")
+}
+
 if (!identical(mode, "fit")) stop("unknown EMC_BENCH_MODE: ", mode)
 
 n_subjects <- as.integer(Sys.getenv("EMC_N", "140"))
