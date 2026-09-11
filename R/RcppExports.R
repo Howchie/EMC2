@@ -41,6 +41,10 @@ fast_dmvnorm <- function(x, mean, sigma) {
     .Call(`_EMC2_fast_dmvnorm`, x, mean, sigma)
 }
 
+fast_dmvnorm_factor <- function(sigma) {
+    .Call(`_EMC2_fast_dmvnorm_factor`, sigma)
+}
+
 fast_dmvnorm_rooti <- function(x, mean, rooti, log_const) {
     .Call(`_EMC2_fast_dmvnorm_rooti`, x, mean, rooti, log_const)
 }

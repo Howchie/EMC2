@@ -142,6 +142,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fast_dmvnorm_factor
+Rcpp::List fast_dmvnorm_factor(const arma::mat& sigma);
+RcppExport SEXP _EMC2_fast_dmvnorm_factor(SEXP sigmaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type sigma(sigmaSEXP);
+    rcpp_result_gen = Rcpp::wrap(fast_dmvnorm_factor(sigma));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fast_dmvnorm_rooti
 arma::vec fast_dmvnorm_rooti(const arma::mat& x, const arma::rowvec& mean, const arma::mat& rooti, double log_const);
 RcppExport SEXP _EMC2_fast_dmvnorm_rooti(SEXP xSEXP, SEXP meanSEXP, SEXP rootiSEXP, SEXP log_constSEXP) {
@@ -3476,6 +3487,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_pt_defer_scalars", (DL_FUNC) &_EMC2_emc_pt_defer_scalars, 1},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_fast_dmvnorm", (DL_FUNC) &_EMC2_fast_dmvnorm, 3},
+    {"_EMC2_fast_dmvnorm_factor", (DL_FUNC) &_EMC2_fast_dmvnorm_factor, 1},
     {"_EMC2_fast_dmvnorm_rooti", (DL_FUNC) &_EMC2_fast_dmvnorm_rooti, 4},
     {"_EMC2_fpe_bm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bm_fht_pdf_cdf_vec, 12},
     {"_EMC2_fpe_ou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_ou_fht_pdf_cdf_vec, 13},

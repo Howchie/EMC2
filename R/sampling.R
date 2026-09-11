@@ -845,7 +845,8 @@ run_stage <- function(pmwgs,
                                 marginal_idx_blk, pmwgs$marginalise),
       error = function(e) NULL
     )
-    group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
+    group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
+                                          marginal_idx_blk)
     cache_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - cache_started
     } else NA_real_
@@ -1199,9 +1200,24 @@ build_subject_chol_cache <- function(chains_var, eff_var, idx_list) {
 # Per-iteration factorisation of the group covariance, shared across subjects.
 # `group_var` must already carry the marginalise() modification, because that is
 # what new_particle() will compare against.
-build_group_chol_cache <- function(group_var, idx_list) {
+build_group_chol_cache <- function(group_var, idx_list, marginal_idx = NULL) {
   if (is.null(group_var)) return(NULL)
-  list(idx_list = idx_list, ref = group_var,
+  # C15.  The per-component factors below serve the proposal draws. The prior
+  # density under blocking is evaluated against the FULL non-marginal covariance
+  # -- the same matrix, once per subject per component per iteration -- and was
+  # refactorised every time. Cache it here, beside the component factors and
+  # keyed on the same reference, so it is computed once per group draw.
+  #
+  # `fast_dmvnorm_factor()` and not `.chol_factor()`: the latter's regularisation
+  # ladder is for proposals, and using it here would change the prior. This one
+  # reproduces `fast_dmvnorm()` exactly, including its -Inf on a singular matrix.
+  full <- NULL
+  if (!is.null(marginal_idx) && any(!marginal_idx)) {
+    keep <- !marginal_idx
+    full <- fast_dmvnorm_factor(group_var[keep, keep, drop = FALSE])
+    full$keep <- keep
+  }
+  list(idx_list = idx_list, ref = group_var, full = full,
        f = lapply(idx_list, function(idx) {
          if (is.null(idx)) return(NULL)
          .chol_factor(group_var[idx, idx, drop = FALSE], sum(idx))
@@ -1389,9 +1405,26 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     } else rep(0, nrow(proposals))
     if(length(unq_components) > 1){
       prior_density <- if (any(!marginal_idx)) {
-        fast_dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
-                     mean = group_mu[!marginal_idx],
-                     sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE])
+        # The cached full factor when it is this group draw's, and the original
+        # call otherwise -- same arithmetic either way, so the cache can only
+        # save work, never move a number.
+        gf <- group_chol$full
+        if (!is.null(gf) && !is.null(group_chol$ref) &&
+            identical(group_chol$ref, group_var) &&
+            identical(gf$keep, !marginal_idx)) {
+          if (isTRUE(gf$ok)) {
+            fast_dmvnorm_rooti(x = proposals[, !marginal_idx, drop = FALSE],
+                               mean = group_mu[!marginal_idx],
+                               rooti = gf$rooti, log_const = gf$log_const)
+          } else {
+            # What fast_dmvnorm does when the Cholesky fails.
+            rep(-Inf, nrow(proposals))
+          }
+        } else {
+          fast_dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
+                       mean = group_mu[!marginal_idx],
+                       sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE])
+        }
       } else rep(0, nrow(proposals))
     } else{
       prior_density <- lp
