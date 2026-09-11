@@ -708,10 +708,17 @@ test_that("teardown does not wait on a reap it cannot perform", {
   skip_if(!identical(pool$backend, "spawn"), "not on the clean backend here")
   on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)),
           add = TRUE)
+  # Measured against the escalation deadline rather than against an absolute
+  # number of seconds: a knife-edge bound like "under one second" is a test
+  # that fails on a loaded machine for reasons that have nothing to do with the
+  # code.  Stretch the deadline to 30 s and require teardown to return in a
+  # small fraction of it -- a margin contention cannot plausibly erase.
+  old_wait <- options(emc2.worker_reap_wait = 30)
+  on.exit(options(old_wait), add = TRUE)
+  expect_identical(EMC2:::.emc_wpool_reap_wait(), 30)
   elapsed <- system.time(
     suppressWarnings(EMC2:::.emc_wpool_stop_workers(pool)))[["elapsed"]]
-  # Generous: the point is that this is not the two-second escalation deadline.
-  expect_lt(elapsed, 1)
+  expect_lt(elapsed, 5)
 })
 
 # --- generation retirement (finding 5) --------------------------------------

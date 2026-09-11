@@ -160,6 +160,171 @@ test_that("a design too wide for the budget still maps correctly", {
   EMC2:::emc_pt_cell_budget(default)
 })
 
+# --- deferred scalar coefficients -------------------------------------------
+
+test_that("deferring the scalar fill changes no number", {
+  # A sampled coefficient holds one value per particle repeated across every
+  # trial.  Writing it T times per particle is the prologue's largest fixed
+  # cost on a wide design, and the cell route never reads past row 0 -- so the
+  # fill is deferred and widened only on demand.  Deferred and eager must be
+  # the same table.
+  on.exit(EMC2:::emc_pt_defer_scalars(TRUE), add = TRUE)
+  for (cells in c(4L, 64L, 300L)) {
+    for (model in c("RDM", "LBA", "DDM")) {
+      fx <- audit_fixture(model, n_trials = 400L, n_particles = 4L, cells = cells)
+      EMC2:::emc_pt_defer_scalars(TRUE)
+      pars_deferred <- audit_prologue(fx)$pars
+      ll_deferred <- audit_ll_direct(fx)
+      EMC2:::emc_pt_defer_scalars(FALSE)
+      pars_eager <- audit_prologue(fx)$pars
+      ll_eager <- audit_ll_direct(fx)
+      EMC2:::emc_pt_defer_scalars(TRUE)
+      lbl <- paste(model, "cells =", cells)
+      expect_bit_identical(pars_deferred, pars_eager, paste(lbl, "- mapped pars"))
+      expect_bit_identical(ll_deferred, ll_eager, paste(lbl, "- likelihood"))
+      expect_informative_ll(fx, ll_deferred, lbl)
+    }
+  }
+})
+
+test_that("deferring is invisible to the independent reference mapper", {
+  # `get_pars_c_batch_wrapper_oo` takes its own route with no cell short cuts
+  # at all, so agreeing with it is the check that does not depend on any of
+  # this machinery being right.
+  on.exit(EMC2:::emc_pt_defer_scalars(TRUE), add = TRUE)
+  for (cells in c(8L, 257L)) {
+    fx <- audit_fixture("RDM", n_trials = 500L, n_particles = 3L, cells = cells)
+    EMC2:::emc_pt_defer_scalars(TRUE)
+    expect_mapper_agrees(fx, label = paste("deferred, cells =", cells))
+    EMC2:::emc_pt_defer_scalars(FALSE)
+    expect_mapper_agrees(fx, label = paste("eager, cells =", cells))
+    EMC2:::emc_pt_defer_scalars(TRUE)
+  }
+})
+
+test_that("a self-referencing design still reads its own column whole", {
+  # The one case that must NOT be deferred: a design whose output column is
+  # also one of its coefficients reads that column at each cell's
+  # representative row, not just at row 0.  An intercept-only parameter is
+  # exactly that shape.
+  on.exit(EMC2:::emc_pt_defer_scalars(TRUE), add = TRUE)
+  fx <- audit_fixture("RDM", n_trials = 300L, n_particles = 4L, cells = 6L)
+  EMC2:::emc_pt_defer_scalars(TRUE)
+  a <- audit_prologue(fx)$pars
+  EMC2:::emc_pt_defer_scalars(FALSE)
+  b <- audit_prologue(fx)$pars
+  EMC2:::emc_pt_defer_scalars(TRUE)
+  # A and t0 are intercept-only here, so they are the self-referencing shape.
+  expect_bit_identical(a[, "A", ], b[, "A", ], "intercept-only A")
+  expect_bit_identical(a[, "t0", ], b[, "t0", ], "intercept-only t0")
+  # And they really are one repeated value, not row-0-plus-stale.
+  expect_identical(length(unique(a[, "t0", 1L])), 1L)
+  expect_identical(length(unique(a[, "A", 2L])), 1L)
+})
+
+test_that("the deferral switch round-trips and refuses nonsense", {
+  default <- EMC2:::emc_pt_defer_scalars()
+  on.exit(EMC2:::emc_pt_defer_scalars(default), add = TRUE)
+  expect_true(default)
+  expect_identical(EMC2:::emc_pt_defer_scalars(FALSE), TRUE)
+  expect_identical(EMC2:::emc_pt_defer_scalars(TRUE), FALSE)
+  expect_identical(EMC2:::emc_pt_defer_scalars(), TRUE)
+  expect_error(EMC2:::emc_pt_defer_scalars(NA), "TRUE or FALSE")
+  expect_error(EMC2:::emc_pt_defer_scalars(c(TRUE, FALSE)), "TRUE or FALSE")
+})
+
+# --- the joint cell partition -----------------------------------------------
+
+test_that("the joint partition is the coarsest common refinement", {
+  # Each design induces a partition of the trials on its own. The joint one is
+  # the coarsest partition on which every column in the set is constant, which
+  # is what a kernel subexpression reading several parameters needs.
+  fx <- audit_fixture("RDM", n_trials = 300L, n_particles = 2L, cells = 6L)
+  des <- audit_designs(fx)
+  expect_identical(nrow(des$v), 6L)
+  expect_identical(nrow(des$B), 3L)
+
+  v <- audit_joint_cells(fx, "v")
+  b <- audit_joint_cells(fx, "B")
+  expect_true(v$usable)
+  expect_identical(v$n_cells, 6L)
+  expect_identical(b$n_cells, 3L)
+
+  # Independent structure refines to the product.
+  vb <- audit_joint_cells(fx, c("v", "B"))
+  expect_true(vb$usable)
+  expect_identical(vb$n_cells, 18L)
+
+  # A column that is the same for every trial splits nothing, so adding the
+  # intercept-only parameters must not move the answer.
+  expect_identical(audit_joint_cells(fx, c("v", "B", "A", "t0"))$n_cells, 18L)
+  expect_identical(audit_joint_cells(fx, c("A", "t0"))$n_cells, 1L)
+
+  # It is a SET: order and repeats cannot matter, because the cache is keyed on
+  # the set and a caller that lists a column twice must not get a second entry.
+  expect_identical(audit_joint_cells(fx, c("B", "v"))$expand, vb$expand)
+  expect_identical(audit_joint_cells(fx, c("v", "v", "B"))$expand, vb$expand)
+})
+
+test_that("the partition is a partition, and its representatives are in it", {
+  fx <- audit_fixture("RDM", n_trials = 300L, n_particles = 2L, cells = 6L)
+  jc <- audit_joint_cells(fx, c("v", "B"))
+  T_rows <- nrow(fx$dadm)
+  expect_identical(length(jc$expand), T_rows)
+  # Every cell is used, and nothing is numbered outside the range.
+  expect_identical(sort(unique(jc$expand)), seq_len(jc$n_cells))
+  expect_identical(length(jc$rep), jc$n_cells)
+  # A representative is a trial that really does read its cell, and it is the
+  # first such trial -- callers evaluate a subexpression there and scatter.
+  for (c_i in seq_len(jc$n_cells)) {
+    expect_identical(jc$expand[jc$rep[c_i]], c_i, info = paste("cell", c_i))
+    expect_identical(jc$rep[c_i], match(c_i, jc$expand), info = paste("cell", c_i))
+  }
+  # Trials in the same joint cell agree on every column in the set; trials in
+  # different cells differ on at least one.  Checked against the mapped values
+  # themselves rather than against the index arithmetic that produced them.
+  pars <- audit_prologue(fx)$pars[, , 1L]
+  for (c_i in seq_len(jc$n_cells)) {
+    rows <- which(jc$expand == c_i)
+    expect_identical(length(unique(round(pars[rows, "v"], 12))), 1L)
+    expect_identical(length(unique(round(pars[rows, "B"], 12))), 1L)
+  }
+})
+
+test_that("a set with no reuse is refused rather than partitioned per trial", {
+  # "Bound the result by min(prod(n_cells), T) and defer to the row route when
+  # a covariate drives it to T."  The budget is the reachable way to make a
+  # design cell-less on demand, which is the same condition.
+  default <- EMC2:::emc_pt_cell_budget()
+  on.exit(EMC2:::emc_pt_cell_budget(default), add = TRUE)
+  EMC2:::emc_pt_cell_budget(0)
+  fx <- audit_fixture("RDM", n_trials = 300L, n_particles = 2L, cells = 6L)
+  # A column with structure but no cell map: nothing to reuse, say so.
+  jc <- audit_joint_cells(fx, c("v", "B"))
+  expect_false(jc$usable)
+  expect_identical(jc$n_cells, 0L)
+  expect_identical(length(jc$expand), 0L)
+  # Columns that are constant for every trial are still one cell: that is not a
+  # covariate driving the partition to T, it is the absence of structure.
+  expect_true(audit_joint_cells(fx, c("A", "t0"))$usable)
+  EMC2:::emc_pt_cell_budget(default)
+})
+
+test_that("the partition never exceeds the trial count", {
+  # A wide set whose product of cell counts is far larger than the data.
+  fx <- audit_fixture("RDM", n_trials = 120L, n_particles = 2L, cells = 40L)
+  T_rows <- nrow(fx$dadm)
+  jc <- audit_joint_cells(fx, c("v", "B", "A", "t0"))
+  if (jc$usable) {
+    expect_lte(jc$n_cells, T_rows)
+    expect_identical(length(jc$expand), T_rows)
+  } else {
+    # Refused is the other correct answer: it means the refinement reached the
+    # trials themselves, which is exactly when the caller should not bother.
+    expect_identical(jc$n_cells, 0L)
+  }
+})
+
 # --- constants --------------------------------------------------------------
 
 test_that("duplicate constant names take the last value", {

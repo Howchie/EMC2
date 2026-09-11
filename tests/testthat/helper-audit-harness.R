@@ -256,3 +256,20 @@ audit_truncated_frame <- function(obj, keep) {
   writeBin(raw_all[seq_len(min(keep, length(raw_all)))], g)
   g
 }
+
+# --- joint cell partitions --------------------------------------------------
+
+# Build a ParamTable from a fixture the way the prologue does, map its designs,
+# and ask for the common refinement of a set of parameter columns.  The table is
+# built here rather than reached into, because the partition depends only on the
+# designs and the data and is meant to be answerable without running a particle.
+audit_joint_cells <- function(fx, params, designs = NULL) {
+  des <- if (is.null(designs)) audit_designs(fx) else designs
+  p_vec <- fx$prop[1L, , drop = TRUE]
+  cst <- fx$constants
+  if (!identical(cst, NA) && length(cst)) p_vec <- c(p_vec, cst)
+  pt <- EMC2:::ParamTable_create_from_pvector_designs(p_vec, des, nrow(fx$dadm))
+  EMC2:::ParamTable_map_designs(pt, des,
+                                stats::setNames(rep(TRUE, length(des)), names(des)))
+  EMC2:::ParamTable_joint_cells(pt, params)
+}

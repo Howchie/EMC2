@@ -20,6 +20,17 @@ std::size_t cell_scratch_budget() { return budget_storage(); }
 
 void set_cell_scratch_budget(std::size_t bytes) { budget_storage() = bytes; }
 
+namespace {
+bool& defer_storage() {
+  static bool on = true;
+  return on;
+}
+}  // namespace
+
+bool defer_scalar_fill() { return defer_storage(); }
+
+void set_defer_scalar_fill(bool on) { defer_storage() = on; }
+
 }  // namespace emc
 
 //' Per-design cell scratch budget, in bytes
@@ -38,6 +49,24 @@ double emc_pt_cell_budget(Rcpp::Nullable<Rcpp::NumericVector> bytes = R_NilValue
       Rcpp::stop("the cell scratch budget must be one finite, non-negative number of bytes");
     }
     emc::set_cell_scratch_budget(static_cast<std::size_t>(v[0]));
+  }
+  return previous;
+}
+
+//' Defer the per-trial fill of scalar coefficients
+//'
+//' Reads the setting; with a value, sets it and returns the previous one.
+//'
+//' @noRd
+// [[Rcpp::export]]
+bool emc_pt_defer_scalars(Rcpp::Nullable<Rcpp::LogicalVector> on = R_NilValue) {
+  const bool previous = emc::defer_scalar_fill();
+  if (on.isNotNull()) {
+    Rcpp::LogicalVector v(on);
+    if (v.size() != 1 || Rcpp::LogicalVector::is_na(v[0])) {
+      Rcpp::stop("emc_pt_defer_scalars() takes one TRUE or FALSE");
+    }
+    emc::set_defer_scalar_fill(v[0] != 0);
   }
   return previous;
 }

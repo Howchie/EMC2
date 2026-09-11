@@ -377,6 +377,31 @@ SEXP ParamTable_create_from_pvector_designs(NumericVector p_vector,
 }
 
 
+// The common refinement of a set of parameter columns, for tests and for any
+// caller that wants to see what reuse a design set actually offers.  Named
+// columns rather than indices at this boundary only because R has the names;
+// ParamTable itself is handed indices and never a meaning.
+// [[Rcpp::export]]
+Rcpp::List ParamTable_joint_cells(SEXP pt_xptr, Rcpp::CharacterVector param_names) {
+  Rcpp::XPtr<ParamTable> pt(pt_xptr);
+  std::vector<int> cols;
+  cols.reserve(param_names.size());
+  for (int i = 0; i < param_names.size(); ++i) {
+    cols.push_back(pt->base_index_for(Rcpp::as<std::string>(param_names[i])));
+  }
+  const JointCells& jc = pt->joint_cells(cols);
+  // 1-based for R, and only when there is a partition to report.
+  Rcpp::IntegerVector expand(jc.usable ? jc.expand.size() : 0);
+  Rcpp::IntegerVector rep(jc.usable ? jc.rep.size() : 0);
+  for (std::size_t i = 0; i < (std::size_t)expand.size(); ++i) expand[i] = jc.expand[i] + 1;
+  for (std::size_t i = 0; i < (std::size_t)rep.size(); ++i) rep[i] = jc.rep[i] + 1;
+  return Rcpp::List::create(
+    Rcpp::_["usable"] = jc.usable,
+    Rcpp::_["n_cells"] = jc.n_cells,
+    Rcpp::_["expand"] = expand,
+    Rcpp::_["rep"] = rep);
+}
+
 // [[Rcpp::export]]
 void ParamTable_map_designs(SEXP pt_xptr,
                             Rcpp::List designs,

@@ -356,6 +356,19 @@
 # The deadline is deliberately loose: 20x the median observed receive time,
 # floored at two minutes, so a merely slow iteration can never trip it.
 # options(emc2.worker_timeout = <seconds>) overrides it; Inf disables it.
+# How long a graceful shutdown is given before a signal, when this process is
+# the one that has to reap.  Short because it is an escalation, not a wait for
+# work: the child has already been told to stop.  Overridable so a test can
+# separate "returned promptly" from "waited out the escalation" with a margin
+# that load cannot erase.
+.EMC_WPOOL_REAP_WAIT <- 2
+
+.emc_wpool_reap_wait <- function() {
+  opt <- suppressWarnings(as.numeric(
+    getOption("emc2.worker_reap_wait", .EMC_WPOOL_REAP_WAIT)))
+  if (length(opt) != 1L || is.na(opt) || opt < 0) .EMC_WPOOL_REAP_WAIT else opt
+}
+
 .EMC_WPOOL_TIMEOUT_FLOOR <- 120
 .EMC_WPOOL_TIMEOUT_COLD <- 600
 # Starting a clean R process, loading the namespace and forking workers from it.
@@ -538,7 +551,7 @@
     if (wait) {
       # proc.time(), not Sys.time(): a deadline measured on a clock the
       # administrator can set backwards is not a deadline.
-      deadline <- proc.time()[["elapsed"]] + 2
+      deadline <- proc.time()[["elapsed"]] + .emc_wpool_reap_wait()
       while (any(vapply(pids, .emc_wpool_pid_alive, logical(1))) &&
              proc.time()[["elapsed"]] < deadline) Sys.sleep(0.005)
     }

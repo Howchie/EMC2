@@ -98,6 +98,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_pt_defer_scalars
+bool emc_pt_defer_scalars(Rcpp::Nullable<Rcpp::LogicalVector> on);
+RcppExport SEXP _EMC2_emc_pt_defer_scalars(SEXP onSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type on(onSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_pt_defer_scalars(on));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sp_new
 Rcpp::List sp_new(const int iter, const arma::cube& lambda_varimax, const int q, const int p, const int dim_all_c, const arma::mat& all_c, const arma::mat& lambda_hat, const arma::uvec& st, arma::mat cost_matrix, arma::mat perm);
 RcppExport SEXP _EMC2_sp_new(SEXP iterSEXP, SEXP lambda_varimaxSEXP, SEXP qSEXP, SEXP pSEXP, SEXP dim_all_cSEXP, SEXP all_cSEXP, SEXP lambda_hatSEXP, SEXP stSEXP, SEXP cost_matrixSEXP, SEXP permSEXP) {
@@ -2636,6 +2647,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// ParamTable_joint_cells
+Rcpp::List ParamTable_joint_cells(SEXP pt_xptr, Rcpp::CharacterVector param_names);
+RcppExport SEXP _EMC2_ParamTable_joint_cells(SEXP pt_xptrSEXP, SEXP param_namesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type pt_xptr(pt_xptrSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type param_names(param_namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(ParamTable_joint_cells(pt_xptr, param_names));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ParamTable_map_designs
 void ParamTable_map_designs(SEXP pt_xptr, Rcpp::List designs, Rcpp::LogicalVector include_param);
 RcppExport SEXP _EMC2_ParamTable_map_designs(SEXP pt_xptrSEXP, SEXP designsSEXP, SEXP include_paramSEXP) {
@@ -3390,6 +3413,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
     {"_EMC2_emc_pt_cell_budget", (DL_FUNC) &_EMC2_emc_pt_cell_budget, 1},
+    {"_EMC2_emc_pt_defer_scalars", (DL_FUNC) &_EMC2_emc_pt_defer_scalars, 1},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_fast_dmvnorm", (DL_FUNC) &_EMC2_fast_dmvnorm, 3},
     {"_EMC2_fast_dmvnorm_rooti", (DL_FUNC) &_EMC2_fast_dmvnorm_rooti, 4},
@@ -3533,6 +3557,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_ParamTable_materialize", (DL_FUNC) &_EMC2_ParamTable_materialize, 1},
     {"_EMC2_ParamTable_set_column", (DL_FUNC) &_EMC2_ParamTable_set_column, 3},
     {"_EMC2_ParamTable_create_from_pvector_designs", (DL_FUNC) &_EMC2_ParamTable_create_from_pvector_designs, 3},
+    {"_EMC2_ParamTable_joint_cells", (DL_FUNC) &_EMC2_ParamTable_joint_cells, 2},
     {"_EMC2_ParamTable_map_designs", (DL_FUNC) &_EMC2_ParamTable_map_designs, 3},
     {"_EMC2_TrendEngine_create", (DL_FUNC) &_EMC2_TrendEngine_create, 2},
     {"_EMC2_TrendEngine_premap_mask", (DL_FUNC) &_EMC2_TrendEngine_premap_mask, 2},

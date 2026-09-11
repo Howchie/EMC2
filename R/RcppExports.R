@@ -24,6 +24,15 @@ emc_pt_cell_budget <- function(bytes = NULL) {
     .Call(`_EMC2_emc_pt_cell_budget`, bytes)
 }
 
+#' Defer the per-trial fill of scalar coefficients
+#'
+#' Reads the setting; with a value, sets it and returns the previous one.
+#'
+#' @noRd
+emc_pt_defer_scalars <- function(on = NULL) {
+    .Call(`_EMC2_emc_pt_defer_scalars`, on)
+}
+
 sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm) {
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
@@ -594,6 +603,10 @@ ParamTable_set_column <- function(pt_xptr, name, col) {
 
 ParamTable_create_from_pvector_designs <- function(p_vector, designs, n_trials) {
     .Call(`_EMC2_ParamTable_create_from_pvector_designs`, p_vector, designs, n_trials)
+}
+
+ParamTable_joint_cells <- function(pt_xptr, param_names) {
+    .Call(`_EMC2_ParamTable_joint_cells`, pt_xptr, param_names)
 }
 
 ParamTable_map_designs <- function(pt_xptr, designs, include_param) {

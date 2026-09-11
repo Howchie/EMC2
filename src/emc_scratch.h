@@ -110,6 +110,14 @@ private:
 std::size_t cell_scratch_budget();
 void set_cell_scratch_budget(std::size_t bytes);
 
+// Whether a sampled coefficient's value is written once at row 0 and widened
+// only if something reads it at row resolution, or written to every trial up
+// front as it always was.  On by default; the switch exists so the two can be
+// compared directly, which is how "they are the same numbers" is asserted and
+// how the saving is measured.
+bool defer_scalar_fill();
+void set_defer_scalar_fill(bool on);
+
 }  // namespace emc
 
 #endif
