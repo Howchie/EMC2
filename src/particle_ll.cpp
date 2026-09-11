@@ -290,6 +290,36 @@ static inline bool read_all_finite_trials_attr(const Rcpp::DataFrame& data,
 // design mapping + transforms, then bounds). i == 0 runs on the template as
 // built (must fully compute every parameter, including transforms of
 // constants); i > 0 may skip invariant designs/transforms.
+//
+// --- C11: owner and lifetime -----------------------------------------------
+//
+// The members below fall into two kinds, and the distinction is not cosmetic.
+//
+// DATA-INDEPENDENT COMPILED PLAN.  Decided by the design, the data's shape and
+// the model's specifications, and identical for every particle and every call
+// made with the same inputs: `designs`, `bounds`, `minmax`, `mm_names`,
+// `keep_names`, `transform_specs`, the table's design plan, and the three
+// `plan_*` selections.  `invalidation_key()` below is what a cache of these
+// would have to compare, and it enumerates exactly what the audit says must
+// invalidate one: data, levels, design, constants, transforms, bounds, trends
+// and the guess window.
+//
+// PER-CALL STATE, TIED TO THE FIRST PARTICLE.  `particle_matrix_pt` holds THIS
+// call's proposals; `invariant_design_mask`, `invariant_param_names` and
+// `invariant_base_idx_vec` are computed from which of THIS call's columns vary;
+// `bound_specs`, `bound_seed` and `bound_buf` are built on particle 0's values;
+// `mat_buf` holds particle i's natural-scale columns.  None of it survives a
+// call, and persisting any of it unchanged would not be a cache -- it would be
+// answering the next call with the previous call's first particle.
+//
+// So this type is NOT reused across calls today, deliberately.  The audit asks
+// for the lifetime to be explicit and per-worker, which it now is: one owner,
+// constructed per call, nothing shared and nothing global.  An external pointer
+// to it is never serialised -- a spawned worker rebuilds from the context it
+// was given, because a pointer that survived a fork would not survive a spawn.
+// The measurement that says cross-call caching is not urgent is in
+// WorkingTests/bench_likelihood_prologue.R: building this is ~1% of a call, and
+// the staleness risk above is the whole of the other side of that trade.
 struct PtMapper {
   NumericMatrix particle_matrix_pt;
   ParamTable table;
@@ -329,6 +359,13 @@ struct PtMapper {
   Rcpp::LogicalVector bound_buf;                  // per-particle verdict, reused
   bool bound_plan_ready = false;
 
+  // What a cache of the data-independent plan would have to compare before
+  // reusing one is `emc_pt_invalidation_key()` in param_table_interface.cpp:
+  // the data's identity and shape, the factor levels behind the designs, the
+  // designs, the constants, the transform and bound specifications, whether a
+  // trend is in play, and the guess window.  It lives there rather than here
+  // because it is about the CALL's inputs, not about this object -- a cache
+  // compares keys before it has a PtMapper to ask.
   // Build the i > 0 plans.  Only valid without a trend runtime, which is also
   // the only case in which use_invariants is ever set.
   void build_plan() {
@@ -1889,17 +1926,30 @@ double c_log_likelihood_race(
 
   // Fast path hint: computed once per calc_ll call (data-only), to avoid re-scanning per particle.
   const bool use_full_finite_batch = all_finite_trials;
+  // C11.  The three partitions below are data-only: they are decided once per
+  // likelihood call and read by every particle.  The shared state already owns
+  // them, and the comment on the branch below used to claim "no copy" while
+  // assigning three std::vectors -- on a censored fit that is three
+  // trial-length copies per call, for state that outlives the copy anyway.
+  //
+  // Owner and lifetime, stated: `shared` owns them when it has them, the
+  // `_owned` locals own them when they had to be derived here, and the
+  // references below are const views into whichever it was.  The owner outlives
+  // the view in both cases, which is the whole of the discipline.
   Rcpp::LogicalVector finite_rt_mask;
-  std::vector<int> finite_rt_unique_trial_indices;
-  std::vector<int> other_unique_trial_indices;
-  std::vector<int> active_nogo_trial_mask;
+  std::vector<int> finite_unique_owned;
+  std::vector<int> other_unique_owned;
+  std::vector<int> nogo_mask_owned;
+  const std::vector<int>* finite_unique_view = &finite_unique_owned;
+  const std::vector<int>* other_unique_view = &other_unique_owned;
+  const std::vector<int>* nogo_mask_view = &nogo_mask_owned;
   if (!use_full_finite_batch) {
     if (use_shared && static_cast<int>(shared->finite_mask.size()) == n_trials) {
-      // Fast path: re-use pre-read partition from shared state (no attr lookup, no copy)
+      // Views into state this call already owns; nothing is copied.
       finite_rt_mask = shared->finite_mask;
-      finite_rt_unique_trial_indices = shared->finite_unique_idx;
-      other_unique_trial_indices     = shared->other_unique_idx;
-      active_nogo_trial_mask         = shared->active_nogo_trial_mask;
+      finite_unique_view = &shared->finite_unique_idx;
+      other_unique_view  = &shared->other_unique_idx;
+      nogo_mask_view     = &shared->active_nogo_trial_mask;
     } else {
       const bool has_partition_attrs =
         dadm.hasAttribute("finite_rt_mask") &&
@@ -1912,14 +1962,14 @@ double c_log_likelihood_race(
         Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
         Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
         Rcpp::LogicalVector nogo_attr = dadm.attr("active_nogo_trial_mask");
-        finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
-        other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
-        active_nogo_trial_mask.assign(nogo_attr.begin(), nogo_attr.end());
+        finite_unique_owned.assign(finite_attr.begin(), finite_attr.end());
+        other_unique_owned.assign(other_attr.begin(), other_attr.end());
+        nogo_mask_owned.assign(nogo_attr.begin(), nogo_attr.end());
       } else {
         // Fallback path for direct calc_ll/calc_ll_oo callers that bypass
         // .cache_ll_data_attrs(): derive finite/other unique-trial partitions.
         finite_rt_mask = Rcpp::LogicalVector(n_trials, false);
-        active_nogo_trial_mask.assign(static_cast<size_t>(n_unique_trials), 0);
+        nogo_mask_owned.assign(static_cast<size_t>(n_unique_trials), 0);
         const SEXP lR_sexp = dadm["lR"];
         const Rcpp::IntegerVector lR_code(lR_sexp);
         const Rcpp::CharacterVector lR_levels = lR_code.attr("levels");
@@ -1942,13 +1992,13 @@ double c_log_likelihood_race(
               if (has_RACE_col && static_cast<int>(RACE_mask.size()) == n_trials && !RACE_mask[row]) continue;
               if (lR_code[row] == nogo_code) { has_active_nogo = true; break; }
             }
-            active_nogo_trial_mask[static_cast<size_t>(unique_trial_idx)] = has_active_nogo ? 1 : 0;
+            nogo_mask_owned[static_cast<size_t>(unique_trial_idx)] = has_active_nogo ? 1 : 0;
           }
           if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
-            finite_rt_unique_trial_indices.push_back(unique_trial_idx);
+            finite_unique_owned.push_back(unique_trial_idx);
             for (int k = 0; k < n_lR_j; ++k) finite_rt_mask[start_row_idx + k] = true;
           } else {
-            other_unique_trial_indices.push_back(unique_trial_idx);
+            other_unique_owned.push_back(unique_trial_idx);
           }
         }
       }
@@ -2243,6 +2293,9 @@ double c_log_likelihood_race(
     return logS;
   };
 
+  const std::vector<int>& finite_rt_unique_trial_indices = *finite_unique_view;
+  const std::vector<int>& other_unique_trial_indices = *other_unique_view;
+  const std::vector<int>& active_nogo_trial_mask = *nogo_mask_view;
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
   std::vector<int> winner_row_by_trial;
   std::vector<double> global_log_sk_by_trial;

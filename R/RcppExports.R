@@ -641,6 +641,10 @@ ParamTable_joint_cells <- function(pt_xptr, param_names) {
     .Call(`_EMC2_ParamTable_joint_cells`, pt_xptr, param_names)
 }
 
+emc_pt_invalidation_key <- function(data, constants, designs, bounds, transforms, pretransforms, trend, p_types) {
+    .Call(`_EMC2_emc_pt_invalidation_key`, data, constants, designs, bounds, transforms, pretransforms, trend, p_types)
+}
+
 ParamTable_map_designs <- function(pt_xptr, designs, include_param) {
     invisible(.Call(`_EMC2_ParamTable_map_designs`, pt_xptr, designs, include_param))
 }

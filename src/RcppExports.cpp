@@ -2700,6 +2700,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_pt_invalidation_key
+Rcpp::List emc_pt_invalidation_key(Rcpp::DataFrame data, Rcpp::NumericVector constants, Rcpp::List designs, Rcpp::List bounds, Rcpp::List transforms, Rcpp::List pretransforms, Rcpp::Nullable<Rcpp::List> trend, Rcpp::CharacterVector p_types);
+RcppExport SEXP _EMC2_emc_pt_invalidation_key(SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP trendSEXP, SEXP p_typesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type constants(constantsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type designs(designsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type bounds(boundsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type transforms(transformsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type pretransforms(pretransformsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type p_types(p_typesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_pt_invalidation_key(data, constants, designs, bounds, transforms, pretransforms, trend, p_types));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ParamTable_map_designs
 void ParamTable_map_designs(SEXP pt_xptr, Rcpp::List designs, Rcpp::LogicalVector include_param);
 RcppExport SEXP _EMC2_ParamTable_map_designs(SEXP pt_xptrSEXP, SEXP designsSEXP, SEXP include_paramSEXP) {
@@ -3604,6 +3622,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_ParamTable_set_column", (DL_FUNC) &_EMC2_ParamTable_set_column, 3},
     {"_EMC2_ParamTable_create_from_pvector_designs", (DL_FUNC) &_EMC2_ParamTable_create_from_pvector_designs, 3},
     {"_EMC2_ParamTable_joint_cells", (DL_FUNC) &_EMC2_ParamTable_joint_cells, 2},
+    {"_EMC2_emc_pt_invalidation_key", (DL_FUNC) &_EMC2_emc_pt_invalidation_key, 8},
     {"_EMC2_ParamTable_map_designs", (DL_FUNC) &_EMC2_ParamTable_map_designs, 3},
     {"_EMC2_TrendEngine_create", (DL_FUNC) &_EMC2_TrendEngine_create, 2},
     {"_EMC2_TrendEngine_premap_mask", (DL_FUNC) &_EMC2_TrendEngine_premap_mask, 2},

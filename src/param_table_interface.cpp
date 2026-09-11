@@ -402,6 +402,44 @@ Rcpp::List ParamTable_joint_cells(SEXP pt_xptr, Rcpp::CharacterVector param_name
     Rcpp::_["rep"] = rep);
 }
 
+// C11's invalidation key, exposed so the contract can be tested: two calls that
+// differ in anything the audit says must invalidate a compiled plan produce
+// different keys, and two that differ in nothing produce equal ones.
+// [[Rcpp::export]]
+Rcpp::List emc_pt_invalidation_key(Rcpp::DataFrame data,
+                                   Rcpp::NumericVector constants,
+                                   Rcpp::List designs, Rcpp::List bounds,
+                                   Rcpp::List transforms,
+                                   Rcpp::List pretransforms,
+                                   Rcpp::Nullable<Rcpp::List> trend,
+                                   Rcpp::CharacterVector p_types) {
+  Rcpp::List levels;
+  Rcpp::CharacterVector nms = data.names();
+  for (int j = 0; j < nms.size(); ++j) {
+    SEXP col = data[Rcpp::as<std::string>(nms[j])];
+    if (Rf_isFactor(col)) {
+      levels.push_back(Rcpp::CharacterVector(Rf_getAttrib(col, R_LevelsSymbol)),
+                       Rcpp::as<std::string>(nms[j]));
+    }
+  }
+  SEXP guess_window = data.hasAttribute("guess_window")
+    ? SEXP(data.attr("guess_window")) : R_NilValue;
+  // A list of values, not a hash: a cache must compare what actually differs
+  // rather than trust that two different plans could not collide.
+  return Rcpp::List::create(
+    Rcpp::_["n_trials"] = data.nrow(),
+    Rcpp::_["columns"] = nms,
+    Rcpp::_["levels"] = levels,
+    Rcpp::_["designs"] = designs,
+    Rcpp::_["constants"] = constants,
+    Rcpp::_["transforms"] = transforms,
+    Rcpp::_["pretransforms"] = pretransforms,
+    Rcpp::_["bounds"] = bounds,
+    Rcpp::_["trend"] = trend.isNull() ? R_NilValue : SEXP(Rcpp::List(trend)),
+    Rcpp::_["p_types"] = p_types,
+    Rcpp::_["guess_window"] = guess_window);
+}
+
 // [[Rcpp::export]]
 void ParamTable_map_designs(SEXP pt_xptr,
                             Rcpp::List designs,

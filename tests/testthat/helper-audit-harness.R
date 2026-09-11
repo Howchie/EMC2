@@ -273,3 +273,20 @@ audit_joint_cells <- function(fx, params, designs = NULL) {
                                 stats::setNames(rep(TRUE, length(des)), names(des)))
   EMC2:::ParamTable_joint_cells(pt, params)
 }
+
+# The planned mapping route against the independent reference, which takes no
+# cell short cuts at all.  Lives here rather than in one test file so every file
+# that touches the mapper can make the same comparison.
+expect_mapper_agrees <- function(fx, designs = NULL, label = "") {
+  got <- audit_prologue(fx, designs)$pars
+  want <- audit_reference(fx, designs)
+  # Compare column by column rather than as one flattened block, so a failure
+  # names the parameter that moved instead of only a maximum difference.
+  shared <- dimnames(want)[[2L]]
+  testthat::expect_true(all(shared %in% dimnames(got)[[2L]]), info = label)
+  testthat::expect_equal(dim(got)[c(1L, 3L)], dim(want)[c(1L, 3L)], info = label)
+  for (nm in shared) {
+    expect_bit_identical(got[, nm, , drop = FALSE], want[, nm, , drop = FALSE],
+                         paste(label, "-", nm))
+  }
+}
