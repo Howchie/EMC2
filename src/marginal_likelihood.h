@@ -31,7 +31,8 @@ Rcpp::NumericVector calc_ll_oo(Rcpp::NumericMatrix particle_matrix,
                                Rcpp::List pretransforms,
                                Rcpp::CharacterVector p_types, double min_ll,
                                Rcpp::Nullable<Rcpp::List> trend,
-                               Rcpp::Nullable<Rcpp::List> marginalise);
+                               Rcpp::Nullable<Rcpp::List> marginalise,
+                               Rcpp::Nullable<Rcpp::LogicalVector> varying);
 
 // Marginal log-likelihood: log-sum-exp of the shared core's per-node terms.
 // Not Rcpp-exported; external linkage so calc_ll_oo's delegation branch

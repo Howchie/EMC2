@@ -693,8 +693,8 @@ TrendEngine_apply_posttransform_bases <- function(param_table_ptr, trend_engine_
     invisible(.Call(`_EMC2_TrendEngine_apply_posttransform_bases`, param_table_ptr, trend_engine_ptr))
 }
 
-calc_ll_oo <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL, marginalise = NULL) {
-    .Call(`_EMC2_calc_ll_oo`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise)
+calc_ll_oo <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL, marginalise = NULL, varying = NULL) {
+    .Call(`_EMC2_calc_ll_oo`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise, varying)
 }
 
 pt_prologue_oo <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend = NULL, return_pars = FALSE) {

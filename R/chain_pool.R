@@ -1370,9 +1370,11 @@
   # "ll" computes likelihoods for proposal rows and performs no random draws.
   # Particle messages carry group state and use the RNG-preserving path below.
   if (identical(msg$kind, "ll")) {
+    # The mask is over proposal COLUMNS, so it survives the row split this pool
+    # does without adjustment.
     return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
                                      model = ctx$model, component = msg$component,
-                                     r_cores = 1L)))
+                                     r_cores = 1L, varying = msg$varying)))
   }
   # loo::loo parallelises over columns with mclapply. Run it in a clean,
   # one-shot process so those inner workers inherit only this model's matrix,
@@ -1505,7 +1507,8 @@
 #
 # Return NULL when the pool cannot serve the call so the caller computes the
 # vector itself.
-.emc_wpool_ll <- function(proposals, s, component = NULL, dynamic = FALSE) {
+.emc_wpool_ll <- function(proposals, s, component = NULL, dynamic = FALSE,
+                          varying = NULL) {
   pool <- .emc_pool_state$ll_pool
   if (is.null(pool) || !isTRUE(pool$alive) || pool$n <= 1L) return(NULL)
   if (!is.matrix(proposals)) return(NULL)
@@ -1520,7 +1523,7 @@
   .emc_pool_state$ll_dynamic <- isTRUE(dynamic) && !is.null(pool$done) &&
     n >= .EMC_LL_DYN_MIN_ROWS * pool$n
   if (.emc_pool_state$ll_dynamic) {
-    return(.emc_wpool_ll_dynamic(pool, proposals, s, component, n))
+    return(.emc_wpool_ll_dynamic(pool, proposals, s, component, n, varying))
   }
   idx <- .split_work_indices(n, pool$n)
   n_workers <- max(idx)
@@ -1529,6 +1532,7 @@
   for (w in seq_len(n_workers)) {
     sent[w] <- .emc_wpool_request(
       pool, w, list(kind = "ll", s = s, component = component,
+                    varying = varying,
                     proposals = proposals[idx == w, , drop = FALSE]))
     if (!sent[w]) {
       .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))
@@ -1574,7 +1578,8 @@
 # versus message overhead.
 .EMC_LL_DYN_GRAIN <- 4
 
-.emc_wpool_ll_dynamic <- function(pool, proposals, s, component, n) {
+.emc_wpool_ll_dynamic <- function(pool, proposals, s, component, n,
+                                  varying = NULL) {
   k <- pool$n
   out <- numeric(n)
   pending <- vector("list", k)
@@ -1600,7 +1605,7 @@
     ok <- .emc_wpool_request(
       pool, w, list(kind = "ll", s = s, component = component,
                     notify = TRUE, w = w, generation = generation,
-                    request = issued[w],
+                    request = issued[w], varying = varying,
                     proposals = proposals[rows, , drop = FALSE]))
     if (!ok) {
       .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))

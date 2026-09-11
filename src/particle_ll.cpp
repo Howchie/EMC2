@@ -126,7 +126,8 @@ NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
-                         Rcpp::Nullable<Rcpp::List> marginalise);
+                         Rcpp::Nullable<Rcpp::List> marginalise,
+                         Rcpp::Nullable<Rcpp::LogicalVector> varying);
 
 
 static void update_pt_only(ParamTable& param_table,
@@ -480,7 +481,9 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                List transforms, List pretransforms,
                                Rcpp::Nullable<Rcpp::List> trend,
                                CharacterVector p_types,
-                               int n_trials, int n_particles) {
+                               int n_trials, int n_particles,
+                               Rcpp::Nullable<Rcpp::LogicalVector> varying =
+                                 R_NilValue) {
   PtMapper m;
   m.designs = designs;
   m.bounds = bounds;
@@ -529,10 +532,47 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
   // particles after the first can skip re-mapping/re-transforming them.
   if (n_particles > 1 && !m.trend_runtime) {
     Rcpp::CharacterVector p_names = colnames(particle_matrix);
+    // C10.  A design was called invariant when none of its coefficients appear
+    // in the proposal matrix at all, which is a statement about NAMES.  Under a
+    // blocked proposal most of those named columns hold the current value
+    // repeated -- only the block's own coordinates vary -- and every design
+    // reading one of the repeated ones was being re-mapped per particle for
+    // nothing.
+    //
+    // The mask says which coordinates this call actually varies.  It is passed
+    // in, never sniffed: inferring invariance from columns that happen to hold
+    // equal doubles would silently freeze a coordinate the sampler meant to
+    // move the moment two particles drew the same value.
+    //
+    // It is verified, though, because a wrong mask is a wrong posterior and the
+    // check is O(particles) against mapping's O(particles x trials).
+    std::vector<char> varies(p_names.size(), 1);
+    if (varying.isNotNull()) {
+      Rcpp::LogicalVector vm(varying);
+      if (vm.size() != p_names.size()) {
+        Rcpp::stop("calc_ll_oo: the varying mask has %d entries for %d proposal columns",
+                   (int)vm.size(), (int)p_names.size());
+      }
+      for (int j = 0; j < vm.size(); ++j) {
+        if (Rcpp::LogicalVector::is_na(vm[j]) || vm[j]) continue;
+        const double first = particle_matrix(0, j);
+        for (int r = 1; r < n_particles; ++r) {
+          const double x = particle_matrix(r, j);
+          const bool same = (x == first) ||
+            (Rcpp::NumericVector::is_na(x) && Rcpp::NumericVector::is_na(first));
+          if (!same) {
+            Rcpp::stop("calc_ll_oo: column '%s' is marked unchanged but particle "
+                       "%d holds %g against particle 1's %g",
+                       Rcpp::as<std::string>(p_names[j]).c_str(), r + 1, x, first);
+          }
+        }
+        varies[j] = 0;
+      }
+    }
     std::unordered_set<std::string> sampled_coef_names;
     sampled_coef_names.reserve(p_names.size());
     for (int j = 0; j < p_names.size(); ++j) {
-      sampled_coef_names.insert(Rcpp::as<std::string>(p_names[j]));
+      if (varies[j]) sampled_coef_names.insert(Rcpp::as<std::string>(p_names[j]));
     }
 
     m.invariant_design_mask = Rcpp::LogicalVector(designs.size(), false);
@@ -651,7 +691,8 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
-                         Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue) {
+                         Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue,
+                         Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue) {
   // -------------------------------------------------------------------------
   // Optional coherent marginalization of a shared subject-level parameter
   // (Stage 1: the non-decision time t0 in race/GNG models). When `marginalise`
@@ -708,7 +749,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   if (use_pt_mapping) {
     pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
                         transforms, pretransforms, trend, p_types,
-                        n_trials, n_particles);
+                        n_trials, n_particles, varying);
   }
   ParamTable& param_table_template = pt.table;
   Rcpp::CharacterVector& keep_names = pt.keep_names;

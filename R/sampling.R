@@ -1284,10 +1284,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       lw <- marginal_ll_from_grid(marg_grid)
     } else if(tune$components[length(tune$components)] > 1){
       lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                           component = shared_idx, r_cores = r_cores, s = s)
+                           component = shared_idx, r_cores = r_cores, s = s,
+                           varying = idx[is_shared])
     } else{
       lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                           r_cores = r_cores, s = s)
+                           r_cores = r_cores, s = s, varying = idx[is_shared])
     }
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
@@ -1699,14 +1700,15 @@ check_prop_performance <- function(prop_performance, stage){
 # speed and nothing else.  `s` is what gates the pool: only the subject the
 # workers were started for can be served by them.
 calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1,
-                           s = NULL){
+                           s = NULL, varying = NULL){
   have_pool <- !is.null(s) && !is.null(.emc_pool_state$ll_subject) &&
     identical(s, .emc_pool_state$ll_subject) &&
     isTRUE(.emc_pool_state$ll_pool$alive)
   if (!have_pool) {
     # Without a pool, use the standard likelihood manager.
     return(calc_ll_manager(proposals, dadm = dadm, model = model,
-                           component = component, r_cores = r_cores))
+                           component = component, r_cores = r_cores,
+                           varying = varying))
   }
   # With a pool available the choice is between it and a plain serial call --
   # never the per-call fork, which the pool exists to replace.  Both arms are
@@ -1716,11 +1718,14 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   # the pool itself has won.  See .emc_ll_route_use_dynamic().
   dynamic <- use_pool && .emc_ll_route_use_dynamic()
   started <- proc.time()[["elapsed"]]
-  out <- if (use_pool) .emc_wpool_ll(proposals, s, component, dynamic) else NULL
+  out <- if (use_pool) {
+    .emc_wpool_ll(proposals, s, component, dynamic, varying)
+  } else NULL
   pooled <- !is.null(out)
   if (!pooled) {
     out <- calc_ll_manager(proposals, dadm = dadm, model = model,
-                           component = component, r_cores = 1L)
+                           component = component, r_cores = 1L,
+                           varying = varying)
   }
   el <- proc.time()[["elapsed"]] - started
   if (pooled || !use_pool) {
@@ -1745,8 +1750,17 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   out
 }
 
+# `varying` is the explicit update mask of C10: a logical over `proposals`'
+# columns saying which coordinates this call actually moves.  Under a blocked
+# proposal the rest hold the current value repeated, and a design that reads
+# only repeated coordinates maps to the same column for every particle.
+#
+# It is passed, never inferred.  Two particles that happen to draw the same
+# value for a coordinate the sampler meant to move must not freeze it, so the
+# mask comes from the block structure rather than from comparing doubles. The
+# C++ side verifies what it is told before acting on it.
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
-                            marginalise = NULL){
+                            marginalise = NULL, varying = NULL){
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component, r_cores = r_cores, marginalise = marginalise)
   } else{
@@ -1777,7 +1791,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
                           type = model$c_name, bounds = model$bound,
                           transforms = model$transform, pretransforms = model$pre_transform,
                           p_types = p_types, min_ll = log(1e-10), trend = model$trend,
-                          marginalise = marginalise)
+                          marginalise = marginalise, varying = varying)
       } else {
         idx <- .split_work_indices(nrow(proposals), r_cores)
         lls <- unlist(auto_mclapply(1:r_cores,function(i) {
@@ -1785,7 +1799,8 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
                      designs = designs, type = model$c_name, bounds = model$bound,
                      transforms = model$transform, pretransforms = model$pre_transform,
                      p_types = p_types, min_ll = log(1e-10),
-                     trend = model$trend, marginalise = marginalise)
+                     trend = model$trend, marginalise = marginalise,
+                     varying = varying)
         },mc.cores=r_cores))
       }
     }

@@ -83,9 +83,12 @@ static NumericMatrix marginal_eval_nodes(
         pm(r, t0col) = X(i, k0 + k);
       }
     }
+    // No varying mask: the quadrature rewrites the marginalised coordinate for
+    // every node, so which of the caller's coordinates were blocked says
+    // nothing about which of these vary.
     NumericVector ll = calc_ll_oo(pm, data, constants, designs, type, bounds,
                                   transforms, pretransforms, p_types, min_ll,
-                                  trend, R_NilValue);
+                                  trend, R_NilValue, R_NilValue);
     for (int k = 0; k < mk; ++k)
       for (int i = 0; i < np; ++i) out(i, k0 + k) = ll[k * np + i];
   }

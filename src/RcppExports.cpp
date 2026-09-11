@@ -2851,8 +2851,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // calc_ll_oo
-NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend, Rcpp::Nullable<Rcpp::List> marginalise);
-RcppExport SEXP _EMC2_calc_ll_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP, SEXP marginaliseSEXP) {
+NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend, Rcpp::Nullable<Rcpp::List> marginalise, Rcpp::Nullable<Rcpp::LogicalVector> varying);
+RcppExport SEXP _EMC2_calc_ll_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP, SEXP marginaliseSEXP, SEXP varyingSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2868,7 +2868,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type marginalise(marginaliseSEXP);
-    rcpp_result_gen = Rcpp::wrap(calc_ll_oo(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type varying(varyingSEXP);
+    rcpp_result_gen = Rcpp::wrap(calc_ll_oo(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise, varying));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3616,7 +3617,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_TrendEngine_apply_premap_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_premap_bases, 2},
     {"_EMC2_TrendEngine_apply_pretransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_pretransform_bases, 2},
     {"_EMC2_TrendEngine_apply_posttransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_posttransform_bases, 2},
-    {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 12},
+    {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 13},
     {"_EMC2_pt_prologue_oo", (DL_FUNC) &_EMC2_pt_prologue_oo, 10},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
