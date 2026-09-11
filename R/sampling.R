@@ -331,17 +331,24 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
 # is what C1's corrected `worker_cpu_max` and `queue_delay` exist to provide,
 # and ranking it needs C3 on a quiet machine.  Adding dynamic dispatch
 # unranked would amplify exactly the lifecycle bugs C4 and C5 have just closed.
-# `allow_spare = FALSE` keeps the inner width at exactly what was asked for.
-# The `mcmapply` fallback needs that: each of its children draws its own
-# proposals, and an inner `mclapply` inside the likelihood advances that child's
-# L'Ecuyer stream before it draws again to choose a particle.  Widening the
-# inner budget there would move the sampler's draws, so a fit would stop being
+# `allow_spare` is OFF by default, and that default is a prior decision this
+# commit deliberately does not overturn: "the r_cores = 1 default must not gain
+# inner workers it never asked for", recorded in
+# tests/testthat/test-particle-core-budget.R.
+#
+# The reason turns out to be RNG coupling. Both `mclapply` routes -- start
+# points and the `mcmapply` particle fallback -- have children that draw their
+# own proposals, and an inner `mclapply` inside the likelihood advances that
+# child's L'Ecuyer stream before it draws again to choose a particle. Widening
+# the inner budget there moves the sampler's draws, so a fit stops being
 # reproducible from a fixed seed for a reason that has nothing to do with the
-# model.  The pool route has no such coupling: it splits particles itself and
-# draws nothing.
+# model. Those call sites keep the default.
+#
+# The worker pool has no such coupling: it splits particles itself and draws
+# nothing, so it opts in and that is where the audit's idle cores go.
 .particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L,
                                  total_cores = NULL, blas_threads = NULL,
-                                 allow_spare = TRUE) {
+                                 allow_spare = FALSE) {
   n_subjects <- as.integer(n_subjects)
   n_cores <- max(1L, as.integer(n_cores))
   r_cores <- max(1L, as.integer(r_cores))
@@ -349,10 +356,9 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   # The sampler supplies total_cores for an explicit per-chain allocation.
   if (is.null(total_cores)) {
     if (n_subjects == 1L && n_cores > 1L) {
-      return(list(subject = 1L, likelihood = max(r_cores, n_cores),
-                  blas = NA_integer_))
+      return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
     }
-    return(list(subject = n_cores, likelihood = r_cores, blas = NA_integer_))
+    return(list(subject = n_cores, likelihood = r_cores))
   }
   total_cores <- max(1L, as.integer(total_cores))
   if (is.null(blas_threads)) blas_threads <- .emc_blas_threads()
@@ -362,8 +368,7 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   budget <- max(1L, total_cores %/% blas_threads)
   if (n_subjects == 1L && n_cores > 1L) {
     return(list(subject = 1L,
-                likelihood = min(budget, max(r_cores, n_cores)),
-                blas = blas_threads))
+                likelihood = min(budget, max(r_cores, n_cores))))
   }
   # Keep subject workers times likelihood workers within the chain budget.
   likelihood <- min(r_cores, budget)
@@ -374,7 +379,9 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   if (isTRUE(allow_spare) || r_cores > 1L) {
     likelihood <- max(likelihood, budget %/% subject)
   }
-  list(subject = subject, likelihood = likelihood, blas = blas_threads)
+  # Two elements, as callers have always had: the BLAS width is an input to the
+  # budget, not part of its answer, and `.emc_blas_threads()` reports it.
+  list(subject = subject, likelihood = likelihood)
 }
 
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
@@ -668,9 +675,13 @@ run_stage <- function(pmwgs,
   # Persistent workers, started once for the whole block instead of forked once
   # per iteration.  A clean template loads only this block-constant context and
   # forks the workers without the chain's sample history; see R/chain_pool.R.
+  # The pool is the one route that can take spare capacity safely: it splits a
+  # subject's particles itself and draws no random numbers, so widening the
+  # inner budget cannot move the sampler's draws.
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                        r_cores = r_cores,
-                                       total_cores = n_cores)
+                                       total_cores = n_cores,
+                                       allow_spare = TRUE)
   wpool_ctx <- list(
     data = data, model = .emc_wpool_slim_model(pmwgs$model),
     stage = stage, type = pmwgs$type,
@@ -911,8 +922,7 @@ run_stage <- function(pmwgs,
     # budget here would make the fit irreproducible from a fixed seed.
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
-                                         total_cores = n_cores,
-                                         allow_spare = FALSE)
+                                         total_cores = n_cores)
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,

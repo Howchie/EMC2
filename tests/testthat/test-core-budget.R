@@ -5,7 +5,11 @@
 # remainder was handed out only when inner parallelism had been asked for, so a
 # fit with fewer subjects than cores did not use the machine it was given.
 
-budget <- function(...) EMC2:::.particle_core_budget(..., blas_threads = 1L)
+# Spare capacity is opt-in; see the note in .particle_core_budget about which
+# call sites can take it and why the others cannot.
+budget <- function(...) {
+  EMC2:::.particle_core_budget(..., blas_threads = 1L, allow_spare = TRUE)
+}
 
 test_that("spare cores are used when subjects are the binding constraint", {
   # The audit's own example.
@@ -36,11 +40,14 @@ test_that("the budget is counted in threads, not processes", {
   # budget that counted only processes would oversubscribe by that factor.
   single <- budget(32L, n_cores = 32L, r_cores = 1L, total_cores = 32L)
   four <- EMC2:::.particle_core_budget(32L, n_cores = 32L, r_cores = 1L,
-                                       total_cores = 32L, blas_threads = 4L)
+                                       total_cores = 32L, blas_threads = 4L,
+                                       allow_spare = TRUE)
   expect_identical(single$subject * single$likelihood, 32L)
   expect_lte(four$subject * four$likelihood * 4L, 32L)
   expect_lt(four$subject, single$subject)
-  expect_identical(four$blas, 4L)
+  # The BLAS width is an input to the budget, not part of its answer: callers
+  # have always received exactly two elements and still do.
+  expect_identical(names(four), c("subject", "likelihood"))
 })
 
 test_that("a single subject still gets its particles split", {
@@ -96,14 +103,25 @@ test_that("the mcmapply fallback keeps exactly the inner width it asked for", {
   # fixed seed for a reason unrelated to the model.
   spare <- budget(8L, n_cores = 32L, r_cores = 1L, total_cores = 32L)
   strict <- EMC2:::.particle_core_budget(8L, n_cores = 32L, r_cores = 1L,
-                                         total_cores = 32L, blas_threads = 1L,
-                                         allow_spare = FALSE)
+                                         total_cores = 32L, blas_threads = 1L)
   expect_gt(spare$likelihood, 1L)
   expect_identical(strict$likelihood, 1L)
   expect_identical(strict$subject, spare$subject)
   # An explicit r_cores is still honoured on that route -- the caller asked.
   asked <- EMC2:::.particle_core_budget(8L, n_cores = 32L, r_cores = 4L,
-                                        total_cores = 32L, blas_threads = 1L,
-                                        allow_spare = FALSE)
+                                        total_cores = 32L, blas_threads = 1L)
   expect_gte(asked$likelihood, 4L)
+})
+
+test_that("the default is the contract the prior tests pinned", {
+  # "The r_cores = 1 default must not gain inner workers it never asked for",
+  # from tests/testthat/test-particle-core-budget.R. That decision stands: both
+  # mclapply routes seed their children from mc.cores, so widening the inner
+  # budget there would move the sampler's draws. Only the pool opts in.
+  b <- EMC2:::.particle_core_budget(3L, n_cores = 8L, r_cores = 1L,
+                                    total_cores = 8L, blas_threads = 1L)
+  expect_identical(b$likelihood, 1L)
+  expect_identical(b$subject, 3L)
+  # And the return shape callers have always had.
+  expect_identical(names(b), c("subject", "likelihood"))
 })
