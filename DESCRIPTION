@@ -61,7 +61,8 @@ Suggests:
     vdiffr,
     knitr,
     rmarkdown,
-    DiagrammeR
+    DiagrammeR,
+    RhpcBLASctl
 Config/testthat/edition: 3
 Imports: 
     abind,

@@ -270,8 +270,78 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   return(sampler)
 }
 
+# How many hardware threads the linear-algebra library will use per process.
+#
+# This matters to the budget because it multiplies: eight subject workers each
+# running a four-threaded BLAS is thirty-two threads, not eight, and a budget
+# that counts only processes oversubscribes the machine by that factor.
+#
+# Read once and cached. `RhpcBLASctl` is the supported way to ask, and it is a
+# suggested dependency rather than a required one, so its absence means "assume
+# one" rather than an error -- a wrong guess here costs throughput, never
+# correctness.
+.emc_blas_threads <- function() {
+  cached <- .emc_pool_state$blas_threads
+  if (!is.null(cached)) return(cached)
+  n <- 1L
+  if (requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+    got <- tryCatch(RhpcBLASctl::blas_get_num_procs(), error = function(e) NULL)
+    if (length(got) == 1L && !is.na(got) && got >= 1L) n <- as.integer(got)
+  }
+  .emc_pool_state$blas_threads <- n
+  n
+}
+
+# Set the thread policy at a boundary the library supports, rather than by
+# exporting an environment variable after it has already initialised -- which
+# is read once at load time and silently ignored afterwards.
+#
+# Returns the previous value so a caller can restore it. NULL when there is no
+# supported way to ask, in which case nothing was changed and nothing should be
+# restored.
+.emc_set_blas_threads <- function(n) {
+  if (!requireNamespace("RhpcBLASctl", quietly = TRUE)) return(NULL)
+  n <- max(1L, as.integer(n))
+  previous <- tryCatch(RhpcBLASctl::blas_get_num_procs(), error = function(e) NULL)
+  ok <- tryCatch({ RhpcBLASctl::blas_set_num_threads(n); TRUE },
+                 error = function(e) FALSE)
+  if (!ok) return(NULL)
+  .emc_pool_state$blas_threads <- n
+  previous
+}
+
+# One bounded task budget.
+#
+# C13.  `.particle_core_budget(8, 32, 1, 32)` returned eight subject workers and
+# one likelihood core, leaving twenty-four idle: the remainder was handed out
+# only when inner parallelism had been *asked for*, so a fit with fewer subjects
+# than cores simply did not use the machine.  The remainder now goes to
+# likelihood workers whenever there is one, because splitting a subject's
+# particles is deterministic -- a likelihood draws no random numbers, and
+# tests/testthat/test-audit-differential.R asserts r_cores 1 through 4 give
+# bit-identical results.
+#
+# The budget is bounded in threads, not processes: subject x likelihood x BLAS
+# threads must fit, or eight workers each running a four-threaded BLAS is
+# thirty-two threads against a budget of eight.
+#
+# Static LPT partitioning is retained.  Dynamic whole-subject assignment is the
+# other half of the audit's item and is deliberately not here: it is only worth
+# its dispatch cost where measured tail imbalance exceeds it, that measurement
+# is what C1's corrected `worker_cpu_max` and `queue_delay` exist to provide,
+# and ranking it needs C3 on a quiet machine.  Adding dynamic dispatch
+# unranked would amplify exactly the lifecycle bugs C4 and C5 have just closed.
+# `allow_spare = FALSE` keeps the inner width at exactly what was asked for.
+# The `mcmapply` fallback needs that: each of its children draws its own
+# proposals, and an inner `mclapply` inside the likelihood advances that child's
+# L'Ecuyer stream before it draws again to choose a particle.  Widening the
+# inner budget there would move the sampler's draws, so a fit would stop being
+# reproducible from a fixed seed for a reason that has nothing to do with the
+# model.  The pool route has no such coupling: it splits particles itself and
+# draws nothing.
 .particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L,
-                                 total_cores = NULL) {
+                                 total_cores = NULL, blas_threads = NULL,
+                                 allow_spare = TRUE) {
   n_subjects <- as.integer(n_subjects)
   n_cores <- max(1L, as.integer(n_cores))
   r_cores <- max(1L, as.integer(r_cores))
@@ -279,22 +349,32 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   # The sampler supplies total_cores for an explicit per-chain allocation.
   if (is.null(total_cores)) {
     if (n_subjects == 1L && n_cores > 1L) {
-      return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
+      return(list(subject = 1L, likelihood = max(r_cores, n_cores),
+                  blas = NA_integer_))
     }
-    return(list(subject = n_cores, likelihood = r_cores))
+    return(list(subject = n_cores, likelihood = r_cores, blas = NA_integer_))
   }
   total_cores <- max(1L, as.integer(total_cores))
+  if (is.null(blas_threads)) blas_threads <- .emc_blas_threads()
+  blas_threads <- max(1L, as.integer(blas_threads))
+  # Threads, not processes: whatever the linear-algebra library will run inside
+  # each worker comes out of the same budget.
+  budget <- max(1L, total_cores %/% blas_threads)
   if (n_subjects == 1L && n_cores > 1L) {
     return(list(subject = 1L,
-                likelihood = min(total_cores, max(r_cores, n_cores))))
+                likelihood = min(budget, max(r_cores, n_cores)),
+                blas = blas_threads))
   }
   # Keep subject workers times likelihood workers within the chain budget.
-  likelihood <- min(r_cores, total_cores)
-  subject <- max(1L, min(n_subjects, n_cores, total_cores %/% likelihood))
-  # Allocate any remainder to likelihood workers only when inner parallelism
-  # was requested.
-  if (r_cores > 1L) likelihood <- max(likelihood, total_cores %/% subject)
-  list(subject = subject, likelihood = likelihood)
+  likelihood <- min(r_cores, budget)
+  subject <- max(1L, min(n_subjects, n_cores, budget %/% likelihood))
+  # Spare capacity goes to splitting particles, whether or not inner
+  # parallelism was asked for: there is no reason to leave cores idle when the
+  # subject count is the binding constraint, and the split is deterministic.
+  if (isTRUE(allow_spare) || r_cores > 1L) {
+    likelihood <- max(likelihood, budget %/% subject)
+  }
+  list(subject = subject, likelihood = likelihood, blas = blas_threads)
 }
 
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
@@ -831,7 +911,8 @@ run_stage <- function(pmwgs,
     # budget here would make the fit irreproducible from a fixed seed.
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
-                                         total_cores = n_cores)
+                                         total_cores = n_cores,
+                                         allow_spare = FALSE)
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,
