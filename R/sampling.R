@@ -1786,7 +1786,12 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
       designs <- .oo_expanded_designs(dadm, expand = FALSE)
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
-      if (nrow(proposals) <= r_cores) {
+      # C12.  `nrow(proposals) <= r_cores` sent a serial call into the split
+      # branch whenever there was more than one proposal: with r_cores = 1,
+      # `.split_work_indices` returns all ones, `proposals[idx == 1, , drop =
+      # FALSE]` copies the whole matrix, and `auto_mclapply(1:1, ...)` wraps one
+      # result in a list to immediately unlist it.  One core means one call.
+      if (r_cores <= 1L || nrow(proposals) <= r_cores) {
         lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs,
                           type = model$c_name, bounds = model$bound,
                           transforms = model$transform, pretransforms = model$pre_transform,
