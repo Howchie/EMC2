@@ -6,6 +6,7 @@
 #include <numeric>
 #include <cstring>
 #include "utility_types.h"
+#include "emc_scratch.h"
 using Rcpp::_;
 
 struct DesignEntry {
@@ -34,10 +35,14 @@ struct DesignEntry {
   std::vector<int> cell_rep;
 };
 
-// Above this many design cells the gather stops paying for itself and the
-// per-cell scratch would not fit on the stack; such designs take the plain
-// per-row path.
-static const int EMC2_PT_MAX_CELLS = 256;
+// What a single design entry's cell scratch costs: the mapper holds three
+// accumulators per cell (pre-sum, post-sum and the self-reference snapshot),
+// and the transform and bound lanes hold one each, so the mapper's need is the
+// binding one.  Admission is this against a memory budget -- see
+// emc::cell_scratch_budget() -- rather than a fixed number of cells, because a
+// fixed number is a cliff: at 256 an otherwise identical RDM fit took 113.50 ms
+// on the per-row route against 54.83 ms on this one.
+static const std::size_t EMC2_PT_CELL_SCRATCH_BYTES = 3 * sizeof(double);
 
 // View-based ParamTable: one base matrix + active column indices
 // Invariants:
@@ -54,6 +59,12 @@ struct ParamTable {
 
   std::vector<int> active_cols;  // indices into base/base_names
   std::vector<char> is_active;  // size = base.ncol()
+
+  // Per-call working memory, owned here so it is reused across calls rather
+  // than reallocated per particle, and `mutable` because the transform and
+  // bound lanes take a const table -- scratch is not part of the table's
+  // value, and nothing outside a ScratchFrame can reach it.
+  mutable emc::Scratch scratch;
 
   // fast look-up map
   std::unordered_map<std::string,int> name_to_base_idx;
@@ -380,10 +391,28 @@ struct ParamTable {
         entry.single_cell = (design.nrow() == 1) || (T <= 1);
       }
 
-      // Cell structure: worth exploiting only for a compressed design that
-      // genuinely has fewer rows than trials, and only up to the scratch cap.
+      // Cell structure: worth exploiting when the design genuinely has fewer
+      // rows than trials -- that ratio is the reuse, and it is what every
+      // consumer of `cell_usable` saves, the mapper's arithmetic and the
+      // transform's exp() calls and the bound lane's comparisons alike -- and
+      // only while its scratch fits the budget.  A continuous covariate has one
+      // cell per trial, no reuse, and is refused here by the first test, which
+      // is what keeps the general row route in service for it.
+      //
+      // Deliberately no minimum reuse *ratio*.  At n_cells barely below T the
+      // cell route does nearly the row route's arithmetic and adds a gather,
+      // so there is a regime where it should lose -- but that regime was
+      // already admitted before this commit (a 300-trial design with 299 cells
+      // took the cell route under the old constant too), so imposing a
+      // threshold here would change behaviour this commit has not measured.
+      // WorkingTests/bench_likelihood_prologue.R times the two routes against
+      // each other on identical inputs; that is where a threshold gets decided,
+      // on evidence.
+      const bool cells_fit =
+        static_cast<std::size_t>(design.nrow()) <=
+          emc::cell_scratch_budget() / EMC2_PT_CELL_SCRATCH_BYTES;
       if (!entry.single_cell && !entry.expand_idx.empty() &&
-          design.nrow() < T && design.nrow() <= EMC2_PT_MAX_CELLS) {
+          design.nrow() < T && cells_fit) {
         entry.n_cells = design.nrow();
         entry.cell_rep.assign(entry.n_cells, -1);
         for (int r = 0; r < T; ++r) {
@@ -727,49 +756,70 @@ struct ParamTable {
         // the transform and the bound check can work at cell resolution too.
         if (entry.cell_usable && all_coef_const) {
           const int n_cells = entry.n_cells;
-          double post_val[EMC2_PT_MAX_CELLS];
-          double pre_val[EMC2_PT_MAX_CELLS];
-          double self_val[EMC2_PT_MAX_CELLS];
-          double* outc = &base(0, out_idx);
-          const int* ex = entry.expand_idx.data();
-          for (int c = 0; c < n_cells; ++c) { post_val[c] = 0.0; pre_val[c] = 0.0; }
-          // uses_self reads the pre-clear output column; it is governed by this
-          // same map (only this design writes this column), so cell c's self
-          // value is the one at cell c's representative row.  Snapshot them
-          // before the scatter overwrites the column.
-          if (entry.uses_self) {
-            for (int c = 0; c < n_cells; ++c) {
-              const int rep = entry.cell_rep[c];
-              self_val[c] = (rep >= 0) ? outc[rep] : 0.0;
-            }
+          // Owned, sized to this design, released when the frame ends.  A
+          // refusal here is not a failure: the general per-row route below
+          // produces the same numbers, and taking it is better than proceeding
+          // with a span the arena could not hand out.
+          emc::ScratchFrame frame(scratch);
+          // Three spans, so allow each one an alignment step: the arena is
+          // 8-aligned at the start of an outermost frame, but reserving the
+          // exact figure would leave nothing for padding if that ever changed.
+          const std::size_t want =
+            static_cast<std::size_t>(n_cells) * EMC2_PT_CELL_SCRATCH_BYTES +
+            3 * alignof(double);
+          double* post_val = nullptr;
+          double* pre_val = nullptr;
+          double* self_val = nullptr;
+          if (frame.reserve(want)) {
+            post_val = frame.take<double>(n_cells);
+            pre_val = frame.take<double>(n_cells);
+            self_val = frame.take<double>(n_cells);
           }
-          // Loop order and accumulation order deliberately mirror the general
-          // per-row path below, coefficient-major into a zeroed accumulator, so
-          // the two routes fold the same products in the same sequence.
-          for (int j = 0; j < K; ++j) {
-            const int cidx = entry.coef_idx[j];
-            if (cidx < 0) continue;
-            const bool is_self = entry.uses_self && cidx == out_idx;
-            const double cv = is_self ? 0.0 : base(0, cidx);
-            double* acc = (entry.split_transform && entry.coef_in_pre_sum[j])
-              ? pre_val : post_val;
-            const double* dcol = &design(0, j);
-            if (is_self) {
-              for (int c = 0; c < n_cells; ++c) acc[c] += self_val[c] * dcol[c];
-            } else {
-              for (int c = 0; c < n_cells; ++c) acc[c] += cv * dcol[c];
+          if (post_val != nullptr && pre_val != nullptr && self_val != nullptr) {
+            double* outc = &base(0, out_idx);
+            const int* ex = entry.expand_idx.data();
+            for (int c = 0; c < n_cells; ++c) { post_val[c] = 0.0; pre_val[c] = 0.0; }
+            // uses_self reads the pre-clear output column; it is governed by this
+            // same map (only this design writes this column), so cell c's self
+            // value is the one at cell c's representative row.  Snapshot them
+            // before the scatter overwrites the column.
+            if (entry.uses_self) {
+              for (int c = 0; c < n_cells; ++c) {
+                const int rep = entry.cell_rep[c];
+                self_val[c] = (rep >= 0) ? outc[rep] : 0.0;
+              }
             }
-          }
-          if (entry.split_transform) {
-            for (int c = 0; c < n_cells; ++c) {
-              post_val[c] = apply_split_transform_scalar(
-                pre_val[c], entry.split_code, entry.split_lower,
-                entry.split_upper) + post_val[c];
+            // Loop order and accumulation order deliberately mirror the general
+            // per-row path below, coefficient-major into a zeroed accumulator, so
+            // the two routes fold the same products in the same sequence.
+            for (int j = 0; j < K; ++j) {
+              const int cidx = entry.coef_idx[j];
+              if (cidx < 0) continue;
+              const bool is_self = entry.uses_self && cidx == out_idx;
+              const double cv = is_self ? 0.0 : base(0, cidx);
+              double* acc = (entry.split_transform && entry.coef_in_pre_sum[j])
+                ? pre_val : post_val;
+              const double* dcol = &design(0, j);
+              if (is_self) {
+                for (int c = 0; c < n_cells; ++c) acc[c] += self_val[c] * dcol[c];
+              } else {
+                for (int c = 0; c < n_cells; ++c) acc[c] += cv * dcol[c];
+              }
             }
+            if (entry.split_transform) {
+              for (int c = 0; c < n_cells; ++c) {
+                post_val[c] = apply_split_transform_scalar(
+                  pre_val[c], entry.split_code, entry.split_lower,
+                  entry.split_upper) + post_val[c];
+              }
+            }
+            for (int r = 0; r < T; ++r) outc[r] = post_val[ex[r]];
+            col_cell[out_idx] = i;
+            continue;
           }
-          for (int r = 0; r < T; ++r) outc[r] = post_val[ex[r]];
-          col_cell[out_idx] = i;
-          continue;
+          // The arena refused: fall through to the general per-row route,
+          // which produces the same numbers more slowly.  The frame releases
+          // here, on the way out of this scope.
         }
       }
 

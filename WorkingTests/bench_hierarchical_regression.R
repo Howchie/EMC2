@@ -25,7 +25,10 @@
 #
 # Environment:
 #
-#   EMC_CASES       case or group names, comma separated, or "all" (smoke)
+#   EMC_CASES       case or group names, comma separated, or "all" (smoke).
+#                   Groups: smoke, size, stress, cores, particles, chains.
+#                   `stress` is the P = 250 mapper probe and is slow by
+#                   construction -- see the registry note.
 #   EMC_MODEL       RDM (default), LBA, BAwL or DDM
 #   EMC_LIB         library to load EMC2 from
 #   EMC_ITER_SCALE  multiplies every stage's iteration count (1)
@@ -175,13 +178,30 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
     .case("smoke", "smoke", subjects = 8L, pars = 8L, chains = 2L,
           cores_per_chain = 2L))
   # N and P together: the audit asks for N = 8/32/140+ against P ~ 8/64/250+.
+  #
+  # Split into two groups, because they are not the same kind of measurement.
+  # `size` is what a real fit looks like: 140 subjects at P = 8 runs at 0.65 s
+  # an iteration here, which is ~22 minutes for a full fit, and that matches
+  # what people actually wait for.
+  #
+  # `stress` is P = 250, and it is not a design anyone fits.  Getting an exact
+  # parameter count out of one factor means 244 levels, so `v` has 245 columns
+  # and 488 design rows and each subject sees a design cell about 1.5 times.
+  # It is here because it is dominated by one specific defect -- above 256 cells
+  # the mapper runs at trial resolution, so a single subject-iteration is
+  # ~790 particles x 245 coefficients x 1464 rows, 283 million multiply-adds
+  # before any likelihood at all -- which is what C7 and C8 remove.  Read it as
+  # a probe of the mapper, never as a fit anybody would run, and expect a case
+  # to take tens of minutes.
   for (n in c(8L, 32L, 140L)) {
-    for (p in c(8L, 64L, 250L)) {
+    for (p in c(8L, 64L)) {
       # The name follows the width the model can actually reach, so a case
-      # called n8_p250 always has 250 parameters in it.
+      # called n8_p64 always has 64 parameters in it.
       out[[length(out) + 1L]] <- .case(NULL, "size", subjects = n, pars = p,
                                        chains = 2L, cores_per_chain = 4L)
     }
+    out[[length(out) + 1L]] <- .case(NULL, "stress", subjects = n, pars = 250L,
+                                     chains = 2L, cores_per_chain = 4L)
   }
   # Core budget at a fixed shape.  One chain, so `cores_per_chain` is the only
   # thing varying and the chains are not competing for the same cores.
@@ -566,6 +586,21 @@ if (PROFILE) {
   options(emc2.sampler_profile = TRUE, emc2.sampler_profile_expensive = TRUE)
 }
 
+# Written after every case, not at the end.  A size grid is measured in hours,
+# and a run that has to be interrupted must still leave behind everything it
+# already paid for.
+.save <- function(results) {
+  if (!length(results)) return(invisible(NULL))
+  saveRDS(list(label = LABEL, model = MODEL, seed = SEED, iters = ITERS,
+               step = STEP,
+               summary = do.call(rbind, lapply(results, .summary_row)),
+               results = results, complete = length(results) == n_expected,
+               detected_cores = parallel::detectCores(), when = Sys.time()),
+          OUT)
+  invisible(NULL)
+}
+
+n_expected <- REPS * length(cases)
 results <- list()
 for (rep in seq_len(REPS)) {
   for (cs in cases) {
@@ -573,6 +608,7 @@ for (rep in seq_len(REPS)) {
     res$rep <- rep
     .report_case(res)
     results[[length(results) + 1L]] <- res
+    .save(results)
   }
 }
 
@@ -592,11 +628,7 @@ if (REPS > 1L) {
       else "identical posterior checksums across reps", "\n", sep = "")
 }
 
-saveRDS(list(label = LABEL, model = MODEL, seed = SEED, iters = ITERS,
-             step = STEP, summary = rows, results = results,
-             detected_cores = parallel::detectCores(),
-             when = Sys.time()),
-        OUT)
+.save(results)
 cat("\nwritten ", OUT, "\n", sep = "")
 
 if (nzchar(BASELINE)) .compare(rows, BASELINE)

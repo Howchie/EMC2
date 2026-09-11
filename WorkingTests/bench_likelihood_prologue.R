@@ -42,7 +42,10 @@ cpu <- function(expr, reps = REPS) {
 }
 
 # --- fixtures --------------------------------------------------------------
-make_fixture <- function(n_trials, censor_frac = 0) {
+# `cells` gives a covariate that many distinct values, which is how a design is
+# driven to a chosen number of design rows without widening the parameter
+# vector -- the shape the design-cell path exists for.
+make_fixture <- function(n_trials, censor_frac = 0, cells = NULL) {
   set.seed(1)
   d <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1L], ]
   d <- d[rep(seq_len(nrow(d)), length.out = n_trials), , drop = FALSE]
@@ -54,9 +57,12 @@ make_fixture <- function(n_trials, censor_frac = 0) {
     d$R[cens] <- NA
     d$UC <- 2.0
   }
+  if (!is.null(cells)) d$x <- rep_len(seq_len(cells), nrow(d)) / 1000
   rownames(d) <- NULL
   des <- design(data = d, model = LBA, matchfun = function(x) x$S == x$lR,
-                formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1),
+                formula = if (is.null(cells)) {
+                  list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1)
+                } else list(v ~ x, B ~ E, A ~ 1, t0 ~ 1),
                 constants = c(sv = log(1)))
   emc <- make_emc(d, des, n_chains = 1, compress = TRUE,
                   rt_resolution = NULL, type = "single")
@@ -119,4 +125,41 @@ for (np in c(1L, 2L, 5L, 10L, 25L, NP)) {
            reps = max(3L, as.integer(REPS * NP / np / 4)))
   cat(sprintf("  %4d particles  %8.2f ms  (%.3f ms/particle)\n",
               np, 1000 * t, 1000 * t / np))
+}
+
+# --- the design-cell route against the general row route -------------------
+# The audit's identical-input probe, and C7's gate.  Both routes produce the
+# same numbers -- tests/testthat/test-audit-mapper-equivalence.R asserts that
+# bit-for-bit -- so the only thing that varies here is which one runs.
+#
+# It used to have to be provoked by a cell COUNT: 256 cells took the cell path
+# and 257 fell off a cliff onto the row path, for 113.50 ms against 54.83 ms.
+# The count is gone, so the probe sets the scratch budget to zero instead,
+# which refuses every design its cell scratch and drives mapping, transforms
+# and bounds onto the row route on demand -- at any width, not just above 256.
+if (exists("emc_pt_cell_budget", envir = asNamespace("EMC2"))) {
+  budget <- EMC2:::emc_pt_cell_budget
+  cat("\ncell route vs row route (identical inputs, identical results):\n")
+  default <- budget()
+  on.exit(budget(default), add = TRUE)
+  for (cells in c(64L, 255L, 257L, 1024L, 4096L)) {
+    fx_cell <- make_fixture(NT, cells = cells)
+    t_cell <- cpu(EMC2:::calc_ll_manager(fx_cell$prop, fx_cell$dadm,
+                                         fx_cell$model, r_cores = 1))
+    ll_cell <- EMC2:::calc_ll_manager(fx_cell$prop, fx_cell$dadm,
+                                      fx_cell$model, r_cores = 1)
+    budget(0)
+    # A fresh fixture: the design plan is decided once per table, when it is
+    # built, so the budget has to be in force before that.
+    fx_row <- make_fixture(NT, cells = cells)
+    t_row <- cpu(EMC2:::calc_ll_manager(fx_row$prop, fx_row$dadm,
+                                        fx_row$model, r_cores = 1))
+    ll_row <- EMC2:::calc_ll_manager(fx_row$prop, fx_row$dadm,
+                                     fx_row$model, r_cores = 1)
+    budget(default)
+    cat(sprintf("  %5d cells   cell %8.2f ms   row %8.2f ms   %5.2fx   %s\n",
+                cells, 1000 * t_cell, 1000 * t_row, t_row / t_cell,
+                if (identical(ll_cell, ll_row)) "identical" else "RESULTS MOVED"))
+  }
+  budget(default)
 }

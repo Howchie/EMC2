@@ -13,6 +13,17 @@ EMC2_call_custom_trend <- function(trend_pars, input, funptrSEXP) {
     .Call(`_EMC2_EMC2_call_custom_trend`, trend_pars, input, funptrSEXP)
 }
 
+#' Per-design cell scratch budget, in bytes
+#'
+#' Reads the budget; with a value, sets it and returns the previous one. The
+#' setter exists so a test can drive a design onto the general row route
+#' without building one with hundreds of thousands of cells.
+#'
+#' @noRd
+emc_pt_cell_budget <- function(bytes = NULL) {
+    .Call(`_EMC2_emc_pt_cell_budget`, bytes)
+}
+
 sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm) {
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }

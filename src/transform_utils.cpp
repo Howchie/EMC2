@@ -121,22 +121,29 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
     // verdict is settled by n_cells comparisons; and when they all pass (the
     // usual case) the spec cannot change any row and is skipped entirely.
     if (const DesignEntry* ce = pt.col_cell_entry(col_idx)) {
-      bool ok_cell[EMC2_PT_MAX_CELLS];
-      bool any_bad = false;
-      for (int c = 0; c < ce->n_cells; ++c) {
-        const int rep = ce->cell_rep[c];
-        if (rep < 0) { ok_cell[c] = true; continue; }   // no trial reads this cell
-        const double val = col[rep];
-        bool ok = (val > min_v && val < max_v);
-        for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
-        ok_cell[c] = ok;
-        if (!ok) any_bad = true;
+      // One verdict per cell rather than per trial, in memory sized to the
+      // design instead of to a constant.  A refusal falls through to the
+      // per-row route below, which reaches the same verdicts.
+      emc::ScratchFrame frame(pt.scratch);
+      char* ok_cell = frame.reserve(static_cast<std::size_t>(ce->n_cells))
+        ? frame.take<char>(ce->n_cells) : nullptr;
+      if (ok_cell != nullptr) {
+        bool any_bad = false;
+        for (int c = 0; c < ce->n_cells; ++c) {
+          const int rep = ce->cell_rep[c];
+          if (rep < 0) { ok_cell[c] = 1; continue; }   // no trial reads this cell
+          const double val = col[rep];
+          bool ok = (val > min_v && val < max_v);
+          for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+          ok_cell[c] = ok ? 1 : 0;
+          if (!ok) any_bad = true;
+        }
+        if (any_bad) {
+          const int* ex = ce->expand_idx.data();
+          for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) result[i] = false;
+        }
+        continue;
       }
-      if (any_bad) {
-        const int* ex = ce->expand_idx.data();
-        for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) result[i] = false;
-      }
-      continue;
     }
 
     for (int i = 0; i < nrows; ++i) {
@@ -192,22 +199,26 @@ void c_do_bound_pt_from_into(const ParamTable& pt,
     }
 
     if (const DesignEntry* ce = pt.col_cell_entry(col_idx)) {
-      bool ok_cell[EMC2_PT_MAX_CELLS];
-      bool any_bad = false;
-      for (int c = 0; c < ce->n_cells; ++c) {
-        const int rep = ce->cell_rep[c];
-        if (rep < 0) { ok_cell[c] = true; continue; }
-        const double val = col[rep];
-        bool ok = (val > min_v && val < max_v);
-        for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
-        ok_cell[c] = ok;
-        if (!ok) any_bad = true;
+      emc::ScratchFrame frame(pt.scratch);
+      char* ok_cell = frame.reserve(static_cast<std::size_t>(ce->n_cells))
+        ? frame.take<char>(ce->n_cells) : nullptr;
+      if (ok_cell != nullptr) {
+        bool any_bad = false;
+        for (int c = 0; c < ce->n_cells; ++c) {
+          const int rep = ce->cell_rep[c];
+          if (rep < 0) { ok_cell[c] = 1; continue; }
+          const double val = col[rep];
+          bool ok = (val > min_v && val < max_v);
+          for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
+          ok_cell[c] = ok ? 1 : 0;
+          if (!ok) any_bad = true;
+        }
+        if (any_bad) {
+          const int* ex = ce->expand_idx.data();
+          for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) res[i] = FALSE;
+        }
+        continue;
       }
-      if (any_bad) {
-        const int* ex = ce->expand_idx.data();
-        for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) res[i] = FALSE;
-      }
-      continue;
     }
 
     for (int i = 0; i < nrows; ++i) {
@@ -260,14 +271,20 @@ void c_do_transform_pt(ParamTable& pt,
         break;
       }
       if (ce) {
-        double v[EMC2_PT_MAX_CELLS];
-        for (int k = 0; k < ce->n_cells; ++k) {
-          const int rep = ce->cell_rep[k];
-          v[k] = (rep >= 0) ? lw + std::exp(col[rep]) : 0.0;
+        // n_cells exp() calls instead of nrow of them.  A refusal falls
+        // through to the per-row loop below, which computes the same values.
+        emc::ScratchFrame frame(pt.scratch);
+        double* v = frame.reserve(static_cast<std::size_t>(ce->n_cells) * sizeof(double) + alignof(double))
+          ? frame.take<double>(ce->n_cells) : nullptr;
+        if (v != nullptr) {
+          for (int k = 0; k < ce->n_cells; ++k) {
+            const int rep = ce->cell_rep[k];
+            v[k] = (rep >= 0) ? lw + std::exp(col[rep]) : 0.0;
+          }
+          const int* ex = ce->expand_idx.data();
+          for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+          break;
         }
-        const int* ex = ce->expand_idx.data();
-        for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
-        break;
       }
       for (int i = 0; i < nrow; ++i) col[i] = lw + std::exp(col[i]);
       break;
@@ -280,14 +297,18 @@ void c_do_transform_pt(ParamTable& pt,
         break;
       }
       if (ce) {
-        double v[EMC2_PT_MAX_CELLS];
-        for (int k = 0; k < ce->n_cells; ++k) {
-          const int rep = ce->cell_rep[k];
-          v[k] = (rep >= 0) ? lw + range * pnorm_std(col[rep]) : 0.0;
+        emc::ScratchFrame frame(pt.scratch);
+        double* v = frame.reserve(static_cast<std::size_t>(ce->n_cells) * sizeof(double) + alignof(double))
+          ? frame.take<double>(ce->n_cells) : nullptr;
+        if (v != nullptr) {
+          for (int k = 0; k < ce->n_cells; ++k) {
+            const int rep = ce->cell_rep[k];
+            v[k] = (rep >= 0) ? lw + range * pnorm_std(col[rep]) : 0.0;
+          }
+          const int* ex = ce->expand_idx.data();
+          for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+          break;
         }
-        const int* ex = ce->expand_idx.data();
-        for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
-        break;
       }
       for (int i = 0; i < nrow; ++i) {
         col[i] = lw + range * pnorm_std(col[i]);

@@ -31,11 +31,14 @@ expect_mapper_agrees <- function(fx, designs = NULL, label = "") {
 
 # --- the cell-count cutoff --------------------------------------------------
 
-test_that("mapping agrees across the 256-cell cutoff", {
-  # src/ParamTable.h fixes EMC2_PT_MAX_CELLS at 256, and init_design_plan admits
-  # the design-cell path only at or below it.  Above the cap, mapping falls back
-  # to coefficient-by-trial loops and transforms/bounds fall back to row
-  # resolution.  Both routes are correct; this pins that they stay that way.
+test_that("mapping agrees across the old 256-cell cutoff", {
+  # `EMC2_PT_MAX_CELLS = 256` used to be the admission test for the design-cell
+  # path, and it was a cliff: above it, mapping fell back to
+  # coefficient-by-trial loops and transforms and bounds fell back to row
+  # resolution, for 113.50 ms against 54.83 ms on identical results.  C7
+  # replaced it with a memory budget, so all three of these now take the same
+  # route -- but they must still agree with the independent reference, and this
+  # is where a regression that reintroduced a count would show up.
   for (cells in c(255L, 256L, 257L)) {
     fx <- audit_fixture("RDM", n_trials = 600L, n_particles = 4L, cells = cells)
     expect_equal(nrow(audit_designs(fx)$v), cells)
@@ -51,11 +54,14 @@ test_that("mapping agrees far above the cutoff", {
   expect_mapper_agrees(fx, label = "cells = 1500")
 })
 
-test_that("crossing the cutoff on identical inputs changes no likelihood", {
+test_that("an unreferenced design row changes no likelihood", {
   # The audit's stricter probe.  Append an *unused* row to a 256-row design:
   # `expand` never references it, so every trial, particle and mapped value is
-  # unchanged and only the cell count moves.  Any difference between the two
-  # arms is therefore attributable to the route, not to the model.
+  # unchanged and only the cell count moves.  Before C7 this crossed the
+  # admission cliff and so compared the two routes; it now compares the cell
+  # route with itself, which is still worth pinning -- a design row nobody reads
+  # must not be able to move a number -- and the route comparison has moved to
+  # the budget test below, where it can be made on demand.
   fx <- audit_fixture("RDM", n_trials = 800L, n_particles = 6L, cells = 256L)
   a <- audit_ll_args(fx)
   expect_equal(nrow(a$designs$v), 256L)
@@ -86,6 +92,72 @@ test_that("the cutoff probe also holds with a wide parameter vector", {
   b <- audit_pad_designs(a, "v", 1L)
   expect_bit_identical(audit_call_ll(fx, b), audit_call_ll(fx, a),
                        "wide design across the cutoff")
+})
+
+# --- the cell scratch budget ------------------------------------------------
+
+test_that("the row route and the cell route are the same numbers", {
+  # C7's gate.  The cell path is an optimisation: it must be indistinguishable
+  # from computing every trial's coefficients one at a time.  Setting the
+  # budget to zero refuses every design its cell scratch and drives the whole
+  # pipeline -- mapping, transforms and bounds -- onto the general row route,
+  # which is the comparison the old 256-cell cliff used to make by accident.
+  on.exit(EMC2:::emc_pt_cell_budget(EMC2:::emc_pt_cell_budget()), add = TRUE)
+  for (cells in c(8L, 255L, 256L, 257L, 1500L)) {
+    fx <- audit_fixture("RDM", n_trials = 600L, n_particles = 4L, cells = cells)
+    with_cells <- audit_prologue(fx)$pars
+    ll_cells <- audit_ll_direct(fx)
+    expect_informative_ll(fx, ll_cells, paste("cells =", cells))
+
+    old <- EMC2:::emc_pt_cell_budget(0)
+    on.exit(EMC2:::emc_pt_cell_budget(old), add = TRUE)
+    # A fresh fixture, because the design plan is decided once per table and
+    # the budget is read when it is built.
+    fy <- audit_fixture("RDM", n_trials = 600L, n_particles = 4L, cells = cells)
+    with_rows <- audit_prologue(fy)$pars
+    ll_rows <- audit_ll_direct(fy)
+    EMC2:::emc_pt_cell_budget(old)
+
+    expect_bit_identical(with_rows, with_cells, paste("mapped pars, cells =", cells))
+    expect_bit_identical(ll_rows, ll_cells, paste("likelihood, cells =", cells))
+  }
+})
+
+test_that("the budget is a memory limit that round-trips", {
+  # It is a number of bytes, not a number of cells: what it admits depends on
+  # what each cell costs, which is why nothing outside ParamTable.h has to know
+  # a cell count.
+  default <- EMC2:::emc_pt_cell_budget()
+  on.exit(EMC2:::emc_pt_cell_budget(default), add = TRUE)
+  expect_gt(default, 0)
+  # Big enough that no design anyone fits is refused: three doubles per cell,
+  # so the default admits hundreds of thousands of them.
+  expect_gt(default / 24, 1e5)
+  # The setter returns the previous value, so a caller can restore it.
+  expect_identical(EMC2:::emc_pt_cell_budget(4096), default)
+  expect_identical(EMC2:::emc_pt_cell_budget(default), 4096)
+  expect_identical(EMC2:::emc_pt_cell_budget(), default)
+  # And it refuses nonsense rather than silently taking it.
+  expect_error(EMC2:::emc_pt_cell_budget(-1), "non-negative")
+  expect_error(EMC2:::emc_pt_cell_budget(c(1, 2)), "one finite")
+  expect_error(EMC2:::emc_pt_cell_budget(NaN), "finite")
+  expect_identical(EMC2:::emc_pt_cell_budget(), default)
+})
+
+test_that("a design too wide for the budget still maps correctly", {
+  # The budget refuses, the general route runs, and the answer is the same.
+  # This is the case the old constant made unreachable without building a
+  # design of a few hundred thousand cells.
+  default <- EMC2:::emc_pt_cell_budget()
+  on.exit(EMC2:::emc_pt_cell_budget(default), add = TRUE)
+  fx <- audit_fixture("RDM", n_trials = 600L, n_particles = 3L, cells = 300L)
+  want <- audit_prologue(fx)$pars
+  # Room for 100 cells at three doubles each: a 300-cell design does not fit.
+  EMC2:::emc_pt_cell_budget(100 * 24)
+  fy <- audit_fixture("RDM", n_trials = 600L, n_particles = 3L, cells = 300L)
+  expect_bit_identical(audit_prologue(fy)$pars, want, "300 cells over a 100-cell budget")
+  expect_mapper_agrees(fy, label = "300 cells over a 100-cell budget")
+  EMC2:::emc_pt_cell_budget(default)
 })
 
 # --- constants --------------------------------------------------------------
