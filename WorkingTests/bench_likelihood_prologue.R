@@ -163,3 +163,25 @@ if (exists("emc_pt_cell_budget", envir = asNamespace("EMC2"))) {
   }
   budget(default)
 }
+
+# --- kernel reuse: is there arithmetic worth hoisting? ---------------------
+# C9's decision input.  A subexpression that reads a known set of parameter
+# columns is constant exactly on the joint partition of those columns, so
+# "recomputed per trial" against "distinct values" is a ratio, not a guess.
+# Near 1 means specialising that model would add indirection for nothing.
+if (exists("emc_kernel_stats", envir = asNamespace("EMC2"))) {
+  cat("\nkernel reuse (rows recomputed / distinct values):\n")
+  for (cells in c(4L, 16L, 64L, 256L)) {
+    fx <- make_fixture(NT, cells = cells)
+    EMC2:::emc_kernel_stats_reset()
+    EMC2:::emc_kernel_stats(TRUE)
+    invisible(EMC2:::calc_ll_manager(fx$prop, fx$dadm, fx$model, r_cores = 1))
+    EMC2:::emc_kernel_stats(FALSE)
+    st <- EMC2:::emc_kernel_stats_read()
+    if (!nrow(st)) { cat(sprintf("  %5d cells   not measured\n", cells)); next }
+    cat(sprintf("  %5d cells   %10.0f rows  %8.0f distinct  %7.1fx reuse  kernel %7.2f ms\n",
+                cells, st$rows[1], st$cells[1], st$rows[1] / st$cells[1],
+                1000 * st$seconds[1]))
+  }
+  EMC2:::emc_kernel_stats_reset()
+}

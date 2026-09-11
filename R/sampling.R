@@ -817,6 +817,7 @@ run_stage <- function(pmwgs,
       if (!is.null(it$rejects)) {
         stage_rejects$particle <- stage_rejects$particle + it$rejects
       }
+      iter_kernel <- it$kernel
       # Re-balance from what the subjects actually cost this iteration: trial
       # counts are only a proxy, and the adaptive particle number drifts.
       # Floor rather than discard: a subject whose CPU time lands under the
@@ -857,6 +858,9 @@ run_stage <- function(pmwgs,
     # The group step runs in the master, so its failures are on this process's
     # counter.  Read the difference every iteration, not only when profiling:
     # the stage summary has to be able to say what happened in an ordinary run.
+    if (!exists("iter_kernel", inherits = FALSE) || is.null(iter_kernel)) {
+      iter_kernel <- c(rows = NA_real_, cells = NA_real_, seconds = NA_real_)
+    }
     gibbs_delta <- .emc_reject_delta(gibbs_rejects, "gibbs")
     gibbs_rejects <- .emc_reject_counts("gibbs")
     stage_rejects$gibbs <- stage_rejects$gibbs + gibbs_delta
@@ -920,6 +924,9 @@ run_stage <- function(pmwgs,
         wire_bytes = pp$wire_bytes,
         private_memory = mem$bytes,
         private_memory_method = mem$method,
+        kernel_rows = unname(iter_kernel[["rows"]]),
+        kernel_cells = unname(iter_kernel[["cells"]]),
+        kernel_seconds = unname(iter_kernel[["seconds"]]),
         fallback_workers = pp$fallback_workers,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded),

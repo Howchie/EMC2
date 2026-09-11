@@ -129,6 +129,17 @@
       .emc_profile_field("private_memory_method", "character", "memory", "",
                          desc = "how private_memory was obtained"),
 
+      # -- kernel reuse (opt-in: emc_kernel_stats(TRUE)) ---------------------
+      # How much of a model kernel's arithmetic is recomputed per trial that a
+      # cell-resolution version would compute once.  `rows / cells` is the
+      # reuse available; near 1 means there is nothing to hoist.
+      .emc_profile_field("kernel_rows", "numeric", "kernel", "count",
+                         desc = "per-trial evaluations of the reusable subexpression"),
+      .emc_profile_field("kernel_cells", "numeric", "kernel", "count",
+                         desc = "evaluations the same subexpression needs at cell resolution"),
+      .emc_profile_field("kernel_seconds", "numeric", "kernel", "s",
+                         desc = "wall time inside the model kernel"),
+
       # -- health -----------------------------------------------------------
       .emc_profile_field("fallback_subjects", "integer", "health", "count",
                          desc = "subjects recomputed in the master after a failure"),
@@ -457,6 +468,30 @@
 # Counters live in the process that caught the error, so a worker's counts must
 # travel back in its reply.  Snapshot before the work, difference after.
 # Every source's totals at once, in the shape `.emc_failure_summary()` reads.
+# Kernel reuse totals, summed over whatever models ran.  NA when the C++
+# counters are not compiled in or instrumentation was never switched on, so a
+# profile from an ordinary run carries no kernel columns rather than zeros that
+# would read as "measured, and there is no reuse".
+.emc_kernel_totals <- function() {
+  if (!exists("emc_kernel_stats_read", envir = asNamespace("EMC2"),
+              inherits = FALSE)) {
+    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
+  }
+  st <- tryCatch(emc_kernel_stats_read(), error = function(e) NULL)
+  if (is.null(st) || !nrow(st)) {
+    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
+  }
+  c(rows = sum(st$rows), cells = sum(st$cells), seconds = sum(st$seconds))
+}
+
+.emc_kernel_delta <- function(before) {
+  now <- .emc_kernel_totals()
+  if (anyNA(now) || anyNA(before)) {
+    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
+  }
+  now - before
+}
+
 .emc_reject_counts_all <- function() {
   counts <- .emc_profile_state$rejects
   if (is.null(counts)) list() else counts
@@ -613,6 +648,21 @@
                 if (length(meth)) meth[[1L]] else "unknown",
                 .emc_profile_fmt_bytes(max(full$private_memory, na.rm = TRUE)),
                 sum(!is.na(full$private_memory)), nrow(full)))
+  }
+
+  kr <- m("kernel_rows")
+  kc <- m("kernel_cells")
+  if (!is.na(kr) && !is.na(kc) && kc > 0) {
+    say("\nkernel reuse per iteration\n")
+    say(sprintf("  %-20s %10.0f   per-trial evaluations\n", "kernel_rows", kr))
+    say(sprintf("  %-20s %10.0f   at cell resolution\n", "kernel_cells", kc))
+    say(sprintf("  %-20s %10.1fx  (1.0 means nothing to hoist)\n", "reuse", kr / kc))
+    ks <- m("kernel_seconds")
+    if (!is.na(ks)) {
+      say(sprintf("  %-20s %10.2f ms  %s\n", "kernel_seconds", 1000 * ks,
+                  if (!is.na(tot) && tot > 0) sprintf("%5.1f%% of the iteration",
+                                                      100 * ks / tot) else ""))
+    }
   }
 
   health <- Filter(function(f) f$group == "health", .emc_profile_schema)

@@ -1460,6 +1460,7 @@
   t_recv <- Sys.time()
   w_started <- proc.time()
   rejects_before <- .emc_reject_counts("particle")
+  kernel_before <- .emc_kernel_totals()
   for (k in seq_along(subs)) {
     s <- subs[k]
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
@@ -1492,7 +1493,11 @@
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
        elapsed = unname(w_spent[["elapsed"]]),
-       rejects = .emc_reject_delta(rejects_before, "particle"))
+       rejects = .emc_reject_delta(rejects_before, "particle"),
+       # Kernel reuse is measured where the kernel runs, so like the rejection
+       # counts it travels back with the reply rather than being read in the
+       # master, which never called it.
+       kernel = .emc_kernel_delta(kernel_before))
 })
 
 # With one subject, distribute proposal rows across persistent workers. Likelihood
@@ -1858,6 +1863,7 @@
   fallback_subjects <- 0L
   rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                              .EMC_REJECT_CLASSES)
+  kernel <- c(rows = NA_real_, cells = NA_real_, seconds = NA_real_)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   sendable <- was_alive && !is.null(shared_file)
   if (sendable) {
@@ -1891,6 +1897,9 @@
     pm_settings[subs] <<- res$pm
     seeds[subs] <<- res$seeds
     if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
+    if (!is.null(res$kernel) && !anyNA(res$kernel)) {
+      kernel <<- if (anyNA(kernel)) res$kernel else kernel + res$kernel
+    }
     # A pool that was already dead on entry (a single worker, or Windows) runs
     # every share in the master by design; that is the serial route, not a
     # fallback, and counting it would report a healthy fit as failing.
@@ -2061,7 +2070,7 @@
   # numerical rejection has to be visible in an ordinary run, not only in a
   # profiled one, and it is four integers.
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       alive = pool$alive, rejects = rejects,
+       alive = pool$alive, rejects = rejects, kernel = kernel,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,

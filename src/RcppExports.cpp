@@ -375,6 +375,47 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_kernel_stats
+bool emc_kernel_stats(Rcpp::Nullable<Rcpp::LogicalVector> on);
+RcppExport SEXP _EMC2_emc_kernel_stats(SEXP onSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type on(onSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_kernel_stats(on));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_kernel_stats_read
+Rcpp::DataFrame emc_kernel_stats_read();
+RcppExport SEXP _EMC2_emc_kernel_stats_read() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(emc_kernel_stats_read());
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_kernel_stats_reset
+void emc_kernel_stats_reset();
+RcppExport SEXP _EMC2_emc_kernel_stats_reset() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    emc_kernel_stats_reset();
+    return R_NilValue;
+END_RCPP
+}
+// emc_kernel_reuse_columns
+Rcpp::CharacterVector emc_kernel_reuse_columns(std::string c_name);
+RcppExport SEXP _EMC2_emc_kernel_reuse_columns(SEXP c_nameSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type c_name(c_nameSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_kernel_reuse_columns(c_name));
+    return rcpp_result_gen;
+END_RCPP
+}
 // lr_capacity_counter_values
 Rcpp::List lr_capacity_counter_values();
 RcppExport SEXP _EMC2_lr_capacity_counter_values() {
@@ -3429,6 +3470,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
+    {"_EMC2_emc_kernel_stats", (DL_FUNC) &_EMC2_emc_kernel_stats, 1},
+    {"_EMC2_emc_kernel_stats_read", (DL_FUNC) &_EMC2_emc_kernel_stats_read, 0},
+    {"_EMC2_emc_kernel_stats_reset", (DL_FUNC) &_EMC2_emc_kernel_stats_reset, 0},
+    {"_EMC2_emc_kernel_reuse_columns", (DL_FUNC) &_EMC2_emc_kernel_reuse_columns, 1},
     {"_EMC2_lr_capacity_counter_values", (DL_FUNC) &_EMC2_lr_capacity_counter_values, 0},
     {"_EMC2_lr_capacity_counters_reset", (DL_FUNC) &_EMC2_lr_capacity_counters_reset, 0},
     {"_EMC2_calc_ll_oo_marginal_nodes", (DL_FUNC) &_EMC2_calc_ll_oo_marginal_nodes, 12},

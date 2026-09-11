@@ -93,6 +93,38 @@ draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
 }
 
+#' Kernel reuse instrumentation
+#'
+#' Reads the flag; with a value, sets it and returns the previous one.
+#'
+#' @noRd
+emc_kernel_stats <- function(on = NULL) {
+    .Call(`_EMC2_emc_kernel_stats`, on)
+}
+
+#' Read the kernel reuse counters
+#'
+#' One row per model seen since the last reset.  `rows` is how many per-trial
+#' evaluations the kernel performed and `cells` how many a cell-resolution
+#' version would have performed, so `rows / cells` is the reuse available.
+#'
+#' @noRd
+emc_kernel_stats_read <- function() {
+    .Call(`_EMC2_emc_kernel_stats_read`)
+}
+
+#' @noRd
+emc_kernel_stats_reset <- function() {
+    invisible(.Call(`_EMC2_emc_kernel_stats_reset`))
+}
+
+#' The columns a model's reusable subexpression reads
+#'
+#' @noRd
+emc_kernel_reuse_columns <- function(c_name) {
+    .Call(`_EMC2_emc_kernel_reuse_columns`, c_name)
+}
+
 lr_capacity_counter_values <- function() {
     .Call(`_EMC2_lr_capacity_counter_values`)
 }

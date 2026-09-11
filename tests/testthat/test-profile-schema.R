@@ -12,7 +12,8 @@ test_that("the schema is internally consistent", {
   expect_false(any(duplicated(names(sch))))
   for (f in sch) {
     expect_true(f$type %in% c("numeric", "integer", "character"), info = f$name)
-    expect_true(f$group %in% c("id", "time", "work", "wire", "memory", "health"),
+    expect_true(f$group %in% c("id", "time", "work", "wire", "memory", "kernel",
+                               "health"),
                 info = f$name)
     expect_true(nzchar(f$desc), info = f$name)
   }
