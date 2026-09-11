@@ -122,14 +122,23 @@ run_emc <- function(emc, stage, stop_criteria,
   progress <- progress[!names(progress) == 'emc']
   # We need to multiply step_size by thin to make an accurate guess for good step_size.
   cur_thin <- ifelse(is.numeric(thin), thin, 1)
+  block_no <- 0L
   while(!progress$done){
+    # C16.  A block does work no per-iteration record ever saw: building chain
+    # and efficient proposals, convergence diagnostics, the checkpoint write and
+    # the history join.  Timed here, in the master, where `run_emc` runs -- the
+    # per-iteration record has to travel back from a forked chain, this does not.
+    block_no <- block_no + 1L
+    block_started <- proc.time()[["elapsed"]]
     emc <- reset_pm_settings(emc, stage)
     # Remove redundant samples
     if(trim){
       emc <- fit_remove_samples(emc)
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
+    prop_started <- proc.time()[["elapsed"]]
     emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks)
+    prop_elapsed <- proc.time()[["elapsed"]] - prop_started
     last_stage <- get_last_stage(emc)
     if(stage == "preburn"){
       sub_emc <- emc
@@ -139,6 +148,8 @@ run_emc <- function(emc, stage, stop_criteria,
       sub_emc <- subset(emc, filter = chain_n(emc)[1,stage] - 1, stage = stage)
     }
     t0 <- Sys.time()
+    prepare_elapsed <- proc.time()[["elapsed"]] - block_started - prop_elapsed
+    sample_started <- proc.time()[["elapsed"]]
     # Actual sampling
     stage_iter <- progress$step_size*max(1,cur_thin)
     # One reallocation arena per block: markers must not survive into the next
@@ -152,6 +163,8 @@ run_emc <- function(emc, stage, stop_criteria,
                              r_cores = r_cores, core_ctl = core_ctl,
                              mc.preschedule = FALSE)
     if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
+    sample_elapsed <- proc.time()[["elapsed"]] - sample_started
+    concat_started <- proc.time()[["elapsed"]]
     if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
     class(sub_emc) <- "emc"
     if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
@@ -170,10 +183,14 @@ run_emc <- function(emc, stage, stop_criteria,
     if(stage == "sample" && !is.null(stop_criteria$max_sample_iter)){
       emc <- .trim_sample_stage(emc, stop_criteria$max_sample_iter)
     }
+    concat_elapsed <- proc.time()[["elapsed"]] - concat_started
+    check_started <- proc.time()[["elapsed"]]
     progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains,
                                verbose, progress, n_blocks, rhat_version = rhat_version)
     emc <- progress$emc
     progress <- progress[!names(progress) == 'emc']
+    check_elapsed <- proc.time()[["elapsed"]] - check_started
+    save_started <- proc.time()[["elapsed"]]
     if(!is.null(fileName)){
       emc <- strip_duplicates(emc)
       fileName <- fix_fileName(fileName)
@@ -181,6 +198,21 @@ run_emc <- function(emc, stage, stop_criteria,
       save(emc, file = fileName)
       emc <- restore_duplicates(emc)
     }
+    save_elapsed <- proc.time()[["elapsed"]] - save_started
+    .emc_block_record(
+      block = block_no, stage = stage,
+      block_iterations = as.integer(stage_iter),
+      block_chains = length(emc),
+      block_total = proc.time()[["elapsed"]] - block_started,
+      block_prepare = prepare_elapsed,
+      # `add_proposals` splits its own time between the two kinds; when it does
+      # not report (the preburn stage builds neither) both stay NA.
+      block_proposals = .emc_proposal_split("chain", prop_elapsed),
+      block_eff_proposals = .emc_proposal_split("eff", prop_elapsed),
+      block_sample = sample_elapsed,
+      block_concat = concat_elapsed,
+      block_check_progress = check_elapsed,
+      block_save = save_elapsed)
     elapsed <- Sys.time() - t0
     if (verbose) {
       gd_values <- progress$gd
@@ -253,8 +285,20 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   return(sampler)
 }
 
+# What `add_proposals` spent on each of its two halves, for the block record.
+# Stored rather than returned so the function's signature -- and every caller --
+# stays as it was.
+.emc_proposal_split <- function(which, total) {
+  got <- .emc_profile_state$proposal_split
+  if (is.null(got) || is.na(got[[which]])) return(NA_real_)
+  got[[which]]
+}
+
 add_proposals <- function(emc, stage, n_cores, n_blocks){
+  prof <- .emc_profile_enabled()
+  split <- c(chain = NA_real_, eff = NA_real_)
   if(stage != "preburn"){
+    t0 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_chain_proposals(emc, do_block = stage != "sample")
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
@@ -265,9 +309,15 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
       }
     }
   }
-  if(stage == "sample"){
-    emc <- create_eff_proposals(emc, n_cores)
+  if(stage != "preburn" && prof) {
+    split[["chain"]] <- proc.time()[["elapsed"]] - t0
   }
+  if(stage == "sample"){
+    t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
+    emc <- create_eff_proposals(emc, n_cores)
+    if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
+  }
+  if (prof) .emc_profile_state$proposal_split <- split
   return(emc)
 }
 

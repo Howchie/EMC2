@@ -129,6 +129,35 @@
       .emc_profile_field("private_memory_method", "character", "memory", "",
                          desc = "how private_memory was obtained"),
 
+      # -- per-block costs ---------------------------------------------------
+      # C16.  `run_emc` does work between blocks that never appeared in
+      # per-iteration timing: building chain and efficient proposals,
+      # convergence diagnostics, the checkpoint write and the history join.  A
+      # block is not an iteration, so these carry their own total rather than
+      # nesting under one.
+      .emc_profile_field("block", "integer", "block", "index",
+                         desc = "block number within the stage"),
+      .emc_profile_field("block_iterations", "integer", "block", "count",
+                         desc = "iterations requested in this block"),
+      .emc_profile_field("block_chains", "integer", "block", "count",
+                         desc = "chains run in this block"),
+      .emc_profile_field("block_total", "numeric", "block", "s",
+                         desc = "whole block, master elapsed"),
+      .emc_profile_field("block_prepare", "numeric", "block", "s", "block_total",
+                         desc = "trimming, resetting and subsetting before sampling"),
+      .emc_profile_field("block_proposals", "numeric", "block", "s", "block_total",
+                         desc = "create_chain_proposals and sub-blocking"),
+      .emc_profile_field("block_eff_proposals", "numeric", "block", "s", "block_total",
+                         desc = "create_eff_proposals"),
+      .emc_profile_field("block_sample", "numeric", "block", "s", "block_total",
+                         desc = "the chains' sampling call, start-up included"),
+      .emc_profile_field("block_concat", "numeric", "block", "s", "block_total",
+                         desc = "thinning and joining the block into the fit"),
+      .emc_profile_field("block_check_progress", "numeric", "block", "s", "block_total",
+                         desc = "convergence diagnostics"),
+      .emc_profile_field("block_save", "numeric", "block", "s", "block_total",
+                         desc = "checkpoint write"),
+
       # -- kernel reuse (opt-in: emc_kernel_stats(TRUE)) ---------------------
       # How much of a model kernel's arithmetic is recomputed per trial that a
       # cell-resolution version would compute once.  `rows / cells` is the
@@ -468,6 +497,29 @@
 # Counters live in the process that caught the error, so a worker's counts must
 # travel back in its reply.  Snapshot before the work, difference after.
 # Every source's totals at once, in the shape `.emc_failure_summary()` reads.
+# Per-block records, collected in the master.  `run_emc` runs there, so unlike
+# the per-iteration record -- which is built inside a forked chain and has to
+# travel back -- these can simply be accumulated.
+.emc_block_reset <- function() {
+  .emc_profile_state$blocks <- NULL
+  invisible(NULL)
+}
+
+.emc_block_record <- function(...) {
+  if (!.emc_profile_enabled()) return(invisible(NULL))
+  rows <- .emc_profile_state$blocks
+  if (is.null(rows)) rows <- list()
+  rows[[length(rows) + 1L]] <- .emc_profile_row(...)
+  .emc_profile_state$blocks <- rows
+  invisible(NULL)
+}
+
+.emc_block_profile <- function() {
+  rows <- .emc_profile_state$blocks
+  if (is.null(rows) || !length(rows)) return(NULL)
+  .emc_profile_bind(rows)
+}
+
 # Kernel reuse totals, summed over whatever models ran.  NA when the C++
 # counters are not compiled in or instrumentation was never switched on, so a
 # profile from an ordinary run carries no kernel columns rather than zeros that
@@ -531,6 +583,32 @@
   mean(x, na.rm = TRUE)
 }
 
+# The per-block section, split out so a run with blocks but no per-iteration
+# record -- which is every multi-block run -- still reports.
+.emc_block_report <- function(blocks, elapsed = NULL, con = stdout()) {
+  say <- function(...) cat(..., sep = "", file = con)
+  say(sprintf("\nper-block costs (%d block%s)\n", nrow(blocks),
+              if (nrow(blocks) > 1L) "s" else ""))
+  btot <- .emc_profile_mean(blocks$block_total)
+  say(sprintf("  %-22s %8.2f ms  (mean over blocks)\n", "block_total",
+              1000 * btot))
+  bf <- Filter(function(f) f$group == "block" && identical(f$parent, "block_total"),
+               .emc_profile_schema)
+  for (f in bf) {
+    v <- .emc_profile_mean(blocks[[f$name]])
+    if (is.na(v)) next
+    pct <- if (is.na(btot) || btot <= 0) NA_real_ else 100 * v / btot
+    say(sprintf("    %-20s %8.2f ms  %s\n", f$name, 1000 * v,
+                if (is.na(pct)) "" else sprintf("%5.1f%%", pct)))
+  }
+  total_blocks <- sum(blocks$block_total, na.rm = TRUE)
+  if (!is.null(elapsed) && elapsed > 0) {
+    say(sprintf("  %-22s %8.2f s   %5.1f%% of the run\n", "all blocks",
+                total_blocks, 100 * total_blocks / elapsed))
+  }
+  invisible(blocks)
+}
+
 #' Print a sampler profile
 #'
 #' The single reporting path for the profiling record described in
@@ -543,13 +621,22 @@
 #'   `options(emc2.sampler_profile = TRUE)`.
 #' @param elapsed Optional wall clock for the whole run, in seconds.
 #' @param drop_first Drop the first iteration, which pays pool start-up.
+#' @param blocks Optional per-block record from `.emc_block_profile()`.
 #' @param con Connection to write to.
 #' @noRd
 .emc_profile_report <- function(profile, elapsed = NULL, drop_first = TRUE,
-                                con = stdout()) {
+                                con = stdout(), blocks = NULL) {
   say <- function(...) cat(..., sep = "", file = con)
   if (is.null(profile) || !nrow(profile)) {
-    say("no profile recorded\n")
+    # Blocks are recorded in the master and survive; the per-iteration record is
+    # built inside a forked chain and does not outlive `concat_emc`.  Having one
+    # without the other is the ordinary case for a multi-block run, not an
+    # error, so report what there is.
+    if (!is.null(blocks) && nrow(blocks)) {
+      .emc_block_report(blocks, elapsed = elapsed, con = con)
+    } else {
+      say("no profile recorded\n")
+    }
     return(invisible(NULL))
   }
   # `full` keeps every iteration; `profile` drops the first for the per-iteration
@@ -663,6 +750,10 @@
                   if (!is.na(tot) && tot > 0) sprintf("%5.1f%% of the iteration",
                                                       100 * ks / tot) else ""))
     }
+  }
+
+  if (!is.null(blocks) && nrow(blocks)) {
+    .emc_block_report(blocks, elapsed = elapsed, con = con)
   }
 
   health <- Filter(function(f) f$group == "health", .emc_profile_schema)

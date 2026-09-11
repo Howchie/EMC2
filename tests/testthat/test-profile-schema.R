@@ -13,7 +13,7 @@ test_that("the schema is internally consistent", {
   for (f in sch) {
     expect_true(f$type %in% c("numeric", "integer", "character"), info = f$name)
     expect_true(f$group %in% c("id", "time", "work", "wire", "memory", "kernel",
-                               "health"),
+                               "block", "health"),
                 info = f$name)
     expect_true(nzchar(f$desc), info = f$name)
   }
@@ -22,8 +22,17 @@ test_that("the schema is internally consistent", {
   parents <- stats::na.omit(vapply(sch, function(f) f$parent, character(1)))
   expect_true(all(parents %in% names(sch)))
   # Only time fields nest.
+  # A nested field's percentage is taken against its parent, so the two must be
+  # the same kind of quantity.  This used to say "every nested field is in the
+  # `time` group", which was the same invariant while `time` was the only group
+  # that nested; block costs nest under `block_total` now, and the rule that
+  # was really being protected is that a child sits in its parent's group.
   nested <- Filter(function(f) !is.na(f$parent), sch)
-  expect_true(all(vapply(nested, function(f) f$group == "time", logical(1))))
+  expect_true(all(vapply(nested, function(f) f$group == sch[[f$parent]]$group,
+                         logical(1))))
+  # And every nested field is a duration, because that is what a percentage of
+  # a parent means here.
+  expect_true(all(vapply(nested, function(f) f$unit == "s", logical(1))))
 })
 
 test_that("rows carry every field with the declared type", {
