@@ -652,14 +652,24 @@ test_that("a failed recycle keeps the handles it will be cleaned up by", {
   pool <- dead
 })
 
-test_that("workers whose reaper has died are terminated by their owner", {
-  # The other half of finding 3.  A spawned worker is the *template's* child,
-  # so only the template can collect it, and normally that is exactly what
-  # happens -- waiting for it in the master would wait for something the master
-  # cannot cause.  But a template that is killed outright never runs its exit
-  # handler, and then nobody reaps its workers: each is a retained R process
-  # holding a whole likelihood context.  The pool holds their pids, so it can
-  # end them itself.
+# The other half of finding 3.  A spawned worker is the *template's* child, so
+# only the template can collect it, and normally that is exactly what happens.
+# But a template that is killed outright never runs its exit handler, and then
+# nobody reaps its workers: each is a retained R process holding a whole
+# likelihood context.
+#
+# Two mechanisms now end them, and they are tested separately because they can
+# no longer be observed together.  Where the platform has a parent-death signal
+# (Linux), each worker arms it, so the kernel kills the workers within tens of
+# milliseconds of the template -- measured at 36-42 ms.  Where it has not, the
+# owner does it from the pids it holds.  This used to be a single test asserting
+# that the workers *outlived* the template before the owner acted, which stopped
+# being true when workers began arming the signal: it then passed only when its
+# check happened to land inside that window, and failed on a loaded machine.
+
+test_that("workers whose reaper has died do not survive it", {
+  # End to end, with real processes: whichever mechanism the platform has,
+  # nothing may be left once the template is gone and the owner has torn down.
   skip_on_os("windows")
   skip_on_cran()
   skip_if(!nzchar(Sys.which("mkfifo")))
@@ -674,22 +684,104 @@ test_that("workers whose reaper has died are terminated by their owner", {
 
   pids <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
   expect_true(all(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+  any_alive <- function() any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1)))
+  wait_for <- function(done, seconds = 20) {
+    deadline <- proc.time()[["elapsed"]] + seconds
+    while (!done() && proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
+    done()
+  }
 
   # SIGKILL, so the template's own cleanup never runs.
   template_pid <- EMC2:::.emc_wpool_job_pid(pool$template$job)
   tools::pskill(template_pid, tools::SIGKILL)
-  deadline <- proc.time()[["elapsed"]] + 20
-  while (EMC2:::.emc_wpool_pid_alive(template_pid) &&
-         proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
-  skip_if(EMC2:::.emc_wpool_pid_alive(template_pid), "template would not die")
-  # The workers outlive it, which is the leak.
-  expect_true(any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+  skip_if(!wait_for(function() !EMC2:::.emc_wpool_pid_alive(template_pid)),
+          "template would not die")
 
-  suppressWarnings(EMC2:::.emc_wpool_stop_workers(pool))
-  deadline <- proc.time()[["elapsed"]] + 20
-  while (any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
-         proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
-  expect_false(any(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+  if (identical(Sys.info()[["sysname"]], "Linux")) {
+    # The kernel's half: no call into the pool at all.
+    expect_true(wait_for(function() !any_alive()),
+                info = "parent-death signal should end the workers")
+  }
+  # The owner's half, which must also be harmless when there is nothing left
+  # to end.
+  expect_no_error(suppressWarnings(EMC2:::.emc_wpool_stop_workers(pool)))
+  expect_true(wait_for(function() !any_alive()))
+})
+
+test_that("a process that has been seen dead is never seen alive again", {
+  # Liveness has to be monotonic, or "wait until every worker is gone" can
+  # time out on processes that no longer exist.  It was not: a process reaped
+  # between the signal probe and the /proc read, or caught in state X on its
+  # way out, read as alive -- 230 flips back to "alive" in 400 deaths.
+  # The previous test flaked on exactly that.  A correct check cannot fail
+  # this; the old one failed it on most deaths.
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!dir.exists("/proc"), "needs /proc")
+  skip_if(!nzchar(Sys.which("sh")) || !nzchar(Sys.which("sleep")))
+  flips <- 0L
+  for (i in seq_len(40L)) {
+    # Backgrounded from a shell that then exits, so the process is reaped by
+    # whatever adopts it -- concurrently with the polling, which is the race.
+    pid <- suppressWarnings(as.integer(system2(
+      "sh", c("-c", shQuote("sleep 0.02 & echo $!")), stdout = TRUE)))
+    skip_if(length(pid) != 1L || is.na(pid), "could not start a process")
+    seen_dead <- FALSE
+    started <- proc.time()[["elapsed"]]
+    while (proc.time()[["elapsed"]] - started < 0.15) {
+      if (!EMC2:::.emc_wpool_pid_alive(pid)) {
+        seen_dead <- TRUE
+      } else if (seen_dead) {
+        flips <- flips + 1L
+        break
+      }
+    }
+    expect_true(seen_dead)
+  }
+  expect_identical(flips, 0L)
+})
+
+test_that("an owner whose template is gone terminates the workers itself", {
+  # The decision, without depending on which mechanism wins a race: with the
+  # template dead, stop_workers() must signal the workers it holds handles
+  # for, and not wait for a reap it cannot perform; with the template alive,
+  # it must leave them to the template.
+  calls <- list()
+  pool <- audit_fake_pool(2L)
+  pool$backend <- "spawn"
+  pool$jobs <- list(list(pid = 101L, external = TRUE),
+                    list(pid = 102L, external = TRUE))
+  pool$template <- list(alive = TRUE, job = list(pid = 100L, external = TRUE))
+  run <- function(template_alive) {
+    calls <<- list()
+    with_mocked_bindings(
+      EMC2:::.emc_wpool_stop_workers(pool),
+      .emc_wpool_pid_alive = function(pid) {
+        if (identical(as.integer(pid), 100L)) template_alive else TRUE
+      },
+      .emc_wpool_send = function(con, obj, deadline = NULL) TRUE,
+      .emc_wpool_terminate_jobs = function(jobs, wait = TRUE, terminate = TRUE) {
+        calls[[length(calls) + 1L]] <<- list(jobs = jobs, wait = wait,
+                                             terminate = terminate)
+        invisible(NULL)
+      },
+      .package = "EMC2")
+  }
+
+  run(template_alive = FALSE)
+  expect_length(calls, 1L)
+  expect_identical(calls[[1L]]$jobs, pool$jobs)
+  expect_true(calls[[1L]]$terminate)
+  expect_false(calls[[1L]]$wait)
+
+  # A template flagged dead by the pool is an orphan too, whatever its pid says.
+  pool$template$alive <- FALSE
+  run(template_alive = TRUE)
+  expect_length(calls, 1L)
+  pool$template$alive <- TRUE
+
+  run(template_alive = TRUE)
+  expect_length(calls, 0L)
 })
 
 test_that("teardown does not wait on a reap it cannot perform", {

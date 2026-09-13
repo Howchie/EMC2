@@ -522,20 +522,33 @@
   alive <- isTRUE(tryCatch(tools::pskill(pid, 0L),
                            error = function(e) FALSE))
   if (!alive) return(FALSE)
+  # Without /proc the signal probe is all there is.
+  if (!dir.exists("/proc")) return(TRUE)
   # kill(pid, 0) reports TRUE for a zombie retained by the clean template.
   # Treat that process as dead so a missing completion token triggers the
   # serial correctness fallback instead of an infinite FIFO wait.
-  # A process that exits between the signal probe and this read is normal, and
-  # readLines() warns as well as errors when the file has gone.
+  #
+  # Two more ways a dead process used to read as alive, both on the way out:
+  #
+  #   * reaped between the probe above and this read.  The stat file is then
+  #     gone, and "could not read it" used to fall through to TRUE.  With /proc
+  #     present, a pid we own that has no stat file has exited.
+  #   * state X, "dead", which a process passes through after Z while it is
+  #     being reaped.  Only Z was checked.
+  #
+  # Either one made liveness non-monotonic: a worker read as dead and then,
+  # one poll later, as alive again -- 230 such flips in 400 process deaths when
+  # measured, none with both handled.  A caller waiting for "all gone" could
+  # then time out on a process that no longer existed.  readLines() warns as
+  # well as errors when the file has gone, so both are silenced.
   stat <- suppressWarnings(
     tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
              error = function(e) character()))
-  if (length(stat)) {
-    tail <- sub("^.*\\) ", "", stat)
-    state <- strsplit(tail, " ", fixed = TRUE)[[1L]][1L]
-    if (identical(state, "Z")) return(FALSE)
-  }
-  TRUE
+  if (!length(stat)) return(FALSE)
+  tail <- sub("^.*\\) ", "", stat)
+  state <- strsplit(tail, " ", fixed = TRUE)[[1L]][1L]
+  # `x` is the same state on kernels 2.6.33 to 3.13.
+  !(state %in% c("Z", "X", "x"))
 }
 
 .emc_wpool_job_pid <- function(job) {
