@@ -36,7 +36,8 @@ support is \code{rt > t0}. For \code{rt <= t0}, the density and CDF are zero and
 survivor is one. Above \code{t0}, the density, CDF, and survivor include the
 normalizer \code{1 - F_EXG(0)}. Optional fitting parameters are
 \code{pContaminant}, the omission probability, and \code{pGuess}, the uniform-outlier
-probability.
+probability. As in the other race models, the default lower bound used when
+checking \code{t0} is 0.05 s.
 EMC2 creates one accumulator per response level in \code{R} and evaluates the
 race likelihood from the accumulator density and survivor functions.
 }

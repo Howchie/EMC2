@@ -232,8 +232,8 @@ test_that("REXG raw survivor keeps its tail after CDF saturation", {
   }
   # Ordinary parameters and an extreme mu contrast (loser far in its tail).
   for (mu_d in c(0.2, 5)) {
-    # trailing 0s: t0 and the pContaminant nuisance column
-    p <- c(0.4, mu_d, log(0.05), log(0.1), log(0), 0)
+    # trailing values: t0 and the pContaminant nuisance column
+    p <- c(0.4, mu_d, log(0.05), log(0.1), log(0.05), 0)
     ll <- ll_for(p)
     expect_true(is.finite(ll))
   }

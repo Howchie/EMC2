@@ -21,7 +21,7 @@ design_EXG <- design(
 )
 
 pexg1 <- log(c(mu = .5, sigma = .1, tau = .2))
-pexg1_rexg <- c(pexg1, t0 = log(0))
+pexg1_rexg <- c(pexg1, t0 = log(0.05))
 
 dat <- make_data(
   pexg1,
@@ -56,7 +56,7 @@ print(credint(exgC, map = TRUE))
 recovery(exgC,true_pars = pexg1)
 
 ## New - Racing Ex-Gaussian model to keep it simple
-# Equivalent 1-choice ex-Gaussian race model.
+# One-choice race with a process truncated at zero and an additive t0 shift.
 design_REXG <- design(
   factors = list(subjects = 1, S = 1),
   Rlevels = 1,
@@ -79,7 +79,7 @@ cat("\nUncensored REXG fit:\n")
 print(credint(rexg, map = TRUE))
 recovery(rexg,true_pars = pexg1_rexg)
 
-# Fit against the SSEXG-generated data to show equivalence
+# Fit against the legacy SSEXG-generated data (different truncation/shift).
 
 rexg2 <- make_emc(dat, design_REXG, type = "single")
 rexg2 <- fit(rexg2)
@@ -104,7 +104,7 @@ cat("\nCensored REXG fit:\n")
 print(credint(rexgC, map = TRUE))
 recovery(rexgC,true_pars = pexg1_rexg)
 
-# Fit against the SSEXG-generated data with UC/LC to show equivalence
+# Fit against the legacy SSEXG-generated data with UC/LC (different truncation/shift).
 
 rexgC2 <- make_emc(datC, design_REXG, type = "single")
 rexgC2 <- fit(rexgC2)

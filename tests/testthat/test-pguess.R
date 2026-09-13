@@ -119,7 +119,7 @@ test_that("the compiled mixture matches the reference on every trial kind", {
   expect_identical(n_resp, 1L)
   log_g <- -log(n_resp * diff(gw))
 
-  base_p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0))
+  base_p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0.05))
   pC <- 0.08; pG <- 0.15
 
   # Process-only per-trial log-likelihoods.
@@ -259,7 +259,7 @@ test_that("expand and compressed branches agree with pGuess active", {
     LT = 0.20, LC = 0.35, UC = Inf, UT = Inf)
   dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
   model <- attr(dadm, "model")()
-  p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0),
+  p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0.05),
          pContaminant = qnorm(0.05), pGuess = qnorm(0.2))
 
   expect_true(length(attr(dadm, "expand")) > 0)

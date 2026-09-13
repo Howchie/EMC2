@@ -29,6 +29,12 @@ test_that("REXG dfun/pfun use shifted zero-truncated ex-Gaussian", {
   expect_equal(model$pfun(rep(Inf, 3), invalid_t0), numeric(3))
 })
 
+test_that("REXG uses the common 0.05-second t0 lower bound", {
+  model <- REXG()
+  expect_equal(unname(model$bound$minmax[1, "t0"]), 0.05)
+  expect_false("t0" %in% names(model$bound$exception))
+})
+
 test_that("REXG simulation draws positive processes and races shifted finishes", {
   model <- REXG()
   lR <- factor(rep(c("a", "b"), 40), levels = c("a", "b"))
@@ -36,7 +42,7 @@ test_that("REXG simulation draws positive processes and races shifted finishes",
     mu = rep(0.35, length(lR)),
     sigma = rep(0.12, length(lR)),
     tau = rep(0.18, length(lR)),
-    t0 = rep(c(0.6, 0), 40)
+    t0 = rep(c(0.6, 0.05), 40)
   )
   attr(pars, "ok") <- rep(TRUE, nrow(pars))
 

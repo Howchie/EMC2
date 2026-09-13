@@ -17,7 +17,7 @@ design_rexg <- design(
   model = REXG
 )
 
-p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0))
+p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0.05))
 p_mat <- matrix(p, nrow = 1, dimnames = list(NULL, names(p)))
 
 # Common censoring bounds. The observable window is [LC, UC]; a trial whose RT

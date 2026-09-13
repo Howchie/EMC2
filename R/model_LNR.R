@@ -284,7 +284,8 @@ PCOUNTER <- function() {
 #' survivor is one. Above `t0`, the density, CDF, and survivor include the
 #' normalizer `1 - F_EXG(0)`. Optional fitting parameters are
 #' `pContaminant`, the omission probability, and `pGuess`, the uniform-outlier
-#' probability.
+#' probability. As in the other race models, the default lower bound used when
+#' checking `t0` is 0.05 s.
 #' EMC2 creates one accumulator per response level in `R` and evaluates the
 #' race likelihood from the accumulator density and survivor functions.
 #'
@@ -360,9 +361,9 @@ REXG <- function() {
                               pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(
       minmax = cbind(mu = c(0, Inf), sigma = c(1e-6, Inf), tau = c(1e-6, Inf),
-                     t0 = c(0, Inf), pContaminant = c(0.001, 0.999),
+                     t0 = c(0.05, Inf), pContaminant = c(0.001, 0.999),
                      pGuess = c(0.001, 0.999)),
-      exception = c(t0 = 0, pContaminant = 0, pGuess = 0)
+      exception = c(pContaminant = 0, pGuess = 0)
     ),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rREXG(data$lR, pars, ok = attr(pars, "ok")),
