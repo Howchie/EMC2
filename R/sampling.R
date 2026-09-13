@@ -1016,6 +1016,15 @@ run_stage <- function(pmwgs,
         wire_bytes = pp$wire_bytes,
         private_memory = mem$bytes,
         private_memory_method = mem$method,
+        particle_weight_ess = {
+          # The quantity `update_pm_settings` adapts the particle count from,
+          # averaged over subjects. Deliberately beside the chain-ESS columns
+          # the benchmark reports: they answer different questions.
+          we <- vapply(pm_settings, function(x) {
+            if (is.null(x$weight_ess)) NA_real_ else as.numeric(x$weight_ess)
+          }, numeric(1))
+          if (all(is.na(we))) NA_real_ else mean(we, na.rm = TRUE)
+        },
         kernel_rows = unname(iter_kernel[["rows"]]),
         kernel_cells = unname(iter_kernel[["cells"]]),
         kernel_seconds = unname(iter_kernel[["seconds"]]),
@@ -1587,6 +1596,20 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     # F) Adapt the number of particles (ESS logic)
     # -------------------------------------------------------
     # Sample stage: reduce particles only after convergence.
+    #
+    # C17.  Note what this quantity is and is not.  `sum(w)^2 / sum(w^2)` is the
+    # effective size of THIS proposal cloud -- how concentrated the importance
+    # weights are within one iteration's draws.  It is not the effective sample
+    # size of the saved chain, which is about autocorrelation across iterations
+    # and is what a posterior is actually worth.  The two can move in opposite
+    # directions: a tight cloud around a stuck state scores well here and
+    # contributes almost nothing there.
+    #
+    # The rule below is unchanged. What is new is that the number it adapts from
+    # is recorded, so it can be put beside the chain ESS that
+    # WorkingTests/bench_hierarchical_regression.R reports and the question
+    # "does this rule track what matters" can be answered with two columns
+    # rather than argued.
     if (length(pm_settings$mix) > 3 && pm_settings$gd_good) {
       ess <- sum(weights)^2 / sum(weights^2)
       desired_ess <- tune$target_ESS
@@ -1596,6 +1619,15 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     }
   }
 
+  # Recorded on every call, whether or not the rule fired, so a stage in which
+  # it never fires still says what the cloud was doing.  Overwritten each time:
+  # the settings persist across iterations, so a value set only once would go
+  # on reporting the first iteration's cloud.  Two sums over the weights.
+  pm_settings$weight_ess <- if (length(weights)) {
+    sum(weights)^2 / sum(weights^2)
+  } else {
+    NA_real_
+  }
   return(pm_settings)
 }
 

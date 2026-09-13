@@ -158,6 +158,14 @@
       .emc_profile_field("block_save", "numeric", "block", "s", "block_total",
                          desc = "checkpoint write"),
 
+      # -- particle adaptation ----------------------------------------------
+      # What `update_pm_settings` adapts the particle count from: the effective
+      # size of one proposal cloud, NOT the chain's effective sample size. The
+      # two are different questions and the audit's experiment is whether the
+      # first tracks the second.
+      .emc_profile_field("particle_weight_ess", "numeric", "work", "count",
+                         desc = "importance-weight ESS of the proposal cloud, mean over subjects"),
+
       # -- kernel reuse (opt-in: emc_kernel_stats(TRUE)) ---------------------
       # How much of a model kernel's arithmetic is recomputed per trial that a
       # cell-resolution version would compute once.  `rows / cells` is the
@@ -715,6 +723,11 @@
   if (!is.na(m("queue_delay_max"))) {
     say(sprintf("  %-20s %8.2f ms  max, %.2f ms mean\n", "queue_delay",
                 1000 * m("queue_delay_max"), 1000 * m("queue_delay_mean")))
+  }
+  we <- m("particle_weight_ess")
+  if (!is.na(we)) {
+    say(sprintf("  %-20s %8.1f     (one proposal cloud, NOT chain ESS)\n",
+                "weight_ess", we))
   }
   if (!is.na(m("particles_sum"))) {
     say(sprintf("  %-20s %8.0f     (max %.0f per subject)\n", "particles_sum",
