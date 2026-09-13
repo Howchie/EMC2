@@ -416,7 +416,15 @@
 # -- which is how a retired worker could answer for a live one.  Counting them
 # is deliberate: retiring the generation they belong to is C5's work, and a
 # count is what shows whether it is needed.
-.emc_wpool_await_record <- function(pool, pending, deadline = NULL) {
+#
+# `on_start`, when given, is called with each ST_START record of this
+# generation instead of returning it, and the wait carries on where it was.  A
+# START is progress, not an answer, and it arrives within moments of the send:
+# returning it made the caller wait again from scratch, which restarted the
+# spin below once per worker per iteration -- twice the empty polls of the
+# one-record protocol, at ~14 us each, on every iteration of a fit.
+.emc_wpool_await_record <- function(pool, pending, deadline = NULL,
+                                    on_start = NULL) {
   started <- proc.time()[["elapsed"]]
   idle <- 0L
   wait <- 0
@@ -424,6 +432,11 @@
     rec <- .emc_wpool_done_take(pool$done)
     if (!is.null(rec)) {
       if (identical(rec$generation, .emc_wpool_one_int(pool$generation))) {
+        if (is.function(on_start) &&
+            identical(rec$status, .EMC_WPOOL_ST_START)) {
+          on_start(rec)
+          next
+        }
         return(rec)
       }
       .emc_pool_state$stale_records <-
@@ -905,18 +918,31 @@
        request = ints[[3L]], status = as.integer(bytes[[13L]]))
 }
 
-# One complete record, or NULL if nothing whole has arrived yet. Whatever is
-# available is drained into the pool's buffer on every call, so several records
-# that arrived together cost one read between them.
+# One complete record, or NULL if nothing whole has arrived yet.
+#
+# Reads at most the bytes still missing from ONE record, never more.  This is
+# the master's wait loop: it is called on every poll, and nearly every poll
+# finds nothing.  `readBin(con, "raw", n)` allocates all `n` bytes before it
+# knows how many arrived, so the drain-everything version -- n = 64 KiB --
+# allocated 64 KiB per empty poll, thousands of times a block.  Measured on a
+# 24-subject, 4-worker preburn: master CPU 1.00 s before the framed record,
+# 1.82 s with the 64 KiB read, 1.11 s with this, and the extra garbage
+# collection accounted for most of the difference.  Several records that
+# arrived together now cost one small read each, which is cheap; the buffer
+# only ever holds part of one record, so nothing is copied to shift it.
 .emc_wpool_done_take <- function(done) {
   buf <- done$buf
-  chunk <- tryCatch(readBin(done$rc, "raw", .EMC_WPOOL_READ_CHUNK),
-                    error = function(e) raw(0))
-  if (length(chunk)) buf$bytes <- c(buf$bytes, chunk)
-  if (length(buf$bytes) < .EMC_WPOOL_DONE_BYTES) return(NULL)
-  rec <- .emc_wpool_done_decode(buf$bytes[seq_len(.EMC_WPOOL_DONE_BYTES)])
-  buf$bytes <- buf$bytes[-seq_len(.EMC_WPOOL_DONE_BYTES)]
-  rec
+  have <- length(buf$bytes)
+  if (have < .EMC_WPOOL_DONE_BYTES) {
+    chunk <- tryCatch(readBin(done$rc, "raw", .EMC_WPOOL_DONE_BYTES - have),
+                      error = function(e) raw(0))
+    if (!length(chunk)) return(NULL)
+    buf$bytes <- if (have) c(buf$bytes, chunk) else chunk
+    if (length(buf$bytes) < .EMC_WPOOL_DONE_BYTES) return(NULL)
+  }
+  bytes <- buf$bytes
+  buf$bytes <- raw(0)
+  .emc_wpool_done_decode(bytes)
 }
 
 # The reader is non-blocking to detect worker death; keeping a master writer
@@ -990,7 +1016,10 @@
   # One is checked too: growing by one repeatedly reaches the same limit as
   # asking for the whole width at once.
   if (is.na(n_workers) || n_workers < 1L) return(n_workers)
-  open <- tryCatch(nrow(showConnections(all = TRUE)),
+  # `getAllConnections()`, not `nrow(showConnections(all = TRUE))`: the same
+  # count, but `showConnections` formats a description of every connection to
+  # produce it and cost ~0.2 s of every pool start inside a fit.
+  open <- tryCatch(length(getAllConnections()),
                    error = function(e) NA_integer_)
   if (is.na(open)) return(n_workers)
   room <- .emc_wpool_conn_limit() - open - .EMC_WPOOL_CONN_OVERHEAD
@@ -1620,7 +1649,8 @@
   deadline <- .emc_wpool_deadline()
   await <- function() {
     repeat {
-      rec <- .emc_wpool_await_record(pool, outstanding, deadline)
+      rec <- .emc_wpool_await_record(pool, outstanding, deadline,
+                                     on_start = function(rec) NULL)
       if (!identical(rec$code, "record")) return(NA_integer_)
       # Progress rather than completion: the chunk was collected.
       if (identical(rec$status, .EMC_WPOOL_ST_START)) next
@@ -1872,9 +1902,12 @@
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   sendable <- was_alive && !is.null(shared_file)
   if (sendable) {
+    # One deadline for every send: it is a median over the receive history,
+    # which does not change between the sends of one iteration.
+    send_deadline <- .emc_wpool_deadline()
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
-      sent[w] <- .emc_wpool_request(pool, w, msgs[[w]])
+      sent[w] <- .emc_wpool_request(pool, w, msgs[[w]], send_deadline)
       if (profile && sent[w]) {
         dispatch_at[w] <- proc.time()[["elapsed"]] - iter_started
         dispatch_wall[w] <- Sys.time()
@@ -1940,8 +1973,22 @@
   picked_up <- rep(FALSE, pool$n)
   if (watch && any(pending)) {
     deadline <- .emc_wpool_deadline()
+    # Pick-ups are noted without leaving the wait; see the stale-record and
+    # START handling below, which this mirrors.
+    note_start <- function(rec) {
+      w <- rec$w
+      if (!identical(rec$request, request)) {
+        .emc_pool_state$stale_records <-
+          (if (is.null(.emc_pool_state$stale_records)) 0L
+           else .emc_pool_state$stale_records) + 1L
+      } else if (!is.na(w) && w >= 1L && w <= pool$n) {
+        picked_up[w] <<- TRUE
+      }
+      invisible(NULL)
+    }
     while (any(pending)) {
-      rec <- .emc_wpool_await_record(pool, function() which(pending), deadline)
+      rec <- .emc_wpool_await_record(pool, function() which(pending), deadline,
+                                     on_start = note_start)
       w <- if (identical(rec$code, "record")) rec$w else NA_integer_
       # A record for a request that has already been settled belongs to an
       # earlier iteration of this same pool -- a worker that answered after its

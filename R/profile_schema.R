@@ -533,8 +533,11 @@
 # profile from an ordinary run carries no kernel columns rather than zeros that
 # would read as "measured, and there is no reuse".
 .emc_kernel_totals <- function() {
-  if (!exists("emc_kernel_stats_read", envir = asNamespace("EMC2"),
-              inherits = FALSE)) {
+  # Every worker request calls this twice, so the ordinary case -- measurement
+  # off -- must not pay for the read: building the counter table as a data
+  # frame costs ~200 us, the flag ~1 us.  A process that never switched it on
+  # has recorded nothing, so this is the same answer, reached directly.
+  if (!isTRUE(tryCatch(emc_kernel_stats(), error = function(e) FALSE))) {
     return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
   }
   st <- tryCatch(emc_kernel_stats_read(), error = function(e) NULL)
