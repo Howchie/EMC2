@@ -116,3 +116,27 @@ test_that("the report names it for what it is", {
   # whole item is about.
   expect_match(txt, "NOT chain ESS")
 })
+
+test_that("a tune without search_width still adapts epsilon at every stage", {
+  # `run_stages()` defaults `search_width` to NULL. It used to reach
+  # `set_p_accept()` as `1/NULL`, give an empty target, and empty every epsilon
+  # at the first adaptation -- after which half of every proposal cloud was NaN
+  # and every update repeated the previous state.
+  n_pars <- 5L
+  for (stage in c("preburn", "burn", "adapt", "sample")) {
+    unset <- EMC2:::check_tune_settings(list(), n_pars, stage, 100)
+    given <- EMC2:::check_tune_settings(list(search_width = 1), n_pars, stage, 100)
+    expect_identical(unset$p_accept, given$p_accept, info = stage)
+    pm <- EMC2:::check_sampling_settings(list(list()), stage, n_pars, 100)[[1L]]
+    n_mix <- length(pm$mix)
+    pm$iter <- unset$n0 + 1
+    w <- c(0.5, runif(n_mix * 10))
+    got <- EMC2:::update_pm_settings(pm, 1L, w, rep(10, n_mix), unset,
+                                     n_pars = n_pars)
+    # One epsilon per non-group proposal, all finite -- the shape
+    # `new_particle()` indexes when it scales proposals 2..n_mix.
+    expect_length(got$epsilon, n_mix - 1L)
+    expect_true(length(got$epsilon) > 0L && all(is.finite(got$epsilon)),
+                info = stage)
+  }
+})

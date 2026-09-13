@@ -139,8 +139,11 @@ pool_state <- get(".emc_pool_state", envir = asNamespace("EMC2"))
 pool_state$last_error <- NULL
 pool_state$warned <- FALSE
 timing <- system.time({
+  # `search_width = 1` is what fit() and run_emc() pass.  Without it, libraries
+  # older than the check_tune_settings() default adapt every epsilon to empty at
+  # iteration 26, and everything after that times caught errors, not sampling.
   sampler <- suppressMessages(EMC2:::run_stages(
-    sampler, stage = "preburn", iter = iterations,
+    sampler, stage = "preburn", iter = iterations, search_width = 1,
     particle_factor = particles / sqrt(sampler$n_pars),
     n_cores = workers, verbose = FALSE, verboseProgress = FALSE, r_cores = 1
   ))

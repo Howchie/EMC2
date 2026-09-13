@@ -529,6 +529,15 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
 check_tune_settings <- function(tune, n_pars, stage, particles){
   # Acceptance ratio tuning
   tune$alphaStar <- ifelse(stage == "sample", 2, 3)
+  # `fit()` and `run_emc()` default this to 1, but `run_stages()` defaults it to
+  # NULL, and `0.02 * (1/NULL)` is numeric(0) rather than an error.  An empty
+  # target empties every subject's epsilon at the first adaptation (iteration
+  # n0 + 1), so the scaled proposal's covariance becomes NA, half of every cloud
+  # is NaN, and each update is caught and answered by repeating the previous
+  # state -- a chain that stops moving after 25 iterations and says nothing.
+  # That is what a direct `run_stages()` call without `search_width` did,
+  # including the audit's own pool benchmark.
+  if (is.null(tune$search_width)) tune$search_width <- 1
   tune$p_accept <- set_p_accept(stage, tune$search_width)
   # Potential blocking settings
   if(is.null(tune$components)) tune$components <- rep(1, n_pars)
