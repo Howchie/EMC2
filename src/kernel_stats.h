@@ -38,6 +38,66 @@ struct KernelStat {
   long long rows = 0;    // per-trial evaluations performed
   long long cells = 0;   // evaluations at cell resolution
   double seconds = 0.0;  // wall time inside the kernel
+
+  // PCOUNTER's raw adapters have a deliberately separate set of counters.
+  // They are carried on the model row returned by emc_kernel_stats_read(),
+  // rather than allocating an R object from a hot kernel.
+  long long dpcounter_calls = 0;
+  long long dpcounter_rows = 0;
+  double dpcounter_seconds = 0.0;
+  long long ppcounter_calls = 0;
+  long long ppcounter_rows = 0;
+  double ppcounter_seconds = 0.0;
+  long long pcounter_logS_calls = 0;
+  long long pcounter_logS_rows = 0;
+  double pcounter_logS_seconds = 0.0;
+  long long sv_zero = 0;
+  long long gamma_zero = 0;
+  long long omega_zero = 0;
+  long long fallback_tail = 0;
+  long long invalid_exits = 0;
+  long long support_exits = 0;
+  long long k_observations = 0;
+  long long k_sum = 0;
+  long long k_min = 0;
+  long long k_max = 0;
+  long long k_0_3 = 0;
+  long long k_4_7 = 0;
+  long long k_8_15 = 0;
+  long long k_16_31 = 0;
+  long long k_32_63 = 0;
+  long long k_64_127 = 0;
+  long long k_128_255 = 0;
+  long long k_256_1023 = 0;
+  long long k_1024_plus = 0;
+  long long stirling_terms = 0;
+  long long rising_terms = 0;
+  double preparation_seconds = 0.0;
+  double rt_sum_seconds = 0.0;
+};
+
+// PCOUNTER instrumentation is updated with plain native counters.  These
+// helpers are no-ops at call sites when kernel_stats_on() is false; in
+// particular they never construct Rcpp objects.
+void pcounter_stats_record_raw(int route, long long rows, double seconds,
+                               double preparation_seconds,
+                               double rt_sum_seconds);
+void pcounter_stats_record_branch(bool sv_zero, bool gamma_zero,
+                                  bool omega_zero);
+void pcounter_stats_record_exit(bool support);
+void pcounter_stats_record_fallback_tail();
+void pcounter_stats_record_k(int K);
+void pcounter_stats_add_stirling_terms(long long n);
+void pcounter_stats_add_rising_terms(long long n);
+bool pcounter_stats_seen();
+KernelStat pcounter_stats_snapshot();
+void pcounter_stats_reset();
+
+// Adapter identifiers used by pcounter_stats_record_raw.
+enum PcounterStatsRoute {
+  PC_DENSITY = 0,
+  PC_SURVIVOR = 1,
+  PC_LOG_SURVIVOR_AT_T = 2
 };
 
 bool kernel_stats_on();

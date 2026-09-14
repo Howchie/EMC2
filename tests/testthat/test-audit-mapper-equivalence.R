@@ -127,6 +127,7 @@ test_that("the budget is a memory limit that round-trips", {
   expect_error(EMC2:::emc_pt_cell_budget(-1), "non-negative")
   expect_error(EMC2:::emc_pt_cell_budget(c(1, 2)), "one finite")
   expect_error(EMC2:::emc_pt_cell_budget(NaN), "finite")
+  expect_error(EMC2:::emc_pt_cell_budget(1e300), "finite")
   expect_identical(EMC2:::emc_pt_cell_budget(), default)
 })
 
@@ -217,6 +218,20 @@ test_that("the deferral switch round-trips and refuses nonsense", {
   expect_identical(EMC2:::emc_pt_defer_scalars(), TRUE)
   expect_error(EMC2:::emc_pt_defer_scalars(NA), "TRUE or FALSE")
   expect_error(EMC2:::emc_pt_defer_scalars(c(TRUE, FALSE)), "TRUE or FALSE")
+})
+
+test_that("minimum cell reuse admission is configurable and numerically inert", {
+  default <- EMC2:::emc_pt_cell_min_reuse()
+  on.exit(EMC2:::emc_pt_cell_min_reuse(default), add = TRUE)
+  expect_identical(EMC2:::emc_pt_cell_min_reuse(0.9), default)
+  expect_identical(EMC2:::emc_pt_cell_min_reuse(), 0.9)
+  expect_error(EMC2:::emc_pt_cell_min_reuse(-0.1), "in \\[0, 1\\]")
+  expect_error(EMC2:::emc_pt_cell_min_reuse(1.1), "in \\[0, 1\\]")
+
+  # Six cells in 300 trials fall below the requested reuse threshold, so the
+  # plan uses the row route.  The independent wrapper must still agree exactly.
+  fx <- audit_fixture("RDM", n_trials = 300L, n_particles = 3L, cells = 6L)
+  expect_mapper_agrees(fx, label = "minimum reuse threshold")
 })
 
 # --- the joint cell partition -----------------------------------------------

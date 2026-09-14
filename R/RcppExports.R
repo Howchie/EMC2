@@ -13,6 +13,26 @@ EMC2_call_custom_trend <- function(trend_pars, input, funptrSEXP) {
     .Call(`_EMC2_EMC2_call_custom_trend`, trend_pars, input, funptrSEXP)
 }
 
+#' Minimum fraction of trials reused by an admitted cell design
+#'
+#' Zero retains the historical admission rule.  A value in [0, 1] requires
+#' at least that fraction of trial rows to share design cells.
+#'
+#' @noRd
+emc_pt_cell_min_reuse <- function(ratio = NULL) {
+    .Call(`_EMC2_emc_pt_cell_min_reuse`, ratio)
+}
+
+#' Enable, read, or reset mapper route counters
+#'
+#' The counters are disabled by default.  Passing enabled changes the switch;
+#' reset clears counts, and the returned list is a snapshot.
+#'
+#' @noRd
+emc_pt_mapper_stats <- function(enabled = NULL, reset = FALSE) {
+    .Call(`_EMC2_emc_pt_mapper_stats`, enabled, reset)
+}
+
 #' Per-design cell scratch budget, in bytes
 #'
 #' Reads the budget; with a value, sets it and returns the previous one. The
@@ -106,11 +126,11 @@ emc_kernel_stats <- function(on = NULL) {
     .Call(`_EMC2_emc_kernel_stats`, on)
 }
 
-#' Read the kernel reuse counters
-#'
 #' One row per model seen since the last reset.  `rows` is how many per-trial
 #' evaluations the kernel performed and `cells` how many a cell-resolution
 #' version would have performed, so `rows / cells` is the reuse available.
+#' For PCOUNTER, the additional adapter, branch, K, term, and timing columns
+#' are populated; they are zero on other model rows.
 #'
 #' @noRd
 emc_kernel_stats_read <- function() {

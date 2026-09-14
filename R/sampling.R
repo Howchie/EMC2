@@ -310,6 +310,35 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   previous
 }
 
+# Return the BLAS width that can actually fit inside a chain's core budget.
+# A library configured for more threads than the chain owns is already too
+# wide for one worker; allowing that width to participate in the integer
+# worker allocation would make the scheduler's safety claim false.  When the
+# optional control package is available, apply the cap at the process boundary
+# before workers are created.  Without it, the package's existing conservative
+# assumption (one thread) remains in force.
+.emc_limit_blas_threads <- function(total_cores) {
+  total_cores <- max(1L, as.integer(total_cores)[1L])
+  requested <- max(1L, as.integer(.emc_blas_threads())[1L])
+  target <- min(requested, total_cores)
+  if (requested > target) {
+    .emc_set_blas_threads(target)
+    observed <- max(1L, as.integer(.emc_blas_threads())[1L])
+    if (observed > target) {
+      # The library could not be retuned.  Keep the allocation serial and make
+      # the diagnostic visible without starting a second pool that would make
+      # the oversubscription worse.
+      if (!isTRUE(.emc_pool_state$blas_warning)) {
+        warning("BLAS thread width exceeds the chain core budget; using a serial allocation")
+        .emc_pool_state$blas_warning <- TRUE
+      }
+      return(target)
+    }
+    return(observed)
+  }
+  requested
+}
+
 # One bounded task budget.
 #
 # C13.  `.particle_core_budget(8, 32, 1, 32)` returned eight subject workers and
@@ -361,8 +390,14 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
     return(list(subject = n_cores, likelihood = r_cores))
   }
   total_cores <- max(1L, as.integer(total_cores))
-  if (is.null(blas_threads)) blas_threads <- .emc_blas_threads()
-  blas_threads <- max(1L, as.integer(blas_threads))
+  if (is.null(blas_threads)) {
+    blas_threads <- .emc_limit_blas_threads(total_cores)
+  } else {
+    # Explicit probes may pass a synthetic BLAS width.  Cap it here too, so
+    # the returned allocation never claims more threads than the requested
+    # chain budget can contain.
+    blas_threads <- min(total_cores, max(1L, as.integer(blas_threads)[1L]))
+  }
   # Threads, not processes: whatever the linear-algebra library will run inside
   # each worker comes out of the same budget.
   budget <- max(1L, total_cores %/% blas_threads)
@@ -382,6 +417,39 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   # Two elements, as callers have always had: the BLAS width is an input to the
   # budget, not part of its answer, and `.emc_blas_threads()` reports it.
   list(subject = subject, likelihood = likelihood)
+}
+
+# Which mechanism actually carried the likelihood work this iteration, for the
+# `route` profile field.  A persistent pool (subject-level `wpool`, or the
+# single-subject `llpool`) is only "alive" when it is genuinely running
+# workers -- the degenerate one-worker stand-in `run_stage` constructs when no
+# pool could be started deliberately reports `alive = FALSE`, so a fallback
+# never silently reads as spare-core use.  Absent both, the only other way
+# work widens is a fresh per-call fork (`auto_mclapply`/`mcmapply` sized by
+# the relevant core budget); anything narrower than that is plain serial work.
+.emc_ll_route <- function(wpool, llpool, pool_budget, core_budget = NULL,
+                          ll_route = NULL) {
+  if (!is.null(wpool) && isTRUE(wpool$alive)) {
+    return("persistent_pool")
+  }
+  # A live likelihood pool can still be the serial arm while its empirical
+  # probe is running, or after it lost a request and calc_ll_pooled recomputed
+  # that call in the master.  Prefer the arm actually recorded for this
+  # iteration over the pool handle's stale local copy.
+  if (!is.null(llpool)) {
+    if (!is.null(ll_route) && !is.null(ll_route$last_route)) {
+      return(ll_route$last_route)
+    }
+    if (isTRUE(llpool$alive)) return("persistent_pool")
+    return(if (pool_budget$likelihood > 1L) "nested_per_call" else "serial")
+  }
+  if (!is.null(wpool)) {
+    return(if (pool_budget$likelihood > 1L) "nested_per_call" else "serial")
+  }
+  if (!is.null(core_budget) && core_budget$likelihood > 1L) {
+    return("nested_per_call")
+  }
+  "serial"
 }
 
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
@@ -686,11 +754,17 @@ run_stage <- function(pmwgs,
   # forks the workers without the chain's sample history; see R/chain_pool.R.
   # The pool is the one route that can take spare capacity safely: it splits a
   # subject's particles itself and draws no random numbers, so widening the
-  # inner budget cannot move the sampler's draws.
+  # inner budget cannot move the sampler's draws.  That is still only granted
+  # when inner parallelism was explicitly asked for (`r_cores > 1`): an
+  # ordinary multi-subject pool at the `r_cores = 1` default keeps a
+  # likelihood width of one, so it does not silently start splitting a
+  # subject's particles across extra processes nobody requested.  Explicit
+  # requests and the one-subject path are untouched -- see
+  # `.particle_core_budget()`'s own branches for both.
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                        r_cores = r_cores,
                                        total_cores = n_cores,
-                                       allow_spare = TRUE)
+                                       allow_spare = r_cores > 1L)
   wpool_ctx <- list(
     data = data, model = .emc_wpool_slim_model(pmwgs$model),
     stage = stage, type = pmwgs$type,
@@ -989,11 +1063,15 @@ run_stage <- function(pmwgs,
           vapply(wpool$jobs, .emc_wpool_job_pid, integer(1)),
           .emc_wpool_job_pid(wpool$template$job)))
       } else list(bytes = NA_real_, method = NA_character_)
+      route <- .emc_ll_route(wpool, llpool, pool_budget,
+                             if (exists("core_budget", inherits = FALSE)) core_budget else NULL,
+                             .emc_pool_state$ll_route)
       profile_rows[[i]] <- do.call(.emc_profile_row, c(list(
         iteration = j,
         stage = stage,
         subjects = pmwgs$n_subjects,
         workers = if (is.null(wpool)) 0L else wpool$n,
+        route = route,
         workers_active = pp$workers_active,
         particles_max = if (all(is.na(n_part))) NA_real_ else max(n_part, na.rm = TRUE),
         particles_sum = if (all(is.na(n_part))) NA_real_ else sum(n_part, na.rm = TRUE),
@@ -1870,10 +1948,21 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
     identical(s, .emc_pool_state$ll_subject) &&
     isTRUE(.emc_pool_state$ll_pool$alive)
   if (!have_pool) {
-    # Without a pool, use the standard likelihood manager.
-    return(calc_ll_manager(proposals, dadm = dadm, model = model,
+    # Without a pool, use the standard likelihood manager.  When a pool was
+    # previously registered, retain the observed mechanism in the profile even
+    # if the local handle is stale after a transport failure.
+    route_started <- if (!is.null(.emc_pool_state$ll_route))
+      proc.time()[["elapsed"]] else NA_real_
+    out <- calc_ll_manager(proposals, dadm = dadm, model = model,
                            component = component, r_cores = r_cores,
-                           varying = varying))
+                           varying = varying)
+    if (is.finite(route_started)) {
+      .emc_ll_route_record(FALSE,
+                           proc.time()[["elapsed"]] - route_started,
+                           if (is.matrix(proposals)) nrow(proposals) else 1L,
+                           route = if (r_cores > 1L) "nested_per_call" else "serial")
+    }
+    return(out)
   }
   # With a pool available the choice is between it and a plain serial call --
   # never the per-call fork, which the pool exists to replace.  Both arms are
@@ -1893,12 +1982,14 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
                            varying = varying)
   }
   el <- proc.time()[["elapsed"]] - started
-  if (pooled || !use_pool) {
-    # Record only calls that actually used the selected arm.
-    .emc_ll_route_record(pooled, el,
-                         if (is.matrix(proposals)) nrow(proposals) else 1L,
-                         dynamic = pooled && isTRUE(.emc_pool_state$ll_dynamic))
-  }
+  # Record the arm that actually returned the result.  A live pool can fail
+  # between the handle check and the request, in which case the fallback is
+  # serial and must not leave the diagnostic claiming persistent-pool work.
+  actual_route <- if (pooled) "persistent_pool" else "serial"
+  .emc_ll_route_record(pooled, el,
+                       if (is.matrix(proposals)) nrow(proposals) else 1L,
+                       dynamic = pooled && isTRUE(.emc_pool_state$ll_dynamic),
+                       route = actual_route)
   # Optional trace for inspecting routing decisions from forked chains.
   trace_file <- Sys.getenv("EMC2_LL_TRACE")
   if (nzchar(trace_file)) {

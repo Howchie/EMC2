@@ -108,12 +108,12 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
     // check and an i + nrow*j multiply per element.
     const double* col = &base(0, col_idx);
 
-    // A row-constant column is in or out of bounds for every trial at once.
     if (pt.col_is_const(col_idx)) {
       const double val = col[0];
       bool ok = (val > min_v && val < max_v);
       for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
       if (!ok) for (int i = 0; i < nrows; ++i) result[i] = false;
+      emc::mapper_count_bound(emc::MAPPER_SCALAR);
       continue;
     }
 
@@ -142,9 +142,12 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) result[i] = false;
         }
+        emc::mapper_count_bound(emc::MAPPER_CELL);
         continue;
       }
     }
+
+    emc::mapper_count_bound(emc::MAPPER_ROW);
 
     for (int i = 0; i < nrows; ++i) {
       const double val = col[i];
@@ -195,6 +198,7 @@ void c_do_bound_pt_from_into(const ParamTable& pt,
       bool ok = (val > min_v && val < max_v);
       for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
       if (!ok) std::fill(res, res + nrows, FALSE);
+      emc::mapper_count_bound(emc::MAPPER_SCALAR);
       continue;
     }
 
@@ -217,9 +221,12 @@ void c_do_bound_pt_from_into(const ParamTable& pt,
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrows; ++i) if (!ok_cell[ex[i]]) res[i] = FALSE;
         }
+        emc::mapper_count_bound(emc::MAPPER_CELL);
         continue;
       }
     }
+
+    emc::mapper_count_bound(emc::MAPPER_ROW);
 
     for (int i = 0; i < nrows; ++i) {
       if (!res[i]) continue;
@@ -268,6 +275,8 @@ void c_do_transform_pt(ParamTable& pt,
       if (cst) {
         const double v = lw + std::exp(col[0]);
         std::fill(col, col + nrow, v);
+        pt.clear_scalar_marker(col_idx);
+        emc::mapper_count_transform(emc::MAPPER_SCALAR);
         break;
       }
       if (ce) {
@@ -283,10 +292,14 @@ void c_do_transform_pt(ParamTable& pt,
           }
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+          pt.clear_scalar_marker(col_idx);
+          emc::mapper_count_transform(emc::MAPPER_CELL);
           break;
         }
       }
       for (int i = 0; i < nrow; ++i) col[i] = lw + std::exp(col[i]);
+      pt.clear_scalar_marker(col_idx);
+      emc::mapper_count_transform(emc::MAPPER_ROW);
       break;
     }
     case PNORM: {
@@ -294,6 +307,8 @@ void c_do_transform_pt(ParamTable& pt,
       if (cst) {
         const double v = lw + range * pnorm_std(col[0]);
         std::fill(col, col + nrow, v);
+        pt.clear_scalar_marker(col_idx);
+        emc::mapper_count_transform(emc::MAPPER_SCALAR);
         break;
       }
       if (ce) {
@@ -307,12 +322,16 @@ void c_do_transform_pt(ParamTable& pt,
           }
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
+          pt.clear_scalar_marker(col_idx);
+          emc::mapper_count_transform(emc::MAPPER_CELL);
           break;
         }
       }
       for (int i = 0; i < nrow; ++i) {
         col[i] = lw + range * pnorm_std(col[i]);
       }
+      emc::mapper_count_transform(emc::MAPPER_ROW);
+      pt.clear_scalar_marker(col_idx);
       break;
     }
     case IDENTITY:

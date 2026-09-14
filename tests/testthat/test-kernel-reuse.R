@@ -133,3 +133,12 @@ test_that("the profile schema carries the kernel columns", {
   row <- EMC2:::.emc_profile_row(iteration = 1L, total = 0.1)
   expect_true(is.na(row$kernel_rows))
 })
+
+test_that("the profile report identifies the execution route", {
+  expect_true("route" %in% names(EMC2:::.emc_profile_schema))
+  row <- EMC2:::.emc_profile_row(iteration = 1L, route = "serial", total = 0.1)
+  report <- capture.output(
+    EMC2:::.emc_profile_report(row, elapsed = 0.1, drop_first = FALSE)
+  )
+  expect_true(any(grepl("route serial", report, fixed = TRUE)))
+})

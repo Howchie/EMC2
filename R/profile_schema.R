@@ -51,6 +51,8 @@
                          desc = "subjects updated"),
       .emc_profile_field("workers", "integer", "id", "count",
                          desc = "pool width"),
+      .emc_profile_field("route", "character", "id", "",
+                         desc = "how the likelihood work was distributed this iteration: serial, persistent_pool, or nested_per_call"),
       .emc_profile_field("workers_active", "integer", "id", "count",
                          desc = "workers given at least one subject"),
       .emc_profile_field("particles_max", "integer", "id", "count",
@@ -670,6 +672,9 @@
     act <- m("workers_active")
     if (!is.na(act)) say(sprintf(" (%.1f active)", act))
   }
+  routes <- unique(as.character(full$route))
+  routes <- routes[!is.na(routes) & nzchar(routes)]
+  if (length(routes)) say(sprintf("   route %s", paste(routes, collapse = ",")))
   say("\n")
   if (!is.null(elapsed)) say(sprintf("wall %.2f s", elapsed), "   ")
   say(sprintf("iteration %.2f ms\n\n", 1000 * tot))

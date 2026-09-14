@@ -66,3 +66,113 @@ test_that("the inner fan-out absorbs cores the outer split would truncate away",
     expect_gte(b$likelihood, 1L)
   }
 })
+
+test_that("multi-subject default r_cores stays a likelihood width of one across sizes and cores", {
+  pb <- EMC2:::.particle_core_budget
+  for (ns in c(2L, 8L)) {
+    for (tc in c(1L, 4L, 8L, 16L, 32L)) {
+      b <- pb(ns, n_cores = tc, r_cores = 1L, total_cores = tc, blas_threads = 1L)
+      expect_identical(b$likelihood, 1L,
+                       info = sprintf("n_subjects=%d total_cores=%d", ns, tc))
+      expect_lte(b$subject * b$likelihood, tc)
+      expect_gte(b$subject, 1L)
+    }
+  }
+})
+
+test_that("explicit r_cores stays honored across sizes and cores, budget never exceeded", {
+  pb <- EMC2:::.particle_core_budget
+  for (ns in c(1L, 2L, 8L)) {
+    for (tc in c(1L, 4L, 8L, 16L, 32L)) {
+      for (rc in c(1L, 2L)) {
+        b <- pb(ns, n_cores = tc, r_cores = rc, total_cores = tc, blas_threads = 1L)
+        expect_lte(b$subject * b$likelihood, tc)
+        expect_gte(b$subject, 1L)
+        expect_gte(b$likelihood, min(rc, tc))
+      }
+    }
+  }
+})
+
+test_that("one subject still uses the available cores regardless of r_cores", {
+  pb <- EMC2:::.particle_core_budget
+  for (tc in c(1L, 4L, 8L, 16L, 32L)) {
+    for (rc in c(1L, 2L)) {
+      b <- pb(1L, n_cores = tc, r_cores = rc, total_cores = tc, blas_threads = 1L)
+      expect_identical(b$subject, 1L)
+      expect_identical(b$likelihood, min(tc, max(rc, tc)))
+    }
+  }
+})
+
+test_that("BLAS width cannot make the worker allocation exceed the chain budget", {
+  pb <- EMC2:::.particle_core_budget
+  for (ns in c(1L, 2L, 8L)) {
+    for (tc in c(1L, 4L, 8L, 16L, 32L)) {
+      for (bt in c(1L, 2L, 4L, 8L, 64L)) {
+        b <- pb(ns, n_cores = tc, r_cores = 2L,
+                total_cores = tc, blas_threads = bt,
+                allow_spare = TRUE)
+        # A BLAS team wider than the chain is capped to one team per chain;
+        # the allocator must never create another process on top of it.
+        effective_bt <- min(tc, bt)
+        expect_lte(b$subject * b$likelihood * effective_bt, tc,
+                   label = sprintf("subjects=%d cores=%d blas=%d", ns, tc, bt))
+        expect_gte(b$subject, 1L)
+        expect_gte(b$likelihood, 1L)
+      }
+    }
+  }
+})
+
+test_that("run_stage requests spare capacity only when r_cores was explicitly raised", {
+  # `run_stage` no longer widens the pool's likelihood workers for an ordinary
+  # multi-subject fit at the r_cores = 1 default: allow_spare is only passed
+  # as TRUE when the caller actually asked for r_cores > 1, at which point
+  # `.particle_core_budget`'s own `r_cores > 1` branch already grants it
+  # regardless of allow_spare -- so the two must agree for every size.
+  pb <- EMC2:::.particle_core_budget
+  for (ns in c(2L, 8L)) {
+    for (tc in c(4L, 8L, 16L)) {
+      for (rc in c(1L, 2L)) {
+        with_spare <- pb(ns, n_cores = tc, r_cores = rc, total_cores = tc,
+                         blas_threads = 1L, allow_spare = rc > 1L)
+        without_spare <- pb(ns, n_cores = tc, r_cores = rc, total_cores = tc,
+                            blas_threads = 1L, allow_spare = FALSE)
+        expect_identical(with_spare, without_spare,
+                         info = sprintf("n_subjects=%d total_cores=%d r_cores=%d", ns, tc, rc))
+      }
+    }
+  }
+})
+
+test_that(".emc_ll_route reports serial or nested_per_call, never a silent persistent_pool on fallback", {
+  route <- EMC2:::.emc_ll_route
+  budget1 <- list(subject = 2L, likelihood = 1L)
+  budget_wide <- list(subject = 2L, likelihood = 4L)
+
+  # No pool at all (e.g. Windows / no FIFO support): the mcmapply fallback's
+  # own core budget decides between serial and a fresh per-call fork.
+  expect_identical(route(NULL, NULL, budget1, budget1), "serial")
+  expect_identical(route(NULL, NULL, budget1, budget_wide), "nested_per_call")
+
+  # A pool object exists but never came alive (single worker, or degraded to
+  # the master-only fallback): this must never read as persistent_pool use,
+  # only as serial or a per-call fork sized by the pool's own budget.
+  dead_pool <- list(n = 1L, alive = FALSE)
+  expect_identical(route(dead_pool, NULL, budget1, NULL), "serial")
+  expect_identical(route(dead_pool, NULL, budget_wide, NULL), "nested_per_call")
+
+  # A genuinely running persistent pool, subject-level or the single-subject
+  # likelihood pool, is reported as such regardless of the fallback budget.
+  live_pool <- list(n = 4L, alive = TRUE)
+  expect_identical(route(live_pool, NULL, budget1, NULL), "persistent_pool")
+  expect_identical(route(NULL, live_pool, budget1, NULL), "persistent_pool")
+  expect_identical(route(dead_pool, live_pool, budget1, NULL), "persistent_pool")
+  # A live handle can be stale after a request falls back in the master.  The
+  # recorded arm, when available, is the diagnostic source of truth.
+  expect_identical(route(NULL, live_pool, budget1, NULL,
+                         list(last_route = "serial")), "serial")
+  expect_identical(route(NULL, live_pool, budget1, NULL,
+                         list(last_route = "persistent_pool")), "persistent_pool")
+})

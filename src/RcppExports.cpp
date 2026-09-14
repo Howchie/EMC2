@@ -87,6 +87,29 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_pt_cell_min_reuse
+double emc_pt_cell_min_reuse(Rcpp::Nullable<Rcpp::NumericVector> ratio);
+RcppExport SEXP _EMC2_emc_pt_cell_min_reuse(SEXP ratioSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type ratio(ratioSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_pt_cell_min_reuse(ratio));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_pt_mapper_stats
+Rcpp::List emc_pt_mapper_stats(Rcpp::Nullable<Rcpp::LogicalVector> enabled, bool reset);
+RcppExport SEXP _EMC2_emc_pt_mapper_stats(SEXP enabledSEXP, SEXP resetSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type enabled(enabledSEXP);
+    Rcpp::traits::input_parameter< bool >::type reset(resetSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_pt_mapper_stats(enabled, reset));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_pt_cell_budget
 double emc_pt_cell_budget(Rcpp::Nullable<Rcpp::NumericVector> bytes);
 RcppExport SEXP _EMC2_emc_pt_cell_budget(SEXP bytesSEXP) {
@@ -3483,6 +3506,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
+    {"_EMC2_emc_pt_cell_min_reuse", (DL_FUNC) &_EMC2_emc_pt_cell_min_reuse, 1},
+    {"_EMC2_emc_pt_mapper_stats", (DL_FUNC) &_EMC2_emc_pt_mapper_stats, 2},
     {"_EMC2_emc_pt_cell_budget", (DL_FUNC) &_EMC2_emc_pt_cell_budget, 1},
     {"_EMC2_emc_pt_defer_scalars", (DL_FUNC) &_EMC2_emc_pt_defer_scalars, 1},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},

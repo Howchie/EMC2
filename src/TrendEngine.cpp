@@ -726,6 +726,11 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
   }
 
   int target_idx = pt.base_index_for(spec.target_param);
+  pt.ensure_full(target_idx);
+  for (std::size_t k = 0; k < op.base_par_indices.size(); ++k) {
+    pt.ensure_full(op.base_par_indices[k]);
+  }
+  pt.mark_full_width_write(target_idx, false);
   double* target_col = &pt.base(0, target_idx);
 
   const std::string& base = spec.base_type;

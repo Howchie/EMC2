@@ -29,7 +29,7 @@
 #                   Groups: smoke, size, stress, cores, particles, chains.
 #                   `stress` is the P = 250 mapper probe and is slow by
 #                   construction -- see the registry note.
-#   EMC_MODEL       RDM (default), LBA, BAwL or DDM
+#   EMC_MODEL       RDM (default), LBA, BAwL, DDM or PCOUNTER
 #   EMC_LIB         library to load EMC2 from
 #   EMC_ITER_SCALE  multiplies every stage's iteration count (1)
 #   EMC_STEP        run_emc block size (100, capped at the shortest stage)
@@ -39,17 +39,20 @@
 #   EMC_PROFILE     also print the preburn stage's per-iteration profile
 #   EMC_ESS_ALPHA   include the N x P subject parameters in "worst"
 #   EMC_SEED        (20260910)     EMC_POLL  memory poll interval, s (0.25)
+#   EMC_TRIALS      override trials/subject for a short proof-of-concept run
+#   EMC_PARTICLE_FACTOR  override particle_factor for a short proof-of-concept
 #
-# How the shapes are chosen.  `cond` is a synthetic factor whose level count
-# sets the parameter vector's width, so P is exact rather than whatever a
-# chosen interaction happened to produce: P = levels(cond) + 6 for RDM, LBA and
-# DDM, + 7 for BAwL, and a case asking for less than a model's floor is raised
-# to it and renamed.  Trial counts are uneven across subjects, and they scale
-# with the level count so that every subject observes every condition.  P and
-# dataset size are therefore *not* orthogonal across the size grid: comparing
-# n32_p64 against n32_p250 measures both at once.  Only matched comparisons of
-# the same case -- before against after, or one library against another -- mean
-# anything, which is what this script is for.
+# How the shapes are chosen.  `cond` (or PCOUNTER's `condition`) is a synthetic
+# factor whose level count sets the parameter vector's width, so P is exact
+# rather than whatever a chosen interaction happened to produce: P =
+# levels(cond) + 6 for RDM, LBA and DDM, + 7 for BAwL, and + 5 for PCOUNTER.
+# A case asking for less than a model's floor is raised to it and renamed.
+# Trial counts are uneven across subjects, and they scale with the level count
+# so that every subject observes every condition.  P and dataset size are
+# therefore *not* orthogonal across the size grid: comparing n32_p64 against
+# n32_p250 measures both at once.  Only matched comparisons of the same case --
+# before against after, or one library against another -- mean anything, which
+# is what this script is for.
 #
 # Traps, each of which has cost real time here:
 #
@@ -103,6 +106,13 @@ BASELINE   <- Sys.getenv("EMC_BASELINE", "")
 LABEL      <- Sys.getenv("EMC_LABEL", if (nzchar(lib)) basename(lib) else "current")
 PROFILE    <- .env_lgl("EMC_PROFILE", FALSE)
 ESS_ALPHA  <- .env_lgl("EMC_ESS_ALPHA", FALSE)
+TRIALS_OVERRIDE <- suppressWarnings(as.integer(Sys.getenv("EMC_TRIALS", "NA")))
+if (length(TRIALS_OVERRIDE) != 1L || is.na(TRIALS_OVERRIDE) || TRIALS_OVERRIDE < 2L)
+  TRIALS_OVERRIDE <- NA_integer_
+PARTICLE_FACTOR_OVERRIDE <- suppressWarnings(as.numeric(Sys.getenv("EMC_PARTICLE_FACTOR", "NA")))
+if (length(PARTICLE_FACTOR_OVERRIDE) != 1L || !is.finite(PARTICLE_FACTOR_OVERRIDE) ||
+    PARTICLE_FACTOR_OVERRIDE <= 0)
+  PARTICLE_FACTOR_OVERRIDE <- NA_real_
 
 # Fixed iteration counts, not adaptive stopping.  `fit()`'s defaults stop burn
 # on Rhat and adapt on unique-sample counts, so two libraries would do different
@@ -144,6 +154,16 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
     DDM  = list(fun = DDM,  offset = 6L, race = FALSE,
                 formula = list(v ~ S + cond, a ~ E, t0 ~ 1, Z ~ 1),
                 constants = c(s = log(1))),
+    PCOUNTER = list(fun = PCOUNTER, offset = 5L, race = TRUE,
+                    # PCOUNTER is included here as the proof-of-concept
+                    # comparator, not as a permanently special sampler route.
+                    # Its six kernel parameters share one condition design on
+                    # nu; the omission/guess terms remain fixed for a stable
+                    # matched sampling workload.
+                    formula = list(nu ~ condition, sv ~ 1, gamma ~ 1,
+                                   k ~ 1, omega ~ 1, t0 ~ 1),
+                    constants = c(pContaminant = qnorm(0),
+                                  pGuess = qnorm(0))),
     stop("no benchmark specification for model ", model))
 }
 
@@ -162,7 +182,9 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
   # Enough trials that every subject sees every condition several times, and
   # never fewer than an ordinary experiment's worth.
   if (is.null(trials)) trials <- max(200L, 3L * n_cond)
+  if (is.finite(TRIALS_OVERRIDE)) trials <- max(2L, TRIALS_OVERRIDE)
   if (is.null(name)) name <- sprintf("n%d_p%d", as.integer(subjects), pars)
+  if (is.finite(PARTICLE_FACTOR_OVERRIDE)) particle_factor <- PARTICLE_FACTOR_OVERRIDE
   list(name = name, group = group, model = MODEL,
        subjects = as.integer(subjects), pars = as.integer(pars),
        conditions = n_cond, trials = as.integer(trials),
@@ -260,6 +282,7 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
     # would alias `cond` with the E and S cycle the source rows already carry,
     # and the design would collapse.
     d$cond <- factor(sample(rep_len(levs, n_i[s])), levels = levs)
+    d$condition <- d$cond
     d
   }))
   dat$subjects <- factor(dat$subjects, levels = sprintf("s%03d", seq_len(cs$subjects)))

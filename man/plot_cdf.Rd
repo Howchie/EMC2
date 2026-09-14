@@ -23,7 +23,10 @@ plot_cdf(
   posterior_args = list(),
   prior_args = list(),
   add_percentiles = c(10, 50, 90),
-  ...
+  ...,
+  smooth = FALSE,
+  rt_resolution = 1/60,
+  smooth_bw = NULL
 )
 }
 \arguments{
@@ -66,6 +69,14 @@ computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows 
 \item{prior_args}{Optional list of graphical parameters for prior lines/ribbons.}
 
 \item{add_percentiles}{Vector of integers giving percentiles to plot as points, NULL stops plotting.}
+
+\item{smooth}{Logical; if \code{TRUE}, use an opt-in Gaussian-kernel CDF evaluated on
+an \code{rt_resolution} grid. The default \code{FALSE} preserves the quantile-based CDF.}
+
+\item{rt_resolution}{Positive grid spacing for the smoothed CDF (default \code{1/60}).}
+
+\item{smooth_bw}{Optional positive Gaussian-kernel bandwidth. If \code{NULL}, it is
+selected from the finite RTs using \code{stats::bw.nrd0()}.}
 
 \item{...}{Other graphical parameters for the real data lines.}
 }

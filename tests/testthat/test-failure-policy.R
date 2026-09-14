@@ -37,7 +37,7 @@ test_that("the policy defaults to report and refuses to be misconfigured", {
 # --- what aborts ------------------------------------------------------------
 
 test_that("numerical rejection continues under every policy", {
-  old <- options()
+  old <- options(emc2.failure_policy = NULL)
   on.exit(options(old), add = TRUE)
   # This is the PMwG invariant. A policy that could abort here would be a
   # policy that breaks the sampler.
@@ -48,7 +48,7 @@ test_that("numerical rejection continues under every policy", {
 })
 
 test_that("only strict aborts, and it aborts on everything else", {
-  old <- options()
+  old <- options(emc2.failure_policy = NULL)
   on.exit(options(old), add = TRUE)
   others <- setdiff(.EMC_REJECT_CLASSES, "numerical")
   expect_identical(sort(others),

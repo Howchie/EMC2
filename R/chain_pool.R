@@ -1746,7 +1746,8 @@
   .emc_pool_state$ll_route <- list(mode = "probe", t_serial = numeric(0),
                                    t_pool = numeric(0), since = 0L,
                                    split = "probe", t_static = numeric(0),
-                                   t_dynamic = numeric(0), since_split = 0L)
+                                   t_dynamic = numeric(0), since_split = 0L,
+                                   last_route = NULL)
   invisible(NULL)
 }
 
@@ -1774,10 +1775,13 @@
          FALSE)
 }
 
-.emc_ll_route_record <- function(pooled, seconds, n_particles, dynamic = FALSE) {
+.emc_ll_route_record <- function(pooled, seconds, n_particles, dynamic = FALSE,
+                                  route = NULL) {
   st <- .emc_pool_state$ll_route
   if (is.null(st) || !is.finite(seconds) || n_particles <= 0L) return(invisible(NULL))
   per <- seconds / n_particles
+  if (is.null(route)) route <- if (pooled) "persistent_pool" else "serial"
+  st$last_route <- route
   if (pooled) st$t_pool <- c(st$t_pool, per) else st$t_serial <- c(st$t_serial, per)
   if (pooled && identical(st$mode, "pool")) {
     if (dynamic) st$t_dynamic <- c(st$t_dynamic, per)
@@ -1814,10 +1818,10 @@
     st$since <- st$since + 1L
     if (st$since >= .EMC_LL_REPROBE) {
       # Re-time both arms as particle costs change; retain the split state so an
-      # outer probe does not discard the nested routing decision.
       st <- list(mode = "probe", t_serial = numeric(0), t_pool = numeric(0),
                  since = 0L, split = st$split, t_static = st$t_static,
-                 t_dynamic = st$t_dynamic, since_split = st$since_split)
+                 t_dynamic = st$t_dynamic, since_split = st$since_split,
+                 last_route = st$last_route)
     }
   }
   .emc_pool_state$ll_route <- st

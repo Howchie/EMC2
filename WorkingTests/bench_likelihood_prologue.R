@@ -119,12 +119,13 @@ report("15% omissions, UC = 2.0 (mixed path)", make_fixture(NT, censor_frac = 0.
 # would be worth its staleness risk; at the time of writing it is ~1%.
 fx <- make_fixture(NT)
 cat("\ncost vs particle count (all-finite):\n")
-for (np in c(1L, 2L, 5L, 10L, 25L, NP)) {
-  p <- fx$prop[seq_len(np), , drop = FALSE]
+for (np in unique(c(1L, 2L, 5L, 10L, 25L, NP))) {
+  np_run <- min(np, nrow(fx$prop))
+  p <- fx$prop[seq_len(np_run), , drop = FALSE]
   t <- cpu(EMC2:::calc_ll_manager(p, fx$dadm, fx$model, r_cores = 1),
-           reps = max(3L, as.integer(REPS * NP / np / 4)))
-  cat(sprintf("  %4d particles  %8.2f ms  (%.3f ms/particle)\n",
-              np, 1000 * t, 1000 * t / np))
+           reps = max(3L, as.integer(REPS * NP / np_run / 4)))
+  cat(sprintf("  %4d particles      %8.2f ms  (%.3f ms/particle)\n",
+              np_run, 1000 * t, 1000 * t / np_run))
 }
 
 # --- the design-cell route against the general row route -------------------

@@ -93,6 +93,15 @@ check_data_plot <- function(data, defective_factor, subject, factors, remove_na 
     data$subjects <- factor(data$subjects)
   }
 
+  # Keep finite upper censoring/truncation bounds available to the optional
+  # smoothed CDF grid even when corresponding rt rows are removed below.
+  plot_upper_max <- unlist(lapply(intersect(c("UC", "UT"), names(data)),
+                                  function(nm) {
+                                    val <- suppressWarnings(as.numeric(data[[nm]]))
+                                    val[is.finite(val)]
+                                  }), use.names = FALSE)
+  plot_upper_max <- if (length(plot_upper_max)) max(plot_upper_max) else NA_real_
+
   if (remove_na && any(!is.finite(data$rt))) {
     panel_cols  <- intersect(if (is.null(factors)) character(0) else factors, names(data))
     context_cols <- detect_context_cols(data, defective_factor, panel_cols)
@@ -118,6 +127,7 @@ check_data_plot <- function(data, defective_factor, subject, factors, remove_na 
   tmp_unique$group_key <- create_group_key(tmp_unique, factors)
   data <- merge(x = data, y = tmp_unique, by = grp_cols, all.x = TRUE,
                 sort = FALSE)
+  if (is.finite(plot_upper_max)) attr(data, "plot_upper_max") <- plot_upper_max
   return(data)
 }
 
@@ -904,9 +914,63 @@ detect_context_cols <- function(data, defective_factor,
 }
 
 ###############################################################################
-## Helper: get_def_cdf
+## Helpers: smoothed CDF grid, percentile markers, and CDF calculation
 ###############################################################################
-get_def_cdf <- function(x, defective_factor, dots)
+get_smooth_cdf_grid <- function(data_sources, rt_resolution = 1 / 60) {
+  if (!is.numeric(rt_resolution) || length(rt_resolution) != 1L ||
+      !is.finite(rt_resolution) || rt_resolution <= 0) {
+    stop("rt_resolution must be a single positive finite number")
+  }
+
+  finite_bounds <- unlist(lapply(data_sources, function(dat) {
+    if (is.null(dat) || !is.data.frame(dat)) return(numeric(0))
+    rt <- suppressWarnings(as.numeric(dat$rt))
+    bounds <- rt[is.finite(rt)]
+    for (upper_name in intersect(c("UC", "UT"), names(dat))) {
+      upper <- suppressWarnings(as.numeric(dat[[upper_name]]))
+      bounds <- c(bounds, upper[is.finite(upper)])
+    }
+    attr_upper <- attr(dat, "plot_upper_max")
+    if (is.numeric(attr_upper) && length(attr_upper) == 1L &&
+        is.finite(attr_upper)) {
+      bounds <- c(bounds, attr_upper)
+    }
+    bounds
+  }), use.names = FALSE)
+  grid_max <- if (length(finite_bounds)) max(0, finite_bounds) else 1
+
+  grid <- seq(0, grid_max, by = rt_resolution)
+  if (!length(grid) || tail(grid, 1L) < grid_max) {
+    grid <- c(grid, grid_max)
+  }
+  # `lines()` can draw a one-point curve, but a two-point grid also makes
+  # interpolation of percentile markers well-defined for degenerate data.
+  if (length(grid) == 1L) grid <- c(grid, grid + rt_resolution)
+  grid
+}
+
+
+get_cdf_percentiles <- function(cmat, percentiles) {
+  if (is.null(cmat) || !length(percentiles) || !nrow(cmat)) return(NULL)
+  x <- as.numeric(cmat[, "x"])
+  y <- as.numeric(cmat[, "y"])
+  keep <- is.finite(x) & is.finite(y)
+  if (!any(keep)) return(NULL)
+  x <- x[keep]
+  y <- y[keep]
+  target_y <- max(y) * percentiles / 100
+  if (length(unique(y)) < 2L) {
+    return(list(x = rep(x[which.max(y)][1L], length(target_y)), y = target_y))
+  }
+  ord <- order(y, x)
+  list(x = approx(y[ord], x[ord], xout = target_y,
+                 ties = "ordered", rule = 2)$y,
+       y = target_y)
+}
+
+
+get_def_cdf <- function(x, defective_factor, dots, smooth = FALSE,
+                        smooth_grid = NULL, smooth_bw = NULL)
 {
   probs      <- c(seq(0.01, 0.99, by = 0.01), 1)
   resp       <- x[[defective_factor]]
@@ -930,8 +994,40 @@ get_def_cdf <- function(x, defective_factor, dots)
       p_finite  <- if ("p_finite_rt" %in% names(inp)) inp$p_finite_rt[1L] else 1.0
     }
     prop_share <- nrow(inp) / n_context * p_finite
-    rtquants   <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
-    cbind(x = rtquants, y = probs * prop_share)
+    if (isTRUE(smooth)) {
+      if (is.null(smooth_grid) || length(smooth_grid) < 2L) {
+        stop("smooth_grid must contain at least two points when smooth = TRUE")
+      }
+      rt_finite <- inp$rt[is.finite(inp$rt)]
+      if (!length(rt_finite)) {
+        return(cbind(x = smooth_grid, y = rep(0, length(smooth_grid))))
+      }
+      bw <- smooth_bw
+      if (is.null(bw) && length(rt_finite) >= 2L) {
+        bw <- stats::bw.nrd0(rt_finite)
+      }
+      if (!is.numeric(bw) || length(bw) != 1L || !is.finite(bw) || bw <= 0) {
+        if (!is.null(smooth_bw)) {
+          stop("smooth_bw must be a single positive finite number")
+        }
+        bw <- diff(range(rt_finite))
+        if (!is.finite(bw) || bw <= 0) bw <- diff(range(smooth_grid))[1L]
+        if (!is.finite(bw) || bw <= 0) bw <- 1e-3
+      }
+      # Gaussian-kernel CDF: averaging the kernel CDF keeps the result
+      # monotone while avoiding a separate density grid/integration step.
+      smoothed <- vapply(smooth_grid, function(rt) {
+        mean(stats::pnorm((rt - rt_finite) / bw))
+      }, numeric(1L))
+      # Only finite RTs contribute kernel centers.  Scale by their share of
+      # the context so `remove_na = FALSE` still retains non-finite mass in
+      # the defective CDF denominator.
+      smooth_prop_share <- length(rt_finite) / n_context * p_finite
+      cbind(x = smooth_grid, y = smoothed * smooth_prop_share)
+    } else {
+      rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
+      cbind(x = rtquants, y = probs * prop_share)
+    }
   })
 
   names(out) <- resp_levels
@@ -970,6 +1066,11 @@ get_def_cdf <- function(x, defective_factor, dots)
 #' @param posterior_args Optional list of graphical parameters for posterior lines/ribbons.
 #' @param prior_args Optional list of graphical parameters for prior lines/ribbons.
 #' @param add_percentiles Vector of integers giving percentiles to plot as points, NULL stops plotting.
+#' @param smooth Logical; if `TRUE`, use an opt-in Gaussian-kernel CDF evaluated on
+#'   an `rt_resolution` grid. The default `FALSE` preserves the quantile-based CDF.
+#' @param rt_resolution Positive grid spacing for the smoothed CDF (default `1/60`).
+#' @param smooth_bw Optional positive Gaussian-kernel bandwidth. If `NULL`, it is
+#'   selected from the finite RTs using `stats::bw.nrd0()`.
 #' @param ... Other graphical parameters for the real data lines.
 #'
 #' @return Returns `NULL` invisibly.
@@ -999,8 +1100,15 @@ plot_cdf <- function(input,
                      posterior_args = list(),
                      prior_args = list(),
                      add_percentiles=c(10,50,90),
-                     ...) {
+                     ...,
+                     smooth = FALSE,
+                     rt_resolution = 1 / 60,
+                     smooth_bw = NULL) {
   dots <- list(...)
+
+  if (length(smooth) != 1L || !is.logical(smooth) || is.na(smooth)) {
+    stop("smooth must be TRUE or FALSE")
+  }
 
   # 1) prep_data_plot
   if (!is.null(add_percentiles)) {
@@ -1013,6 +1121,11 @@ plot_cdf <- function(input,
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- check$xlim
+  smooth_grid <- if (isTRUE(smooth)) {
+    get_smooth_cdf_grid(data_sources, rt_resolution = rt_resolution)
+  } else {
+    NULL
+  }
 
   # Basic definitions
   if (is.numeric(dots$xlim) && length(dots$xlim) == 2L &&
@@ -1064,7 +1177,9 @@ plot_cdf <- function(input,
         # sub_grp is all rows for a single group_key
         # we further split by postn
         postn_splits <- split(sub_grp, sub_grp$postn)
-        lapply(postn_splits, get_def_cdf, defective_factor, dots)
+        lapply(postn_splits, get_def_cdf, defective_factor, dots,
+               smooth = smooth, smooth_grid = smooth_grid,
+               smooth_bw = smooth_bw)
       })
 
       # Now we derive cdf_quants_list from cdf_list
@@ -1127,7 +1242,10 @@ plot_cdf <- function(input,
 
     } else {
       # single dataset => cdf_list[[sname]] => group_key => get_def_cdf => named list by factor level
-      cdf_list[[sname]] <- lapply(splitted, get_def_cdf, defective_factor, dots)
+      cdf_list[[sname]] <- lapply(
+        splitted, get_def_cdf, defective_factor, dots,
+        smooth = smooth, smooth_grid = smooth_grid, smooth_bw = smooth_bw
+      )
 
       # If we use this dataset for y-limit, find max
       if (styp %in% use_lim) {
@@ -1225,13 +1343,21 @@ plot_cdf <- function(input,
                 lines_args <- add_defaults(src_args, lty=line_types[ilev])
                 lines_args <- fix_dots_plot(lines_args)
                 do.call(lines, c(list(x=cmat[,"x"], y=cmat[,"y"]), lines_args))
-              }
-              if (!is.null(add_percentiles)) {
-                points_args <- lines_args
-                if (is.null(points_args$pch)) points_args$pch <- 16
-                points_args$col <- lines_args$col[1]
-                do.call(points, c(list(x = cmat[add_percentiles, "x"][],
-                  y = cmat[add_percentiles, "y"][]), points_args))
+                if (!is.null(add_percentiles)) {
+                  points_args <- lines_args
+                  if (is.null(points_args$pch)) points_args$pch <- 16
+                  points_args$col <- lines_args$col[1]
+                  if (isTRUE(smooth)) {
+                    cdf_points <- get_cdf_percentiles(cmat, add_percentiles)
+                    if (!is.null(cdf_points)) {
+                      do.call(points, c(list(x = cdf_points$x, y = cdf_points$y),
+                                        points_args))
+                    }
+                  } else {
+                    do.call(points, c(list(x = cmat[add_percentiles, "x"][],
+                      y = cmat[add_percentiles, "y"][]), points_args))
+                  }
+                }
               }
               ilev <- ilev+1
             }
@@ -1282,8 +1408,19 @@ plot_cdf <- function(input,
                     points_args <- lines_args
                     if (is.null(points_args$pch)) points_args$pch <- 16
                     points_args$col <- lines_args$col[1]
-                     do.call(points, c(list(x_med[add_percentiles],y_median[add_percentiles]),
-                                      points_args))
+                    if (isTRUE(smooth)) {
+                      cdf_points <- get_cdf_percentiles(
+                        cbind(x = x_med, y = y_median), add_percentiles
+                      )
+                      if (!is.null(cdf_points)) {
+                        do.call(points, c(list(x = cdf_points$x, y = cdf_points$y),
+                                          points_args))
+                      }
+                    } else {
+                      do.call(points, c(list(x_med[add_percentiles],
+                                             y_median[add_percentiles]),
+                                        points_args))
+                    }
                   }
                 }
                 ilev <- ilev+1

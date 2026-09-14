@@ -106,6 +106,32 @@ test_that("mapping, transforms and bounds match the reference lane on every desi
   }
 })
 
+test_that("deferred scalar markers are cleared by varying mapped writers", {
+  old_defer <- EMC2:::emc_pt_defer_scalars()
+  on.exit(EMC2:::emc_pt_defer_scalars(old_defer), add = TRUE)
+  EMC2:::emc_pt_defer_scalars(TRUE)
+
+  # B is first mapped across lM.  v then reads the already-varying B column
+  # through a one-cell, non-self design (the low-level shape of v ~ B).
+  # The initial particle refill defers v because the structural v design is
+  # single-cell.  Mapping v takes the row route because B is varying, so the
+  # writer must retire v's deferred scalar marker before materialize().
+  fx <- prologue_fixture(list(v ~ 1, B ~ lM, A ~ 1, t0 ~ 1),
+                         n_trials = 37, n_particles = 2)
+  designs <- EMC2:::.oo_expanded_designs(fx$dadm, expand = FALSE)
+  v_design <- matrix(1, nrow = 1, ncol = 1,
+                     dimnames = list(NULL, "B"))
+  attr(v_design, "expand") <- rep.int(1L, nrow(fx$dadm))
+  designs$v <- v_design
+  designs <- designs[c("B", "v", setdiff(names(designs), c("B", "v")))]
+
+  got <- run_prologue(fx, designs)$pars
+  want <- run_reference(fx, designs)
+  expect_equal(as.numeric(got[, "v", 2]), as.numeric(want[, "v", 2]),
+               tolerance = 0)
+  expect_gt(length(unique(got[, "v", 2])), 1)
+})
+
 test_that("a continuous covariate is not treated as a single design cell", {
   # This is the one input shape that would silently break the row-constant
   # short cut: the design has one row per distinct covariate value, so the
@@ -226,4 +252,48 @@ test_that("a particle's parameters do not depend on how many particles precede i
                  as.numeric(batch[, , i]), tolerance = 0,
                  info = paste("particle", i))
   }
+})
+
+# --- route diagnostics ------------------------------------------------------
+
+test_that("mapper route counters distinguish cell and row designs", {
+  # Diagnostics are process-local and off by default.  Restore the switch even
+  # when an assertion fails so later test files cannot inherit instrumentation.
+  old <- EMC2:::emc_pt_mapper_stats()
+  on.exit(EMC2:::emc_pt_mapper_stats(enabled = old$enabled, reset = TRUE), add = TRUE)
+  old_reuse <- EMC2:::emc_pt_cell_min_reuse()
+  on.exit(EMC2:::emc_pt_cell_min_reuse(old_reuse), add = TRUE)
+
+
+  EMC2:::emc_pt_mapper_stats(enabled = TRUE, reset = TRUE)
+  cell_fx <- prologue_fixture(list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1),
+                              n_trials = 60, n_particles = 2)
+  run_prologue(cell_fx)
+  cell_stats <- EMC2:::emc_pt_mapper_stats()
+  expect_gt(cell_stats$map_cell, 0)
+  expect_gt(cell_stats$cell_admit, 0)
+
+  EMC2:::emc_pt_mapper_stats(reset = TRUE)
+  # Force the general row route for the continuous design: it is a deliberate
+  # route-cliff probe, not an assertion that continuous cells are invalid.
+  EMC2:::emc_pt_cell_min_reuse(1)
+  cov1 <- seq(-1, 1, length.out = 60)
+  row_fx <- prologue_fixture(list(v ~ cov1, B ~ 1, A ~ 1, t0 ~ 1),
+                             n_trials = 60, n_particles = 2,
+                             covariates = "cov1",
+                             cov_data = list(cov1 = cov1))
+  run_prologue(row_fx)
+  row_stats <- EMC2:::emc_pt_mapper_stats()
+  expect_gt(row_stats$map_row, 0)
+  expect_equal(row_stats$cell_admit, 0)
+})
+
+test_that("mapper counters stay inert while disabled", {
+  EMC2:::emc_pt_mapper_stats(enabled = FALSE, reset = TRUE)
+  fx <- prologue_fixture(list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1),
+                         n_trials = 20, n_particles = 1)
+  run_prologue(fx)
+  stats <- EMC2:::emc_pt_mapper_stats()
+  expect_false(stats$enabled)
+  expect_equal(unname(unlist(stats[setdiff(names(stats), "enabled")])), rep(0, 13))
 })

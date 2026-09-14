@@ -23,12 +23,12 @@ make_censored_dadm <- function(n_trials = 200, omit_every = 7L) {
   # compress = FALSE so the row count tracks n_trials: compression collapses
   # duplicate rt/R rows, which would otherwise saturate the size sweep below.
   emc <- suppressMessages(make_emc(dat, des, type = "single", compress = FALSE))
-  .cache_ll_data_attrs(emc[[1]]$data[[1]], force_rebuild = TRUE)
+  EMC2:::.cache_ll_data_attrs(emc[[1]]$data[[1]], force_rebuild = TRUE)
 }
 
 valid <- function(dadm) {
-  .is_valid_ll_cache(dadm, nrow(dadm),
-                     length(unique(as.integer(dadm[["lR"]]))), FALSE)
+  EMC2:::.is_valid_ll_cache(dadm, nrow(dadm),
+                            length(unique(as.integer(dadm[["lR"]]))), FALSE)
 }
 
 test_that("a freshly built ll cache validates", {
@@ -69,7 +69,7 @@ test_that("a corrupted ll cache is rejected", {
 test_that("the nogo branch validates and rejects", {
   dadm <- make_censored_dadm()
   levels(dadm[["lR"]]) <- c(levels(dadm[["lR"]])[1], "nogo")
-  dadm <- .cache_ll_data_attrs(dadm, force_rebuild = TRUE)
+  dadm <- EMC2:::.cache_ll_data_attrs(dadm, force_rebuild = TRUE)
   expect_true(any(attr(dadm, "active_nogo_trial_mask")))
   expect_true(valid(dadm))
 

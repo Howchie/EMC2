@@ -79,6 +79,33 @@ test_that("workers survive a block, compute, and shut down", {
   on.exit(NULL)
 })
 
+test_that("twenty pool rounds do not retain retired or nested processes", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  skip_if(!file.exists("/proc/self/stat"), "process ancestry needs procfs")
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+
+  # Capture the owned process set before any work.  A later extra descendant
+  # is a nested/per-call executor; a missing original pid is a retired worker.
+  before <- EMC2:::.emc_profile_tree_pids(Sys.getpid(), adopt = TRUE)
+  workers <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
+  expect_true(all(!is.na(workers)))
+  for (iteration in seq_len(20L)) {
+    for (w in seq_along(workers)) {
+      EMC2:::.emc_wpool_send(pool$wcs[[w]],
+                             list(subs = w, echo = iteration))
+    }
+    got <- lapply(seq_along(workers),
+                  function(w) EMC2:::.emc_wpool_reply(pool, w))
+    expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
+    expect_true(all(vapply(workers, EMC2:::.emc_wpool_pid_alive, logical(1))))
+  }
+  after <- EMC2:::.emc_profile_tree_pids(Sys.getpid(), adopt = TRUE)
+  expect_setequal(after, before)
+})
+
 test_that("spawned workers descend from a history-free template", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))

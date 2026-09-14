@@ -25,14 +25,17 @@ struct DesignEntry {
   std::vector<char> coef_in_pre_sum; // length K; whether this design column contributes to pre-sum
   // 0-based row map for a compressed design matrix; empty means identity.
   std::vector<int> expand_idx;
+  // Plan-time scalar-reader classification.  It is deliberately structural:
+  // repeated values in a particle must never be used as evidence.
+  // A scalar-filled output is safe to leave deferred only when this design has
+  // no arbitrary-row read (self-reference and split transforms are excluded).
+  bool scalar_reader = false;
   // Every trial reads the SAME design row, so this design's output column is
   // row-constant whenever all of its coefficient columns are. Computed once in
   // init_design_plan; see the row-constant notes on ParamTable::col_const.
   bool single_cell = false;
   // Design-CELL structure: this design reads n_cells distinct rows, so its
-  // output column takes at most n_cells distinct values laid out by
-  // expand_idx.  cell_rep[c] is the first trial row that reads design row c
-  // (-1 when no trial does).  single_cell is the n_cells == 1 case.
+  // output column takes at most n_cells distinct values laid out by expand_idx.
   bool cell_usable = false;
   int n_cells = 0;
   std::vector<int> cell_rep;
@@ -115,6 +118,16 @@ struct ParamTable {
   inline void scalar_reset() {
     if ((int)col_scalar.size() != base.ncol()) col_scalar.assign(base.ncol(), 0);
   }
+  // Any writer that replaces a whole base column must retire a deferred
+  // scalar claim first.  The caller supplies the row-constant claim when it
+  // can prove one; arbitrary writers pass false.
+  inline void clear_scalar_marker(int j) const {
+    if (j >= 0 && j < (int)col_scalar.size()) col_scalar[j] = 0;
+  }
+  inline void mark_full_width_write(int j, bool is_const) {
+    clear_scalar_marker(j);
+    const_mark(j, is_const);
+  }
   inline bool col_is_scalar(int j) const {
     return j >= 0 && j < (int)col_scalar.size() && col_scalar[j] != 0;
   }
@@ -126,7 +139,7 @@ struct ParamTable {
     Rcpp::NumericMatrix& m = const_cast<Rcpp::NumericMatrix&>(base);
     double* col = &m(0, j);
     std::fill(col + 1, col + n_trials, col[0]);
-    col_scalar[j] = 0;
+    clear_scalar_marker(j);
   }
   inline void ensure_full_all() const {
     for (std::size_t j = 0; j < col_scalar.size(); ++j) ensure_full((int)j);
@@ -285,26 +298,21 @@ struct ParamTable {
   Rcpp::NumericVector column_by_active_index(int j) const {
     return base(_, active_cols[j]);  // view
   }
-
-  bool is_active_base_idx(int base_idx) const {
-    return std::find(active_cols.begin(), active_cols.end(), base_idx) != active_cols.end();
-  }
-
   // Column view by parameter name
   Rcpp::NumericVector column_by_name(const std::string& nm) const {
-    int base_idx = base_index_for(nm); // O(1) from map
-        return base(_, base_idx);  // view
+    const int base_idx = base_index_for(nm);
+    return base(_, base_idx);  // view
   }
 
   // Assign into existing column (writes into base)
   void set_column_by_name(const std::string& nm,
                           const Rcpp::NumericVector& col) {
     int base_idx = base_index_for(nm);
-        // Arbitrary external write: conservatively drop this column's
-        // row-constant claim rather than inspect the incoming vector.
-        const_mark(base_idx, false);
-        base(_, base_idx) = col;
-        return;
+    // Arbitrary external write: conservatively drop this column's
+    // row-constant claim and any deferred scalar representation.
+    mark_full_width_write(base_idx, false);
+    base(_, base_idx) = col;
+    return;
   }
 
 
@@ -370,6 +378,7 @@ struct ParamTable {
     for (int i = 0; i < n_params; ++i) {
       DesignEntry& entry = design_plan[i];
       entry.valid = false;
+      entry.scalar_reader = false;
       entry.split_transform = false;
       entry.split_code = IDENTITY;
       entry.split_lower = 0.0;
@@ -461,28 +470,29 @@ struct ParamTable {
         entry.single_cell = (design.nrow() == 1) || (T <= 1);
       }
 
-      // Cell structure: worth exploiting when the design genuinely has fewer
-      // rows than trials -- that ratio is the reuse, and it is what every
-      // consumer of `cell_usable` saves, the mapper's arithmetic and the
-      // transform's exp() calls and the bound lane's comparisons alike -- and
-      // only while its scratch fits the budget.  A continuous covariate has one
-      // cell per trial, no reuse, and is refused here by the first test, which
-      // is what keeps the general row route in service for it.
-      //
-      // Deliberately no minimum reuse *ratio*.  At n_cells barely below T the
-      // cell route does nearly the row route's arithmetic and adds a gather,
-      // so there is a regime where it should lose -- but that regime was
-      // already admitted before this commit (a 300-trial design with 299 cells
-      // took the cell route under the old constant too), so imposing a
-      // threshold here would change behaviour this commit has not measured.
-      // WorkingTests/bench_likelihood_prologue.R times the two routes against
-      // each other on identical inputs; that is where a threshold gets decided,
-      // on evidence.
+      // A design output is scalar-readable only when its structure guarantees
+      // one design row and it cannot read its own prior output or a split
+      // pre-sum at arbitrary rows.  This is a plan fact, not a value scan.
+      entry.scalar_reader =
+        entry.single_cell && !entry.uses_self && !entry.split_transform;
+
+      // Cell structure is admitted only when the design genuinely reuses rows
+      // and its three accumulator lanes fit the bounded scratch budget.  The
+      // optional reuse threshold defaults to zero, preserving the historical
+      // route exactly while allowing measured experiments to reject marginal
+      // gathers without changing arithmetic.
+      const bool cell_candidate =
+        !entry.single_cell && !entry.expand_idx.empty() && design.nrow() < T;
       const bool cells_fit =
         static_cast<std::size_t>(design.nrow()) <=
           emc::cell_scratch_budget() / EMC2_PT_CELL_SCRATCH_BYTES;
-      if (!entry.single_cell && !entry.expand_idx.empty() &&
-          design.nrow() < T && cells_fit) {
+      const double reuse_fraction =
+        T > 0 ? 1.0 - static_cast<double>(design.nrow()) / static_cast<double>(T)
+               : 0.0;
+      const bool reuse_fit =
+        emc::cell_min_reuse_ratio() <= 0.0 ||
+        reuse_fraction >= emc::cell_min_reuse_ratio();
+      if (cell_candidate && cells_fit && reuse_fit) {
         entry.n_cells = design.nrow();
         entry.cell_rep.assign(entry.n_cells, -1);
         for (int r = 0; r < T; ++r) {
@@ -490,6 +500,9 @@ struct ParamTable {
           if (entry.cell_rep[c] < 0) entry.cell_rep[c] = r;
         }
         entry.cell_usable = true;
+        emc::mapper_count_cell_admit();
+      } else if (cell_candidate) {
+        emc::mapper_count_cell_reject(!cells_fit, !reuse_fit);
       }
 
       entry.valid = true;
@@ -867,8 +880,8 @@ struct ParamTable {
       // A self-intercept-only design is normally already represented by the
       // parameter value in `base`, so remapping it is redundant.  It is not
       // redundant for split transforms: the intercept is the pre-transform
-      // sum and must still pass through the requested transform.
       if (entry.skip_self_intercept && !entry.split_transform) {
+        emc::mapper_count_map(emc::MAPPER_SCALAR);
         continue;
       }
 
@@ -914,6 +927,8 @@ struct ParamTable {
                                            entry.split_lower, entry.split_upper) + post
             : post;
           std::fill(outc, outc + T, v);
+          mark_full_width_write(out_idx, true);
+          emc::mapper_count_map(emc::MAPPER_SCALAR);
           continue;
         }
 
@@ -986,7 +1001,9 @@ struct ParamTable {
               }
             }
             for (int r = 0; r < T; ++r) outc[r] = post_val[ex[r]];
+            mark_full_width_write(out_idx, false);
             col_cell[out_idx] = i;
+            emc::mapper_count_map(emc::MAPPER_CELL);
             continue;
           }
           // The arena refused: fall through to the general per-row route,
@@ -994,6 +1011,7 @@ struct ParamTable {
           // here, on the way out of this scope.
         }
       }
+      emc::mapper_count_map(emc::MAPPER_ROW);
 
       // Preserve self column if needed.  A self-referencing design reads its
       // own output column at arbitrary rows, so it needs the wide form even
@@ -1008,6 +1026,7 @@ struct ParamTable {
         std::copy(src, src + T, self_copy.begin());
       }
 
+      mark_full_width_write(out_idx, false);
       // Clear output
       std::fill(out, out + T, 0.0);
 
@@ -1079,11 +1098,12 @@ struct ParamTable {
 
   // Zero the entire base matrix
   void reset_base_to_zero() {
+    scalar_reset();
     // Every column becomes one repeated value (zero).
-    if (track_const) std::fill(col_const.begin(), col_const.end(), 1);
     const int n = n_trials;
     const int p = base.ncol();
     for (int j = 0; j < p; ++j) {
+      mark_full_width_write(j, true);
       double* col = &base(0, j);
       for (int r = 0; r < n; ++r) {
         col[r] = 0.0;
@@ -1108,7 +1128,7 @@ struct ParamTable {
       }
       int j = it->second;
       double val = p_vector[i];
-      const_mark(j, true);
+      mark_full_width_write(j, true);
       double* col = &base(0, j);
       for (int r = 0; r < n_trials; ++r) {
         col[r] = val;
@@ -1135,7 +1155,7 @@ struct ParamTable {
         int base_idx = pm_col_to_base_idx[j];
         if (base_idx < 0) continue;
         double val = particles(row, j);
-        const_mark(base_idx, true);
+        mark_full_width_write(base_idx, true);
         double* col = &base(0, base_idx);
         for (int r = 0; r < n_trials; ++r) col[r] = val;
       }
@@ -1161,7 +1181,7 @@ struct ParamTable {
         int base_idx = pm_col_to_base_idx[j];
         if (base_idx < 0 || inv_set.count(base_idx)) continue;
         double val = particles(row, j);
-        const_mark(base_idx, true);
+        mark_full_width_write(base_idx, true);
         double* col = &base(0, base_idx);
         for (int r = 0; r < n_trials; ++r) col[r] = val;
       }
@@ -1170,7 +1190,7 @@ struct ParamTable {
       // constant, which is wrong for a restored multi-cell column.
       for (int k = 0; k < n_inv; ++k) {
         const int bidx = invariant_base_indices[k];
-        const_mark(bidx, saved_const[k] != 0);
+        mark_full_width_write(bidx, saved_const[k] != 0);
         for (int r = 0; r < n_trials; ++r)
           base(r, bidx) = saved[static_cast<size_t>(k) * n_trials + r];
       }
@@ -1203,10 +1223,20 @@ struct ParamTable {
     }
   }
 
+  inline bool plan_allows_scalar_reader(int b) const {
+    // A base column absent from the design outputs is an automatic constant:
+    // no mapper design can read it at row resolution.  For a designed output,
+    // use only the structural classification computed in init_design_plan.
+    if (b < 0 || b >= static_cast<int>(out_to_entry.size())) return false;
+    const int e = out_to_entry[b];
+    if (e < 0) return true;
+    return e < static_cast<int>(design_plan.size()) &&
+      design_plan[e].scalar_reader;
+  }
+
   // One value for the whole column, written once where it can be and T times
-  // where something is going to read it at row resolution anyway.
   inline void put_scalar(int b, double val, int T) {
-    const_mark(b, true);
+    mark_full_width_write(b, true);
     double* col = &base(0, b);
     col[0] = val;
     // `track_const` is the established gate for "nothing outside this pipeline
@@ -1216,7 +1246,7 @@ struct ParamTable {
     // only where that promise is already being made.
     const bool deferrable =
       track_const && emc::defer_scalar_fill() &&
-      b >= 0 && b < (int)out_to_entry.size() && out_to_entry[b] < 0;
+      plan_allows_scalar_reader(b);
     if (deferrable && T > 1) {
       col_scalar[b] = 1;
 #ifdef EMC2_PT_CONST_CHECK
@@ -1228,7 +1258,7 @@ struct ParamTable {
 #endif
       return;
     }
-    if (b >= 0 && b < (int)col_scalar.size()) col_scalar[b] = 0;
+    clear_scalar_marker(b);
     std::fill(col + 1, col + T, val);
   }
 };

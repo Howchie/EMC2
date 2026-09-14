@@ -288,9 +288,11 @@ NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
 
     ParamTable table = prototype;
     table.base = Rcpp::clone(prototype.base);
+    table.scalar_reset();
     CharacterVector p_names = p_vector.names();
     for (int j = 0; j < p_vector.size(); ++j) {
       const int col_idx = table.base_index_for(as<std::string>(p_names[j]));
+      table.mark_full_width_write(col_idx, true);
       double* col = &table.base(0, col_idx);
       std::fill(col, col + n_trials, p_vector[j]);
     }
@@ -353,9 +355,8 @@ NumericMatrix ParamTable_materialize(SEXP pt_xptr) {
 // void ParamTable_drop(SEXP pt_xptr, CharacterVector drop_names) {
 //   XPtr<ParamTable> pt(pt_xptr);
 //   pt->drop(drop_names);
-// }
 
-// Wrapper: set a column by name
+// Wrapper: set a column by name.
 // [[Rcpp::export]]
 void ParamTable_set_column(SEXP pt_xptr,
                            std::string name,
