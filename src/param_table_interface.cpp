@@ -288,11 +288,9 @@ NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
 
     ParamTable table = prototype;
     table.base = Rcpp::clone(prototype.base);
-    table.scalar_reset();
     CharacterVector p_names = p_vector.names();
     for (int j = 0; j < p_vector.size(); ++j) {
       const int col_idx = table.base_index_for(as<std::string>(p_names[j]));
-      table.mark_full_width_write(col_idx, true);
       double* col = &table.base(0, col_idx);
       std::fill(col, col + n_trials, p_vector[j]);
     }
@@ -355,8 +353,8 @@ NumericMatrix ParamTable_materialize(SEXP pt_xptr) {
 // void ParamTable_drop(SEXP pt_xptr, CharacterVector drop_names) {
 //   XPtr<ParamTable> pt(pt_xptr);
 //   pt->drop(drop_names);
-
-// Wrapper: set a column by name.
+// }
+// Wrapper: set a column by name
 // [[Rcpp::export]]
 void ParamTable_set_column(SEXP pt_xptr,
                            std::string name,
@@ -377,69 +375,6 @@ SEXP ParamTable_create_from_pvector_designs(NumericVector p_vector,
   return ptr;
 }
 
-
-// The common refinement of a set of parameter columns, for tests and for any
-// caller that wants to see what reuse a design set actually offers.  Named
-// columns rather than indices at this boundary only because R has the names;
-// ParamTable itself is handed indices and never a meaning.
-// [[Rcpp::export]]
-Rcpp::List ParamTable_joint_cells(SEXP pt_xptr, Rcpp::CharacterVector param_names) {
-  Rcpp::XPtr<ParamTable> pt(pt_xptr);
-  std::vector<int> cols;
-  cols.reserve(param_names.size());
-  for (int i = 0; i < param_names.size(); ++i) {
-    cols.push_back(pt->base_index_for(Rcpp::as<std::string>(param_names[i])));
-  }
-  const JointCells& jc = pt->joint_cells(cols);
-  // 1-based for R, and only when there is a partition to report.
-  Rcpp::IntegerVector expand(jc.usable ? jc.expand.size() : 0);
-  Rcpp::IntegerVector rep(jc.usable ? jc.rep.size() : 0);
-  for (std::size_t i = 0; i < (std::size_t)expand.size(); ++i) expand[i] = jc.expand[i] + 1;
-  for (std::size_t i = 0; i < (std::size_t)rep.size(); ++i) rep[i] = jc.rep[i] + 1;
-  return Rcpp::List::create(
-    Rcpp::_["usable"] = jc.usable,
-    Rcpp::_["n_cells"] = jc.n_cells,
-    Rcpp::_["expand"] = expand,
-    Rcpp::_["rep"] = rep);
-}
-
-// C11's invalidation key, exposed so the contract can be tested: two calls that
-// differ in anything the audit says must invalidate a compiled plan produce
-// different keys, and two that differ in nothing produce equal ones.
-// [[Rcpp::export]]
-Rcpp::List emc_pt_invalidation_key(Rcpp::DataFrame data,
-                                   Rcpp::NumericVector constants,
-                                   Rcpp::List designs, Rcpp::List bounds,
-                                   Rcpp::List transforms,
-                                   Rcpp::List pretransforms,
-                                   Rcpp::Nullable<Rcpp::List> trend,
-                                   Rcpp::CharacterVector p_types) {
-  Rcpp::List levels;
-  Rcpp::CharacterVector nms = data.names();
-  for (int j = 0; j < nms.size(); ++j) {
-    SEXP col = data[Rcpp::as<std::string>(nms[j])];
-    if (Rf_isFactor(col)) {
-      levels.push_back(Rcpp::CharacterVector(Rf_getAttrib(col, R_LevelsSymbol)),
-                       Rcpp::as<std::string>(nms[j]));
-    }
-  }
-  SEXP guess_window = data.hasAttribute("guess_window")
-    ? SEXP(data.attr("guess_window")) : R_NilValue;
-  // A list of values, not a hash: a cache must compare what actually differs
-  // rather than trust that two different plans could not collide.
-  return Rcpp::List::create(
-    Rcpp::_["n_trials"] = data.nrow(),
-    Rcpp::_["columns"] = nms,
-    Rcpp::_["levels"] = levels,
-    Rcpp::_["designs"] = designs,
-    Rcpp::_["constants"] = constants,
-    Rcpp::_["transforms"] = transforms,
-    Rcpp::_["pretransforms"] = pretransforms,
-    Rcpp::_["bounds"] = bounds,
-    Rcpp::_["trend"] = trend.isNull() ? R_NilValue : SEXP(Rcpp::List(trend)),
-    Rcpp::_["p_types"] = p_types,
-    Rcpp::_["guess_window"] = guess_window);
-}
 
 // [[Rcpp::export]]
 void ParamTable_map_designs(SEXP pt_xptr,

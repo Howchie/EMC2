@@ -292,6 +292,17 @@ make_trend <- function(par_names, cov_names = NULL, kernels, bases = NULL,
       default_trend_pnames <- c(default_trend_pnames, ct$trend_pnames)
       # Attach the external pointer and optional transforms to this trend entry
       attr(trend, "custom_ptr") <- attr(ct, "custom_ptr")
+      # External pointers do not survive R serialization.  Keep the registration
+      # recipe with the trend so a loaded emc object can rebuild the pointer
+      # without requiring the caller to reconstruct the original make_trend()
+      # call by hand.
+      attr(trend, "custom_registration") <- list(
+        trend_parameters = ct$trend_pnames,
+        file = ct$file,
+        transforms = attr(ct, "custom_transforms"),
+        base = ct$base,
+        maker = ct$maker
+      )
       if (!is.null(attr(ct, "custom_transforms"))) {
         # ensure order matches ct$trend_pnames
         ctf <- attr(ct, "custom_transforms")
@@ -917,12 +928,30 @@ register_trend <- function(trend_parameters, file, transforms = NULL, base = "ad
     }
   }
 
-  # Compile and load user code
+  # Compile and load user code. Rcpp's `depends(EMC2)` plugin resolves the
+  # installed include directory correctly, but during `devtools::load_all()` it
+  # can point at <repo>/include instead of <repo>/inst/include. Add the actual
+  # exported-header directory explicitly so custom kernels work in both modes.
+  include_dir <- system.file("include", package = "EMC2")
+  old_cppflags <- Sys.getenv("PKG_CPPFLAGS", unset = NA_character_)
+  if (nzchar(include_dir)) {
+    include_flag <- paste0("-I", shQuote(include_dir))
+    current_cppflags <- if (is.na(old_cppflags)) "" else old_cppflags
+    Sys.setenv(PKG_CPPFLAGS = trimws(paste(current_cppflags, include_flag)))
+    on.exit({
+      if (is.na(old_cppflags)) {
+        Sys.unsetenv("PKG_CPPFLAGS")
+      } else {
+        Sys.setenv(PKG_CPPFLAGS = old_cppflags)
+      }
+    }, add = TRUE)
+  }
   Rcpp::sourceCpp(file)
   maker <- "EMC2_make_custom_trend_ptr"
   if (!exists(maker, mode = "function", inherits = TRUE)) {
     # Try to derive maker name from macro usage in the file
-    lines <- tryCatch(readLines(file), error = function(e) character(0))
+    lines <- tryCatch(readLines(file, warn = FALSE),
+                      error = function(e) character(0))
     m <- regmatches(lines, regexpr("EMC2_MAKE_PTR\\(([^)]+)\\)", lines))
     if (length(m) == 1) {
       sym <- sub(".*EMC2_MAKE_PTR\\(([^)]+)\\).*", "\\1", m)
@@ -960,12 +989,19 @@ has_delta_rules <- function(model) {
 has_conditional_covariates <- function(design) {
   # find define covariates that depend on behavior -- these are rt, R, or any of the outputs of the functions provided.
   # they can be lRfiltered or not
-  function_output_columns <- names(design$Ffunctions)
+  # Old serialized designs predate Fbehavioral and conservatively treat every
+  # function output as behavioral.  New designs can explicitly mark static
+  # functions (e.g., an accumulator sign derived only from lR).
+  function_output_columns <- design$Fbehavioral
+  if (is.null(function_output_columns)) {
+    function_output_columns <- names(design$Ffunctions)
+  }
   behavioral_covariates <- c('rt', 'R', function_output_columns)
 
   # find actual covariates, look for a match
   trend <- design$model()$trend
-  for(trend_n in 1:length(trend)) {
+  if (is.null(trend) || !length(trend)) return(FALSE)
+  for(trend_n in seq_along(trend)) {
     for(cov in trend[[trend_n]]$covariate) {
       if(cov  %in% behavioral_covariates) return(TRUE)
     }
@@ -1403,6 +1439,92 @@ get_custom_kernel_pointers <- function(input_data) {
   return(ptrs)
 }
 
+.custom_kernel_pointer_valid <- function(ptr) {
+  typeof(ptr) == "externalptr" &&
+    !identical(ptr, methods::new("externalptr"))
+}
+
+##' Restore serialized custom C++ trend pointers
+##'
+##' Custom trend external pointers are process-local and become null when an
+##' `emc` object is serialized.  Trends created by current versions of
+##' [make_trend()] retain their [register_trend()] recipe, allowing this helper
+##' to recompile the source and restore the pointers in every chain and nested
+##' design.  [predict.emc()] calls this automatically.
+##'
+##' @param emc An `emc` object containing one or more custom trends.
+##' @param quiet Logical; suppress recompilation messages.
+##' @return The `emc` object with live custom-kernel pointers.
+##' @export
+restore_custom_kernel_pointers <- function(emc, quiet = FALSE) {
+  if (!inherits(emc, "emc")) stop("emc must inherit from class 'emc'")
+  model <- emc[[1]]$model
+  if (is.list(model) && !is.function(model)) {
+    model_specs <- lapply(model, function(x) if (is.function(x)) x() else x)
+    joint_trends <- lapply(model_specs, `[[`, "trend")
+    custom_ptrs <- unlist(lapply(joint_trends, function(trend) {
+      if (is.null(trend)) return(list())
+      is_custom <- vapply(
+        trend, function(x) identical(x$kernel, "custom"), logical(1)
+      )
+      lapply(trend[is_custom], function(x) attr(x, "custom_ptr"))
+    }), recursive = FALSE)
+    if (!length(custom_ptrs) ||
+        all(vapply(custom_ptrs, .custom_kernel_pointer_valid, logical(1)))) {
+      return(emc)
+    }
+    stop(
+      "Automatic restoration of serialized custom trend pointers is not yet ",
+      "supported for joint emc objects. Re-register the custom trends and ",
+      "call fix_custom_kernel_pointers() with matching complete trend lists.",
+      call. = FALSE
+    )
+  }
+  if (!is.function(model)) return(emc)
+  trend <- model()$trend
+  if (is.null(trend)) return(emc)
+
+  is_custom <- vapply(trend, function(x) identical(x$kernel, "custom"),
+                      logical(1))
+  if (!any(is_custom)) return(emc)
+
+  ptrs <- lapply(trend, function(x) attr(x, "custom_ptr"))
+  valid <- vapply(ptrs, .custom_kernel_pointer_valid, logical(1))
+  needs_restore <- which(is_custom & !valid)
+  if (!length(needs_restore)) return(emc)
+
+  for (i in needs_restore) {
+    registration <- attr(trend[[i]], "custom_registration")
+    if (is.null(registration)) {
+      stop(
+        "Custom trend pointer is unavailable after serialization and this ",
+        "object predates automatic restoration. Re-register the custom trend ",
+        "and call fix_custom_kernel_pointers(emc, pointer_source).",
+        call. = FALSE
+      )
+    }
+    if (is.null(registration$file) || !file.exists(registration$file)) {
+      stop(
+        "Cannot restore custom trend pointer because its source file is missing: ",
+        registration$file %||% "<unknown>",
+        call. = FALSE
+      )
+    }
+    if (!quiet) {
+      message("Restoring custom trend kernel from ", registration$file)
+    }
+    registered <- register_trend(
+      trend_parameters = registration$trend_parameters,
+      file = registration$file,
+      transforms = registration$transforms,
+      base = registration$base
+    )
+    ptrs[[i]] <- attr(registered, "custom_ptr")
+  }
+
+  set_custom_kernel_pointers(emc, ptrs)
+}
+
 ##' (Re-)Set pointers of custom C++ trend kernels to an emc object
 ##'
 ##' When an emc object is loaded from disk, or returned by forked processes, the pointers to custom kernels
@@ -1464,10 +1586,42 @@ pointer_reset_wrapper <- function(sub_emc, emc){
 ##' need to be re-created. This is a convenience function to do this.
 ##'
 ##' @param emc A target emc object with missing pointers
-##' @param pointer_source Either a trend object with correct pointers or another emc object with correct pointers
+##' @param pointer_source Optional. A registered custom trend, a complete trend
+##'   list with live pointers, or another `emc` object with live pointers. When
+##'   omitted, registration metadata stored by [make_trend()] is used to rebuild
+##'   serialized pointers automatically. A single registered trend can be used
+##'   when the target model contains exactly one custom trend.
 ##' @return An emc object with the custom pointers re-instated.
 ##' @export
-fix_custom_kernel_pointers <- function(emc, pointer_source) {
+fix_custom_kernel_pointers <- function(emc, pointer_source = NULL) {
+  if (is.null(pointer_source)) return(restore_custom_kernel_pointers(emc))
+  if (inherits(pointer_source, "emc2_custom_trend")) {
+    if (!inherits(emc, "emc")) stop("emc must inherit from class 'emc'")
+    model <- emc[[1]]$model
+    if (!is.function(model)) {
+      stop(
+        "A registered custom trend can currently repair only a single-model ",
+        "emc object; pass a matching trend list for a joint model.",
+        call. = FALSE
+      )
+    }
+    target_trend <- model()$trend
+    is_custom <- vapply(
+      target_trend,
+      function(x) identical(x$kernel, "custom"),
+      logical(1)
+    )
+    if (sum(is_custom) != 1L) {
+      stop(
+        "A single registered trend can be matched only when the target model ",
+        "contains exactly one custom trend; pass a complete matching trend list.",
+        call. = FALSE
+      )
+    }
+    ptrs <- vector("list", length(target_trend))
+    ptrs[[which(is_custom)]] <- attr(pointer_source, "custom_ptr")
+    return(set_custom_kernel_pointers(emc, ptrs))
+  }
   return(set_custom_kernel_pointers(emc, get_custom_kernel_pointers(pointer_source)))
 }
 

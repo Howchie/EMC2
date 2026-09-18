@@ -10,7 +10,6 @@
 
 #include "col_registry.h"
 #include "race_contract.h"
-#include <chrono>
 
 // ============================================================================
 // Rolling log Stirling numbers of the second kind.
@@ -67,7 +66,6 @@ void pcounter_log_lm(double a, double nu, double sv,
   logL = -shape * std::log1p(a / rate);
   logM = std::log(shape) - std::log(rate + a) + logL;
 }
-
 double pcounter_log_h(int n, double t, double nu, double sv, double gamma,
                       PcounterStirlingRows& rows) {
   double logL, logM;
@@ -78,16 +76,12 @@ double pcounter_log_h(int n, double t, double nu, double sv, double gamma,
   const double rate = nu / (sv * sv);
   std::vector<double> terms;
   std::vector<double> rising(static_cast<size_t>(n + 1), 0.0);
-  if (emc::kernel_stats_on())
-    emc::pcounter_stats_add_rising_terms(static_cast<long long>(n));
   for (int j = 1; j <= n; ++j)
     rising[static_cast<size_t>(j)] =
       rising[static_cast<size_t>(j - 1)] +
       std::log(shape + static_cast<double>(j - 1));
   terms.reserve(static_cast<size_t>(n + 1));
   for (int j = 0; j <= n; ++j) {
-    if (emc::kernel_stats_on())
-      emc::pcounter_stats_add_stirling_terms(1);
     const double c = rows.at(n, j);
     if (!R_FINITE(c)) { terms.push_back(R_NegInf); continue; }
     terms.push_back(c + rising[static_cast<size_t>(j)] - j * std::log(gamma) -
@@ -128,7 +122,6 @@ void pcounter_log_pi_phi(int n, double t, double nu, double sv, double gamma,
 double pcounter_log_tail(int start, double t, double nu, double sv, double gamma,
                          double logr, bool gamma_zero,
                          PcounterStirlingRows& rows, bool phi) {
-  if (emc::kernel_stats_on()) emc::pcounter_stats_record_fallback_tail();
   std::vector<double> terms;
   terms.reserve(65);
   for (int n = start; n <= start + 64; ++n) {
@@ -166,43 +159,22 @@ double pcounter_log_geom_cdf(int start, double t, double nu, double sv,
   }
   return pcounter_logsumexp(terms);
 }
+
 void pcounter_log_eval(double t, double nu, double sv, double gamma,
                        double k, double omega,
                        double& logf, double& logS, double& logF) {
   logf = R_NegInf; logS = 0.0; logF = R_NegInf;
-  const bool stats_on = emc::kernel_stats_on();
   if (ISNAN(t) || !R_FINITE(nu) || !R_FINITE(sv) || !R_FINITE(gamma) ||
-      !R_FINITE(omega)) {
-    if (stats_on) emc::pcounter_stats_record_exit(false);
-    return;
-  }
-  if (!pcounter_k_supported(k)) {
-    if (stats_on) {
-      const bool support = R_FINITE(k) && k >= 0.0;
-      emc::pcounter_stats_record_exit(support);
-    }
-    return;
-  }
-  if (nu <= 0.0 || sv < 0.0 || gamma < 0.0 || omega < 0.0) {
-    if (stats_on) emc::pcounter_stats_record_exit(false);
-    return;
-  }
+      !pcounter_k_supported(k) || !R_FINITE(omega) || nu <= 0.0 ||
+      sv < 0.0 || gamma < 0.0 || omega < 0.0) return;
   if (R_PosInf == t) { logS = R_NegInf; logF = 0.0; return; }
-  if (!R_FINITE(t) || t <= 0.0) {
-    if (stats_on) emc::pcounter_stats_record_exit(false);
-    return;
-  }
+  if (!R_FINITE(t) || t <= 0.0) return;
 
   const int kk = pcounter_k_int(k);
   const bool gamma_zero = gamma < PC_EPS;
   const bool sv_zero = sv < PC_EPS;
   const bool omega_zero = omega < PC_EPS;
-  if (stats_on) {
-    emc::pcounter_stats_record_k(kk);
-    emc::pcounter_stats_record_branch(sv_zero, gamma_zero, omega_zero);
-  }
   PcounterStirlingRows rows;
-
   if (omega_zero) {
     std::vector<double> probs;
     probs.reserve(static_cast<size_t>(kk));
@@ -281,11 +253,6 @@ void pcounter_log_eval(double t, double nu, double sv, double gamma,
 // Race-model adapters.
 // ============================================================================
 
-static inline double pcounter_wall_seconds() {
-  return std::chrono::duration<double>(
-    std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 double dpcounter_scalar(double t, const double* par, void* /*ctx_*/) {
   for (int j = 0; j < emc2col::pcounter::N_REQ; ++j)
     if (!R_FINITE(par[j])) return 0.0;
@@ -315,8 +282,6 @@ double ppcounter_scalar(double t, const double* par, void* /*ctx_*/) {
 void dpcounter_raw(const double* rt, const double* const* cols, int n_rows,
                    const int* mask, const int* isok, double* out,
                    double min_ll, void* ctx_) {
-  const bool stats_on = emc::kernel_stats_on();
-  const double started = stats_on ? pcounter_wall_seconds() : 0.0;
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* nu = cols[emc2col::pcounter::nu];
   const double* sv = cols[emc2col::pcounter::sv];
@@ -324,24 +289,12 @@ void dpcounter_raw(const double* rt, const double* const* cols, int n_rows,
   const double* kk = cols[emc2col::pcounter::k];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
-  const double prepared = stats_on ? pcounter_wall_seconds() : 0.0;
-  long long rows = 0;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    ++rows;
     if (!isok[i] || !R_FINITE(nu[i]) || !R_FINITE(sv[i]) ||
         !R_FINITE(ga[i]) || !R_FINITE(kk[i]) || !R_FINITE(om[i]) ||
         !R_FINITE(t0[i]) || nu[i] <= 0.0 || sv[i] < 0.0 ||
         ga[i] < 0.0 || om[i] < 0.0 || !pcounter_k_supported(kk[i])) {
-      if (stats_on) {
-        const bool support =
-          isok[i] && R_FINITE(nu[i]) && R_FINITE(sv[i]) &&
-          R_FINITE(ga[i]) && R_FINITE(kk[i]) && R_FINITE(om[i]) &&
-          R_FINITE(t0[i]) && nu[i] > 0.0 && sv[i] >= 0.0 &&
-          ga[i] >= 0.0 && om[i] >= 0.0 && kk[i] >= 0.0 &&
-          !pcounter_k_supported(kk[i]);
-        emc::pcounter_stats_record_exit(support);
-      }
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
     double lf, ls, lF;
@@ -349,18 +302,11 @@ void dpcounter_raw(const double* rt, const double* const* cols, int n_rows,
                       lf, ls, lF);
     out[i] = raw_log_value(lf, min_ll, floor_raw);
   }
-  if (stats_on) {
-    const double done = pcounter_wall_seconds();
-    emc::pcounter_stats_record_raw(emc::PC_DENSITY, rows, done - started,
-                                   prepared - started, done - prepared);
-  }
 }
 
 void ppcounter_raw(const double* rt, const double* const* cols, int n_rows,
                    const int* mask, const int* isok, double* out,
                    double min_ll, void* ctx_) {
-  const bool stats_on = emc::kernel_stats_on();
-  const double started = stats_on ? pcounter_wall_seconds() : 0.0;
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* nu = cols[emc2col::pcounter::nu];
   const double* sv = cols[emc2col::pcounter::sv];
@@ -368,24 +314,12 @@ void ppcounter_raw(const double* rt, const double* const* cols, int n_rows,
   const double* kk = cols[emc2col::pcounter::k];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
-  const double prepared = stats_on ? pcounter_wall_seconds() : 0.0;
-  long long rows = 0;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    ++rows;
     if (!isok[i] || !R_FINITE(nu[i]) || !R_FINITE(sv[i]) ||
         !R_FINITE(ga[i]) || !R_FINITE(kk[i]) || !R_FINITE(om[i]) ||
         !R_FINITE(t0[i]) || nu[i] <= 0.0 || sv[i] < 0.0 ||
         ga[i] < 0.0 || om[i] < 0.0 || !pcounter_k_supported(kk[i])) {
-      if (stats_on) {
-        const bool support =
-          isok[i] && R_FINITE(nu[i]) && R_FINITE(sv[i]) &&
-          R_FINITE(ga[i]) && R_FINITE(kk[i]) && R_FINITE(om[i]) &&
-          R_FINITE(t0[i]) && nu[i] > 0.0 && sv[i] >= 0.0 &&
-          ga[i] >= 0.0 && om[i] >= 0.0 && kk[i] >= 0.0 &&
-          !pcounter_k_supported(kk[i]);
-        emc::pcounter_stats_record_exit(support);
-      }
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
     double lf, ls, lF;
@@ -400,11 +334,6 @@ void ppcounter_raw(const double* rt, const double* const* cols, int n_rows,
     out[i] = R_FINITE(ls) ? std::fmin(ls, 0.0)
                           : raw_log_zero(min_ll, floor_raw);
   }
-  if (stats_on) {
-    const double done = pcounter_wall_seconds();
-    emc::pcounter_stats_record_raw(emc::PC_SURVIVOR, rows, done - started,
-                                   prepared - started, done - prepared);
-  }
 }
 
 void pcounter_logS_at_t(double t, const double* const* cols,
@@ -412,35 +341,21 @@ void pcounter_logS_at_t(double t, const double* const* cols,
                         const int* trunc_mask, int n_unique_trials,
                         const int* isok_all, void* ctx_, double* logS_out) {
   (void)ctx_;
-  const bool stats_on = emc::kernel_stats_on();
-  const double started = stats_on ? pcounter_wall_seconds() : 0.0;
   const double* kk = cols[emc2col::pcounter::k];
   const double* sv = cols[emc2col::pcounter::sv];
   const double* ga = cols[emc2col::pcounter::gamma];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
   const double* nu = cols[emc2col::pcounter::nu];
-  const double prepared = stats_on ? pcounter_wall_seconds() : 0.0;
-  long long rows = 0;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     double sum = 0.0;
     for (int k = 0; k < n_lR; ++k) {
       const int r = j * n_lR + k;
-      ++rows;
       if (!isok_all[r] || !R_FINITE(nu[r]) || !R_FINITE(sv[r]) ||
           !R_FINITE(ga[r]) || !R_FINITE(kk[r]) || !R_FINITE(om[r]) ||
           !R_FINITE(t0[r]) || nu[r] <= 0.0 || sv[r] < 0.0 ||
           ga[r] < 0.0 || om[r] < 0.0 || !pcounter_k_supported(kk[r])) {
-        if (stats_on) {
-          const bool support =
-            isok_all[r] && R_FINITE(nu[r]) && R_FINITE(sv[r]) &&
-            R_FINITE(ga[r]) && R_FINITE(kk[r]) && R_FINITE(om[r]) &&
-            R_FINITE(t0[r]) && nu[r] > 0.0 && sv[r] >= 0.0 &&
-            ga[r] >= 0.0 && om[r] >= 0.0 && kk[r] >= 0.0 &&
-            !pcounter_k_supported(kk[r]);
-          emc::pcounter_stats_record_exit(support);
-        }
         sum = R_NegInf; break;
       }
       double lf, ls, lF;
@@ -449,12 +364,6 @@ void pcounter_logS_at_t(double t, const double* const* cols,
       sum += ls;
     }
     logS_out[j] = sum;
-  }
-  if (stats_on) {
-    const double done = pcounter_wall_seconds();
-    emc::pcounter_stats_record_raw(emc::PC_LOG_SURVIVOR_AT_T, rows,
-                                   done - started, prepared - started,
-                                   done - prepared);
   }
 }
 
@@ -495,8 +404,6 @@ NumericVector dpcounter(NumericVector t, NumericVector nu, NumericVector sv,
         t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
         pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
         lf, ls, lF);
-    } else if (emc::kernel_stats_on()) {
-      emc::pcounter_stats_record_exit(false);
     }
     out[i] = log_out ? lf : (R_FINITE(lf) ? std::exp(lf) : 0.0);
   }
@@ -521,8 +428,6 @@ NumericVector ppcounter(NumericVector t, NumericVector nu, NumericVector sv,
         t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
         pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
         lf, ls, lF);
-    } else if (emc::kernel_stats_on()) {
-      emc::pcounter_stats_record_exit(false);
     }
     const double lp = lower_tail ? lF : ls;
     out[i] = log_out ? lp : (lp == 0.0 ? 1.0 :

@@ -109,6 +109,7 @@ run_emc <- function(emc, stage, stop_criteria,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_duplicates(emc)
+  .emc_ll_route_reset()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
   total_iters_stage <- chain_n(emc)[,stage][1]
@@ -120,18 +121,12 @@ run_emc <- function(emc, stage, stop_criteria,
   progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains, verbose, n_blocks = n_blocks, rhat_version = rhat_version)
   emc <- progress$emc
   progress <- progress[!names(progress) == 'emc']
-  # We need to multiply step_size by thin to make an accurate guess for good step_size.
   cur_thin <- ifelse(is.numeric(thin), thin, 1)
   block_no <- 0L
   while(!progress$done){
-    # C16.  A block does work no per-iteration record ever saw: building chain
-    # and efficient proposals, convergence diagnostics, the checkpoint write and
-    # the history join.  Timed here, in the master, where `run_emc` runs -- the
-    # per-iteration record has to travel back from a forked chain, this does not.
     block_no <- block_no + 1L
     block_started <- proc.time()[["elapsed"]]
     emc <- reset_pm_settings(emc, stage)
-    # Remove redundant samples
     if(trim){
       emc <- fit_remove_samples(emc)
     }
@@ -150,10 +145,7 @@ run_emc <- function(emc, stage, stop_criteria,
     t0 <- Sys.time()
     prepare_elapsed <- proc.time()[["elapsed"]] - block_started - prop_elapsed
     sample_started <- proc.time()[["elapsed"]]
-    # Actual sampling
     stage_iter <- progress$step_size*max(1,cur_thin)
-    # One reallocation arena per block: markers must not survive into the next
-    # block, or every chain would start it believing its siblings had finished.
     core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain,
                               cores_for_chains = cores_for_chains)
     sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
@@ -173,7 +165,6 @@ run_emc <- function(emc, stage, stop_criteria,
         sub_emc <- subset(sub_emc, stage = c("preburn", "burn", "adapt", "sample"), thin = thin)
       } else if(thin){
         sub_emc <- auto_thin(sub_emc, stage = c("preburn", "burn", "adapt", "sample"))
-        # Update current rough guess for thinning:
         cur_thin <- progress$step_size/chain_n(sub_emc)[1,stage]
       }
       emc <- concat_emc(emc, sub_emc, progress$step_size, stage)
@@ -205,8 +196,6 @@ run_emc <- function(emc, stage, stop_criteria,
       block_chains = length(emc),
       block_total = proc.time()[["elapsed"]] - block_started,
       block_prepare = prepare_elapsed,
-      # `add_proposals` splits its own time between the two kinds; when it does
-      # not report (the preburn stage builds neither) both stay NA.
       block_proposals = .emc_proposal_split("chain", prop_elapsed),
       block_eff_proposals = .emc_proposal_split("eff", prop_elapsed),
       block_sample = sample_elapsed,
@@ -261,8 +250,7 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
                        particle_factor=50, search_width= NULL, n_cores=1, r_cores = 1,
                        core_ctl = NULL)
 {
-  # Hand this chain's cores back to its siblings as soon as it is done, however
-  # it leaves -- an error here must not strand the budget for the whole block.
+  if (!isTRUE(sampler$init)) .emc_ll_route_reset()
   on.exit(.emc_core_release(core_ctl), add = TRUE)
   chain_cores <- .emc_cores_now(core_ctl, n_cores)
   particles <- round(particle_factor*sqrt(sampler$n_pars))
@@ -285,9 +273,6 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   return(sampler)
 }
 
-# What `add_proposals` spent on each of its two halves, for the block record.
-# Stored rather than returned so the function's signature -- and every caller --
-# stays as it was.
 .emc_proposal_split <- function(which, total) {
   got <- .emc_profile_state$proposal_split
   if (is.null(got) || is.na(got[[which]])) return(NA_real_)
@@ -407,13 +392,12 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     }
   }
 
-  # Append a convergence log entry to the first chain object
   log_entry <- list(
     stage     = stage,
     iter      = total_iters_stage,
     try       = trys,
     gd        = list(
-      values    = gd$gd,         # named per-parameter Rhat vector (NULL when no GR criteria set)
+      values    = gd$gd,
       selection = selection,
       version   = rhat_version
     ),
@@ -598,10 +582,6 @@ sub_blocking <- function(emc, n_blocks){
   covs <- lapply(emc, FUN = function(x){return(x$chains_var)})
   out <- array(0, dim = dim(covs[[1]][[1]]))
   n_summed <- 0L
-  # Average the per-subject correlation matrices over every chain AND every
-  # subject.  Both loop indices used to be pinned at 1, so `out` was
-  # n_chains * n_subjects copies of chain 1 / subject 1 and the clustering below
-  # saw a single subject from a single chain instead of the pooled structure.
   for(i in seq_along(covs)){
     cov_tmp <- covs[[i]]
     for(j in seq_along(cov_tmp)){
@@ -618,14 +598,11 @@ sub_blocking <- function(emc, n_blocks){
     idx <- ll == shared_ll_idx
     n_members <- sum(idx)
     if(n_members <= 1L){
-      # hclust needs at least two members; a singleton is its own block.
       sub_comps <- stats::setNames(rep(min_comp + 1L, n_members),
                                    dimnames(out)[[1]][idx])
     } else {
       distance <- as.dist(1 - abs(out[idx, idx, drop = FALSE]))
       clusts <- hclust(distance)
-      # cutree() silently returns fewer groups than asked when the group has
-      # fewer members than n_blocks; clamp so the block labels stay contiguous.
       sub_comps <- min_comp + cutree(clusts, k = min(n_blocks, n_members))
     }
     min_comp <- max(sub_comps)
@@ -655,7 +632,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
   for(j in 1:n_chains){
-    # Take only a random half of all the samples for each chain
     rnd_index <- sample(1:ncol(LL), round(ncol(LL)/2))
     chains_var <- vector("list", n_subjects)
     chains_mu <- vector("list", n_subjects)
@@ -665,16 +641,13 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
       chains_mu[[sub]] <- moments$w_mu
       if(do_block) emp_covs[block_idx] <- 0
       if(!is.positive.definite(emp_covs)){
-        # If not positive definite, do not use it
         next
       } else{
         chains_var[[sub]] <- emp_covs
       }
     }
-    # Instead use the mean of all other subjects
     null_idx <- sapply(chains_var, is.null)
     if(all(null_idx)){
-      # If all subjects are NULL just come up with something
       mean_chains_var <- diag(n_pars) * .5
     } else{
       mean_chains_var <- Reduce(`+`, chains_var[!null_idx]) / sum(!null_idx)
@@ -687,8 +660,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
 
     new_prop_var <- mean(diag(mean_chains_var))
     if(is.null(attr(emc[[j]], "prop_var"))){
-      # This is in preburn case, group-level proposals are wider
-      # So we scale the epsilon a bit to account for narrow individual proposals
       prop_var_ratio <- 2
     } else{
       prop_var_ratio <- attr(emc[[j]], "prop_var")/new_prop_var
@@ -704,7 +675,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
 }
 
 reset_pm_settings <- function(emc, stage){
-  if(stage != get_last_stage(emc) || stage == "burn"){ # In this case we're running a new stage
+  if(stage != get_last_stage(emc) || stage == "burn"){
     for(i in 1:length(emc)){
       pm_settings <- attr(emc[[i]]$samples, "pm_settings")
       attr(emc[[i]]$samples, "pm_settings") <- lapply(pm_settings, function(x){
@@ -738,13 +709,9 @@ update_epsilon_scale <- function(pmwgs, prop_var_ratio){
 test_adapted <- function(sampler, test_samples, min_unique, n_cores_conditional = 1,
                          verbose = FALSE)
 {
-  # Function used by run_adapt to check whether we can create the conditional.
 
-  # Only need to check uniqueness for one parameter
   first_par <- as.matrix(test_samples$alpha[1, , ])
   if(ncol(first_par) == 1) first_par <- t(first_par)
-  # Split the matrix into a list of vectors by subject
-  # all subjects is greater than unq_vals
   n_unique_sub <- apply(first_par, 1, FUN = function(x) return(length(unique(x))))
   n_pars <- sampler$n_pars
   components <- attr(sampler$data, "components")
@@ -783,12 +750,11 @@ test_adapted <- function(sampler, test_samples, min_unique, n_cores_conditional 
       return(TRUE)
     }
   } else{
-    return(FALSE) # Not enough unique particles found
+    return(FALSE)
   }
 }
 
 loadRData <- function(fileName){
-  #loads an RData file, and returns it
   load(fileName)
   get(ls()[ls() != "fileName"])
 }
@@ -856,13 +822,11 @@ make_emc <- function(data,design,model=NULL,
                     use_data = TRUE,
                     prior_list = NULL, group_design = NULL,
                     par_groups=NULL, ...){
-  # Initialize optional model settings.
   n_factors <- NULL
   nuisance <- NULL
   nuisance_non_hyper <- NULL
   sem_settings <- NULL
   Lambda_mat <- NULL
-  # overwrite those that were supplied
   optionals <- list(...)
   for (name in names(optionals) ) {
     assign(name, optionals[[name]])
@@ -930,7 +894,6 @@ make_emc <- function(data,design,model=NULL,
   if (length(model)!=length(data))
     model <- rep(model,length(data))
 
-  ## Disable compression for models with delta-rule trends.
   compress_passed <- compress
   compress <- rep(compress, length(model))
   has_delta_rule <- sapply(model, has_delta_rules)
@@ -940,9 +903,6 @@ make_emc <- function(data,design,model=NULL,
     else message(paste0('Models ', which(has_delta_rule), ' contain a delta rule; the corresponding data will not be compressed.'))
   }
 
-  # Models whose likelihood is a cached grid solve gain nothing from binning rt
-  # but do lose accuracy by it (see model_compress_ok).  Override both knobs for
-  # them rather than leaving a silent bias in the default workflow.
   no_bin <- !sapply(model, model_compress_ok)
   compress[no_bin] <- FALSE
 
@@ -976,18 +936,14 @@ make_emc <- function(data,design,model=NULL,
       dadm_list[[i]] <- design_model_custom_ll(data = data[[i]],
                                                design = design[[i]],model=model[[i]])
     }
-    # Rebuild LL cache at make_emc-time to avoid carrying over stale attributes.
     dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]], force_rebuild = TRUE)
   }
-  # Make sure class retains following changes
   class(design) <- "emc.design"
   prior_in <- merge_priors(prior_list)
 
   prior_in <- prior(design, type, update = prior_in, group_design = group_design, ...)
   attr(dadm_list[[1]], "prior") <- prior_in
 
-  # Opt-in t0 (etc.) marginalisation travels as an explicit argument to the
-  # sampler, never as a dadm attribute (predict/make_data/IC must not integrate).
   marginalise_flag <- attr(design[[1]], "marginalise")
   if (!is.null(marginalise_flag) && !type %in% c("single", "standard", "blocked", "diagonal")) {
     stop("marginalise is currently only supported for single, standard, blocked and diagonal types")
@@ -1042,12 +998,9 @@ make_emc <- function(data,design,model=NULL,
                  nuisance_non_hyper = nuisance_non_hyper)
   }
   out$model <- lapply(design, function(x) x$model)
-  # Only for joint models we need to keep a list of functions
   if(length(out$model) == 1) out$model <- out$model[[1]]
   out <- check_duplicate_designs(out)
-  # replicate chains
   dadm_lists <- rep(list(out),n_chains)
-  # For post predict
   class(dadm_lists) <- "emc"
   return(dadm_lists)
 }
@@ -1063,7 +1016,7 @@ fix_fileName <- function(x){
 
 check_duplicate_designs <- function(out){
   if(is.data.frame(out$data[[1]])) return(out)
-  for(i in 1:length(out$data)){ # loop over subjects
+  for(i in 1:length(out$data)){
     designs <- lapply(out$data[[i]], function(y) attr(y, "designs"))
     duplicacy <- duplicated(designs)
     unq_idx <-   sapply(seq_along(designs), function(i) {
@@ -1071,7 +1024,7 @@ check_duplicate_designs <- function(out){
         if (identical(designs[[i]], designs[[j]])) return(j)
       }
     })
-    for(j in 1:length(out$data[[i]])){# Loop over data sets in this sub
+    for(j in 1:length(out$data[[i]])){
       if(is.null(designs[[j]])) next
       if(duplicacy[j]){
         attr(out$data[[i]][[j]], "designs") <- unq_idx[j]
@@ -1138,21 +1091,6 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
               dadm_list = dadm_list, subjects = subjects))
 }
 
-# Dynamic core reallocation across chains --------------------------------------
-#
-# Chains run a whole block independently and do not finish it together: on real
-# fits the slowest chain takes ~30% longer than the fastest, so the finished
-# chains' cores would sit idle until the block ends.  Rather than flattening the
-# whole schedule (which pays a barrier every iteration), each chain publishes a
-# marker when it exits and every remaining chain re-reads, once per iteration,
-# how many chains are still running -- growing its worker pool onto the freed
-# cores.  See R/chain_pool.R: this is only safe because each subject carries its
-# own RNG stream there, so a timing-dependent worker count cannot change a draw.
-#
-# The read is a directory listing of at most n_chains entries, tens of
-# microseconds against an iteration of ~100 ms.  The arena tracks both total
-# unfinished chains and the number of outer slots, so queued replacements do
-# not make a live chain claim more than the global budget.
 .emc_core_ctl <- function(n_chains, cores_per_chain,
                           cores_for_chains = n_chains) {
   n_chains <- as.integer(n_chains)
@@ -1160,8 +1098,6 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
   cores_for_chains <- max(1L, as.integer(cores_for_chains))
   if (n_chains <= 1 || cores_per_chain < 1 || cores_for_chains <= 1) return(NULL)
   if (Sys.info()[1] == "Windows") return(NULL)
-  # tempfile(), not a runif() suffix: this runs on the master before every
-  # block, and drawing here would shift every subsequent draw in the fit.
   dir <- tempfile(paste0("emc_cores_", Sys.getpid(), "_"))
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
   list(dir = dir, n_chains = n_chains,
@@ -1169,22 +1105,9 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
        total = cores_for_chains * cores_per_chain)
 }
 
-# Cores this chain may use right now, never fewer than its own static share.
-#
-# Deliberately NOT cached.  Caching the listing for even a fraction of a second
-# was tried and reverted: the reallocation contract is that a released core is
-# visible to the next caller, the pool's own tests assert exactly that, and the
-# listing is tens of microseconds against a ~100 ms iteration.  If a networked
-# tmpdir ever makes it expensive, the fix is to move the arena to a local
-# directory, not to answer with a stale count.
 .emc_cores_now <- function(core_ctl, base) {
   if (is.null(core_ctl)) return(base)
   unfinished <- core_ctl$n_chains - length(list.files(core_ctl$dir))
-  # `mclapply(mc.preschedule = FALSE)` starts a replacement chain as soon as
-  # one finishes.  That replacement is queued work, not an extra active slot:
-  # while there are still at least n_slots unfinished chains, the same n_slots
-  # chain budgets must continue to add up to the global total.  Counting all
-  # unfinished chains here would therefore over-allocate (e.g. 10 + 16 > 16).
   active <- min(core_ctl$n_slots, unfinished)
   if (active <= 0L) return(core_ctl$total)
   max(base, core_ctl$total %/% active)
@@ -1207,11 +1130,6 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
   } else{
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
                                    mc.preschedule = mc.preschedule, ...)
-    # `mclapply` turns a worker error into a "try-error" *element*, so callers
-    # that unlist the result (the likelihood managers do) get a character
-    # vector and fail far away with something like "non-numeric argument to
-    # binary operator".  Re-raise the first real error here so the message the
-    # user sees is the one the worker actually hit, exactly as at one core.
     failed <- vapply(list_out, inherits, logical(1), what = "try-error")
     if (any(failed)) {
       first <- list_out[[which(failed)[1]]]
@@ -1227,9 +1145,6 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
 #' @return The same list with everything but samples removed from all but first entry
 #' @noRd
 strip_duplicates <- function(emc, incl_props = TRUE) {
-  # Keep only samples in non-first entries
-  # (seq_along(emc)[-1] is empty for length-1 emc; 2:length(emc) would wrongly
-  #  give c(2,1) and index a non-existent chain)
   for (i in seq_along(emc)[-1]) {
     samples <- emc[[i]]$samples
     prop_var <- attr(emc[[i]], "prop_var")
@@ -1237,7 +1152,6 @@ strip_duplicates <- function(emc, incl_props = TRUE) {
     attr(emc[[i]], "prop_var") <- prop_var
   }
   if(incl_props){
-    # Also remove eff_mu, eff_var, chains_cov
     for (i in 1:length(emc)) {
       emc[[i]]$eff_mu <- NULL
       emc[[i]]$eff_var <- NULL
@@ -1256,19 +1170,15 @@ get_posterior_weights <- function(ll){
 }
 
 weighted_moments <- function(chain, ll = NULL) {
-  # chain: a matrix with each col as a sample, and each row as a parameter
-  # weights: an optional vector of weights. If not provided, equal weighting is assumed.
   n <- ncol(chain)
   d <- nrow(chain)
 
-  # Use equal weights if none are provided.
   if (is.null(ll)) {
     weights <- rep(1 / n, n)
   } else {
     weights <- get_posterior_weights(ll)
   }
 
-  # Compute the weighted mean of the chain.
   weighted_mean <- as.vector(drop(chain %*% weights))
   cov_matrix <- cov(t(chain))
   return(list(w_cov = cov_matrix, w_mu = weighted_mean))
@@ -1281,7 +1191,6 @@ weighted_moments <- function(chain, ll = NULL) {
 #' @return The same list with all fields restored from first entry except samples
 #' @noRd
 restore_duplicates <- function(emc) {
-  # Restore everything except samples from first entry
   if (length(emc) > 1) {
     for (i in 2:length(emc)) {
       samples <- emc[[i]]$samples

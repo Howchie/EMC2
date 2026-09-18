@@ -13,26 +13,6 @@ EMC2_call_custom_trend <- function(trend_pars, input, funptrSEXP) {
     .Call(`_EMC2_EMC2_call_custom_trend`, trend_pars, input, funptrSEXP)
 }
 
-#' Minimum fraction of trials reused by an admitted cell design
-#'
-#' Zero retains the historical admission rule.  A value in [0, 1] requires
-#' at least that fraction of trial rows to share design cells.
-#'
-#' @noRd
-emc_pt_cell_min_reuse <- function(ratio = NULL) {
-    .Call(`_EMC2_emc_pt_cell_min_reuse`, ratio)
-}
-
-#' Enable, read, or reset mapper route counters
-#'
-#' The counters are disabled by default.  Passing enabled changes the switch;
-#' reset clears counts, and the returned list is a snapshot.
-#'
-#' @noRd
-emc_pt_mapper_stats <- function(enabled = NULL, reset = FALSE) {
-    .Call(`_EMC2_emc_pt_mapper_stats`, enabled, reset)
-}
-
 #' Per-design cell scratch budget, in bytes
 #'
 #' Reads the budget; with a value, sets it and returns the previous one. The
@@ -42,15 +22,6 @@ emc_pt_mapper_stats <- function(enabled = NULL, reset = FALSE) {
 #' @noRd
 emc_pt_cell_budget <- function(bytes = NULL) {
     .Call(`_EMC2_emc_pt_cell_budget`, bytes)
-}
-
-#' Defer the per-trial fill of scalar coefficients
-#'
-#' Reads the setting; with a value, sets it and returns the previous one.
-#'
-#' @noRd
-emc_pt_defer_scalars <- function(on = NULL) {
-    .Call(`_EMC2_emc_pt_defer_scalars`, on)
 }
 
 sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm) {
@@ -115,38 +86,6 @@ calculate_subject_means <- function(group_designs, params) {
 
 draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
-}
-
-#' Kernel reuse instrumentation
-#'
-#' Reads the flag; with a value, sets it and returns the previous one.
-#'
-#' @noRd
-emc_kernel_stats <- function(on = NULL) {
-    .Call(`_EMC2_emc_kernel_stats`, on)
-}
-
-#' One row per model seen since the last reset.  `rows` is how many per-trial
-#' evaluations the kernel performed and `cells` how many a cell-resolution
-#' version would have performed, so `rows / cells` is the reuse available.
-#' For PCOUNTER, the additional adapter, branch, K, term, and timing columns
-#' are populated; they are zero on other model rows.
-#'
-#' @noRd
-emc_kernel_stats_read <- function() {
-    .Call(`_EMC2_emc_kernel_stats_read`)
-}
-
-#' @noRd
-emc_kernel_stats_reset <- function() {
-    invisible(.Call(`_EMC2_emc_kernel_stats_reset`))
-}
-
-#' The columns a model's reusable subexpression reads
-#'
-#' @noRd
-emc_kernel_reuse_columns <- function(c_name) {
-    .Call(`_EMC2_emc_kernel_reuse_columns`, c_name)
 }
 
 lr_capacity_counter_values <- function() {
@@ -659,14 +598,6 @@ ParamTable_set_column <- function(pt_xptr, name, col) {
 
 ParamTable_create_from_pvector_designs <- function(p_vector, designs, n_trials) {
     .Call(`_EMC2_ParamTable_create_from_pvector_designs`, p_vector, designs, n_trials)
-}
-
-ParamTable_joint_cells <- function(pt_xptr, param_names) {
-    .Call(`_EMC2_ParamTable_joint_cells`, pt_xptr, param_names)
-}
-
-emc_pt_invalidation_key <- function(data, constants, designs, bounds, transforms, pretransforms, trend, p_types) {
-    .Call(`_EMC2_emc_pt_invalidation_key`, data, constants, designs, bounds, transforms, pretransforms, trend, p_types)
 }
 
 ParamTable_map_designs <- function(pt_xptr, designs, include_param) {

@@ -24,7 +24,6 @@
 #include <limits>
 #include <vector>
 
-#include "kernel_stats.h"
 using namespace Rcpp;
 
 // Variability/excess parameters (sv, gamma, omega) at or below this threshold
@@ -77,8 +76,6 @@ inline int pcounter_k_int(double k) {
 }
 
 inline double pcounter_log_rising(double a, int n) {
-  if (emc::kernel_stats_on())
-    emc::pcounter_stats_add_rising_terms(static_cast<long long>(n));
   double out = 0.0;
   for (int j = 0; j < n; ++j) out += std::log(a + static_cast<double>(j));
   return out;

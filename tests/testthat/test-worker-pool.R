@@ -710,6 +710,25 @@ test_that("only the covariance goes on the wire, never its factorisation", {
     cache)
 })
 
+test_that("worker cache reconstruction preserves marginal and full-factor policy", {
+  set.seed(5)
+  p <- 4L
+  A <- matrix(rnorm(p * p), p, p)
+  population_var <- crossprod(A) + diag(p)
+  idx_list <- list(c(TRUE, FALSE, TRUE, FALSE), c(FALSE, FALSE, TRUE, FALSE))
+  marginal_idx <- c(FALSE, TRUE, FALSE, FALSE)
+  cache <- EMC2:::build_group_chol_cache(
+    population_var, idx_list, marginal_idx, include_full = FALSE)
+  wire <- serialize(list(group_var = population_var, idx_list = idx_list,
+                         marginal_idx = marginal_idx, include_full = FALSE), NULL)
+  decoded <- unserialize(wire)
+  rebuilt <- EMC2:::build_group_chol_cache(
+    decoded$group_var, decoded$idx_list, decoded$marginal_idx,
+    include_full = decoded$include_full)
+  expect_identical(rebuilt, cache)
+  expect_null(rebuilt$full)
+})
+
 test_that("compute() accepts pre-decoded, encoded, and file shared parts", {
   # The master's fallback path already holds the decoded object; the workers
   # only ever have the bytes.  Both must reach the same arguments.

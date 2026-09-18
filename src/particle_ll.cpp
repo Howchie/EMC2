@@ -10,8 +10,6 @@
 #include "model_SDT.h"
 #include "model_MRI.h"
 #include "model_SS_adapters.h"
-#include "kernel_stats.h"
-#include <chrono>
 #include "ss_raw.h"
 #include "composite_functions.h"
 #include "trend.h"
@@ -52,39 +50,6 @@
 #include <cstdint>
 
 using namespace Rcpp;
-
-// --- C9 instrumentation -----------------------------------------------------
-// Defined here rather than with the includes above: both helpers need
-// ParamTable, which is pulled in further down that block.
-
-// Wall time from a steady clock: the measurement is of elapsed work, and a
-// clock the system can adjust would make a fast call look slow.
-static inline double emc_wall_seconds() {
-  return std::chrono::duration<double>(
-      std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-// How many evaluations a cell-resolution version of this model's reusable
-// subexpression would perform.  -1 when there is no reuse to have, which
-// `kernel_stats_record` records as "one per trial" rather than dropping.
-static inline long long emc_reuse_cells(const ParamTable& pt,
-                                        const std::string& c_name) {
-  const std::vector<std::string> names = emc::kernel_reuse_columns(c_name);
-  if (names.empty()) return -1;
-  std::vector<int> cols;
-  cols.reserve(names.size());
-  for (std::size_t i = 0; i < names.size(); ++i) {
-    std::unordered_map<std::string, int>::const_iterator it =
-      pt.name_to_base_idx.find(names[i]);
-    // A column this model does not carry (a variant without `sv`, say) simply
-    // does not constrain the partition.
-    if (it != pt.name_to_base_idx.end()) cols.push_back(it->second);
-  }
-  if (cols.empty()) return -1;
-  const JointCells& jc = pt.joint_cells(cols);
-  if (!jc.usable) return -1;
-  return static_cast<long long>(jc.n_cells);
-}
 
 // Count accumulators in [start, start+n) that are neither the time accumulator
 // nor the nogo accumulator.  Used to determine the number of guessable responses
@@ -359,13 +324,6 @@ struct PtMapper {
   Rcpp::LogicalVector bound_buf;                  // per-particle verdict, reused
   bool bound_plan_ready = false;
 
-  // What a cache of the data-independent plan would have to compare before
-  // reusing one is `emc_pt_invalidation_key()` in param_table_interface.cpp:
-  // the data's identity and shape, the factor levels behind the designs, the
-  // designs, the constants, the transform and bound specifications, whether a
-  // trend is in play, and the guess window.  It lives there rather than here
-  // because it is about the CALL's inputs, not about this object -- a cache
-  // compares keys before it has a PtMapper to ask.
   // Build the i > 0 plans.  Only valid without a trend runtime, which is also
   // the only case in which use_invariants is ever set.
   void build_plan() {
@@ -838,17 +796,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       if (ddm_raw_ready) {
         for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
-        const double ks_t0 = emc::kernel_stats_on() ? emc_wall_seconds() : 0.0;
         lls[i] = c_log_likelihood_DDM_pt(ddm_cols.data(),
                                         rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
                                         min_ll, ddm_shared.ok_int_buf.data(), gng,
                                         all_finite_untruncated, &ddm_shared,
                                         nullptr, &ddm_adapter);
-        if (emc::kernel_stats_on()) {
-          emc::kernel_stats_record(type_std, n_trials,
-                                   emc_reuse_cells(param_table_template, type_std),
-                                   emc_wall_seconds() - ks_t0);
-        }
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
@@ -1207,12 +1159,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         const bool floor_raw_log_lik_prev = adapter.ctx.floor_raw_log_lik;
         if (time_code != -1) adapter.ctx.floor_raw_log_lik = false;
 
-        // C9's measurement, and only when it is asked for: how much of this
-        // kernel's arithmetic is recomputed per trial that a cell-resolution
-        // version would compute once.  The partition is cached on the column
-        // set, so the cost when instrumentation is on is a clock read.
-        const double ks_t0 = emc::kernel_stats_on() ? emc_wall_seconds() : 0.0;
-
         // Log-density for winner rows
         adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
                                winner_int_buf.data(), isok_int_fp.data(),
@@ -1247,11 +1193,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           }
         }
         if (time_code == -1) adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
-        if (emc::kernel_stats_on()) {
-          emc::kernel_stats_record(type_std, n_trials,
-                                   emc_reuse_cells(param_table_template, type_std),
-                                   emc_wall_seconds() - ks_t0);
-        }
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
         for (int j = 0; j < n_unique_fp; ++j) {
           double s = 0.0;

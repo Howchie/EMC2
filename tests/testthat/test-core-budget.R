@@ -1,12 +1,6 @@
-# C13: one bounded task budget.
-#
-# The audit's complaint, verbatim: `.particle_core_budget(8, 32, 1, 32)` returns
-# eight subject workers and one likelihood core, leaving 24 cores idle. The
-# remainder was handed out only when inner parallelism had been asked for, so a
-# fit with fewer subjects than cores did not use the machine it was given.
-
-# Spare capacity is opt-in; see the note in .particle_core_budget about which
-# call sites can take it and why the others cannot.
+# Exercise the bounded allocator's explicit spare-capacity option. The sampler's
+# default route leaves automatic donation disabled until a combined executor is
+# available.
 budget <- function(...) {
   EMC2:::.particle_core_budget(..., blas_threads = 1L, allow_spare = TRUE)
 }
@@ -113,11 +107,7 @@ test_that("the mcmapply fallback keeps exactly the inner width it asked for", {
   expect_gte(asked$likelihood, 4L)
 })
 
-test_that("the default is the contract the prior tests pinned", {
-  # "The r_cores = 1 default must not gain inner workers it never asked for",
-  # from tests/testthat/test-particle-core-budget.R. That decision stands: both
-  # mclapply routes seed their children from mc.cores, so widening the inner
-  # budget there would move the sampler's draws. Only the pool opts in.
+test_that("the default keeps the requested inner width", {
   b <- EMC2:::.particle_core_budget(3L, n_cores = 8L, r_cores = 1L,
                                     total_cores = 8L, blas_threads = 1L)
   expect_identical(b$likelihood, 1L)

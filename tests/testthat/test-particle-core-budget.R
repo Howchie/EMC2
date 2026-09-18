@@ -43,6 +43,7 @@ test_that("proposal likelihood splits never create empty workers", {
 test_that("log_likelihood_joint forwards r_cores to calc_ll_manager", {
   formals_joint <- formals(EMC2:::log_likelihood_joint)
   expect_true("r_cores" %in% names(formals_joint))
+  expect_true("varying" %in% names(formals_joint))
   expect_identical(formals_joint$r_cores, 1)
 })
 
@@ -120,27 +121,6 @@ test_that("BLAS width cannot make the worker allocation exceed the chain budget"
                    label = sprintf("subjects=%d cores=%d blas=%d", ns, tc, bt))
         expect_gte(b$subject, 1L)
         expect_gte(b$likelihood, 1L)
-      }
-    }
-  }
-})
-
-test_that("run_stage requests spare capacity only when r_cores was explicitly raised", {
-  # `run_stage` no longer widens the pool's likelihood workers for an ordinary
-  # multi-subject fit at the r_cores = 1 default: allow_spare is only passed
-  # as TRUE when the caller actually asked for r_cores > 1, at which point
-  # `.particle_core_budget`'s own `r_cores > 1` branch already grants it
-  # regardless of allow_spare -- so the two must agree for every size.
-  pb <- EMC2:::.particle_core_budget
-  for (ns in c(2L, 8L)) {
-    for (tc in c(4L, 8L, 16L)) {
-      for (rc in c(1L, 2L)) {
-        with_spare <- pb(ns, n_cores = tc, r_cores = rc, total_cores = tc,
-                         blas_threads = 1L, allow_spare = rc > 1L)
-        without_spare <- pb(ns, n_cores = tc, r_cores = rc, total_cores = tc,
-                            blas_threads = 1L, allow_spare = FALSE)
-        expect_identical(with_spare, without_spare,
-                         info = sprintf("n_subjects=%d total_cores=%d r_cores=%d", ns, tc, rc))
       }
     }
   }

@@ -48,27 +48,14 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
 }
 
-# Build the t0 quadrature grid for one or more proposals: the node values
-# (sampled t0 scale) and the np x K unnormalized log-terms. Shared by the
-# particle step (which reduces it to the marginal ll AND reuses the accepted
-# row for reconstruction) and the init/start path, so the grid is only ever
-# computed once per likelihood evaluation.
 compute_marginal_grid <- function(proposals, data, model, marginalise,
                                   r_cores = 1, warm = NULL) {
   model_spec <- if (is.function(model)) model() else model
-  set_stop_method_from_model(model_spec)  # SS models: stop_method -> C++ config
+  set_stop_method_from_model(model_spec)
   data <- .cache_ll_data_attrs(data)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA
-  # Compressed designs: ParamTable::map_from_designs consumes the "expand"
-  # attribute directly (src/ParamTable.h), so materialising a full-length copy
-  # of every design matrix on every likelihood call is pure waste -- and an
-  # intercept-only design is skipped outright rather than expanded to n_trials
-  # rows.  See get_pars_oo() for the same contract on the prediction path.
   designs <- .oo_expanded_designs(data, expand = FALSE)
-  # Warm start: last iteration's accepted mode/scale for this subject. It only
-  # seeds the probe, and the C++ side falls back to the full pilot scan if any
-  # particle comes out unresolved, so a stale hint costs time, never accuracy.
   if (!is.null(warm) && all(is.finite(warm)) && warm[["sd"]] > 0) {
     marginalise$warm_mode <- unname(warm[["mode"]])
     marginalise$warm_sd <- unname(warm[["sd"]])
@@ -82,8 +69,6 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
       marginalise = marginalise, trend = model_spec$trend
     )
   }
-  # Each particle now carries its own quadrature rule, so particles split across
-  # cores exactly like the ordinary likelihood path in calc_ll_manager.
   if (r_cores <= 1 || nrow(proposals) <= r_cores) return(one(proposals))
   idx <- .split_work_indices(nrow(proposals), r_cores)
   parts <- auto_mclapply(1:r_cores, function(i) {
@@ -94,17 +79,11 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
        ll = unlist(lapply(parts, `[[`, "ll")),
        mode = unlist(lapply(parts, `[[`, "mode")),
        sd = unlist(lapply(parts, `[[`, "sd")),
-       # fraction of splits that kept the hint (the backoff gates on a majority)
        warm_used = mean(unlist(lapply(parts, `[[`, "warm_used"))),
        pred_used = mean(unlist(lapply(parts, `[[`, "pred_used"))),
        repaired = sum(unlist(lapply(parts, `[[`, "repaired"))))
 }
 
-# Split a contiguous range into non-empty, near-equal contiguous chunks.  The
-# old `rep(..., each = 1 + n %% r)` construction left trailing workers empty
-# whenever n was not an exact multiple of r (for example, 5 proposals over 4
-# workers produced chunks 2, 2, 1, 0).  Empty forks cost memory and can make
-# the result order-dependent in callers that concatenate worker output.
 .split_work_indices <- function(n, n_workers) {
   n <- as.integer(n)
   n_workers <- min(as.integer(n_workers), n)
@@ -114,8 +93,6 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
   rep.int(seq_len(n_workers), q + (seq_len(n_workers) <= rem))
 }
 
-# Warm-start state carried on pm_settings between iterations: the Laplace fit
-# of the accepted particle, or NULL when that particle had no usable fit.
 marginal_warm_state <- function(grid, idx) {
   if (is.null(grid$mode) || is.null(grid$sd)) return(NULL)
   m <- grid$mode[idx]; s <- grid$sd[idx]
@@ -123,12 +100,6 @@ marginal_warm_state <- function(grid, idx) {
   c(mode = m, sd = s)
 }
 
-# A single hint can only serve the whole particle batch while the batch is
-# tight: the conditional t0 mode moves with the other parameters, so a wide
-# proposal cloud (preburn/burn) spreads the per-particle modes over hundreds of
-# posterior SDs and the hint is rejected.  A rejected hint costs one wasted
-# probe round, so back off geometrically after a failure and retry later -- the
-# cloud contracts as the chain converges, and the hint then holds.
 marginal_warm_backoff <- function(state, attempted, used) {
   pen <- if (is.null(state$penalty)) 0L else state$penalty
   wait <- if (is.null(state$backoff)) 0L else state$backoff
@@ -139,13 +110,8 @@ marginal_warm_backoff <- function(state, attempted, used) {
   list(penalty = pen, backoff = wait)
 }
 
-# Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
-# proposal by a numerically stable row-wise log-sum-exp.
 marginal_ll_from_grid <- function(log_terms) {
   if (is.list(log_terms) && !is.null(log_terms$ll)) return(log_terms$ll)
-  # A pmax fold over the K columns, rather than apply(..., 1L, max): apply()
-  # splits the matrix into nrow() row vectors and calls max() on each.  K is the
-  # number of quadrature nodes, so this is a handful of vectorised passes.
   m <- rep(-Inf, nrow(log_terms))
   for (k in seq_len(ncol(log_terms))) {
     col <- log_terms[, k]
@@ -161,9 +127,6 @@ marginal_ll_from_grid <- function(log_terms) {
   res
 }
 
-# Draw one t0 node ~ Categorical(softmax(log_terms_row)) for the stored alpha.
-# `nodes` is that particle's OWN node row (rules are per particle).
-# Falls back to the fixed prior when the row carries no finite mass.
 draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
   nodes <- as.numeric(nodes)
   if (length(nodes) == 0L || all(!is.finite(log_terms_row))) {
@@ -175,36 +138,11 @@ draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
   nodes[[sample.int(length(nodes), size = 1L, prob = w)]]
 }
 
-# Standalone reconstruction (init/no-reuse path): computes its own grid.
-reconstruct_marginalised_particle <- function(particle, data, model, marginalise) {
-  if (is.null(marginalise)) return(as.numeric(particle))
-  p_names <- names(particle)
-  if (is.null(p_names)) stop("A marginalized particle must have parameter names")
-  particle <- as.numeric(particle)
-  names(particle) <- p_names
-  p_idx <- match(marginalise$param, p_names)
-  if (is.na(p_idx)) stop("Marginalized parameter is missing from the particle")
-  # A subject with no observations has no posterior node weights. Draw from the
-  # fixed prior so the stored alpha still has the same shape as ordinary fits.
-  if (is.null(data) || nrow(data) == 0L) {
-    particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
-    return(particle)
-  }
-  grid <- compute_marginal_grid(
-    matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data, model, marginalise)
-  particle[p_idx] <- draw_marginal_node(grid$nodes[1L, ],
-                                        as.numeric(grid$log_terms[1L, ]), marginalise)
-  particle
-}
-
 pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
                   nuisance = NULL, nuisance_non_hyper = NULL, marginalise = NULL, ...) {
   if(is.data.frame(dadm)) dadm <- list(dadm)
   if(is.null(pars)) pars <- names(sampled_pars(attr(dadm[[1]], "prior")))
   if(is.null(prior)) prior <- attr(dadm[[1]], "prior")
-  # The opt-in flag arrives as an explicit argument (from design(marginalise=)),
-  # NOT tagged onto the dadm: downstream consumers (predict / make_data / IC)
-  # read the reconstructed t0 like any other parameter and must never integrate.
   marginalise <- resolve_marginalise_prior(marginalise, prior)
   dadm <- extractDadms(dadm, par_names = pars)
 
@@ -215,7 +153,6 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
                                          "shared_ll_idx", remap = FALSE)
   attr(dadm_list, "components") <- components
   attr(dadm_list, "shared_ll_idx") <- shared_ll_idx
-  # Storage for the samples.
   subjects <- sort(as.numeric(unique(dadm$subjects)))
   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
   if(!is.null(nuisance_non_hyper) & !is.numeric(nuisance_non_hyper)) nuisance_non_hyper <- which(pars %in% nuisance_non_hyper)
@@ -270,16 +207,6 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   return(sampler)
 }
 
-# How many hardware threads the linear-algebra library will use per process.
-#
-# This matters to the budget because it multiplies: eight subject workers each
-# running a four-threaded BLAS is thirty-two threads, not eight, and a budget
-# that counts only processes oversubscribes the machine by that factor.
-#
-# Read once and cached. `RhpcBLASctl` is the supported way to ask, and it is a
-# suggested dependency rather than a required one, so its absence means "assume
-# one" rather than an error -- a wrong guess here costs throughput, never
-# correctness.
 .emc_blas_threads <- function() {
   cached <- .emc_pool_state$blas_threads
   if (!is.null(cached)) return(cached)
@@ -292,13 +219,6 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   n
 }
 
-# Set the thread policy at a boundary the library supports, rather than by
-# exporting an environment variable after it has already initialised -- which
-# is read once at load time and silently ignored afterwards.
-#
-# Returns the previous value so a caller can restore it. NULL when there is no
-# supported way to ask, in which case nothing was changed and nothing should be
-# restored.
 .emc_set_blas_threads <- function(n) {
   if (!requireNamespace("RhpcBLASctl", quietly = TRUE)) return(NULL)
   n <- max(1L, as.integer(n))
@@ -310,13 +230,6 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   previous
 }
 
-# Return the BLAS width that can actually fit inside a chain's core budget.
-# A library configured for more threads than the chain owns is already too
-# wide for one worker; allowing that width to participate in the integer
-# worker allocation would make the scheduler's safety claim false.  When the
-# optional control package is available, apply the cap at the process boundary
-# before workers are created.  Without it, the package's existing conservative
-# assumption (one thread) remains in force.
 .emc_limit_blas_threads <- function(total_cores) {
   total_cores <- max(1L, as.integer(total_cores)[1L])
   requested <- max(1L, as.integer(.emc_blas_threads())[1L])
@@ -325,9 +238,6 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
     .emc_set_blas_threads(target)
     observed <- max(1L, as.integer(.emc_blas_threads())[1L])
     if (observed > target) {
-      # The library could not be retuned.  Keep the allocation serial and make
-      # the diagnostic visible without starting a second pool that would make
-      # the oversubscription worse.
       if (!isTRUE(.emc_pool_state$blas_warning)) {
         warning("BLAS thread width exceeds the chain core budget; using a serial allocation")
         .emc_pool_state$blas_warning <- TRUE
@@ -339,50 +249,12 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   requested
 }
 
-# One bounded task budget.
-#
-# C13.  `.particle_core_budget(8, 32, 1, 32)` returned eight subject workers and
-# one likelihood core, leaving twenty-four idle: the remainder was handed out
-# only when inner parallelism had been *asked for*, so a fit with fewer subjects
-# than cores simply did not use the machine.  The remainder now goes to
-# likelihood workers whenever there is one, because splitting a subject's
-# particles is deterministic -- a likelihood draws no random numbers, and
-# tests/testthat/test-audit-differential.R asserts r_cores 1 through 4 give
-# bit-identical results.
-#
-# The budget is bounded in threads, not processes: subject x likelihood x BLAS
-# threads must fit, or eight workers each running a four-threaded BLAS is
-# thirty-two threads against a budget of eight.
-#
-# Static LPT partitioning is retained.  Dynamic whole-subject assignment is the
-# other half of the audit's item and is deliberately not here: it is only worth
-# its dispatch cost where measured tail imbalance exceeds it, that measurement
-# is what C1's corrected `worker_cpu_max` and `queue_delay` exist to provide,
-# and ranking it needs C3 on a quiet machine.  Adding dynamic dispatch
-# unranked would amplify exactly the lifecycle bugs C4 and C5 have just closed.
-# `allow_spare` is OFF by default, and that default is a prior decision this
-# commit deliberately does not overturn: "the r_cores = 1 default must not gain
-# inner workers it never asked for", recorded in
-# tests/testthat/test-particle-core-budget.R.
-#
-# The reason turns out to be RNG coupling. Both `mclapply` routes -- start
-# points and the `mcmapply` particle fallback -- have children that draw their
-# own proposals, and an inner `mclapply` inside the likelihood advances that
-# child's L'Ecuyer stream before it draws again to choose a particle. Widening
-# the inner budget there moves the sampler's draws, so a fit stops being
-# reproducible from a fixed seed for a reason that has nothing to do with the
-# model. Those call sites keep the default.
-#
-# The worker pool has no such coupling: it splits particles itself and draws
-# nothing, so it opts in and that is where the audit's idle cores go.
 .particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L,
                                  total_cores = NULL, blas_threads = NULL,
                                  allow_spare = FALSE) {
   n_subjects <- as.integer(n_subjects)
   n_cores <- max(1L, as.integer(n_cores))
   r_cores <- max(1L, as.integer(r_cores))
-  # Without a global budget, retain r_cores as the inner-width lower bound.
-  # The sampler supplies total_cores for an explicit per-chain allocation.
   if (is.null(total_cores)) {
     if (n_subjects == 1L && n_cores > 1L) {
       return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
@@ -393,49 +265,26 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   if (is.null(blas_threads)) {
     blas_threads <- .emc_limit_blas_threads(total_cores)
   } else {
-    # Explicit probes may pass a synthetic BLAS width.  Cap it here too, so
-    # the returned allocation never claims more threads than the requested
-    # chain budget can contain.
     blas_threads <- min(total_cores, max(1L, as.integer(blas_threads)[1L]))
   }
-  # Threads, not processes: whatever the linear-algebra library will run inside
-  # each worker comes out of the same budget.
   budget <- max(1L, total_cores %/% blas_threads)
   if (n_subjects == 1L && n_cores > 1L) {
     return(list(subject = 1L,
                 likelihood = min(budget, max(r_cores, n_cores))))
   }
-  # Keep subject workers times likelihood workers within the chain budget.
   likelihood <- min(r_cores, budget)
   subject <- max(1L, min(n_subjects, n_cores, budget %/% likelihood))
-  # Spare capacity goes to splitting particles, whether or not inner
-  # parallelism was asked for: there is no reason to leave cores idle when the
-  # subject count is the binding constraint, and the split is deterministic.
   if (isTRUE(allow_spare) || r_cores > 1L) {
     likelihood <- max(likelihood, budget %/% subject)
   }
-  # Two elements, as callers have always had: the BLAS width is an input to the
-  # budget, not part of its answer, and `.emc_blas_threads()` reports it.
   list(subject = subject, likelihood = likelihood)
 }
 
-# Which mechanism actually carried the likelihood work this iteration, for the
-# `route` profile field.  A persistent pool (subject-level `wpool`, or the
-# single-subject `llpool`) is only "alive" when it is genuinely running
-# workers -- the degenerate one-worker stand-in `run_stage` constructs when no
-# pool could be started deliberately reports `alive = FALSE`, so a fallback
-# never silently reads as spare-core use.  Absent both, the only other way
-# work widens is a fresh per-call fork (`auto_mclapply`/`mcmapply` sized by
-# the relevant core budget); anything narrower than that is plain serial work.
 .emc_ll_route <- function(wpool, llpool, pool_budget, core_budget = NULL,
                           ll_route = NULL) {
   if (!is.null(wpool) && isTRUE(wpool$alive)) {
     return("persistent_pool")
   }
-  # A live likelihood pool can still be the serial arm while its empirical
-  # probe is running, or after it lost a request and calc_ll_pooled recomputed
-  # that call in the master.  Prefer the arm actually recorded for this
-  # iteration over the pool handle's stale local copy.
   if (!is.null(llpool)) {
     if (!is.null(ll_route) && !is.null(ll_route$last_route)) {
       return(ll_route$last_route)
@@ -455,16 +304,12 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                  verbose = FALSE, particles = 1000,
                  n_cores = 1, r_cores = 1, total_cores = NULL) {
-  # make_emc() replicates the uninitialised sampler across chains.  Its sample
-  # arrays therefore share references until R's ordinary copy-on-modify would
-  # detach them.  The native history writers deliberately bypass that copy, so
-  # take ownership once while every store contains only its initial slice.
+  blas_before <- .emc_blas_threads()
+  on.exit(if (!is.null(blas_before)) .emc_set_blas_threads(blas_before), add = TRUE)
   pmwgs$samples <- emc_clone_sample_store(pmwgs$samples)
   if (!is.null(pmwgs$sampler_nuis$samples)) {
     pmwgs$sampler_nuis$samples <- emc_clone_sample_store(pmwgs$sampler_nuis$samples)
   }
-  # Gets starting points for the mcmc process
-  # If no starting point for group mean just use zeros
   type <- pmwgs$type
   startpoints <-startpoints_comb <- get_startpoints(pmwgs, start_mu, start_var, type)
   if(any(pmwgs$nuisance)){
@@ -480,19 +325,10 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                                                                       n_pars = pmwgs$n_pars, type = type_nuis)
     pmwgs$sampler_nuis$samples$idx <- 1
   }
-  # With one subject there is nothing to parallelise in the outer mclapply.
-  # Spend the same per-chain core budget across that subject's proposal
-  # likelihoods instead.  This matters especially for PDE-backed models, for
-  # which a particle is an independent numerical solve.  The total process
-  # count still respects n_cores; r_cores remains an explicit lower bound.
   core_budget <- .particle_core_budget(
     pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores,
     total_cores = total_cores
   )
-  # Start points get their own per-subject streams for the same reason the
-  # particle step does: `mclapply` seeds its children from `mc.cores`, so
-  # without this the *start* of a fit would still move with the core count and
-  # nothing downstream could recover it.
   start_streams <- .emc_subject_streams(pmwgs$n_subjects)
   proposals <- .emc_with_preserved_rng(
     parallel::mclapply(X=1:pmwgs$n_subjects,
@@ -507,7 +343,6 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                        r_cores = core_budget$likelihood))
   proposals <- array(unlist(proposals), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 
-  # Sample the mixture variables' initial values.
 
   pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = startpoints, proposals = proposals,
                                              j = 1, n_pars = pmwgs$n_pars, type = type)
@@ -566,15 +401,12 @@ init_chains <- function(emc, start_mu = NULL, start_var = NULL, particles = 1000
 }
 
 start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1){
-  #Draw the first start point
   group_pars <- get_group_level(parameters, s, type)
   proposals <- particle_draws(n_particles, group_pars$mu, group_pars$var)
-  colnames(proposals) <- rownames(pmwgs$samples$alpha) # preserve par names
+  colnames(proposals) <- rownames(pmwgs$samples$alpha)
   data_s <- pmwgs$data[[which(pmwgs$subjects == s)]]
   marginalise <- pmwgs$marginalise
   if (!is.null(marginalise)) {
-    # One grid: reduce to the marginal ll for start-point selection and reuse
-    # the chosen particle's node weights to reconstruct its t0.
     grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise,
                                   r_cores = r_cores)
     lw <- marginal_ll_from_grid(grid)
@@ -595,42 +427,25 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
 
 
 check_tune_settings <- function(tune, n_pars, stage, particles){
-  # Acceptance ratio tuning
   tune$alphaStar <- ifelse(stage == "sample", 2, 3)
-  # `fit()` and `run_emc()` default this to 1, but `run_stages()` defaults it to
-  # NULL, and `0.02 * (1/NULL)` is numeric(0) rather than an error.  An empty
-  # target empties every subject's epsilon at the first adaptation (iteration
-  # n0 + 1), so the scaled proposal's covariance becomes NA, half of every cloud
-  # is NaN, and each update is caught and answered by repeating the previous
-  # state -- a chain that stops moving after 25 iterations and says nothing.
-  # That is what a direct `run_stages()` call without `search_width` did,
-  # including the audit's own pool benchmark.
   if (is.null(tune$search_width)) tune$search_width <- 1
   tune$p_accept <- set_p_accept(stage, tune$search_width)
-  # Potential blocking settings
   if(is.null(tune$components)) tune$components <- rep(1, n_pars)
   if(is.null(tune$shared_ll_idx)) tune$shared_ll_idx <- tune$components
-  # Tuning of number of particles, might be a bit arbitrary
   if(is.null(tune$target_ESS)) tune$target_ESS <- 2.5*sqrt(n_pars)
   if(is.null(tune$ESS_scale)) tune$ESS_scale <- .05
   if(is.null(tune$max_particles)) tune$max_particles <- particles*1.2
-  # Mix tuning settings
   if(is.null(tune$mix_adapt)) tune$mix_adapt <- .05
-  # After n0 all the tuning kicks in
   tune$n0 <- 25
   return(tune)
 }
 
 check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
   for(i in 1:length(pm_settings)){
-    # Mix settings
     pm_settings[[i]]$mix <- check_mix(pm_settings[[i]]$mix, stage)
-    # For p_accept
     pm_settings[[i]]$epsilon <- check_epsilon(pm_settings[[i]]$epsilon, n_pars, pm_settings[[i]]$mix)
-    # For mix and p_accept tuning
     pm_settings[[i]]$proposal_counts <- check_prop_performance(pm_settings[[i]]$proposal_counts, stage)
     pm_settings[[i]]$acc_counts <- check_prop_performance(pm_settings[[i]]$acc_counts, stage)
-    # Setting particles
     if(is.null(pm_settings[[i]]$n_particles)) pm_settings[[i]]$n_particles <- particles
     if(is.null(pm_settings[[i]]$iter)) pm_settings[[i]]$iter <- 1
     if(is.null(pm_settings[[i]]$gd_good)) pm_settings[[i]]$gd_good <- FALSE
@@ -689,9 +504,8 @@ run_stage <- function(pmwgs,
                       verboseProgress = TRUE,
                       r_cores = 1,
                       core_ctl = NULL) {
-  # Set defaults for NULL values
-  # Set necessary local variables
-  # Set stable (fixed) new_sample argument for this run
+  blas_before <- .emc_blas_threads()
+  on.exit(if (!is.null(blas_before)) .emc_set_blas_threads(blas_before), add = TRUE)
   n_pars <- pmwgs$n_pars
   par_names <- pmwgs$par_names
   if (is.null(par_names)) {
@@ -714,17 +528,14 @@ run_stage <- function(pmwgs,
   tune$shared_ll_idx <- shared_ll_idx
 
   pm_settings <- attr(pmwgs$samples, "pm_settings")
-  # Intialize sampling tuning settings
   if(is.null(pm_settings)) pm_settings <- lapply(1:pmwgs$n_subjects, function(x) return(vector("list", length(unique(tune$components)))))
   tune <- check_tune_settings(tune, n_pars, stage, particles)
   pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,  stage = stage, n_pars = n_pars, particles)
 
-  # Add proposal distributions
   eff_mu <- pmwgs$eff_mu
   eff_var <- pmwgs$eff_var
   chains_var <- pmwgs$chains_var
   chains_mu <- pmwgs$chains_mu
-  # Make sure that there's at least something to mapply over
   if(is.null(eff_mu)) eff_mu <- vector("list", pmwgs$n_subjects)
   if(is.null(chains_mu)) chains_mu <- vector("list", pmwgs$n_subjects)
   if(is.null(eff_var)) eff_var <- vector("list", pmwgs$n_subjects)
@@ -734,37 +545,20 @@ run_stage <- function(pmwgs,
   }
 
   data <- pmwgs$data
-  subjects <- pmwgs$subjects
   nuisance <- pmwgs$nuisance
-  block_idx <- block_variance_idx(tune$components)
 
-  # chains_var / eff_var are fixed for the whole block, so factorise them once
-  # per subject here rather than once per subject per iteration.
   marginal_idx_blk <- .marginal_par_idx(par_names, marginalise = pmwgs$marginalise)
-  if (length(marginal_idx_blk) != length(tune$components)) {
-    marginal_idx_blk <- rep(FALSE, length(tune$components))
+  if (length(marginal_idx_blk) != length(par_names)) {
+    marginal_idx_blk <- rep(FALSE, length(par_names))
   }
   idx_list_blk <- .component_idx_list(tune$components, marginal_idx_blk)
   chol_caches <- lapply(seq_len(pmwgs$n_subjects), function(s) {
     build_subject_chol_cache(chains_var[[s]], eff_var[[s]], idx_list_blk)
   })
 
-  # Persistent workers, started once for the whole block instead of forked once
-  # per iteration.  A clean template loads only this block-constant context and
-  # forks the workers without the chain's sample history; see R/chain_pool.R.
-  # The pool is the one route that can take spare capacity safely: it splits a
-  # subject's particles itself and draws no random numbers, so widening the
-  # inner budget cannot move the sampler's draws.  That is still only granted
-  # when inner parallelism was explicitly asked for (`r_cores > 1`): an
-  # ordinary multi-subject pool at the `r_cores = 1` default keeps a
-  # likelihood width of one, so it does not silently start splitting a
-  # subject's particles across extra processes nobody requested.  Explicit
-  # requests and the one-subject path are untouched -- see
-  # `.particle_core_budget()`'s own branches for both.
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                        r_cores = r_cores,
-                                       total_cores = n_cores,
-                                       allow_spare = r_cores > 1L)
+                                       total_cores = n_cores)
   wpool_ctx <- list(
     data = data, model = .emc_wpool_slim_model(pmwgs$model),
     stage = stage, type = pmwgs$type,
@@ -773,26 +567,13 @@ run_stage <- function(pmwgs,
     eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
     chains_var = chains_var, chol_caches = chol_caches
   )
-  # Optional low-level timing for architecture benchmarks.  Fields, types and
-  # the reporting path are declared once in R/profile_schema.R; the resulting
-  # data frame is attached to `samples` so profiling works inside the chain
-  # processes without shared global state.
   sampler_profile <- .emc_profile_enabled()
   startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-  # Never start more workers than there are subjects to give them: `mclapply`
-  # caps itself at `length(X)`, and without the same cap a wide core budget on
-  # a small study pays for workers that would be handed nothing.
   n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
-  # NULL where a pool cannot work: Windows, no mkfifo, or a single worker.
   wpool <- .emc_wpool_start(n_workers, wpool_ctx)
   if (!is.null(wpool)) {
     on.exit(.emc_wpool_stop(wpool), add = TRUE)
   } else if (n_workers <= 1L) {
-    # One worker is not worth a fork, but it must still *draw* the way the pool
-    # does, or a single-core run would not reproduce a multi-core one -- and a
-    # one-core run is the obvious baseline to check a fit against.  Nothing is
-    # given up: `mcmapply` at one core is serial too.  A pool marked dead
-    # computes every subject in the master through the same unit of work.
     wpool <- list(n = 1L, dir = NULL, jobs = list(), wcs = list(),
                   rcs = list(), alive = FALSE)
   }
@@ -802,27 +583,20 @@ run_stage <- function(pmwgs,
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
 
-  # For one subject, use a persistent likelihood pool over particles.
   llpool <- NULL
   if (pmwgs$n_subjects == 1L && pool_budget$likelihood > 1L &&
       isTRUE(getOption("emc2.ll_pool", TRUE))) {
     llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx)
     if (!is.null(llpool)) {
-      # Restore rather than clear: the registration is process-global, so a
-      # nested run_stage() must hand the outer one its own pool back instead of
-      # leaving the rest of that block unaccelerated.
       outer_ll <- list(pool = .emc_pool_state$ll_pool,
-                       s = .emc_pool_state$ll_subject)
-      # `s` is a column/list index everywhere in the particle step (see
-      # new_particle's `parameters$alpha[, s]`), not a subject label.
-      #
-      # Preserve routing measurements across stage blocks; they are specific
-      # to this model and subject.
-      .emc_ll_pool_set(llpool, 1L, reset = FALSE)
+                       s = .emc_pool_state$ll_subject,
+                       route = .emc_pool_state$ll_route)
+      .emc_ll_pool_set(llpool, 1L, reset = is.null(outer_ll$route))
       on.exit({
         .emc_wpool_stop(llpool)
         .emc_pool_state$ll_pool <- outer_ll$pool
         .emc_pool_state$ll_subject <- outer_ll$s
+        .emc_pool_state$ll_route <- outer_ll$route
       }, add = TRUE)
     }
   }
@@ -831,13 +605,10 @@ run_stage <- function(pmwgs,
     proc.time()[["elapsed"]] - startup_started
   } else NA_real_
 
-  # Extend only after startup.  This ordering still helps the fork fallback;
-  # clean-process workers are isolated from both the old and extended arrays.
   start_iter <- pmwgs$samples$idx
   pmwgs <- extend_sampler(pmwgs, iter, stage)
   if(any(nuisance)) pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
 
-  # How often to re-fork the workers.  See .emc_wpool_recycle().
   recycle_default <- .emc_wpool_recycle_default(wpool)
   recycle_every <- as.integer(getOption("emc2.worker_recycle", recycle_default))
   if (length(recycle_every) != 1L || is.na(recycle_every)) {
@@ -845,26 +616,15 @@ run_stage <- function(pmwgs,
   }
 
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
-  # Rejections are counted for the whole process, so read the running totals at
-  # the start of each iteration and report the difference.  Only "gibbs" is
-  # taken from here: particle rejections happen inside the workers and travel
-  # back in their replies, and reading both would double-count the shares the
-  # master recomputes itself.
   gibbs_rejects <- .emc_reject_counts("gibbs")
-  # Totals for the whole stage, so R/failure_policy.R can report once at the
-  # end from the master rather than per iteration from a forked worker.
   stage_rejects <- list(
     particle = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                                .EMC_REJECT_CLASSES),
     gibbs = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                             .EMC_REJECT_CLASSES))
-  # Reading smaps for a whole pool costs more than a fast iteration does, so
-  # the memory probe is sampled rather than run every iteration.  The report
-  # takes the mean and the peak over the iterations that carry a reading.
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
-  # Main iteration loop
   for (i in 1:iter) {
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     if (verboseProgress) {
@@ -873,8 +633,6 @@ run_stage <- function(pmwgs,
     }
     j <- start_iter + i
 
-    # Gibbs step. If a numerical failure occurs here, no subject update has
-    # happened yet, so the safe rejection is to repeat the previous iteration.
     gibbs_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pars_attempt <- tryCatch(
       gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type),
@@ -919,9 +677,6 @@ run_stage <- function(pmwgs,
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started
     } else NA_real_
-    # Particle step
-    # group_var is `tvar` for every sampler variant, hence the same matrix for
-    # every subject: factorise it once here instead of n_subjects times below.
     cache_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     group_var_it <- tryCatch(
       .apply_marginal_group_var(get_group_level(pars_comb, 1L, pmwgs$type)$var,
@@ -929,47 +684,30 @@ run_stage <- function(pmwgs,
       error = function(e) NULL
     )
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
-                                          marginal_idx_blk)
+                                          marginal_idx_blk,
+                                          include_full = length(unique(tune$components)) > 1L)
     cache_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - cache_started
     } else NA_real_
     recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
     pool_profile <- NULL
     if (!is.null(llpool)) {
-      # Same recycling contract as the subject pool.  Growing is unconditionally
-      # safe here -- a likelihood draws nothing, so the number of workers cannot
-      # move a number -- which is why this takes the donated cores directly
-      # rather than dividing them around an inner fan-out.
       llpool <- .emc_wpool_recycle(llpool, i, recycle_every, wpool_ctx)
       llpool <- .emc_wpool_grow(llpool, .emc_cores_now(core_ctl, n_cores),
                                 wpool_ctx)
-      # Re-register the (possibly replaced) handles, but keep the routing
-      # measurements: they are a property of the model, not of this worker set.
       .emc_ll_pool_set(llpool, 1L, reset = FALSE)
     }
     if (!is.null(wpool)) {
-      # Re-fork periodically so workers cannot drift far from their initially
-      # shared pages.  On the clean backend they return to the template's small
-      # context, never the chain history.  Streams live in the master, so
-      # replacing workers cannot move a draw.
       recycle_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
       wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
       if (sampler_profile) {
         recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
       }
-      # Siblings that have finished their block free up cores; unlike the
-      # mcmapply path, taking them here cannot perturb the draws.
       chain_cores <- .emc_cores_now(core_ctl, n_cores)
-      # `ctx$r_cores` is fixed for the lifetime of this pool.  Allocate the
-      # donated budget around that inner fan-out so the product of subject and
-      # likelihood workers remains bounded by chain_cores.
       target_workers <- min(
         pmwgs$n_subjects,
         max(1L, chain_cores %/% max(1L, pool_budget$likelihood))
       )
-      # Always take the returned pool back, not only when it grew: a grow that
-      # failed records its backoff state there, and dropping it would retry the
-      # failure on every remaining iteration.
       n_before <- wpool$n
       grow_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
       wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
@@ -987,23 +725,12 @@ run_stage <- function(pmwgs,
       wpool_streams <- it$seeds
       wpool$alive <- it$alive
       pool_profile <- it$profile
-      # Particle failures happen in the workers and travel back here; the
-      # master's own counter never sees them.
       if (!is.null(it$rejects)) {
         stage_rejects$particle <- stage_rejects$particle + it$rejects
       }
-      iter_kernel <- it$kernel
-      # Re-balance from what the subjects actually cost this iteration: trial
-      # counts are only a proxy, and the adaptive particle number drifts.
-      # Floor rather than discard: a subject whose CPU time lands under the
-      # clock's resolution reads as 0, and dropping the whole measurement for
-      # it would pin a fast model to row counts for the entire block.
       if (any(it$times > 0)) wpool_cost <- pmax(it$times, min(it$times[it$times > 0]))
       wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
     } else {
-    # Fallback where no pool could be started.  It keeps the static core share:
-    # `mcmapply` seeds its children from `mc.cores`, so a timing-dependent
-    # budget here would make the fit irreproducible from a fixed seed.
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
                                          total_cores = n_cores)
@@ -1023,42 +750,23 @@ run_stage <- function(pmwgs,
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
     }
 
-    #Fill samples
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
-    # The group step runs in the master, so its failures are on this process's
-    # counter.  Read the difference every iteration, not only when profiling:
-    # the stage summary has to be able to say what happened in an ordinary run.
-    if (!exists("iter_kernel", inherits = FALSE) || is.null(iter_kernel)) {
-      iter_kernel <- c(rows = NA_real_, cells = NA_real_, seconds = NA_real_)
-    }
     gibbs_delta <- .emc_reject_delta(gibbs_rejects, "gibbs")
     gibbs_rejects <- .emc_reject_counts("gibbs")
     stage_rejects$gibbs <- stage_rejects$gibbs + gibbs_delta
     if (sampler_profile) {
-      # Stop the iteration clock before any profiler-only work.  Sizing the
-      # requests and reading the process tree's memory cost tens of
-      # milliseconds on a wide fit, and charging that to `total` makes the
-      # profiler the largest unexplained component of its own report.
       iteration_total <- proc.time()[["elapsed"]] - iteration_started
       pp <- if (is.null(pool_profile)) list() else pool_profile
-      # `n_particles` is what the subject actually ran with after adaptation,
-      # not the nominal setting, which is why it is read back here rather than
-      # taken from `tune`.
       n_part <- vapply(pm_settings, function(x) {
         if (is.null(x$n_particles)) NA_real_ else as.numeric(x$n_particles)
       }, numeric(1))
-      # Sample the first and last iteration too, so a short run still carries a
-      # reading and the peak covers the end of the block.
       mem <- if (.emc_profile_expensive() &&
                  (i == 1L || i == iter || i %% mem_every == 0L)) {
-        # The whole tree, template included: a forked template holds the
-        # context every worker shares, and leaving it out attributes its pages
-        # to nobody.
         .emc_profile_memory(if (is.null(wpool)) NULL else c(
           vapply(wpool$jobs, .emc_wpool_job_pid, integer(1)),
           .emc_wpool_job_pid(wpool$template$job)))
@@ -1104,17 +812,11 @@ run_stage <- function(pmwgs,
         private_memory = mem$bytes,
         private_memory_method = mem$method,
         particle_weight_ess = {
-          # The quantity `update_pm_settings` adapts the particle count from,
-          # averaged over subjects. Deliberately beside the chain-ESS columns
-          # the benchmark reports: they answer different questions.
           we <- vapply(pm_settings, function(x) {
             if (is.null(x$weight_ess)) NA_real_ else as.numeric(x$weight_ess)
           }, numeric(1))
           if (all(is.na(we))) NA_real_ else mean(we, na.rm = TRUE)
         },
-        kernel_rows = unname(iter_kernel[["rows"]]),
-        kernel_cells = unname(iter_kernel[["cells"]]),
-        kernel_seconds = unname(iter_kernel[["seconds"]]),
         fallback_workers = pp$fallback_workers,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded),
@@ -1122,9 +824,6 @@ run_stage <- function(pmwgs,
         .emc_reject_row_fields(gibbs_delta, "gibbs")))
     }
   }
-  # One report per stage, from the master, where a warning cannot go with a
-  # forked process.  Silent unless something that was not numerical rejection
-  # was answered by repeating the previous state.
   .emc_failure_report_stage(stage_rejects, stage)
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   if (sampler_profile) {
@@ -1143,10 +842,6 @@ reject_sample_iteration <- function(samples, j) {
     obj <- samples[[nm]]
     d <- dim(obj)
     if (is.null(d)) next
-    # d[1] != d[2] was the same "looks like a fixed square matrix" guess as the
-    # one extend_obj used to make; no sample store holds a square 2-D element,
-    # and skipping one that happened to be square would leave iteration j
-    # holding NA after a rejection.
     if (length(d) == 2 && d[2] >= j) {
       samples[[nm]][, j] <- samples[[nm]][, j - 1]
     } else if (length(d) == 3 && d[3] >= j) {
@@ -1179,16 +874,7 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     error = identity
   )
   if (inherits(attempt, c("error", "try-error"))) {
-    # Counting only: the rejection policy is unchanged.  Repeating the previous
-    # state is what preserves the PMwG invariant under *numerical* rejection,
-    # but this catch also swallows infrastructure and programming failures, and
-    # a fit that quietly copies the old state every iteration looks like fast,
-    # well-mixing sampling from the outside.  Recording the class is what makes
-    # that visible without changing what happens next.
     cls <- .emc_reject_record(attempt, "particle")
-    # R/failure_policy.R decides.  Under the default the answer is the same one
-    # this has always given -- repeat the previous state -- and the difference
-    # is that a failure which was not numerical rejection now says so.
     if (identical(.emc_failure_action(cls), "abort")) {
       .emc_failure_abort(cls, "particle", attempt)
     }
@@ -1203,33 +889,7 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
 }
 
 
-# ---------------------------------------------------------------------------
-# Proposal-covariance factorisations
-#
-# Every proposal density in new_particle() needs chol(Sigma) and its inverse.
-# Two facts make almost all of that work redundant across the iteration loop:
-#
-#   * chains_var / eff_var are set by add_proposals() *before* run_stage() and
-#     do not change for the whole block, so their factorisations are constant
-#     over all `iter` iterations.
-#   * group_var is `parameters$tvar` for every sampler variant (see
-#     get_group_level_* in define_variants.R and the variant_* files), i.e. it
-#     is the same matrix for every subject within one iteration.
-#
-#   * the epsilon scaling factors out: for R = eps * B,
-#         R^-1 = B^-1 / eps  and  sum(log(diag(R^-1))) = sum(log(diag(B^-1))) - p*log(eps)
-#     so an adapting epsilon never invalidates a cached factorisation.
-#
-# So the factorisations are computed once per block (chains/eff, per subject)
-# and once per iteration (group, shared by all subjects), instead of
-# n_subjects * n_proposals times per iteration.  Each cache entry carries the
-# matrix it was built from and is only used when identical() confirms the match,
-# so a stale or mismatched cache degrades to the original inline computation
-# rather than silently producing a wrong proposal density.
-# ---------------------------------------------------------------------------
 
-# chol() with the original escalating-ridge fallback ladder, plus the derived
-# quantities every caller needs.  Returns NULL for a degenerate (p == 0) block.
 .chol_factor <- function(Sigma, p) {
   if (p <= 0) return(NULL)
   base_R <- tryCatch(chol(Sigma), error = function(e) NULL)
@@ -1248,8 +908,6 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   list(R = base_R, rooti = rooti, sum_log_diag = sum(log(diag(rooti))), p = p)
 }
 
-# Which parameters are held out of the proposal draws entirely.  Shared by
-# new_particle() and the cache builder so both derive the same component index.
 .marginal_par_idx <- function(par_names, marginalise) {
   if (is.null(marginalise) || is.null(par_names)) {
     return(rep(FALSE, length(par_names)))
@@ -1257,9 +915,6 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   par_names %in% marginalise$param
 }
 
-# The marginalized coordinate is held out of the proposal covariance and given
-# its prior variance.  Factored out so the per-iteration cache in run_stage()
-# builds bit-for-bit the same matrix new_particle() will compare against.
 .apply_marginal_group_var <- function(group_var, marginal_idx, marginalise) {
   if (!any(marginal_idx)) return(group_var)
   group_var[marginal_idx, ] <- 0
@@ -1268,7 +923,6 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   group_var
 }
 
-# The per-component parameter blocks used for proposals, in component order.
 .component_idx_list <- function(components, marginal_idx) {
   unq <- unique(components)
   out <- vector("list", max(unq))
@@ -1276,9 +930,6 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   out
 }
 
-# Block-constant factorisations for one subject: chains_var and eff_var, per
-# component.  Returns NULL when neither is available (preburn has no chains_var
-# and only ever proposes from group_var).
 build_subject_chol_cache <- function(chains_var, eff_var, idx_list) {
   if (is.null(chains_var) && is.null(eff_var)) return(NULL)
   facs <- function(S) {
@@ -1293,27 +944,18 @@ build_subject_chol_cache <- function(chains_var, eff_var, idx_list) {
        eff_ref = eff_var, eff = facs(eff_var))
 }
 
-# Per-iteration factorisation of the group covariance, shared across subjects.
-# `group_var` must already carry the marginalise() modification, because that is
-# what new_particle() will compare against.
-build_group_chol_cache <- function(group_var, idx_list, marginal_idx = NULL) {
+build_group_chol_cache <- function(group_var, idx_list, marginal_idx = NULL,
+                                   include_full = TRUE) {
   if (is.null(group_var)) return(NULL)
-  # C15.  The per-component factors below serve the proposal draws. The prior
-  # density under blocking is evaluated against the FULL non-marginal covariance
-  # -- the same matrix, once per subject per component per iteration -- and was
-  # refactorised every time. Cache it here, beside the component factors and
-  # keyed on the same reference, so it is computed once per group draw.
-  #
-  # `fast_dmvnorm_factor()` and not `.chol_factor()`: the latter's regularisation
-  # ladder is for proposals, and using it here would change the prior. This one
-  # reproduces `fast_dmvnorm()` exactly, including its -Inf on a singular matrix.
   full <- NULL
-  if (!is.null(marginal_idx) && any(!marginal_idx)) {
+  if (isTRUE(include_full) && !is.null(marginal_idx) && any(!marginal_idx)) {
     keep <- !marginal_idx
     full <- fast_dmvnorm_factor(group_var[keep, keep, drop = FALSE])
     full$keep <- keep
   }
-  list(idx_list = idx_list, ref = group_var, full = full,
+  list(idx_list = idx_list, ref = group_var, marginal_idx = marginal_idx,
+       include_full = isTRUE(include_full),
+       full = full,
        f = lapply(idx_list, function(idx) {
          if (is.null(idx)) return(NULL)
          .chol_factor(group_var[idx, idx, drop = FALSE], sum(idx))
@@ -1341,8 +983,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   group_mu <- group_pars$mu
   group_var <- group_pars$var
   subj_mu <- if (direct_state) current_alpha else parameters$alpha[,s]
-  # Node grid of the accepted particle, captured during the likelihood step and
-  # reused for reconstruction (avoids a second full marginal pass at storage).
   marg_nodes <- NULL
   marg_terms_row <- NULL
   marginal_idx <- rep(FALSE, length(subj_mu))
@@ -1352,23 +992,17 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       names(subj_mu) <- alpha_names[seq_along(subj_mu)]
     }
     marginal_idx <- .marginal_par_idx(names(subj_mu), marginalise)
-    # Keep a placeholder column for design mapping, but hold the marginalized
-    # coordinate out of every proposal draw and proposal-density evaluation.
     group_mu[marginal_idx] <- marginalise$mu
     group_var <- .apply_marginal_group_var(group_var, marginal_idx, marginalise)
   }
   out_lls <- numeric(length(unq_components))
   particle_multiplier <- 1
-  # Set the proposals
-  # sig_tags names the *source* of each proposal covariance, so that repeated
-  # sources are factorised once and cached factorisations can be looked up.
   if(stage == "preburn"){
     Mus <- list(group_mu, subj_mu)
     Sigmas <- list(group_var, group_var)
     sig_tags <- c("group", "group")
-    # For preburn use a lot of proposals, to increase initial search a bit
     particle_multiplier <- 2
-  } else if(stage == "burn"){ # Burn
+  } else if(stage == "burn"){
     Mus <- list(group_mu, subj_mu, subj_mu)
     Sigmas <- list(group_var, group_var, chains_var)
     sig_tags <- c("group", "group", "chains")
@@ -1376,28 +1010,23 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     Mus <- list(group_mu, subj_mu, chains_mu)
     Sigmas <- list(group_var, chains_var, chains_var)
     sig_tags <- c("group", "chains", "chains")
-  } else{ # Sample
+  } else{
     Mus <- list(group_mu, subj_mu, chains_mu, eff_mu)
     Sigmas <- list(group_var, chains_var, chains_var, eff_var)
     sig_tags <- c("group", "chains", "chains", "eff")
   }
   n_proposals <- length(Mus)
-  # A cache entry is only trusted when it was built from the very matrix and
-  # component split in play here; otherwise we fall back to factorising inline.
   cache_ok <- function(cache, ref_name, ref, idx) {
     !is.null(cache) && !is.null(cache[[ref_name]]) &&
       identical(cache[[ref_name]], ref) &&
       identical(cache$idx_list[[i]], idx)
   }
   for(i in unq_components){
-    # Add 1 to epsilons such that prior/group-level proposals aren't scaled
     epsilons <- c(1, pm_settings[[i]]$epsilon)
     idx_full <- tune$components == i
     idx <- idx_full & !marginal_idx
     p_idx <- sum(idx)
 
-    # One factorisation per distinct covariance source, taken from the block /
-    # iteration caches when they match, then scaled by each proposal's epsilon.
     Rs <- vector("list", n_proposals)
     rootis <- vector("list", n_proposals)
     log_consts <- numeric(n_proposals)
@@ -1424,15 +1053,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       }
     }
 
-    # Draw new proposals for each component
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     proposals <- vector("list", n_proposals +1)
     proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
     for(j in 1:n_proposals){
-      # Fill up the proposals
       if (p_idx > 0) {
-        # R is always supplied here, so particle_draws() never touches `covar`;
-        # building the scaled covariance would be a wasted p x p allocation.
         proposals[[j + 1]] <- particle_draws(
           particle_numbers[j], Mus[[j]][idx], covar = NULL, R = Rs[[j]])
       } else {
@@ -1441,13 +1066,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     }
     proposals <- do.call(rbind, proposals)
 
-    # Non -used proposals (for prior calculations)
-    # Rejoin new proposals with current MCMC values for other components
     if(any(!idx)){
-      # Build the final matrix once.  The previous rbind -> cbind -> reorder
-      # path held two additional full proposal matrices live at peak memory,
-      # which is substantial when particles and non-updated parameters are
-      # both numerous.
       proposals_full <- matrix(rep(subj_mu, each = nrow(proposals)),
                                 nrow = nrow(proposals),
                                 ncol = length(subj_mu))
@@ -1458,25 +1077,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       colnames(proposals) <- names(subj_mu)
     }
 
-    # Normally we assume that a component contains all the parameters to estimate the individual likelihood of a joint model
-    # Sometimes we may also want to block within a model if it has very high dimensionality
     shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
 
-    # Calculate likelihoods
     if (!is.null(marginalise)) {
-      # Compute the t0 quadrature grid ONCE: reduce it to the marginal ll for
-      # the MH weights, and stash the grid so the accepted particle's node
-      # weights reconstruct t0 without a second full marginal pass.
       warm_state <- pm_settings[[i]]$marg_warm
       warm_arg <- if (!is.null(warm_state) && warm_state$backoff <= 0L) {
         c(mode = warm_state$mode, sd = warm_state$sd)
       } else NULL
-      # The within-iteration hint (pilot a subset, regress its modes on the other
-      # parameters) is rejected outright when the proposal cloud is too wide for
-      # the regression to bracket, and then its subset pilot is wasted work. Back
-      # it off exactly like the warm hint: the cloud narrows as the chain
-      # converges, and it starts paying off from then on.
       pred_state <- pm_settings[[i]]$marg_pred
       use_pred <- is.null(pred_state) || pred_state$backoff <= 0L
       marg_spec <- marginalise
@@ -1493,17 +1101,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
                            r_cores = r_cores, s = s, varying = idx[is_shared])
     }
-    lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
-    # Prior density
+    lw_total <- lw + prev_ll - lw[1]
     lp <- if (p_idx > 0) {
       fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
                          rooti = rootis[[1]], log_const = log_consts[[1]])
     } else rep(0, nrow(proposals))
     if(length(unq_components) > 1){
       prior_density <- if (any(!marginal_idx)) {
-        # The cached full factor when it is this group draw's, and the original
-        # call otherwise -- same arithmetic either way, so the cache can only
-        # save work, never move a number.
         gf <- group_chol$full
         if (!is.null(gf) && !is.null(group_chol$ref) &&
             identical(group_chol$ref, group_var) &&
@@ -1513,7 +1117,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                mean = group_mu[!marginal_idx],
                                rooti = gf$rooti, log_const = gf$log_const)
           } else {
-            # What fast_dmvnorm does when the Cholesky fails.
             rep(-Inf, nrow(proposals))
           }
         } else {
@@ -1525,7 +1128,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     } else{
       prior_density <- lp
     }
-    # Calculate mixture log-density using log-sum-exp for numerical stability
     log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = n_proposals)
     log_mix_comps[, 1] <- log(pm_settings[[i]]$mix[1]) + lp
     for (k in 2:n_proposals) {
@@ -1537,10 +1139,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k])
       }
     }
-    # Row maxima of an n_particles x n_proposals matrix.  `do.call(pmax,
-    # as.data.frame(m))` did the same thing but built a data frame -- and so a
-    # column list, row names and a class -- on every component of every subject
-    # of every iteration, to be thrown away one call later.
     max_log <- log_mix_comps[, 1L]
     for (k in seq_len(n_proposals)[-1L]) {
       max_log <- pmax(max_log, log_mix_comps[, k])
@@ -1551,10 +1149,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       fin_vals <- lm[!infnt_idx]
       lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
     }
-    # Calculate weights and center
     l <- lw_total + prior_density - lm
     weights <- exp(l - max(l))
-    # Do MH step and return everything
     idx_ll <- sample(x = sum(particle_numbers) + 1, size = 1, prob = weights)
 
     out_lls[i] <- lw[idx_ll]
@@ -1566,13 +1162,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       warm_next_state <- marginal_warm_backoff(
         warm_state, attempted = !is.null(warm_arg),
         used = isTRUE(marg_grid$warm_used >= 0.5))
-      # The predictor only runs when the warm hint did not already carry the step.
       pred_next_state <- marginal_warm_backoff(
         pred_state, attempted = use_pred && !isTRUE(marg_grid$warm_used == 1),
         used = isTRUE(marg_grid$pred_used == 1))
     }
     pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
-    # Seed next iteration's quadrature from the particle that was accepted here.
     if (!is.null(marginalise)) {
       pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
         c(as.list(warm_next), warm_next_state)
@@ -1597,46 +1191,27 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
 update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_numbers,
                                tune, n_pars) {
-  # Adapt after the initial burn-in.
   pm_settings$iter <- pm_settings$iter + 1
   if (pm_settings$iter > tune$n0) {
-    # A) Update proposal_counts
-    # -------------------------
-    # Each proposal j was used "particle_numbers[j]" times
     pm_settings$proposal_counts <- pm_settings$proposal_counts + particle_numbers
 
-    # B) Update acceptance counts: "percent better than old"
-    # ------------------------------------------------------
-    # weights[1] = old particle's weight
-    # weights[2..(1+sum(particle_numbers))] = new draws' weights
     old_weight <- weights[1]
 
-    # Process each proposal's weight block and update acceptance counts.
-    offset <- 2  # start index in 'weights' for new proposals
+    offset <- 2
     for (j in seq_along(particle_numbers)) {
-      # The chunk of new weights for proposal j
       n_j <- particle_numbers[j]
       if (n_j > 0) {
         draws_j <- weights[offset:(offset + n_j - 1)]
-        # Count how many draws_j exceed old_weight
         better_j <- sum(draws_j > old_weight)
-        # Accumulate that in acceptance counts
         pm_settings$acc_counts[j] <- pm_settings$acc_counts[j] + better_j
         offset <- offset + n_j
       }
     }
 
-    # C) Compute per-proposal acceptance rates
-    # ----------------------------------------
     acc_rates <- ifelse(pm_settings$proposal_counts > 0, pm_settings$acc_counts / pm_settings$proposal_counts, 0)
 
-    # .1 for preburn, .4 for burn and adapt and .6 for sample
     clamp_min <- ifelse(length(pm_settings$mix) == 2, .1, ifelse(length(pm_settings$mix) == 3, .4, .6))
 
-    # D) Adapt epsilon via continuous approach
-    # ----------------------------------------
-    # pm_settings$epsilon is a vector, same length as pm_settings$mix
-    # tune$p_accept is also a vector, e.g. c(0.2, 0.3, 0.6) for each proposal
     new_epsilon <- update_epsilon_continuous(
       epsilon   = pm_settings$epsilon,
       acceptance = acc_rates[-1],
@@ -1644,59 +1219,31 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
       iter       = pm_settings$iter,
       d          = n_pars,
       alphaStar  = tune$alphaStar,
-      damp       = 100,          # Example
-      clamp      = c(clamp_min, 5)    # Example range
+      damp       = 100,
+      clamp      = c(clamp_min, 5)
     )
     pm_settings$epsilon <- new_epsilon
 
-    # E) Adapt mixing weights based on acceptance vs. target
-    # ------------------------------------------------------
-    # If ratio_j > 1 (proposal j acceptance > target), its mix goes up;
-    # if ratio_j < 1, mix goes down.
 
-    if(length(pm_settings$mix) > 2){ # Exclude preburn.
-      eps_val <- 1e-12   # Avoid divide-by-zero
+    if(length(pm_settings$mix) > 2){
+      eps_val <- 1e-12
 
-      # 1) Compute performance ~ (acceptance / old_mix), normalized
       performance <- (acc_rates + eps_val) / pm_settings$mix
       performance <- performance / sum(performance)
 
-      # 2) Adjust the elements by expected acceptance (p_accept)
-      # The first element is the group-level, so has no p_accept, just take the mean of the others
-      # Bit hacky
       adj_factor <- c(mean(tune$p_accept), tune$p_accept)
       performance <- performance / adj_factor
 
-      # 3) Normalize again
       performance <- performance / sum(performance)
 
-      # 4) Blend with old mix: stable update
       new_mix <- (1 - tune$mix_adapt) * pm_settings$mix + tune$mix_adapt * performance
 
-      # 5) Impose a floor, re-normalize
       new_mix <- pmax(new_mix, 0.02)
       new_mix <- new_mix / sum(new_mix)
       pm_settings$mix <- new_mix
     }
 
 
-    # F) Adapt the number of particles (ESS logic)
-    # -------------------------------------------------------
-    # Sample stage: reduce particles only after convergence.
-    #
-    # C17.  Note what this quantity is and is not.  `sum(w)^2 / sum(w^2)` is the
-    # effective size of THIS proposal cloud -- how concentrated the importance
-    # weights are within one iteration's draws.  It is not the effective sample
-    # size of the saved chain, which is about autocorrelation across iterations
-    # and is what a posterior is actually worth.  The two can move in opposite
-    # directions: a tight cloud around a stuck state scores well here and
-    # contributes almost nothing there.
-    #
-    # The rule below is unchanged. What is new is that the number it adapts from
-    # is recorded, so it can be put beside the chain ESS that
-    # WorkingTests/bench_hierarchical_regression.R reports and the question
-    # "does this rule track what matters" can be answered with two columns
-    # rather than argued.
     if (length(pm_settings$mix) > 3 && pm_settings$gd_good) {
       ess <- sum(weights)^2 / sum(weights^2)
       desired_ess <- tune$target_ESS
@@ -1706,10 +1253,6 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     }
   }
 
-  # Recorded on every call, whether or not the rule fired, so a stage in which
-  # it never fires still says what the cloud was doing.  Overwritten each time:
-  # the settings persist across iterations, so a value set only once would go
-  # on reporting the first iteration's cloud.  Two sums over the weights.
   pm_settings$weight_ess <- if (length(weights)) {
     sum(weights)^2 / sum(weights^2)
   } else {
@@ -1720,11 +1263,10 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
 
 
 
-# Utility functions for sampling below ------------------------------------
 update_epsilon_continuous <- function(
-    epsilon,    # vector of current epsilons
-    acceptance, # vector of acceptance rates, same length
-    target,     # vector of target acceptance rates, same length
+    epsilon,
+    acceptance,
+    target,
     iter,
     d,
     alphaStar,
@@ -1732,32 +1274,17 @@ update_epsilon_continuous <- function(
     clamp = c(0.6, 4)
 ) {
   log_eps <- log(epsilon)
-  # 2) define step size
-  # We'll do one pass per element. If you want a single c_term, that's also fine.
   c_term <- (1 - 1/d)*sqrt(2*pi)*exp(alphaStar^2/2)/(2*alphaStar) + 1/(d*target*(1-target))
   step_size <- c_term / max(damp, iter)
-  # 3) compute difference from target acceptance
   diff_accept <- acceptance - target
-  # 4) update in log space (vectorized)
   log_eps_new <- log_eps + step_size * diff_accept
-  # 5) exponentiate
   eps_new <- exp(log_eps_new)
-  # 6) clamp
   eps_new <- pmin(clamp[2], pmax(eps_new, clamp[1]))
 
   return(eps_new)
 }
 
-update_epsilon<- function(epsilon2, acc, p, i, d, alpha) {
-  c <- ((1-1/d)*sqrt(2*pi)*exp(alpha^2/2)/(2*alpha) + 1/(d*p*(1-p)))
-  Theta <- log(sqrt(epsilon2))
-  Theta <- Theta+c*(acc-p)/max(200, i/d)
-  return(exp(Theta))
-}
-
-
 numbers_from_proportion <- function(mix_proportion, n_particles = 1000) {
-  # Make sure each proposal has at least 1 particle
   return(pmax(1, rmultinom(1, n_particles, mix_proportion)))
 }
 
@@ -1771,8 +1298,6 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
       p <- length(mu)
       Z <- matrix(rnorm(n * p), nrow = n, ncol = p)
       X <- Z %*% R
-      # Column-wise `+ mu`.  sweep() reaches the same answer through aperm()
-      # and a recycled array; recycling mu directly is the whole of it.
       return(X + rep(mu, each = n))
     } else {
       return(mvtnorm::rmvnorm(n, mu, covar))
@@ -1781,9 +1306,6 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
 }
 
 extend_sampler <- function(sampler, n_samples, stage) {
-  # Extend each stored sample array along its final dimension.  Which arrays
-  # those are is decided structurally, by comparing the final dimension against
-  # the iteration count BEFORE this call -- so capture it first.
   n_iter <- length(sampler$samples$stage)
   sampler$samples$stage <- c(sampler$samples$stage, rep(stage, n_samples))
   if(any(sampler$nuisance)) sampler$sampler_nuis$samples <- rapply(sampler$sampler_nuis$samples, f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
@@ -1791,10 +1313,6 @@ extend_sampler <- function(sampler, n_samples, stage) {
   return(sampler)
 }
 
-# An array in a sample store is an iteration array iff its LAST dimension is
-# the iteration axis, i.e. it currently has exactly n_iter slices.  Every
-# sample_store_* variant (standard, factor, infnt_factor, SEM, diag_gamma, and
-# the base alpha/subj_ll pair) builds its arrays that way.
 is_iteration_array <- function(obj, n_iter){
   d <- dim(obj)
   if(is.null(d) || length(d) < 2L) return(FALSE)
@@ -1805,21 +1323,9 @@ extend_obj <- function(obj, n_extend, n_iter = NULL){
   old_dim <- dim(obj)
   n_dimensions <- length(old_dim)
   if(is.null(old_dim) | n_dimensions == 1) return(obj)
-  # Anything that is not an iteration array is left alone.  This used to be
-  # decided by inspecting the NUMBERS in the array -- a square matrix whose
-  # scaled row and column sums nearly agreed was taken for a fixed covariance
-  # and skipped.  That test only ever fired when the parameter count happened
-  # to equal the iteration count, its max(obj) normaliser was unguarded (an
-  # all-zero or all-NA slice gives NaN, and `if (NaN < .01)` is an error rather
-  # than FALSE, killing a run at a random iteration count), and a false positive
-  # on a genuine sample array would silently stop that array growing until the
-  # next fill_samples wrote past its end.
   if(!is.null(n_iter) && !is_iteration_array(obj, n_iter)) return(obj)
   new_dim <- c(rep(0, (n_dimensions -1)), n_extend)
   extended <- array(NA_real_, dim = old_dim +  new_dim, dimnames = dimnames(obj))
-  # Extending only the final dimension means the complete old array is a
-  # contiguous prefix.  Copy it directly instead of allocating a full-size
-  # slice.index() array and going through R's copy-on-modify assignment.
   emc_copy_sample_prefix(extended, as.numeric(obj))
   return(extended)
 }
@@ -1845,7 +1351,6 @@ block_variance_idx <- function(components){
 }
 
 fill_samples_base <- function(samples, group_level, proposals, j = 1, n_pars){
-  # Fill samples both group level and random effects
   emc_set_last_slice(samples$theta_mu, j, as.numeric(group_level$tmu))
   emc_set_last_slice(samples$theta_var, j, as.numeric(group_level$tvar))
   if(!is.null(proposals)) samples <- fill_samples_RE(samples, proposals, j, n_pars)
@@ -1855,7 +1360,6 @@ fill_samples_base <- function(samples, group_level, proposals, j = 1, n_pars){
 
 
 fill_samples_RE <- function(samples, proposals, j = 1, n_pars, ...){
-  # Only for random effects, separated because group level sometimes differs.
   if(!is.null(proposals)){
     emc_set_particle_slice(samples$alpha, samples$subj_ll,
                            as.matrix(proposals), j, n_pars)
@@ -1866,11 +1370,6 @@ fill_samples_RE <- function(samples, proposals, j = 1, n_pars, ...){
 
 
 set_p_accept <- function(stage, search_width){
-  # Proposals distributions:
-  # 1. Prior - unscaled: all stages
-  # 2. Prev particle - scaled chain variance: all stages in preburn scaled by prior variance
-  # 3. Chain mean - scaled chain variance: burn onwards
-  # 4. Eff mean - scaled eff variance: sample onwards
   if(stage == "preburn") return(0.02 * (1/search_width))
   if(stage == "burn") return(c(0.02, 0.25)* (1/search_width))
   if(stage == "adapt") return(c(0.2, 0.25)* (1/search_width))
@@ -1906,7 +1405,7 @@ check_mix <- function(mix = NULL, stage) {
 }
 
 check_epsilon <- function(epsilon, n_pars, mix) {
-  if (is.null(epsilon)) { # In preburn case, there's only one epsilon here
+  if (is.null(epsilon)) {
     if (n_pars > 15) {
       epsilon <- .5
     } else if (n_pars > 10) {
@@ -1914,8 +1413,6 @@ check_epsilon <- function(epsilon, n_pars, mix) {
     } else {
       epsilon <- .7
     }
-    # The first proposal is always unscaled
-    # Every subsequent phase at most adds one epsilon
   } else if(length(epsilon) < (length(mix) -1)){
     epsilon <- c(epsilon, epsilon[length(epsilon)])
   }
@@ -1937,20 +1434,12 @@ check_prop_performance <- function(prop_performance, stage){
   return(round(prop_performance))
 }
 
-# The particle step's entry to the likelihood.  It prefers the block's
-# persistent likelihood pool (single-subject fits; see .emc_wpool_ll) and falls
-# back to `calc_ll_manager`'s own `mclapply` split, so losing the pool costs
-# speed and nothing else.  `s` is what gates the pool: only the subject the
-# workers were started for can be served by them.
 calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                            s = NULL, varying = NULL){
   have_pool <- !is.null(s) && !is.null(.emc_pool_state$ll_subject) &&
     identical(s, .emc_pool_state$ll_subject) &&
     isTRUE(.emc_pool_state$ll_pool$alive)
   if (!have_pool) {
-    # Without a pool, use the standard likelihood manager.  When a pool was
-    # previously registered, retain the observed mechanism in the profile even
-    # if the local handle is stale after a transport failure.
     route_started <- if (!is.null(.emc_pool_state$ll_route))
       proc.time()[["elapsed"]] else NA_real_
     out <- calc_ll_manager(proposals, dadm = dadm, model = model,
@@ -1964,12 +1453,7 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
     }
     return(out)
   }
-  # With a pool available the choice is between it and a plain serial call --
-  # never the per-call fork, which the pool exists to replace.  Both arms are
-  # timed; see .emc_ll_route_use_pool().
   use_pool <- .emc_ll_route_use_pool()
-  # Equal counts or a work queue: a second measured decision, taken only once
-  # the pool itself has won.  See .emc_ll_route_use_dynamic().
   dynamic <- use_pool && .emc_ll_route_use_dynamic()
   started <- proc.time()[["elapsed"]]
   out <- if (use_pool) {
@@ -1982,15 +1466,11 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
                            varying = varying)
   }
   el <- proc.time()[["elapsed"]] - started
-  # Record the arm that actually returned the result.  A live pool can fail
-  # between the handle check and the request, in which case the fallback is
-  # serial and must not leave the diagnostic claiming persistent-pool work.
   actual_route <- if (pooled) "persistent_pool" else "serial"
   .emc_ll_route_record(pooled, el,
                        if (is.matrix(proposals)) nrow(proposals) else 1L,
                        dynamic = pooled && isTRUE(.emc_pool_state$ll_dynamic),
                        route = actual_route)
-  # Optional trace for inspecting routing decisions from forked chains.
   trace_file <- Sys.getenv("EMC2_LL_TRACE")
   if (nzchar(trace_file)) {
     st <- .emc_pool_state$ll_route
@@ -2006,25 +1486,16 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   out
 }
 
-# `varying` is the explicit update mask of C10: a logical over `proposals`'
-# columns saying which coordinates this call actually moves.  Under a blocked
-# proposal the rest hold the current value repeated, and a design that reads
-# only repeated coordinates maps to the same column for every particle.
-#
-# It is passed, never inferred.  Two particles that happen to draw the same
-# value for a coordinate the sampler meant to move must not freeze it, so the
-# mask comes from the block structure rather than from comparing doubles. The
-# C++ side verifies what it is told before acting on it.
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                             marginalise = NULL, varying = NULL){
   if(!is.data.frame(dadm)){
-    lls <- log_likelihood_joint(proposals, dadm, model, component, r_cores = r_cores, marginalise = marginalise)
+    lls <- log_likelihood_joint(proposals, dadm, model, component,
+                                r_cores = r_cores, marginalise = marginalise,
+                                varying = varying)
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)
-    # marginalise is threaded explicitly by the sampler; it is never inferred
-    # from a dadm attribute, so predict/make_data/IC calls never integrate.
-    if(is.null(model$c_name)){ # use the R implementation
+    if(is.null(model$c_name)){
       if (!is.null(marginalise)) {
         stop("marginalise requires a registered race-model likelihood")
       }
@@ -2033,20 +1504,11 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
           function(i) calc_ll_R(proposals[i,], model=model, dadm = dadm),
          mc.cores=r_cores))
     } else {
-      # SS models: push stop_method/stop_n_nodes into the process-global C++
-      # config once per likelihood call (before any fork, so mclapply workers
-      # inherit it; PSOCK workers run this themselves)
       set_stop_method_from_model(model)
       p_types <- names(model$p_types)
-      # Compressed: the C++ mapper expands via the "expand" attribute itself.
       designs <- .oo_expanded_designs(dadm, expand = FALSE)
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
-      # C12.  `nrow(proposals) <= r_cores` sent a serial call into the split
-      # branch whenever there was more than one proposal: with r_cores = 1,
-      # `.split_work_indices` returns all ones, `proposals[idx == 1, , drop =
-      # FALSE]` copies the whole matrix, and `auto_mclapply(1:1, ...)` wraps one
-      # result in a list to immediately unlist it.  One core means one call.
       if (r_cores <= 1L || nrow(proposals) <= r_cores) {
         lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs,
                           type = model$c_name, bounds = model$bound,
@@ -2131,7 +1593,6 @@ calc_ll_pw <- function(proposals, dadm, model, r_cores = 1){
                          p_types = p_types, min_ll = log(1e-10), model$trend))
   }
 
-  # Fallback for non-C models or environments without calc_ll_oo_pw.
   trial_groups <- .waic_trial_row_groups(dadm, c_name)
   if (length(trial_groups) == 0) {
     return(matrix(numeric(0), nrow = nrow(proposals), ncol = 0))
@@ -2162,8 +1623,6 @@ merge_group_level <- function(tmu, tmu_nuis, tvar, tvar_nuis, is_nuisance, subj_
   tvar_out[!is_nuisance, !is_nuisance] <- tvar
 
   subj_mu_out <- matrix(NA, ncol = ncol(subj_mu), nrow = length(tmu_out))
-  # matrix() recycles the column directly; the do.call(cbind, rep(list(...)))
-  # this replaces built an n_subjects-long list of copies first.
   subj_mu_out[is_nuisance,] <- matrix(c(tmu_nuis), nrow = sum(is_nuisance),
                                       ncol = ncol(subj_mu))
   subj_mu_out[!is_nuisance,] <- subj_mu

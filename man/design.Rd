@@ -28,6 +28,7 @@ design(
   UT = NULL,
   fixed_accumulator_roles = NULL,
   marginalise = NULL,
+  behavioral_functions = NULL,
   ...
 )
 }
@@ -109,6 +110,13 @@ model parameter (not a \code{constant}, and not a \code{custom_p_vector} design)
 (iii) use an intercept-only design (\code{~ 1}), and (iv) have a finite lower
 bound. See Details. This is a sampling/efficiency feature and does not change
 the model's likelihood.}
+
+\item{behavioral_functions}{Names of entries in \code{functions} whose outputs
+depend on simulated behavior (for example \code{R} or \code{rt}). These force
+trial-by-trial posterior prediction when used by a trend. The default \code{NULL}
+conservatively treats every function as behavioral for backward
+compatibility. Supply \code{character(0)} when all functions used by trends are
+static design functions, such as an accumulator code derived from \code{lR}.}
 
 \item{...}{Additional, optional arguments}
 }

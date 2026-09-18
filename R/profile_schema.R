@@ -16,9 +16,8 @@
 #
 # Reserved names for later work, so that they are not invented twice with
 # different spellings: `block_proposals`, `block_eff_proposals`,
-# `block_check_progress`, `block_save`, `block_concat` (per-block costs, absent
-# from per-iteration timing today), and `kernel_reuse_*` (kernel preparation
-# reuse rates).  Add them here when the commit that populates them lands.
+# `block_check_progress`, `block_save`, and `block_concat` (per-block costs).
+# Add them here when the commit that populates them lands.
 
 # --- schema -----------------------------------------------------------------
 
@@ -167,17 +166,6 @@
       # first tracks the second.
       .emc_profile_field("particle_weight_ess", "numeric", "work", "count",
                          desc = "importance-weight ESS of the proposal cloud, mean over subjects"),
-
-      # -- kernel reuse (opt-in: emc_kernel_stats(TRUE)) ---------------------
-      # How much of a model kernel's arithmetic is recomputed per trial that a
-      # cell-resolution version would compute once.  `rows / cells` is the
-      # reuse available; near 1 means there is nothing to hoist.
-      .emc_profile_field("kernel_rows", "numeric", "kernel", "count",
-                         desc = "per-trial evaluations of the reusable subexpression"),
-      .emc_profile_field("kernel_cells", "numeric", "kernel", "count",
-                         desc = "evaluations the same subexpression needs at cell resolution"),
-      .emc_profile_field("kernel_seconds", "numeric", "kernel", "s",
-                         desc = "wall time inside the model kernel"),
 
       # -- health -----------------------------------------------------------
       .emc_profile_field("fallback_subjects", "integer", "health", "count",
@@ -530,33 +518,6 @@
   .emc_profile_bind(rows)
 }
 
-# Kernel reuse totals, summed over whatever models ran.  NA when the C++
-# counters are not compiled in or instrumentation was never switched on, so a
-# profile from an ordinary run carries no kernel columns rather than zeros that
-# would read as "measured, and there is no reuse".
-.emc_kernel_totals <- function() {
-  # Every worker request calls this twice, so the ordinary case -- measurement
-  # off -- must not pay for the read: building the counter table as a data
-  # frame costs ~200 us, the flag ~1 us.  A process that never switched it on
-  # has recorded nothing, so this is the same answer, reached directly.
-  if (!isTRUE(tryCatch(emc_kernel_stats(), error = function(e) FALSE))) {
-    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
-  }
-  st <- tryCatch(emc_kernel_stats_read(), error = function(e) NULL)
-  if (is.null(st) || !nrow(st)) {
-    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
-  }
-  c(rows = sum(st$rows), cells = sum(st$cells), seconds = sum(st$seconds))
-}
-
-.emc_kernel_delta <- function(before) {
-  now <- .emc_kernel_totals()
-  if (anyNA(now) || anyNA(before)) {
-    return(c(rows = NA_real_, cells = NA_real_, seconds = NA_real_))
-  }
-  now - before
-}
-
 .emc_reject_counts_all <- function() {
   counts <- .emc_profile_state$rejects
   if (is.null(counts)) list() else counts
@@ -756,21 +717,6 @@
                 if (length(meth)) meth[[1L]] else "unknown",
                 .emc_profile_fmt_bytes(max(full$private_memory, na.rm = TRUE)),
                 sum(!is.na(full$private_memory)), nrow(full)))
-  }
-
-  kr <- m("kernel_rows")
-  kc <- m("kernel_cells")
-  if (!is.na(kr) && !is.na(kc) && kc > 0) {
-    say("\nkernel reuse per iteration\n")
-    say(sprintf("  %-20s %10.0f   per-trial evaluations\n", "kernel_rows", kr))
-    say(sprintf("  %-20s %10.0f   at cell resolution\n", "kernel_cells", kc))
-    say(sprintf("  %-20s %10.1fx  (1.0 means nothing to hoist)\n", "reuse", kr / kc))
-    ks <- m("kernel_seconds")
-    if (!is.na(ks)) {
-      say(sprintf("  %-20s %10.2f ms  %s\n", "kernel_seconds", 1000 * ks,
-                  if (!is.na(tot) && tot > 0) sprintf("%5.1f%% of the iteration",
-                                                      100 * ks / tot) else ""))
-    }
   }
 
   if (!is.null(blocks) && nrow(blocks)) {

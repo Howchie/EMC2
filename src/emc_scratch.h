@@ -43,8 +43,8 @@
 // rather than a rewrite.
 
 #include <cstddef>
-#include <cstdint>
 #include <vector>
+
 namespace emc {
 
 class ScratchFrame;
@@ -103,57 +103,12 @@ private:
 };
 
 // How much per-call cell scratch a single design entry may claim, in bytes.
-// A budget, not a cell count: what it admits depends on how much each cell costs,
-// so the mapper does not have to encode a number of cells anywhere.
+// A budget, not a cell count: what it admits depends on how much each cell
+// costs, so the mapper does not have to encode a number of cells anywhere.
 // Settable so that the fallback route above the budget stays reachable in a
 // test without building a design of a few hundred thousand cells.
 std::size_t cell_scratch_budget();
 void set_cell_scratch_budget(std::size_t bytes);
-
-// Minimum fraction of trials that must be reused by a cell design.  Zero is
-// the historical admission rule (any compressed design with fewer cells than
-// trials is eligible), so merely exposing this knob does not change a route.
-double cell_min_reuse_ratio();
-void set_cell_min_reuse_ratio(double ratio);
-
-// Whether a sampled coefficient's value is written once at row 0 and widened
-// only if something reads it at row resolution, or written to every trial up
-// front as it always was.  On by default; the switch exists so the two can be
-// compared directly, which is how "they are the same numbers" is asserted and
-// how the saving is measured.
-bool defer_scalar_fill();
-void set_defer_scalar_fill(bool on);
-
-enum MapperRoute { MAPPER_SCALAR = 0, MAPPER_CELL = 1, MAPPER_ROW = 2 };
-
-// These counters are deliberately plain native state.  Incrementing while
-// disabled is a single branch and never allocates an R object; snapshots are
-// only materialised by the diagnostic wrapper.
-struct MapperStatsSnapshot {
-  std::uint64_t map_scalar = 0;
-  std::uint64_t map_cell = 0;
-  std::uint64_t map_row = 0;
-  std::uint64_t transform_scalar = 0;
-  std::uint64_t transform_cell = 0;
-  std::uint64_t transform_row = 0;
-  std::uint64_t bound_scalar = 0;
-  std::uint64_t bound_cell = 0;
-  std::uint64_t bound_row = 0;
-  std::uint64_t cell_admit = 0;
-  std::uint64_t cell_reject = 0;
-  std::uint64_t cell_budget_reject = 0;
-  std::uint64_t cell_reuse_reject = 0;
-};
-
-bool mapper_stats_enabled();
-void set_mapper_stats_enabled(bool on);
-void reset_mapper_stats();
-MapperStatsSnapshot mapper_stats_snapshot();
-void mapper_count_map(MapperRoute route);
-void mapper_count_transform(MapperRoute route);
-void mapper_count_bound(MapperRoute route);
-void mapper_count_cell_admit();
-void mapper_count_cell_reject(bool budget, bool reuse);
 
 }  // namespace emc
 

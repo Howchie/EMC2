@@ -87,29 +87,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// emc_pt_cell_min_reuse
-double emc_pt_cell_min_reuse(Rcpp::Nullable<Rcpp::NumericVector> ratio);
-RcppExport SEXP _EMC2_emc_pt_cell_min_reuse(SEXP ratioSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type ratio(ratioSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_pt_cell_min_reuse(ratio));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_pt_mapper_stats
-Rcpp::List emc_pt_mapper_stats(Rcpp::Nullable<Rcpp::LogicalVector> enabled, bool reset);
-RcppExport SEXP _EMC2_emc_pt_mapper_stats(SEXP enabledSEXP, SEXP resetSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type enabled(enabledSEXP);
-    Rcpp::traits::input_parameter< bool >::type reset(resetSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_pt_mapper_stats(enabled, reset));
-    return rcpp_result_gen;
-END_RCPP
-}
 // emc_pt_cell_budget
 double emc_pt_cell_budget(Rcpp::Nullable<Rcpp::NumericVector> bytes);
 RcppExport SEXP _EMC2_emc_pt_cell_budget(SEXP bytesSEXP) {
@@ -118,17 +95,6 @@ BEGIN_RCPP
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type bytes(bytesSEXP);
     rcpp_result_gen = Rcpp::wrap(emc_pt_cell_budget(bytes));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_pt_defer_scalars
-bool emc_pt_defer_scalars(Rcpp::Nullable<Rcpp::LogicalVector> on);
-RcppExport SEXP _EMC2_emc_pt_defer_scalars(SEXP onSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type on(onSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_pt_defer_scalars(on));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -406,47 +372,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const arma::mat& >::type mu(muSEXP);
     Rcpp::traits::input_parameter< const arma::cube& >::type var(varSEXP);
     rcpp_result_gen = Rcpp::wrap(draw_alpha_from_design(group_designs, mu, var));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_kernel_stats
-bool emc_kernel_stats(Rcpp::Nullable<Rcpp::LogicalVector> on);
-RcppExport SEXP _EMC2_emc_kernel_stats(SEXP onSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type on(onSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_kernel_stats(on));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_kernel_stats_read
-Rcpp::DataFrame emc_kernel_stats_read();
-RcppExport SEXP _EMC2_emc_kernel_stats_read() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(emc_kernel_stats_read());
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_kernel_stats_reset
-void emc_kernel_stats_reset();
-RcppExport SEXP _EMC2_emc_kernel_stats_reset() {
-BEGIN_RCPP
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    emc_kernel_stats_reset();
-    return R_NilValue;
-END_RCPP
-}
-// emc_kernel_reuse_columns
-Rcpp::CharacterVector emc_kernel_reuse_columns(std::string c_name);
-RcppExport SEXP _EMC2_emc_kernel_reuse_columns(SEXP c_nameSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< std::string >::type c_name(c_nameSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_kernel_reuse_columns(c_name));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2722,36 +2647,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// ParamTable_joint_cells
-Rcpp::List ParamTable_joint_cells(SEXP pt_xptr, Rcpp::CharacterVector param_names);
-RcppExport SEXP _EMC2_ParamTable_joint_cells(SEXP pt_xptrSEXP, SEXP param_namesSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type pt_xptr(pt_xptrSEXP);
-    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type param_names(param_namesSEXP);
-    rcpp_result_gen = Rcpp::wrap(ParamTable_joint_cells(pt_xptr, param_names));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_pt_invalidation_key
-Rcpp::List emc_pt_invalidation_key(Rcpp::DataFrame data, Rcpp::NumericVector constants, Rcpp::List designs, Rcpp::List bounds, Rcpp::List transforms, Rcpp::List pretransforms, Rcpp::Nullable<Rcpp::List> trend, Rcpp::CharacterVector p_types);
-RcppExport SEXP _EMC2_emc_pt_invalidation_key(SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP trendSEXP, SEXP p_typesSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type constants(constantsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type designs(designsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type bounds(boundsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type transforms(transformsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type pretransforms(pretransformsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
-    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type p_types(p_typesSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_pt_invalidation_key(data, constants, designs, bounds, transforms, pretransforms, trend, p_types));
-    return rcpp_result_gen;
-END_RCPP
-}
 // ParamTable_map_designs
 void ParamTable_map_designs(SEXP pt_xptr, Rcpp::List designs, Rcpp::LogicalVector include_param);
 RcppExport SEXP _EMC2_ParamTable_map_designs(SEXP pt_xptrSEXP, SEXP designsSEXP, SEXP include_paramSEXP) {
@@ -3506,10 +3401,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
-    {"_EMC2_emc_pt_cell_min_reuse", (DL_FUNC) &_EMC2_emc_pt_cell_min_reuse, 1},
-    {"_EMC2_emc_pt_mapper_stats", (DL_FUNC) &_EMC2_emc_pt_mapper_stats, 2},
     {"_EMC2_emc_pt_cell_budget", (DL_FUNC) &_EMC2_emc_pt_cell_budget, 1},
-    {"_EMC2_emc_pt_defer_scalars", (DL_FUNC) &_EMC2_emc_pt_defer_scalars, 1},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_fast_dmvnorm", (DL_FUNC) &_EMC2_fast_dmvnorm, 3},
     {"_EMC2_fast_dmvnorm_factor", (DL_FUNC) &_EMC2_fast_dmvnorm_factor, 1},
@@ -3526,10 +3418,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
-    {"_EMC2_emc_kernel_stats", (DL_FUNC) &_EMC2_emc_kernel_stats, 1},
-    {"_EMC2_emc_kernel_stats_read", (DL_FUNC) &_EMC2_emc_kernel_stats_read, 0},
-    {"_EMC2_emc_kernel_stats_reset", (DL_FUNC) &_EMC2_emc_kernel_stats_reset, 0},
-    {"_EMC2_emc_kernel_reuse_columns", (DL_FUNC) &_EMC2_emc_kernel_reuse_columns, 1},
     {"_EMC2_lr_capacity_counter_values", (DL_FUNC) &_EMC2_lr_capacity_counter_values, 0},
     {"_EMC2_lr_capacity_counters_reset", (DL_FUNC) &_EMC2_lr_capacity_counters_reset, 0},
     {"_EMC2_calc_ll_oo_marginal_nodes", (DL_FUNC) &_EMC2_calc_ll_oo_marginal_nodes, 12},
@@ -3658,8 +3546,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_ParamTable_materialize", (DL_FUNC) &_EMC2_ParamTable_materialize, 1},
     {"_EMC2_ParamTable_set_column", (DL_FUNC) &_EMC2_ParamTable_set_column, 3},
     {"_EMC2_ParamTable_create_from_pvector_designs", (DL_FUNC) &_EMC2_ParamTable_create_from_pvector_designs, 3},
-    {"_EMC2_ParamTable_joint_cells", (DL_FUNC) &_EMC2_ParamTable_joint_cells, 2},
-    {"_EMC2_emc_pt_invalidation_key", (DL_FUNC) &_EMC2_emc_pt_invalidation_key, 8},
     {"_EMC2_ParamTable_map_designs", (DL_FUNC) &_EMC2_ParamTable_map_designs, 3},
     {"_EMC2_TrendEngine_create", (DL_FUNC) &_EMC2_TrendEngine_create, 2},
     {"_EMC2_TrendEngine_premap_mask", (DL_FUNC) &_EMC2_TrendEngine_premap_mask, 2},

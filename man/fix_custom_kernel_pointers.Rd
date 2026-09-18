@@ -4,12 +4,16 @@
 \alias{fix_custom_kernel_pointers}
 \title{Reset pointers of custom C++ trend kernels to an emc object}
 \usage{
-fix_custom_kernel_pointers(emc, pointer_source)
+fix_custom_kernel_pointers(emc, pointer_source = NULL)
 }
 \arguments{
 \item{emc}{A target emc object with missing pointers}
 
-\item{pointer_source}{Either a trend object with correct pointers or another emc object with correct pointers}
+\item{pointer_source}{Optional. A registered custom trend, a complete trend
+list with live pointers, or another \code{emc} object with live pointers. When
+omitted, registration metadata stored by \code{\link[=make_trend]{make_trend()}} is used to rebuild
+serialized pointers automatically. A single registered trend can be used
+when the target model contains exactly one custom trend.}
 }
 \value{
 An emc object with the custom pointers re-instated.

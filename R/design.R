@@ -126,6 +126,12 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' @param covariates Names of numeric covariates.
 #' @param functions List of functions to create new factors based on those in
 #' the factors argument. These new factors can then be used in `formula`.
+#' @param behavioral_functions Names of entries in `functions` whose outputs
+#' depend on simulated behavior (for example `R` or `rt`). These force
+#' trial-by-trial posterior prediction when used by a trend. The default `NULL`
+#' conservatively treats every function as behavioral for backward
+#' compatibility. Supply `character(0)` when all functions used by trends are
+#' static design functions, such as an accumulator code derived from `lR`.
 #' @param report_p_vector Boolean. If TRUE (default), it returns the vector of
 #' parameters to be estimated.
 #' @param custom_p_vector A character vector. If specified, a custom likelihood
@@ -215,12 +221,13 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #'
 design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
-                   functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
+                   functions=NULL, report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
                    pre_transform_terms = NULL,
                    transform = NULL, bound = NULL, TC = NULL,
                    LT=NULL,LC=NULL,UC=NULL,UT=NULL,
-                   fixed_accumulator_roles = NULL, marginalise = NULL,...){
+                   fixed_accumulator_roles = NULL, marginalise = NULL,
+                   behavioral_functions=NULL,...){
 
   TC <- check_missing(TC, data = data)
   if (!is.null(LT)) TC$LT <- LT
@@ -229,6 +236,15 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!is.null(UT)) TC$UT <- UT
 
   optionals <- list(...)
+  if (is.null(behavioral_functions)) {
+    behavioral_functions <- names(functions)
+  } else {
+    unknown_behavioral <- setdiff(behavioral_functions, names(functions))
+    if (length(unknown_behavioral)) {
+      stop("behavioral_functions must name entries in functions: ",
+           paste(unknown_behavioral, collapse = ", "))
+    }
+  }
   if (is.list(model) && !is.function(model)) {
     model_list <- model
     model <- function(){return(model_list)}
@@ -383,7 +399,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model,
+                 Fcovariates=covariates,Ffunctions=functions,
+                 Fbehavioral=behavioral_functions,model=model,
                  TC=TC,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
                  fixed_accumulator_roles = fixed_accumulator_roles)
   class(design) <- "emc.design"

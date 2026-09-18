@@ -83,8 +83,6 @@ run_case <- function(model, nt, nc, np, branch) {
   cat(sprintf(" checksum=%s native_calls=%d all_finite=%s invalid_floor=%s checksum_reproducible=%s\n",
               fmt(fast$likelihood_checksum), fast$native_calls,
               fast$all_finite, fast$invalid_floor, fast$checksum_reproducible))
-  cat(sprintf("  speed kernel_rows=%s kernel_cells=%s kernel_seconds=%s\n",
-              fmt(fast$kernel_rows), fmt(fast$kernel_cells), fmt(fast$kernel_seconds)))
 
   # One direct native call on one particle is a smoke check, not another
   # sampler step and not part of the speed median.
@@ -104,24 +102,6 @@ run_case <- function(model, nt, nc, np, branch) {
     cat(sprintf("  explanation(profile=on) median_s=%s mad_s=%s cpu_median_s=%s\n",
                 fmt(explain$median_seconds), fmt(explain$mad_seconds),
                 fmt(explain$cpu_seconds)))
-    cat(sprintf("  explanation kernel_rows=%s kernel_cells=%s kernel_seconds=%s kernel_calls=%s\n",
-                fmt(explain$kernel_rows), fmt(explain$kernel_cells),
-                fmt(explain$kernel_seconds), fmt(explain$kernel_calls)))
-    if (is.data.frame(explain$pcounter) && nrow(explain$pcounter)) {
-      pc <- explain$pcounter[1L, , drop = FALSE]
-      cat(sprintf(paste0("  pcounter d_calls=%d p_calls=%d logS_calls=%d",
-                         " rows=%d prep_s=%s rt_s=%s",
-                         " sv_zero=%d gamma_zero=%d omega_zero=%d",
-                         " k_min=%d k_max=%d k_mean=%s stirling=%d rising=%d\n"),
-                  pc$dpcounter_calls, pc$ppcounter_calls,
-                  pc$pcounter_logS_calls,
-                  pc$dpcounter_rows + pc$ppcounter_rows + pc$pcounter_logS_rows,
-                  fmt(pc$preparation_seconds), fmt(pc$rt_sum_seconds),
-                  pc$sv_zero, pc$gamma_zero, pc$omega_zero,
-                  pc$k_min, pc$k_max,
-                  fmt(if (pc$k_observations > 0) pc$k_sum / pc$k_observations else NA),
-                  pc$stirling_terms, pc$rising_terms))
-    }
   }
   invisible(fast)
 }

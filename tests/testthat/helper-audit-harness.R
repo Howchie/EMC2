@@ -301,25 +301,8 @@ audit_time_direct <- function(fx, reps = 7L, profile = FALSE,
     stop("profile must be TRUE or FALSE")
   profile <- isTRUE(profile)
 
-  has_stats <- exists("emc_kernel_stats", envir = asNamespace("EMC2"),
-                      inherits = FALSE)
-  previous_stats <- FALSE
-  if (has_stats) {
-    previous_stats <- isTRUE(tryCatch(EMC2:::emc_kernel_stats(),
-                                      error = function(e) FALSE))
-    # Never let a caller's profiling state contaminate a speed measurement.
-    if (previous_stats)
-      try(EMC2:::emc_kernel_stats(FALSE), silent = TRUE)
-  }
-  on.exit(if (has_stats) try(EMC2:::emc_kernel_stats(previous_stats),
-                             silent = TRUE), add = TRUE)
-
   for (i in seq_len(3L)) invisible(audit_ll_direct(fx, min_ll = min_ll))
 
-  if (profile && has_stats) {
-    try(EMC2:::emc_kernel_stats_reset(), silent = TRUE)
-    try(EMC2:::emc_kernel_stats(TRUE), silent = TRUE)
-  }
   elapsed <- numeric(reps)
   cpu <- numeric(reps)
   lls <- vector("list", reps)
@@ -327,24 +310,6 @@ audit_time_direct <- function(fx, reps = 7L, profile = FALSE,
     tm <- system.time(lls[[i]] <- audit_ll_direct(fx, min_ll = min_ll))
     elapsed[[i]] <- unname(tm[["elapsed"]])
     cpu[[i]] <- unname(tm[["user.self"]] + tm[["sys.self"]])
-  }
-
-  st <- NULL
-  if (profile && has_stats) {
-    try(EMC2:::emc_kernel_stats(FALSE), silent = TRUE)
-    st <- tryCatch(EMC2:::emc_kernel_stats_read(),
-                   error = function(e) NULL)
-  }
-  kernel <- c(rows = NA_real_, cells = NA_real_, seconds = NA_real_)
-  kernel_calls <- NA_real_
-  pcounter <- NULL
-  if (is.data.frame(st) && nrow(st)) {
-    kernel <- c(rows = sum(st$rows), cells = sum(st$cells),
-                seconds = sum(st$seconds))
-    if ("calls" %in% names(st)) kernel_calls <- sum(st$calls)
-    if (is.data.frame(st) && any(st$model == "PCOUNTER")) {
-      pcounter <- st[which(st$model == "PCOUNTER")[1L], , drop = FALSE]
-    }
   }
 
   checksums <- vapply(lls, function(x) sum(as.numeric(x)), numeric(1L))
@@ -369,11 +334,6 @@ audit_time_direct <- function(fx, reps = 7L, profile = FALSE,
                                        checksums[[reps]])),
     native_calls = as.integer(reps),
     native_call_count = as.integer(reps),
-    kernel_calls = kernel_calls,
-    kernel_rows = unname(kernel[["rows"]]),
-    kernel_cells = unname(kernel[["cells"]]),
-    kernel_seconds = unname(kernel[["seconds"]]),
-    pcounter = pcounter,
     invalid_floor = any(at_floor),
     invalid_floor_calls = sum(at_floor),
     floor_log_likelihood = unname(floor_ll),
@@ -487,17 +447,6 @@ audit_truncated_frame <- function(obj, keep) {
 # and ask for the common refinement of a set of parameter columns.  The table is
 # built here rather than reached into, because the partition depends only on the
 # designs and the data and is meant to be answerable without running a particle.
-audit_joint_cells <- function(fx, params, designs = NULL) {
-  des <- if (is.null(designs)) audit_designs(fx) else designs
-  p_vec <- fx$prop[1L, , drop = TRUE]
-  cst <- fx$constants
-  if (!identical(cst, NA) && length(cst)) p_vec <- c(p_vec, cst)
-  pt <- EMC2:::ParamTable_create_from_pvector_designs(p_vec, des, nrow(fx$dadm))
-  EMC2:::ParamTable_map_designs(pt, des,
-                                stats::setNames(rep(TRUE, length(des)), names(des)))
-  EMC2:::ParamTable_joint_cells(pt, params)
-}
-
 # The planned mapping route against the independent reference, which takes no
 # cell short cuts at all.  Lives here rather than in one test file so every file
 # that touches the mapper can make the same comparison.

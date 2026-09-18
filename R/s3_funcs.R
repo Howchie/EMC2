@@ -145,7 +145,7 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   # #' @param LCdirection Boolean, default TRUE, set LC rt to 0, else to NA
   # #' @param UCdirection Boolean, default TRUE, set LC rt to Inf, else to NA
   # #' @param expand Integer. Default is 1, exact same design for each subject. Larger values will replicate designs, so more trials per subject.
-  emc <- object
+  emc <- restore_custom_kernel_pointers(object)
   dots <- list(...)
   data <- dots$data
   dots$data <- NULL
@@ -250,6 +250,15 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
       do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]),
                            fix_dots(cur_dots, make_data)))
     },mc.cores=n_cores))
+    failed <- vapply(simDat, inherits, logical(1), what = "try-error")
+    if (any(failed)) {
+      first_error <- as.character(simDat[[which(failed)[1L]]])
+      stop(
+        "Posterior prediction failed for ", sum(failed), " of ", n_post,
+        " draws. First worker error:\n", first_error,
+        call. = FALSE
+      )
+    }
     in_bounds <- !sapply(simDat, is.logical)
     if(any(!in_bounds)){
       good_post <- sample(1:n_post, sum(!in_bounds))
@@ -259,6 +268,15 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
         do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE),
                              fix_dots(cur_dots, make_data)))
       },mc.cores=n_cores))
+      failed <- vapply(simDat, inherits, logical(1), what = "try-error")
+      if (any(failed)) {
+        first_error <- as.character(simDat[[which(failed)[1L]]])
+        stop(
+          "Posterior prediction retry failed. First worker error:\n",
+          first_error,
+          call. = FALSE
+        )
+      }
       in_bounds <- !sapply(simDat, is.logical)
     }
     if(all(!in_bounds)) {
