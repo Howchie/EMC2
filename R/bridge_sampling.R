@@ -244,6 +244,7 @@ bridge_sampling <- function(samples, n_eff, split_idx, cores_for_props = 1, core
 #' @export
 #'
 run_bridge_sampling <- function(emc, stage = "sample", filter = NULL, repetitions = 1, cores_for_props = 4,  cores_per_prop = 1, both_splits = TRUE, ...){
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   # Hyper parameters and dev options
   maxiter <- 5000
   r0 <- 1e-5

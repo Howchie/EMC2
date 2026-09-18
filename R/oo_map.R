@@ -187,6 +187,7 @@ get_pars_oo <- function(p, dadm, model,
                         return_kernel_matrix = FALSE,
                         return_all_pars = FALSE,
                         kernel_output_codes = 1L) {
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   model_list <- .oo_model_list(model)
   particle_matrix <- .oo_particle_matrix(p, dadm, keep_all_columns = constants_included)
   constants <- attr(dadm, "constants")
@@ -353,6 +354,7 @@ get_pars_batch_oo <- function(p, dadm, model, row_idx = NULL,
 }
 
 get_pars_matrix_oo <- function(p_vector, dadm, model) {
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   model_list <- .oo_model_list(model)
   pars <- get_pars_oo(p_vector, dadm, model_list)
   pars <- model_list$Ttransform(pars, dadm)

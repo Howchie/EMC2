@@ -189,6 +189,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     stop("`sList` must be a non-empty list of emc fits or saved compare() data frames.")
   if (any(vapply(sList, is.data.frame, logical(1))))
     stop("Cannot mix EMC2 fits and saved compare() data frames in `sList`.")
+  sList <- lapply(sList, restore_custom_kernel_pointers, quiet = TRUE)
 
   if (is.numeric(filter)) defaultsf <- filter[1] else defaultsf <- 0
   sflist <- as.list(setNames(rep(defaultsf,length(sList)),names(sList)))
@@ -440,6 +441,7 @@ extract_pw_ll <- function(emc, stage = "sample", filter = 0, FUN = mean) {
 #' @return The same emc object with \code{pw_ll} added to each chain's samples.
 #' @export
 add_pw_ll <- function(emc, cores_for_chains = 1) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc)
   results <- auto_mclapply(emc, add_pw_ll_chain, mc.cores = cores_for_chains)
   for (i in seq_along(results)) {
@@ -568,6 +570,7 @@ IC <- function(emc,stage="sample",filter=0,use_best_fit=TRUE,
                group_only = FALSE)
   # Gets DIC, BPIC, effective parameters, mean deviance, and deviance of mean
 {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   # Mean log-likelihood for each subject
   if (length(subject)!=1) {
     ll <- get_pars(emc, stage = stage, filter = filter, selection = "LL", merge_chains = TRUE)

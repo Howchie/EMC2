@@ -42,6 +42,7 @@
 #' @export
 prior <- function(design, type = NULL, group_design = NULL, update = NULL,
                       do_ask = NULL, fill_default = TRUE, ...){
+  design <- .restore_custom_kernel_design(design, quiet = TRUE)
   if(!is.null(update) && is.null(type)){
     type <- attr(update, "type")
   }
@@ -570,6 +571,7 @@ credint.emc.prior <- function(x, selection="mu", probs = c(0.025, .5, .975),
 predict.emc.prior <- function(object,data = NULL,n_post=50,n_cores=1,
                                n_trials = NULL, ...)
 {
+  object <- restore_custom_kernel_pointers(object, quiet = TRUE)
   if(is.data.frame(data)) data <- list(data)
   prior <- object
   design <- get_design(prior)
@@ -605,6 +607,7 @@ predict.emc.prior <- function(object,data = NULL,n_post=50,n_cores=1,
 #' @export
 get_design.emc.prior <- function(x)
 {
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   design <- attr(x, "design")
   class(design) <- "emc.design"
   if(is.null(design)){
@@ -629,6 +632,7 @@ get_group_design.emc.prior <- function(x)
 #' @export
 plot_design.emc.prior <- function(x, data = NULL, factors = NULL, plot_factor = NULL, n_data_sim = 10,
                                   p_vector = NULL, functions = NULL, ...){
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   if(is.null(p_vector)) p_vector <- x$theta_mu_mean
   design <- get_design(x)
   plot(design, p_vector, data = data, factors = factors, plot_factor = plot_factor, n_data_sim = n_data_sim,
@@ -640,6 +644,7 @@ plot_design.emc.prior <- function(x, data = NULL, factors = NULL, plot_factor = 
 mapped_pars.emc.prior <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
                                    covariates=NULL, data = NULL, use_data = TRUE,
                                    n_covariates = 10, group_design = NULL, ...){
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   if (is.null(group_design)) group_design <- get_group_design(x)
   if(is.null(p_vector)) p_vector <- x$theta_mu_mean
   design <- get_design(x)

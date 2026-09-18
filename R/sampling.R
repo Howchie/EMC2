@@ -391,6 +391,7 @@ init_chains <- function(emc, start_mu = NULL, start_var = NULL, particles = 1000
                         cores_per_chain=1,cores_for_chains = length(emc),
                         ...)
 {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   dots <- add_defaults(list(...),r_cores=1)
   emc <- mclapply(emc,init,start_mu = start_mu, start_var = start_var,
            verbose = FALSE, particles = particles,r_cores=dots$r_cores,
@@ -1488,6 +1489,7 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
 
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                             marginalise = NULL, varying = NULL){
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component,
                                 r_cores = r_cores, marginalise = marginalise,
@@ -1576,6 +1578,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
 #' @return A matrix of pointwise log-likelihoods with dimensions `n_iter x n_trials`.
 #' @export
 calc_ll_pw <- function(proposals, dadm, model, r_cores = 1){
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   model <- model()
   dadm <- .cache_ll_data_attrs(dadm)
   c_name <- model$c_name

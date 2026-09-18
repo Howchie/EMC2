@@ -108,6 +108,7 @@ run_emc <- function(emc, stage, stop_criteria,
                     fileName = NULL,particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc)
   .emc_ll_route_reset()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
@@ -822,6 +823,7 @@ make_emc <- function(data,design,model=NULL,
                     use_data = TRUE,
                     prior_list = NULL, group_design = NULL,
                     par_groups=NULL, ...){
+  design <- .restore_custom_kernel_design(design, quiet = TRUE)
   n_factors <- NULL
   nuisance <- NULL
   nuisance_non_hyper <- NULL

@@ -154,7 +154,8 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   if (is.null(dots$force_direction)) dots$force_direction <- FALSE
   if (is.null(dots$force_response)) dots$force_response <- FALSE
   return_trialwise_parameters <- isTRUE(dots$return_trialwise_parameters)
-  if (is.null(dots$conditional_on_data) && has_conditional_covariates(design[[1]])) {
+  if (is.null(dots$conditional_on_data) &&
+      any(vapply(design, has_conditional_covariates, logical(1)))) {
     dots$conditional_on_data <- FALSE
     message('One of the covariates in the model trends is either rt, R, or the output of a function provided to design.
 Since the covariate depends on behavior, the data will be simulated trial-by-trial, reapplying the functions after each trial.
@@ -491,6 +492,7 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
     if(is.null(fileName)) fileName <- emc
     emc <- loadRData(emc)
   }
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   if(is.null(stage)){
     last_stage <- get_last_stage(emc)
   } else{
@@ -1214,6 +1216,7 @@ get_data <- function(emc){
 #' @rdname get_prior
 #' @export
 get_prior.emc <- function(emc){
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   prior <- emc[[1]]$prior
   attr(prior, "type") <- emc[[1]]$type
   class(prior) <- "emc.prior"
@@ -1236,6 +1239,7 @@ get_prior <- function(emc){
 #' @rdname get_design
 #' @export
 get_design.emc <- function(x){
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   emc_design <- .get_design_emc(x)
   if (!is.null(x[[1]]$data)) {
     design_data <- get_data(x)
@@ -1291,6 +1295,7 @@ plot_design <- function(x, data = NULL, factors = NULL, plot_factor = NULL, n_da
 #' @export
 plot_design.emc <- function(x, data = NULL, factors = NULL, plot_factor = NULL, n_data_sim = 10, p_vector = NULL,
                             functions = NULL, ...){
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   p_vector <- credint(x, probs = .5)[[1]]
   design <- get_design(x)[[1]]
   plot(design, p_vector, data = data, factors = factors, plot_factor = plot_factor, n_data_sim = n_data_sim,
@@ -1302,6 +1307,7 @@ plot_design.emc <- function(x, data = NULL, factors = NULL, plot_factor = NULL, 
 mapped_pars.emc <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
                                   covariates=NULL, data = NULL, use_data = TRUE,
                                   n_covariates = 10, group_design = NULL, ...){
+  x <- restore_custom_kernel_pointers(x, quiet = TRUE)
   if (is.null(group_design)) group_design <- get_group_design(x)
   if(is.null(p_vector)) {
     # With a group design the fitted coefficients live in theta_beta.  The

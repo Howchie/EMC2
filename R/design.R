@@ -1053,7 +1053,8 @@ check_dm_identifiability <- function(designs, constants)
 design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=1/60,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE,
-                         compress_dms = TRUE, drop_unobserved = FALSE)
+                         compress_dms = TRUE, drop_unobserved = FALSE,
+                         refresh_functions = NULL)
 {
   add_bound_column_if_needed <- function(df, col, value, default) {
     if (col %in% names(df)) return(df)
@@ -1068,6 +1069,8 @@ design_model <- function(data,design,model=NULL,
       stop("Model must be supplied if it has not been added to design")
     model <- design$model
   }
+  design <- .restore_custom_kernel_design(design, quiet = TRUE)
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   if (model()$type=="SDT") rt_check <- FALSE
   # design_model() defaults rt_resolution to 1/60 and most internal callers take
   # that default rather than passing one, so make_emc()'s override would not
@@ -1101,11 +1104,13 @@ design_model <- function(data,design,model=NULL,
   order_idx <- order(da$subjects)
   da <- da[order_idx,] # fixes different sort in add_accumulators depending on subject type
 
-  # Only create Ffunction columns when missing.
-  # Many designs use stochastic Ffunctions (e.g., SSD assignment), so overwriting an existing
-  # column would silently change the design encoded in the data and break likelihood checks.
+  refresh_names <- if (isTRUE(refresh_functions)) names(design$Ffunctions) else
+    if (is.character(refresh_functions)) refresh_functions else character(0)
+  # Only create Ffunction columns when missing, unless a caller explicitly asks
+  # for selected outputs to be refreshed (the unconditional simulator uses this
+  # for behavioral functions after each simulated trial).
   if (!is.null(design$Ffunctions)) for (i in names(design$Ffunctions)) {
-    if (i %in% names(da)) next
+    if (i %in% names(da) && !(i %in% refresh_names)) next
     newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)), i)
     da[, i] <- newF
   }
@@ -2006,6 +2011,7 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
   if(is.null(x$Ffactors)){
     x <- x[[1]]
   }
+  x <- .restore_custom_kernel_design(x, quiet = TRUE)
   if(!is.null(attr(x, "custom_ll"))){
     stop("Mapped_pars not available for this design type")
   }

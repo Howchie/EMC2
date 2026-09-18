@@ -524,6 +524,7 @@ score_held_out <- function(emc, data, type = c("trial", "subject", "calibrated")
                            K = 200, n_calibration = 0.5,
                            calibration_order = c("first", "random"),
                            refit = list(), cores = 1, verbose = FALSE) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   type <- match.arg(type)
   calibration_order <- match.arg(calibration_order)
 

@@ -1002,9 +1002,10 @@ has_conditional_covariates <- function(design) {
   trend <- design$model()$trend
   if (is.null(trend) || !length(trend)) return(FALSE)
   for(trend_n in seq_along(trend)) {
-    for(cov in trend[[trend_n]]$covariate) {
-      if(cov  %in% behavioral_covariates) return(TRUE)
-    }
+    fields <- c(trend[[trend_n]]$covariate,
+                trend[[trend_n]]$par_input,
+                trend[[trend_n]]$at)
+    if(any(fields %in% behavioral_covariates)) return(TRUE)
   }
   return(FALSE)
 }
@@ -1212,15 +1213,16 @@ verbal_trend <- function(design_matrix, trend) {
 
 make_data_unconditional <- function(data, pars, design, model,
                                     return_trialwise_parameters, kernel_output_codes=c(1L),
-                                    optionals=NULL) {
+                                    optionals=NULL, return_functions = FALSE) {
   model_fun <- model
   model_list <- model()
+  refresh_f <- if (is.null(design$Fbehavioral)) names(design$Ffunctions) else design$Fbehavioral
   includeColumns <- colnames(data)
   # Initial scaffolding (attributes and factor setup)
   data <- design_model(
     add_accumulators(data,design$matchfun,simulate=FALSE,type=model_list$type,Fcovariates=design$Fcovariates),
     design,model_fun,add_acc=FALSE,compress=FALSE,verbose=FALSE,
-    rt_check=FALSE)
+    rt_check=FALSE, refresh_functions = refresh_f)
   trialwise_parameters <- NULL
   # Iterate per subject, then per trial
   subj_levels <- levels(data$subjects)
@@ -1239,7 +1241,8 @@ make_data_unconditional <- function(data, pars, design, model,
       current_rows <- idx_subj_all[trials_subj == current_trial]
 
       # Rebuild design for the current prefix so the mapped parameters see updated feedback data.
-      dm <- design_model(data[prefix_rows, ],design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE, compress_dms=FALSE)
+      dm <- design_model(data[prefix_rows, ],design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE, compress_dms=FALSE,
+                         refresh_functions = refresh_f)
 
       mask_current <- dm$subjects == subj & dm$trials == current_trial
       if (!any(mask_current)) next
@@ -1305,113 +1308,135 @@ make_data_unconditional <- function(data, pars, design, model,
     }
   }
   # Re-run with newly updated data to ensure Ffunctions correspond to the simulated data
-  data <- design_model(data, design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE)
+  data <- design_model(data, design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE,
+                       refresh_functions = refresh_f)
+
+  final_pars <- get_pars_oo(pars, data, model_list,
+                            pretransformed = TRUE, constants_included = TRUE)
+  final_pars <- model_list$Ttransform(final_pars, data)
+  first_acc <- if (is.null(data$lR)) rep(TRUE, nrow(data)) else
+    data$lR == levels(data$lR)[1]
+  nuisance <- list()
+  for (nm in c("pContaminant", "pGuess")) {
+    if (nm %in% colnames(final_pars)) {
+      values <- unname(final_pars[, nm][first_acc])
+      if (any(values != 0, na.rm = TRUE)) nuisance[[nm]] <- values
+    }
+  }
 
   if(is.null(data$lR)) data$lR <- 1
-  data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
+  keep_functions <- if (isTRUE(return_functions)) names(design$Ffunctions) else character(0)
+  data <- data[data$lR == unique(data$lR)[1],
+               unique(c(includeColumns, "R", "rt", keep_functions)), drop = FALSE]
   data <- data[,!colnames(data) %in% c('lR', 'lM')]
   if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
     trialwise_parameters <- do.call(rbind, trialwise_parameters)
   }
-  return(list(data = data, trialwise_parameters = trialwise_parameters))
+  return(list(data = data, trialwise_parameters = trialwise_parameters,
+              nuisance = nuisance))
 }
 
-make_data_unconditional_vectorised <- function(data, pars, design, model, return_trialwise_parameters, kernel_output_codes=c(1L)) {
+make_data_unconditional_vectorised <- function(data, pars, design, model, return_trialwise_parameters,
+                                               kernel_output_codes=c(1L), optionals=NULL,
+                                               return_functions = FALSE) {
   model_fun <- model
   model_list <- model()
+  refresh_f <- if (is.null(design$Fbehavioral)) names(design$Ffunctions) else design$Fbehavioral
   includeColumns <- colnames(data)
-  # Initial scaffolding (attributes and factor setup)
   data <- design_model(
-    add_accumulators(data,design$matchfun,simulate=FALSE,type=model_list$type,Fcovariates=design$Fcovariates),
-    design,model_fun,add_acc=FALSE,compress=FALSE,verbose=FALSE,
-    rt_check=FALSE)
+    add_accumulators(data, design$matchfun, simulate = FALSE,
+                     type = model_list$type, Fcovariates = design$Fcovariates),
+    design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE,
+    rt_check = FALSE, refresh_functions = refresh_f
+  )
   trialwise_parameters <- NULL
-  # Iterate per trial, with an inner loop over subjects to get the parameters
   subj_levels <- levels(data$subjects)
   trial_vals <- sort(unique(data$trials))
-  all_trials <- 1:nrow(data)
+  all_rows <- seq_len(nrow(data))
 
-  trialwise_parameters <- NULL
-
-  # Loop over trials only
   for (j in seq_along(trial_vals)) {
-    tmp_return_trialwise <- ifelse(j == length(trial_vals) & return_trialwise_parameters, TRUE, FALSE)
-
     current_trial <- trial_vals[j]
-    prefix_rows <- all_trials[data$trials %in% trial_vals[seq_len(j)]]
-    current_rows <- all_trials[data$trials == current_trial]
-
-    # Rebuild design for the current prefix so the mapped parameters see updated feedback data.
-    # design_model can be used with data of all participants
-    dm <- design_model(data[prefix_rows, ], design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE, compress_dms=FALSE)
-
-    ## Inner loop over subjects to map subject-specific parameters on the current prefix.
-    all_pars <- NULL
-    for(subj in subj_levels) {
-      ## Mask for get_pars_wrapper: All trials of this subject
-      mask_current_subject <- dm$subjects == subj & prefix_rows
-      if (!any(mask_current_subject)) next
-
-      tr <- model_list$trend
-
-      cur_dm <- dm[mask_current_subject,,drop=FALSE]
-      pm <- get_pars_oo(pars[which(subj == subj_levels),,drop=FALSE], cur_dm, model_list,
-                        pretransformed = TRUE, constants_included = TRUE)
-      if(tmp_return_trialwise) {
-        covariates <- get_pars_oo(pars[which(subj == subj_levels),,drop=FALSE], cur_dm, model_list,
-                                  pretransformed = TRUE, constants_included = TRUE,
-                                  return_kernel_matrix = TRUE,
-                                  kernel_output_codes = kernel_output_codes)
-        trialwise_parameters <- c(trialwise_parameters, list(cbind(pm, covariates)))
-      }
-
-      # We extract only the *current* trials of this subject
-      current_trial_in_dm <- cur_dm$trials == current_trial
-      cur_dm <- cur_dm[current_trial_in_dm,]
-      pr <- model_list$Ttransform(pm[current_trial_in_dm,,drop=FALSE], cur_dm)
-      all_pars <- c(all_pars, list(pr))
-    }
-    all_pars <- do.call(rbind, all_pars)
-    all_pars <- add_bound(all_pars, model_list$bound, dm$lR)
-
-    # Identify current-trial rows inside the prefix design
-
-
-    # Simulate current trial rows.
-    if (any(names(dm) == "RACE")) {
-      Rrt <- RACE_rfun(dm, all_pars, model_fun)
+    prefix_rows <- all_rows[data$trials %in% trial_vals[seq_len(j)]]
+    dm <- design_model(
+      data[prefix_rows, , drop = FALSE], design, model_fun,
+      add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE,
+      compress_dms = FALSE, refresh_functions = refresh_f
+    )
+    current_mask <- dm$trials == current_trial
+    if (!any(current_mask)) next
+    current_dm <- dm[current_mask, , drop = FALSE]
+    subject_pars <- get_pars_oo(
+      pars[subj_levels, , drop = FALSE], dm, model_list,
+      pretransformed = TRUE, constants_included = TRUE
+    )
+    current_pars <- model_list$Ttransform(
+      subject_pars[current_mask, , drop = FALSE], current_dm
+    )
+    if (!is.null(optionals$nobound)) {
+      attr(current_pars, "ok") <- rep(TRUE, nrow(current_pars))
     } else {
-      Rrt <- model_list$rfun(dm, all_pars)
+      current_pars <- fix_bound(
+        current_pars, model_list$bound, current_dm$lR,
+        fix = !is.null(optionals$shrink2bound)
+      )
     }
-    # Write outputs back to original data rows for the current trial
-    target_rows <- prefix_rows[dm$trials == current_trial]
+    if (any(names(current_dm) == "RACE")) {
+      Rrt <- RACE_rfun(current_dm, current_pars, model_fun)
+    } else {
+      Rrt <- model_list$rfun(current_dm, current_pars)
+    }
+    target_rows <- match(rownames(current_dm), rownames(data))
     for (nm in dimnames(Rrt)[[2]]) data[target_rows, nm] <- Rrt[, nm]
 
-    # Apply per-trend feedback to the next trial.
-    if(!is.null(tr)) {
-      for(trend_n in 1:length(tr)) {
-        if(!is.null(tr[[trend_n]]$feedback_fun)) {
-          nams <- names(tr[[trend_n]]$feedback_fun)
-          window_rows <- prefix_rows
-          for(i in 1:length(nams)){
-            fb_vec <- tr[[trend_n]]$feedback_fun[[i]](data[window_rows,,drop=FALSE])
-            data[window_rows, nams[i]] <- fb_vec
-          }
+    if (!is.null(model_list$trend)) {
+      for (trend_n in seq_along(model_list$trend)) {
+        feedback <- model_list$trend[[trend_n]]$feedback_fun
+        if (is.null(feedback)) next
+        window_rows <- match(rownames(dm), rownames(data))
+        for (nm in names(feedback)) {
+          fb_vec <- feedback(data[window_rows, , drop = FALSE])
+          data[window_rows, nm] <- fb_vec
         }
       }
     }
+    if (j == length(trial_vals) && return_trialwise_parameters) {
+      covariates <- if (!is.null(model_list$trend)) {
+        get_pars_oo(
+          pars[subj_levels, , drop = FALSE], dm, model_list,
+          pretransformed = TRUE, constants_included = TRUE,
+          return_kernel_matrix = TRUE, kernel_output_codes = kernel_output_codes
+        )
+      } else NULL
+      trialwise_parameters <- list(cbind(subject_pars, covariates))
+    }
   }
 
-  # Re-run with newly updated data to ensure Ffunctions correspond to the simulated data
-  data <- design_model(data, design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE)
-
-  if(is.null(data$lR)) data$lR <- 1
-  data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
-  data <- data[,!colnames(data) %in% c('lR', 'lM')]
-  if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
+  data <- design_model(
+    data, design, model_fun, add_acc = FALSE, compress = FALSE,
+    verbose = FALSE, rt_check = FALSE, refresh_functions = refresh_f
+  )
+  final_pars <- model_list$Ttransform(
+    get_pars_oo(pars, data, model_list,
+               pretransformed = TRUE, constants_included = TRUE), data
+  )
+  first_acc <- if (is.null(data$lR)) rep(TRUE, nrow(data)) else
+    data$lR == levels(data$lR)[1]
+  nuisance <- list()
+  for (nm in c("pContaminant", "pGuess")) {
+    if (nm %in% colnames(final_pars)) {
+      values <- unname(final_pars[, nm][first_acc])
+      if (any(values != 0, na.rm = TRUE)) nuisance[[nm]] <- values
+    }
+  }
+  if (is.null(data$lR)) data$lR <- 1
+  keep_functions <- if (isTRUE(return_functions)) names(design$Ffunctions) else character(0)
+  data <- data[data$lR == unique(data$lR)[1],
+               unique(c(includeColumns, "R", "rt", keep_functions)), drop = FALSE]
+  data <- data[, !colnames(data) %in% c("lR", "lM")]
+  if (return_trialwise_parameters && length(trialwise_parameters))
     trialwise_parameters <- do.call(rbind, trialwise_parameters)
-  }
-  return(list(data = data, trialwise_parameters = trialwise_parameters))
+  list(data = data, trialwise_parameters = trialwise_parameters,
+       nuisance = nuisance)
 }
 
 
@@ -1426,17 +1451,20 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
 ##' @param input_data Either an emc object or a trend list.
 ##' @return A list of custom pointers. The list is of the same size as total number of trends; trends without a custom kernel return NULL.
 get_custom_kernel_pointers <- function(input_data) {
-  if(inherits(input_data, 'emc')) {
-    trend <- input_data[[1]]$model()$trend
+  if (inherits(input_data, "emc")) {
+    ptrs <- .get_custom_model_container_pointers(input_data[[1]]$model)
+  } else if (is.list(input_data) && !is.null(input_data$model)) {
+    ptrs <- .get_custom_model_container_pointers(input_data$model)
   } else {
-    trend <- input_data
+    ptrs <- lapply(input_data, function(x) attr(x, "custom_ptr"))
   }
-  if(is.null(trend)) return(NULL)
-
-  ptrs <- lapply(trend, function(x) attr(x, 'custom_ptr'))
-  if(all(sapply(ptrs, is.null))) return(NULL)
-
-  return(ptrs)
+  if (is.null(ptrs)) return(NULL)
+  has_ptr <- function(x) {
+    if (is.list(x)) return(any(vapply(x, has_ptr, logical(1))))
+    !is.null(x)
+  }
+  if (!has_ptr(ptrs)) return(NULL)
+  ptrs
 }
 
 .custom_kernel_pointer_valid <- function(ptr) {
@@ -1444,57 +1472,14 @@ get_custom_kernel_pointers <- function(input_data) {
     !identical(ptr, methods::new("externalptr"))
 }
 
-##' Restore serialized custom C++ trend pointers
-##'
-##' Custom trend external pointers are process-local and become null when an
-##' `emc` object is serialized.  Trends created by current versions of
-##' [make_trend()] retain their [register_trend()] recipe, allowing this helper
-##' to recompile the source and restore the pointers in every chain and nested
-##' design.  [predict.emc()] calls this automatically.
-##'
-##' @param emc An `emc` object containing one or more custom trends.
-##' @param quiet Logical; suppress recompilation messages.
-##' @return The `emc` object with live custom-kernel pointers.
-##' @export
-restore_custom_kernel_pointers <- function(emc, quiet = FALSE) {
-  if (!inherits(emc, "emc")) stop("emc must inherit from class 'emc'")
-  model <- emc[[1]]$model
-  if (is.list(model) && !is.function(model)) {
-    model_specs <- lapply(model, function(x) if (is.function(x)) x() else x)
-    joint_trends <- lapply(model_specs, `[[`, "trend")
-    custom_ptrs <- unlist(lapply(joint_trends, function(trend) {
-      if (is.null(trend)) return(list())
-      is_custom <- vapply(
-        trend, function(x) identical(x$kernel, "custom"), logical(1)
-      )
-      lapply(trend[is_custom], function(x) attr(x, "custom_ptr"))
-    }), recursive = FALSE)
-    if (!length(custom_ptrs) ||
-        all(vapply(custom_ptrs, .custom_kernel_pointer_valid, logical(1)))) {
-      return(emc)
-    }
-    stop(
-      "Automatic restoration of serialized custom trend pointers is not yet ",
-      "supported for joint emc objects. Re-register the custom trends and ",
-      "call fix_custom_kernel_pointers() with matching complete trend lists.",
-      call. = FALSE
-    )
-  }
-  if (!is.function(model)) return(emc)
-  trend <- model()$trend
-  if (is.null(trend)) return(emc)
-
-  is_custom <- vapply(trend, function(x) identical(x$kernel, "custom"),
-                      logical(1))
-  if (!any(is_custom)) return(emc)
-
-  ptrs <- lapply(trend, function(x) attr(x, "custom_ptr"))
-  valid <- vapply(ptrs, .custom_kernel_pointer_valid, logical(1))
-  needs_restore <- which(is_custom & !valid)
-  if (!length(needs_restore)) return(emc)
-
-  for (i in needs_restore) {
-    registration <- attr(trend[[i]], "custom_registration")
+.restore_custom_trend_list <- function(trend, quiet = FALSE, cache = NULL) {
+  if (is.null(trend) || !length(trend)) return(trend)
+  if (is.null(cache)) cache <- new.env(parent = emptyenv())
+  for (i in seq_along(trend)) {
+    entry <- trend[[i]]
+    if (!identical(entry$kernel, "custom") ||
+        .custom_kernel_pointer_valid(attr(entry, "custom_ptr"))) next
+    registration <- attr(entry, "custom_registration")
     if (is.null(registration)) {
       stop(
         "Custom trend pointer is unavailable after serialization and this ",
@@ -1510,19 +1495,154 @@ restore_custom_kernel_pointers <- function(emc, quiet = FALSE) {
         call. = FALSE
       )
     }
-    if (!quiet) {
-      message("Restoring custom trend kernel from ", registration$file)
+    key <- paste(registration$file,
+                 paste(registration$trend_parameters, collapse = "\r"),
+                 paste(registration$transforms %||% character(0), collapse = "\r"),
+                 registration$base %||% "", sep = "\n")
+    if (exists(key, envir = cache, inherits = FALSE)) {
+      ptr <- get(key, envir = cache, inherits = FALSE)
+    } else {
+      if (!quiet) message("Restoring custom trend kernel from ", registration$file)
+      registered <- register_trend(
+        trend_parameters = registration$trend_parameters,
+        file = registration$file,
+        transforms = registration$transforms,
+        base = registration$base
+      )
+      ptr <- attr(registered, "custom_ptr")
+      assign(key, ptr, envir = cache)
     }
-    registered <- register_trend(
-      trend_parameters = registration$trend_parameters,
-      file = registration$file,
-      transforms = registration$transforms,
-      base = registration$base
-    )
-    ptrs[[i]] <- attr(registered, "custom_ptr")
+    attr(entry, "custom_ptr") <- ptr
+    trend[[i]] <- entry
   }
+  trend
+}
 
-  set_custom_kernel_pointers(emc, ptrs)
+.restore_custom_model_container <- function(model, quiet = FALSE, cache = NULL) {
+  if (is.null(cache)) cache <- new.env(parent = emptyenv())
+  if (is.function(model)) {
+    model_list <- model()
+    if (!is.list(model_list) || is.null(model_list$trend)) return(model)
+    needs_restore <- any(vapply(model_list$trend, function(x)
+      identical(x$kernel, "custom") &&
+        !.custom_kernel_pointer_valid(attr(x, "custom_ptr")), logical(1)))
+    if (!needs_restore) return(model)
+    model_list$trend <- .restore_custom_trend_list(model_list$trend, quiet, cache)
+    return(local({
+      value <- model_list
+      function() value
+    }))
+  }
+  if (is.list(model)) {
+    if (!is.null(model$trend)) {
+      model$trend <- .restore_custom_trend_list(model$trend, quiet, cache)
+      return(model)
+    }
+    if (any(c("p_types", "rfun", "Ttransform") %in% names(model))) return(model)
+    return(lapply(model, .restore_custom_model_container,
+                  quiet = quiet, cache = cache))
+  }
+  model
+}
+
+.restore_custom_kernel_design <- function(design, quiet = FALSE, cache = NULL) {
+  if (is.null(design)) return(design)
+  if (is.null(cache)) cache <- new.env(parent = emptyenv())
+  if (is.list(design) && !is.null(design$model)) {
+    design$model <- .restore_custom_model_container(design$model, quiet, cache)
+    return(design)
+  }
+  if (is.list(design)) {
+    return(lapply(design, .restore_custom_kernel_design,
+                  quiet = quiet, cache = cache))
+  }
+  design
+}
+
+.set_custom_model_container_pointers <- function(model, ptrs) {
+  if (is.function(model)) {
+    model_list <- model()
+    if (!is.list(model_list) || is.null(model_list$trend)) return(model)
+    model_list$trend <- .set_custom_trend_pointers(model_list$trend, ptrs)
+    return(local({
+      value <- model_list
+      function() value
+    }))
+  }
+  if (is.list(model)) {
+    if (!is.null(model$trend)) {
+      model$trend <- .set_custom_trend_pointers(model$trend, ptrs)
+      return(model)
+    }
+    if (any(c("p_types", "rfun", "Ttransform") %in% names(model))) return(model)
+    nested <- length(ptrs) == length(model) && length(ptrs) > 0L &&
+      all(vapply(ptrs, is.list, logical(1)))
+    return(lapply(seq_along(model), function(i)
+      .set_custom_model_container_pointers(model[[i]], if (nested) ptrs[[i]] else ptrs)))
+  }
+  model
+}
+
+.set_custom_trend_pointers <- function(trend, ptrs) {
+  if (is.null(trend) || is.null(ptrs)) return(trend)
+  if (length(ptrs) != length(trend))
+    stop("List of potential pointers not equal to number of trends")
+  for (i in seq_along(trend)) {
+    if (!is.null(ptrs[[i]])) attr(trend[[i]], "custom_ptr") <- ptrs[[i]]
+  }
+  trend
+}
+
+.get_custom_model_container_pointers <- function(model) {
+  if (is.function(model)) {
+    model_list <- model()
+    return(if (is.list(model_list) && !is.null(model_list$trend))
+      lapply(model_list$trend, function(x) attr(x, "custom_ptr")) else NULL)
+  }
+  if (is.list(model)) {
+    if (!is.null(model$trend))
+      return(lapply(model$trend, function(x) attr(x, "custom_ptr")))
+    return(lapply(model, .get_custom_model_container_pointers))
+  }
+  NULL
+}
+
+##' Restore serialized custom C++ trend pointers
+##'
+##' Custom trend external pointers are process-local and become null when an
+##' `emc` object is serialized.  Trends created by current versions of
+##' [make_trend()] retain their [register_trend()] recipe, allowing this helper
+##' to recompile the source and restore the pointers in every chain and nested
+##' design.  [predict.emc()] calls this automatically.
+##'
+##' @param emc An `emc` object containing one or more custom trends.
+##' @param quiet Logical; suppress recompilation messages.
+##' @return The `emc` object with live custom-kernel pointers.
+##' @export
+restore_custom_kernel_pointers <- function(emc, quiet = FALSE) {
+  if (inherits(emc, "emc")) {
+    cache <- new.env(parent = emptyenv())
+    for (i in seq_along(emc)) {
+      if (!is.null(emc[[i]]$model))
+        emc[[i]]$model <- .restore_custom_model_container(emc[[i]]$model, quiet, cache)
+      if (!is.null(emc[[i]]$prior)) {
+        designs <- attr(emc[[i]]$prior, "design")
+        if (!is.null(designs)) {
+          attr(emc[[i]]$prior, "design") <-
+            .restore_custom_kernel_design(designs, quiet, cache)
+        }
+      }
+    }
+    return(emc)
+  }
+  if (inherits(emc, "emc.prior") || inherits(emc, "emc.design")) {
+    if (!is.null(emc$model)) return(.restore_custom_kernel_design(emc, quiet))
+    if (inherits(emc, "emc.design") && is.null(attr(emc, "design")))
+      return(.restore_custom_kernel_design(emc, quiet))
+    attr(emc, "design") <- .restore_custom_kernel_design(attr(emc, "design"), quiet)
+    return(emc)
+  }
+  stop("object must inherit from 'emc', 'emc.prior', or 'emc.design'")
 }
 
 ##' (Re-)Set pointers of custom C++ trend kernels to an emc object
@@ -1535,47 +1655,38 @@ restore_custom_kernel_pointers <- function(emc, quiet = FALSE) {
 ##' @return An emc object with the custom pointers re-instated.
 set_custom_kernel_pointers <- function(emc, ptrs) {
   if(is.null(ptrs)) return(emc)   # nothing to set
-  if(is.null(emc[[1]]$model()$trend)) stop('emc object has no trends, nothing to set...')
-  if(length(ptrs) != length(emc[[1]]$model()$trend)) {
-    stop('List of potential pointers not equal to number of trends')
-  }
-
-  for(chain_ in 1:length(emc)) {
-    # update model() function in emc
-    if('model' %in% names(emc[[chain_]])) {
-      model_list <- emc[[chain_]]$model()
-      trend <- model_list$trend
-      for(i in 1:length(trend)) {
-        if(!is.null(ptrs[[i]])) attr(trend[[i]], 'custom_ptr') <- ptrs[[i]]
-      }
-      model_list$trend <- trend
-      emc[[chain_]]$model <- function() return(model_list)
-    }
-    ## Update model() function hidden in the design hidden in the prior
-    if('prior' %in% names(emc[[chain_]])) {
-      for(design_n in 1:length(attr(emc[[chain_]]$prior, 'design'))) {
-        if('model' %in% names(attr(emc[[chain_]]$prior, 'design')[[design_n]])) {
-          model_list <- attr(emc[[chain_]]$prior, 'design')[[design_n]]$model()
-          trend <- model_list$trend
-          for(i in 1:length(trend)) {
-            if(!is.null(ptrs[[i]])) attr(trend[[i]], 'custom_ptr') <- ptrs[[i]]
-          }
-          model_list$trend <- trend
-          attr(emc[[chain_]]$prior, 'design')[[design_n]]$model <- function() return(model_list)
-        }
+  if (!inherits(emc, "emc")) stop("emc must inherit from class 'emc'")
+  for (chain_ in seq_along(emc)) {
+    if (!is.null(emc[[chain_]]$model))
+      emc[[chain_]]$model <- .set_custom_model_container_pointers(emc[[chain_]]$model, ptrs)
+    if (!is.null(emc[[chain_]]$prior)) {
+      designs <- attr(emc[[chain_]]$prior, "design")
+      if (!is.null(designs)) {
+        attr(emc[[chain_]]$prior, "design") <-
+          .set_custom_kernel_design_pointers(designs, ptrs)
       }
     }
   }
   return(emc)
 }
 
-pointer_reset_wrapper <- function(sub_emc, emc){
-  # Joint models retain their existing custom-kernel pointers.
-  if(is.list(emc[[1]]$model)){ # Joint model!!
-    return(sub_emc)
-  } else{
-    return(set_custom_kernel_pointers(sub_emc, get_custom_kernel_pointers(emc)))
+.set_custom_kernel_design_pointers <- function(design, ptrs) {
+  if (is.null(design)) return(design)
+  if (is.list(design) && !is.null(design$model)) {
+    design$model <- .set_custom_model_container_pointers(design$model, ptrs)
+    return(design)
   }
+  if (is.list(design)) {
+    nested <- length(ptrs) == length(design) && length(ptrs) > 0L &&
+      all(vapply(ptrs, is.list, logical(1)))
+    return(lapply(seq_along(design), function(i)
+      .set_custom_kernel_design_pointers(design[[i]], if (nested) ptrs[[i]] else ptrs)))
+  }
+  design
+}
+
+pointer_reset_wrapper <- function(sub_emc, emc){
+  return(set_custom_kernel_pointers(sub_emc, get_custom_kernel_pointers(emc)))
 }
 
 
@@ -1599,11 +1710,7 @@ fix_custom_kernel_pointers <- function(emc, pointer_source = NULL) {
     if (!inherits(emc, "emc")) stop("emc must inherit from class 'emc'")
     model <- emc[[1]]$model
     if (!is.function(model)) {
-      stop(
-        "A registered custom trend can currently repair only a single-model ",
-        "emc object; pass a matching trend list for a joint model.",
-        call. = FALSE
-      )
+      stop("A single registered trend requires an explicit matching trend list for a joint model.", call. = FALSE)
     }
     target_trend <- model()$trend
     is_custom <- vapply(
@@ -1743,8 +1850,11 @@ normalize_maps <- function(maps, par_names) {
 #' Returns a kernel matrix produced by the corresponding implementation.
 #' @export
 apply_kernel <- function(kernel_pars, emc, subject=1, input_pars=NULL, trend_n=1, mode='Rcpp') {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   dadm <- emc[[1]]$data[[subject]]
-  model <- emc[[1]]$model()
+  model <- emc[[1]]$model
+  if (!is.function(model)) stop("apply_kernel() requires a single-model emc object")
+  model <- .restore_custom_model_container(model, quiet = TRUE)
   trend_list <- model()$trend
   if(length(trend_list) > 1) {
     warning(paste0('Multiple trends found - applying trend number ', trend_n))

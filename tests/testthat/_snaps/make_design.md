@@ -3,7 +3,7 @@
     Code
       str(design_data, give.attr = FALSE)
     Output
-      List of 15
+      List of 16
        $ Flist                  :List of 8
         ..$ :Class 'formula'  language v ~ lM
         ..$ :Class 'formula'  language sv ~ lM
@@ -26,6 +26,7 @@
        $ Fcovariates            : chr "CO"
        $ Ffunctions             :List of 1
         ..$ E2:function (d)  
+       $ Fbehavioral            : chr "E2"
        $ model                  :function ()  
        $ TC                     :List of 12
         ..$ LT         : num 0
@@ -51,7 +52,7 @@
     Code
       str(design_custom, give.attr = FALSE)
     Output
-      List of 15
+      List of 16
        $ Flist                  :List of 5
         ..$ :Class 'formula'  language m ~ 0 + S
         ..$ :Class 'formula'  language s ~ 1
@@ -67,6 +68,7 @@
        $ constants              : Named num [1:3] 0 -Inf -Inf
        $ Fcovariates            : NULL
        $ Ffunctions             : NULL
+       $ Fbehavioral            : NULL
        $ model                  :function ()  
        $ TC                     :List of 12
         ..$ LT         : num 0

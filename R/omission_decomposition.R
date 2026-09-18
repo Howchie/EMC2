@@ -497,6 +497,7 @@ decompose_omissions <- function(emc, factors = NULL, n_post = 50,
                                 stat = c("random", "mean", "median"),
                                 by_subject = FALSE, data = NULL,
                                 probs = c(.025, .5, .975)) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   stat <- match.arg(stat)
   if (length(probs) < 1L || any(!is.finite(probs)) || any(probs < 0 | probs > 1))
     stop("probs must lie in [0, 1]")

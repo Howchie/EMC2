@@ -34,6 +34,7 @@ waic_warnings <- function() {
 
 # Compute the pointwise log-likelihood matrix for one subject.
 .ll_matrix_subject <- function(emc, stage = "sample", filter = 0, subject) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   # Try to get cached first
   pw_ll <- get_pars(emc, selection = "pw_ll", stage = stage, filter = filter,
                     merge_chains = TRUE, return_mcmc = FALSE, subject = subject)
@@ -49,6 +50,7 @@ waic_warnings <- function() {
 # Concatenate per-trial pointwise log-likelihood matrices across subjects.
 # Returns [n_iter x total_trials].
 .ll_matrix_pooled <- function(emc, stage = "sample", filter = 0, cores = 1) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   # Try to get cached first
   pw_ll <- get_pars(emc, selection = "pw_ll", stage = stage, filter = filter,
                     merge_chains = TRUE, return_mcmc = FALSE)
@@ -121,6 +123,7 @@ waic_warnings <- function() {
 # Returns [n_iter x n_subjects].
 .marg_ll_matrix <- function(emc, stage = "sample", filter = 0, K = 200,
                             cores = 1) {
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   theta_mu  <- get_pars(emc, selection = "mu",    stage = stage, filter = filter,
                         merge_chains = TRUE, return_mcmc = FALSE)
   theta_var <- get_pars(emc, selection = "Sigma", stage = stage, filter = filter,

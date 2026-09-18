@@ -796,6 +796,8 @@ plot_trend <- function(input_data, emc, par_name, subject=1,
                        pp_shaded=TRUE,
                        ...) {
 
+  emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
+
   if(!is.list(input_data)) {
     # user supplied p_vector
     dadm <- emc[[1]]$data[[subject]]

@@ -426,10 +426,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     assign(name, optionals[[name]])
   }
   if(is(parameters, "emc")){
+    parameters <- restore_custom_kernel_pointers(parameters, quiet = TRUE)
     if(is.null(design)) design <- get_design(parameters)[[1]] # Currently not supported for multiple designs
     if(is.null(data)) data <- get_data(parameters)
     parameters <- do.call(rbind, credint(parameters, probs = 0.5, selection = "alpha", by_subject = TRUE))
   }
+  design <- .restore_custom_kernel_design(design, quiet = TRUE)
 
   # Resolve censoring and truncation settings from the data, then the design.
   # Run this after the emc block so fitted settings are available.
@@ -524,9 +526,14 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   } else {
     kernel_output_codes <- c(1L)
   }
-  if (isFALSE(dots_local$conditional_on_data)) {
+  if (is.null(dots_local$conditional_on_data)) {
+    # A behavioral trend cannot be represented by one parameter-independent
+    # design scaffold: generated function columns must be refreshed after each
+    # simulated response.  Static generated functions remain on the fast path.
+    simulate_unconditional_on_data <- has_conditional_covariates(design)
+  } else if (isFALSE(dots_local$conditional_on_data)) {
     simulate_unconditional_on_data <- TRUE
-  } else if (!is.null(dots_local$conditional_on_data)) {
+  } else {
     simulate_unconditional_on_data <- !isTRUE(dots_local$conditional_on_data)
   }
   return_trialwise_parameters <- isTRUE(dots_local$return_trialwise_parameters)
@@ -549,42 +556,72 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if (expand > 1) {
       data_list <- vector("list", expand)
       twp_last <- NULL
+      nuisance_list <- vector("list", expand)
       for (rep_i in seq_len(expand)) {
         if (use_vectorised) {
           res_i <- make_data_unconditional_vectorised(
             data = data, pars = pars, design = design, model = model,
             return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
-            kernel_output_codes = kernel_output_codes
+            kernel_output_codes = kernel_output_codes, optionals = optionals,
+            return_functions = return_functions
           )
         } else {
           res_i <- make_data_unconditional(
             data = data, pars = pars, design = design, model = model,
             return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
-            kernel_output_codes = kernel_output_codes
+            kernel_output_codes = kernel_output_codes, optionals = optionals,
+            return_functions = return_functions
           )
         }
         data_list[[rep_i]] <- cbind(rep = rep_i, res_i$data)
+        nuisance_list[[rep_i]] <- res_i$nuisance
         if (rep_i == expand) twp_last <- res_i$trialwise_parameters
       }
       data <- do.call(rbind, data_list)
       rownames(data) <- NULL
       trialwise_parameters <- twp_last
+      nuisance_names <- unique(unlist(lapply(nuisance_list, names), use.names = FALSE))
+      nuisance <- lapply(nuisance_names, function(nm)
+        unlist(lapply(nuisance_list, `[[`, nm), use.names = FALSE))
+      names(nuisance) <- nuisance_names
     } else {
       if (use_vectorised) {
         res <- make_data_unconditional_vectorised(
           data = data, pars = pars, design = design, model = model,
           return_trialwise_parameters = return_trialwise_parameters,
-          kernel_output_codes = kernel_output_codes
+          kernel_output_codes = kernel_output_codes, optionals = optionals,
+          return_functions = return_functions
         )
       } else {
         res <- make_data_unconditional(
           data = data, pars = pars, design = design, model = model,
           return_trialwise_parameters = return_trialwise_parameters,
-          kernel_output_codes = kernel_output_codes
+          kernel_output_codes = kernel_output_codes, optionals = optionals,
+          return_functions = return_functions
         )
       }
       data <- res$data
       trialwise_parameters <- res$trialwise_parameters
+      nuisance <- res$nuisance
+    }
+    if (length(nuisance)) {
+      for (nm in names(nuisance)) if (is.null(TC[[nm]])) TC[[nm]] <- nuisance[[nm]]
+    }
+    tc_nondefault <- !identical(TC$LT, 0) || !identical(TC$LC, 0) ||
+      !identical(TC$UT, Inf) || !identical(TC$UC, Inf) ||
+      !is.null(TC$pContaminant) || !is.null(TC$pGuess) ||
+      isTRUE(TC$no_truncate) || isTRUE(TC$no_censor) ||
+      !is.null(TC$rt_resolution)
+    if (tc_nondefault) {
+      if (!is.null(TC$rt_resolution) && !model_compress_ok(model))
+        TC$rt_resolution <- NULL
+      data <- make_missing(data, LT = TC$LT, LC = TC$LC, UC = TC$UC, UT = TC$UT,
+        LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
+        LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
+        pContaminant = TC$pContaminant, pGuess = TC$pGuess,
+        guess_window = TC$guess_window, no_truncate = TC$no_truncate,
+        no_censor = TC$no_censor, verbose = TC$verbose,
+        rt_resolution = TC$rt_resolution, digits = TC$digits)
     }
     attr(data, "p_vector") <- parameters
     if (return_trialwise_parameters) attr(data, "trialwise_parameters") <- trialwise_parameters
@@ -619,6 +656,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if (!is.null(optionals$nobound)) attr(pars,"ok") <- rep(TRUE,nrow(pars)) else
       pars <- fix_bound(pars, model()$bound, data$lR,fix=!is.null(optionals$shrink2bound))
     pars_ok <- attr(pars, 'ok')
+    if (is.null(pars_ok)) pars_ok <- rep(TRUE, nrow(pars))
+    pars_ok[is.na(pars_ok)] <- FALSE
+    attr(pars, "ok") <- pars_ok
     if(mean(!pars_ok) > .1){
       warning("More than 10% of parameter values fall out of model bounds, see <model_name>$bounds()")
       if (!isTRUE(optionals$check_bounds)) {
