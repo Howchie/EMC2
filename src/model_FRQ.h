@@ -35,28 +35,17 @@
 // just alpha, beta > 0 rather than positive integers; every formula above is
 // already valid there, because nothing above uses integrality -- only that
 // I_q(alpha, beta) and the Beta density exist, which they do for any
-// alpha, beta > 0.  The FITTED model bounds both
-// shapes below at 1 (R/model_FRQ.R): the sub-one corner is mathematically
-// fine but the (h, tau) coordinates are not representable there in double
-// precision, so it is not offered.
+// alpha, beta > 0. The fitted model bounds both shapes below at 1
+// (R/model_FRQ.R) to preserve the finite-reservoir interpretation and a
+// bounded leading edge.
 //
-// PARAMETERISATION.  Raw (p, lambda) are poor estimation coordinates, so the
-// exposed parameters are (alpha, beta, h, tau, t0, delta, cv_u) where h is the eventual
-// completion probability and tau is the CONDITIONAL MEDIAN decision time,
-// P(T <= tau | T < Inf) = 1/2.  frq_derive() inverts that exactly:
-//
-//   p      = I^{-1}_{H^{-1}(h)}(alpha, beta)
-//   u_r    = I^{-1}_{H^{-1}(r h)}(alpha, beta)         with r = FRQ_QUANTILE
-//   lambda = -log1p(-u_r / p) / tau       (cv_u = 0)
-//   lambda = expm1(-cv_u^2 log1p(-u_r / p)) / (cv_u^2 tau)  (cv_u > 0)
-//
-// (H is the identity at the default delta = 0, so those reduce to qbeta(h, .)
-// and qbeta(r h, .).)
-//
-// r is hard-coded at 1/2.  Exposing it would add a parameter that is not
-// identified separately from tau: (r, tau) enter the likelihood only through
-// the single point they pin on F, so any change in r can be absorbed exactly
-// by a change in tau.
+// PARAMETERISATION.  The fitted coordinates are the generative coordinates
+// (alpha, beta, p, lambda, t0, delta, cv_u).  `p` is the probability that an
+// evidence unit is available and `lambda` is the mean registration-rate
+// parameter.  The endpoint p = 1 is a proper, non-defective FRQ member; p < 1
+// leaves the intrinsic never-finish mass.  The old conditional-median chart is
+// deliberately not part of the model contract: a median is a derived RT
+// summary and changes when the quorum geometry changes even if lambda does not.
 //
 // THRESHOLD VARIABILITY (delta).  The quorum a trial actually demands is not
 // fixed.  Let U be the latent quorum percentile, so that the baseline model is
@@ -86,7 +75,7 @@
 //
 //       H^{-1}(y) = sinh(delta y) / [sinh(delta y) + sinh(delta (1 - y))],
 //
-//     so (h, tau) keep their exact meanings for STILL exactly two qbeta calls.
+//     so the generative p/lambda coordinates do not need a quantile inversion.
 //     Solve H(z) = y for e^x directly: (1+e^{x+d})/(1+e^{x-d}) = e^{2dy} gives
 //     e^x = (e^{2dy} - 1)/(e^d - e^{2dy-d}) = sinh(dy)/sinh(d(1-y)).
 //
@@ -128,11 +117,6 @@
 #include <unordered_map>
 
 using namespace Rcpp;
-
-// Conditional-quantile level defining tau.  1/2 = the conditional median.
-// Changing this changes the meaning of tau in every fitted model, so it is a
-// constant rather than an argument.
-constexpr double FRQ_QUANTILE = 0.5;
 
 // Shapes below this are treated as degenerate.  The fitted model keeps
 // alpha, beta >= 1 (R/model_FRQ.R bounds), so this floor is only a guard for
@@ -249,7 +233,7 @@ inline double frq_h_inv(double y, const FrqH& H) {
 }
 
 // ---------------------------------------------------------------------------
-// (alpha, beta, h, tau, delta, cv_u) -> (p, lambda).  `ok` is false for any parameter
+// (alpha, beta, p, lambda, delta, cv_u) -> compiled state.  `ok` is false for any parameter
 // combination that does not define a proper accumulator; every evaluator then
 // returns log 0 for the density and lets the caller floor the trial, which is
 // what the rest of the race machinery expects from an invalid row.
@@ -266,15 +250,15 @@ struct FrqPars {
   bool ok = false;
 };
 
-inline FrqPars frq_derive(double alpha, double beta, double h, double tau,
+inline FrqPars frq_derive(double alpha, double beta, double p, double lambda,
                           double delta = 0.0, double cv_u = 0.0) {
   FrqPars s;
-  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h) || ISNAN(tau) ||
+  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(p) || ISNAN(lambda) ||
       ISNAN(cv_u)) return s;
   if (!(alpha >= FRQ_SHAPE_MIN) || !R_FINITE(alpha)) return s;
   if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
-  if (!(h > 0.0) || !(h <= 1.0)) return s;
-  if (!(tau > 0.0) || !R_FINITE(tau)) return s;
+  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p)) return s;
+  if (!(lambda > 0.0) || !R_FINITE(lambda)) return s;
   if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return s;
   const double cv2 = cv_u * cv_u;
   if (!R_FINITE(cv2)) return s;
@@ -283,47 +267,18 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double tau,
 
   s.alpha = alpha;
   s.beta = beta;
+  s.p = p;
+  s.lambda = lambda;
   s.cv_u = cv_u;
   s.cv2 = cv2;
-  // p is the saturation level of q(x): the registered fraction the reservoir
-  // can ever reach.  h = H(I_p(alpha, beta)) inverts to it exactly, in two
-  // steps: undo the threshold-variability map, then undo the incomplete beta.
-  s.p = R::qbeta(frq_h_inv(h, s.hh), alpha, beta, /*lower_tail=*/1, /*log_p=*/0);
-  // If h is defective, p must remain strictly below one.  qbeta can round a
-  // representable but extreme h to one; accepting that value would silently
-  // turn the requested defective distribution into a proper one.
-  if (ISNAN(s.p) || !(s.p > 0.0) || !(s.p <= 1.0) ||
-      (h < 1.0 && !(s.p < 1.0))) return s;
-
-  // The r-quantile of the CONDITIONAL distribution sits at F = r h, so on the
-  // Beta scale it is the H^{-1}(r h)-quantile.  It is strictly below p whenever
-  // r < 1 (H is strictly increasing), which is what makes the log1p below
-  // finite.
-  const double u_r = R::qbeta(frq_h_inv(FRQ_QUANTILE * h, s.hh), alpha, beta, 1, 0);
-  if (ISNAN(u_r) || !(u_r >= 0.0)) return s;
-  const double gap = s.p - u_r;
-  // A vanishing gap means the two quantiles have collapsed into each other in
-  // double precision -- lambda is then unresolvable rather than merely large,
-  // so reject instead of returning a garbage rate.
-  if (!(gap > 0.0)) return s;
-
-  const double ratio = u_r / s.p;
-  if (!(ratio >= 0.0) || !(ratio < 1.0)) return s;
-  if (cv2 == 0.0) {
-    s.lambda = -std::log1p(-ratio) / tau;
-  } else {
-    s.lambda = std::expm1(-cv2 * std::log1p(-ratio)) / (cv2 * tau);
-  }
-  if (ISNAN(s.lambda) || !(s.lambda > 0.0) || !R_FINITE(s.lambda)) return s;
   s.lbeta_val = R::lbeta(alpha, beta);
   s.ok = true;
   return s;
 }
 
-// Shared exact-key cache for the expensive (alpha, beta, h, tau, delta, cv_u) ->
-// (p, lambda) inversion.  The likelihood clears this once per particle, so
-// entries are shared across density, survivor, scalar and truncation callbacks
-// without accumulating proposals from earlier particles.
+// Shared exact-key cache for the compiled state.  The likelihood clears this
+// once per particle, so entries are shared across density, survivor, scalar and
+// truncation callbacks without accumulating proposals from earlier particles.
 struct FrqCacheKey {
   std::uint64_t bits[6];
 
@@ -362,15 +317,15 @@ struct FrqCache {
 
   void clear() { entries.clear(); }
 
-  const FrqPars& get(double alpha, double beta, double h, double tau,
+  const FrqPars& get(double alpha, double beta, double p, double lambda,
                      double delta, double cv_u) {
     const FrqCacheKey key{{frq_cache_bits(alpha), frq_cache_bits(beta),
-                           frq_cache_bits(h), frq_cache_bits(tau),
+                           frq_cache_bits(p), frq_cache_bits(lambda),
                            frq_cache_bits(delta), frq_cache_bits(cv_u)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive(alpha, beta, h, tau, delta, cv_u));
+      key, frq_derive(alpha, beta, p, lambda, delta, cv_u));
     return inserted.first->second;
   }
 };
@@ -595,20 +550,20 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
 // the cheap consecutive-row hit for exported/reference entry points.
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  double alpha = R_NaN, beta = R_NaN, h = R_NaN, tau = R_NaN;
+  double alpha = R_NaN, beta = R_NaN, p = R_NaN, lambda = R_NaN;
   double delta = R_NaN, cv_u = R_NaN;
   FrqPars value;
 
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
-  const FrqPars& get(double a, double b, double hh, double t,
+  const FrqPars& get(double a, double b, double pp, double l,
                      double d = 0.0, double c = 0.0) {
-    if (a == alpha && b == beta && hh == h && t == tau &&
+    if (a == alpha && b == beta && pp == p && l == lambda &&
         d == delta && c == cv_u) return value;
-    alpha = a; beta = b; h = hh; tau = t; delta = d; cv_u = c;
+    alpha = a; beta = b; p = pp; lambda = l; delta = d; cv_u = c;
     value = shared != nullptr
-      ? shared->get(a, b, hh, t, d, c)
-      : frq_derive(a, b, hh, t, d, c);
+      ? shared->get(a, b, pp, l, d, c)
+      : frq_derive(a, b, pp, l, d, c);
     return value;
   }
 };

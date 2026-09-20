@@ -1721,7 +1721,7 @@ double c_log_likelihood_race(
   if (n_lR <= 0) Rcpp::stop("c_log_likelihood_race: n_lR must be positive and correctly determined before this call.");
   if (n_trials % n_lR != 0) Rcpp::stop("c_log_likelihood_race: dadm nrows not a multiple of n_lR.");
 
-  // FRQ's qbeta inversion cache is shared by the raw density/survivor passes,
+  // FRQ's direct-state cache is shared by the raw density/survivor passes,
   // scalar fallbacks, and both truncation endpoints.  Its lifetime is one
   // particle, matching the parameter matrix being evaluated.
   auto* cache_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);

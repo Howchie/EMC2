@@ -197,17 +197,16 @@ test_that("PCOUNTER has a proper tail and supports finite thresholds beyond the 
   expect_equal(unname(model$bound$minmax[, "k"]), c(0, Inf))
 })
 
-test_that("the proper pure-birth PCOUNTER member is the h = 1 FRQ boundary", {
+test_that("the proper pure-birth PCOUNTER member is the p = 1 FRQ boundary", {
   K <- 4
   nu <- 6
   gamma <- 1.5
   beta <- nu / gamma
-  tau <- -log1p(-qbeta(0.5, K, beta)) / gamma
   x <- c(0.01, 0.1, 0.4, 1, 3)
   pc_pars <- cbind(nu = nu, sv = 0, gamma = gamma, k = K - 2,
                    omega = 0, t0 = 0)
   pc_pars <- pc_pars[rep(1, length(x)), , drop = FALSE]
-  frq <- cbind(alpha = K, beta = beta, h = 1, tau = tau, t0 = 0)
+  frq <- cbind(alpha = K, beta = beta, p = 1, lambda = gamma, t0 = 0)
   frq <- frq[rep(1, length(x)), , drop = FALSE]
   pc <- PCOUNTER()
 

@@ -98,7 +98,7 @@ test_that("representative model kernels preserve the CDF/PDF contract", {
       expect_equal(cs$pdf(cs$times[5]), 0, tolerance = 1e-12,
                    info = paste(nm, "endpoint density"))
     } else {
-      expect_equal(cs$cdf(Inf), .8, tolerance = 1e-12,
+      expect_equal(cs$cdf(Inf), pbeta(.8, 2, 3), tolerance = 1e-12,
                    info = "FRQ defective endpoint")
     }
   }

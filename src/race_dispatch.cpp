@@ -234,9 +234,10 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr  = &frq_logS_at_t;
     out.col_spec       = emc2col::frq::spec();
     out.ctx.t0_index   = emc2col::frq::t0;
-    // FRQ supports a defective atom 1 - h at +Inf, with h = 1 as the explicit
-    // proper boundary.  Keeping the capability enabled lets the same adapter
-    // handle both parameterisations; at h = 1 the atom is exactly zero.
+    // FRQ supports a defective atom 1 - h at +Inf, with p = 1 as the explicit
+    // proper boundary. Keeping the capability enabled lets the same adapter
+    // handle both direct availability parameterisations; at p = 1 the atom is
+    // exactly zero.
     out.ctx.defective_upper_tail = true;
     out.ctx.supports_batched_defective_truncation = true;
     out.ctx.frq_cache = std::make_shared<FrqCache>();

@@ -1,5 +1,12 @@
 # FRQ extension implementation plan
 
+> **Superseded parameterisation note (2026-09-20).** The implemented FRQ
+> contract now fits the generative coordinates `(alpha, beta, p, lambda, t0,
+> delta, cv_u)`. `h` is derived for reporting and the former `tau` conditional
+> median chart is no longer exposed. The historical `(h, tau)` inversion notes
+> below describe the pre-refactor design and should not be used for new model
+> formulas.
+
 Date: 2026-09-20
 
 Scope: extend the existing FRQ race with analytic threshold variability, unit-level
