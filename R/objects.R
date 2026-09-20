@@ -1,19 +1,34 @@
+.EMC_STATIC_SAMPLE_FIELDS <- c("last_theta_var_inv")
+
 filter_obj <- function(obj, idx){
   dims <- dim(obj)
   dim_names <- dimnames(obj)
   if(is.null(dims)) return(obj)
-  if(length(dims) == 2){
-    if(nrow(obj) == ncol(obj)){
-      if(nrow(obj) > 1){
-        if(mean(abs(abs(rowSums(obj/max(obj))) - abs(colSums(obj/max(obj))))) < .01) return(obj)
-      }
-    }
+  if(length(idx) == 0L) {
+    idx <- integer(0)
+  } else if(anyNA(idx) || any(idx < 1L) || max(idx) > dims[length(dims)]) {
+    stop("sample history index is outside the allocated iteration range",
+         call. = FALSE)
   }
   obj <- obj[slice.index(obj, length(dims)) %in% idx]
   dims[length(dims)] <- length(idx)
   dim(obj) <- dims
   dimnames(obj) <- dim_names # Give back to the community
   return(obj)
+}
+
+filter_sample_store <- function(samples, idx){
+  if(is.null(samples)) return(samples)
+  for(nm in names(samples)){
+    if(nm %in% .EMC_STATIC_SAMPLE_FIELDS) next
+    value <- samples[[nm]]
+    if(is.list(value) && is.null(dim(value))) {
+      samples[[nm]] <- filter_sample_store(value, idx)
+    } else {
+      samples[[nm]] <- filter_obj(value, idx)
+    }
+  }
+  samples
 }
 
 remove_samples <- function(samples, stage = "sample", filter = NULL, thin = 1,
@@ -40,11 +55,11 @@ remove_samples <- function(samples, stage = "sample", filter = NULL, thin = 1,
   if(keep_stages) filter_idx <- c(which(!(samples$samples$stage %in% stage)), filter_idx)
 
   if(any(samples$nuisance)) {
-    samples$sampler_nuis$samples <- base::rapply(samples$sampler_nuis$samples, f = function(x) filter_obj(x, filter_idx), how = "replace")
+    samples$sampler_nuis$samples <- filter_sample_store(samples$sampler_nuis$samples, filter_idx)
     samples$sampler_nuis$samples$idx <- length(filter_idx)
   }
   stage <- samples$samples$stage
-  samples$samples <- base::rapply(samples$samples, f = function(x) filter_obj(x, filter_idx), how = "replace")
+  samples$samples <- filter_sample_store(samples$samples, filter_idx)
   samples$samples$stage <- stage[filter_idx]
   samples$samples$idx <- length(filter_idx)
   return(samples)
@@ -644,8 +659,3 @@ fit_remove_samples <- function(emc){
   }
   return(emc)
 }
-
-
-
-
-

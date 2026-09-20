@@ -1271,7 +1271,7 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQ simulator.  pars columns: alpha, beta, h, tau, t0, delta.
+// FRQ simulator.  pars columns: alpha, beta, h, tau, t0, delta, cv_u.
 //
 // Exact, not approximate: the process is distributionally identical to drawing
 // the latent quorum U ~ Beta(alpha, beta) and inverting the registration CDF at
@@ -1309,6 +1309,9 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   // Safe to default here, unlike on the likelihood path: this lookup is BY NAME,
   // so a missing column cannot silently resolve to a different parameter.
   const int idl = ci.count("delta") ? ci.at("delta") : -1;
+  // cv_u is optional only for this named direct/reference simulator path; the
+  // compiled likelihood has it in the required positional FRQ contract.
+  const int icv = ci.count("cv_u") ? ci.at("cv_u") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1321,13 +1324,20 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       continue;
     }
     const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
-                                 pars(r, it), idl >= 0 ? pars(r, idl) : 0.0);
+                                 pars(r, it), idl >= 0 ? pars(r, idl) : 0.0,
+                                 icv >= 0 ? pars(r, icv) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes
     const double u = s.hh.active
       ? R::qbeta(frq_h_inv(R::unif_rand(), s.hh), s.alpha, s.beta, 1, 0)
       : R::rbeta(s.alpha, s.beta);
     if (!(u <= s.p)) continue;                 // quorum unreachable: omission
-    const double d = -std::log1p(-u / s.p) / s.lambda;
+    double ratio = u / s.p;
+    // An exact U = p = 1 is a zero-probability endpoint, but finite RNGs can
+    // return it.  Keep the proper model finite rather than creating an
+    // artificial omission through an infinite inverse.
+    if (s.p == 1.0 && ratio >= 1.0)
+      ratio = std::nextafter(1.0, 0.0);
+    const double d = frq_registration_inv(ratio, s);
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 

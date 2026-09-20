@@ -17,8 +17,9 @@ Model files are almost exclusively used in \code{design()}.
 
 Each accumulator draws on a finite pool of \code{N} potential evidence units and
 responds once a quorum of \code{K} of them has registered. A unit is usable on a
-given trial with probability \code{p}, and a usable unit registers after an
-exponentially distributed latency with rate \code{lambda}. If fewer than \code{K} of
+given trial with probability \code{p}, and a usable unit registers after a delay
+with mean rate \code{lambda}. At \code{cv_u = 0} the delay is exponential; at positive
+\code{cv_u} its latent unit rate is Gamma-distributed. If fewer than \code{K} of
 the \code{N} units happen to be usable, the quorum is never reached and the
 accumulator never responds, so the model produces omissions without needing
 a contaminant parameter.
@@ -32,6 +33,8 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
    \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
    \emph{tau} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Median decision time on the trials where it does respond \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
+   \emph{delta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Half-width of continuous threshold variability \cr
+   \emph{cv_u} \tab log \tab [0, Inf] \tab log(0) \tab  \tab CV of an individual unit's latent registration rate \cr
 }
 
 
@@ -44,8 +47,9 @@ by two directly interpretable quantities: \code{h}, the probability that the
 accumulator ever responds, and \code{tau}, its median decision time among the
 trials on which it does. \code{tau} is a decision time, so the median observed
 RT of a lone accumulator is \code{t0 + tau}. \code{mapped_pars()} reports \code{p} and
-\code{lambda}, along with the pool size \code{N} = \code{alpha} + \code{beta} - 1 and the
-quorum fraction \code{d} = \code{alpha}/\code{N}, next to the sampled parameters.
+\code{lambda}, along with the pool size \code{N} = \code{alpha} + \code{beta} - 1, the quorum
+fraction \code{d} = \code{alpha}/\code{N}, and the unit-rate Gamma shape \code{a_u = 1/cv_u^2}
+(\code{Inf} at zero), next to the sampled parameters.
 
 \code{h} and \code{tau} are the two dimensions of evidence strength and are where the
 design normally goes: \code{h} is whether enough evidence is ultimately
@@ -69,6 +73,11 @@ race, and that it is only weakly identified: values below about 2 are
 difficult to distinguish from a small change in \code{alpha} and \code{beta}, so it
 is worth fitting only with a lot of data or a strong prior.
 
+\code{cv_u} is independent unit-level rate heterogeneity, not a shared trialwise
+drift state. It is best held fixed or shared across racers initially. The
+proper/non-defective boundary is obtained by fixing \code{h = 1}, which fixes
+availability to one through the internal inversion.
+
 \code{alpha} and \code{beta} control the shape of the distribution: \code{alpha} how
 sharply the density rises at the leading edge, \code{beta} how heavy the late
 tail is. Both are much more weakly informed than \code{h} and \code{tau}, so the
@@ -84,8 +93,8 @@ per accumulator is compatible with very few observed omissions: two
 accumulators at \code{h = 0.98} give a race-level omission rate of 0.0004.
 Optional fitting parameters are \code{pContaminant}, the omission probability,
 and \code{pGuess}, the uniform-outlier probability. The optional
-threshold-variability \code{delta} parameter is log/exp transformed with default
-\code{log(0)}.
+threshold-variability \code{delta} and unit-rate \code{cv_u} parameters are log/exp
+transformed with default \code{log(0)}.
 
 Because the FRQ is a race model, it has one accumulator per response
 option. EMC2 automatically constructs a factor representing the

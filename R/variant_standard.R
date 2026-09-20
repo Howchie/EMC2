@@ -380,7 +380,17 @@ gibbs_step_standard <- function(sampler, alpha) {
       B_half_block <- 2 * prior$v * diag(1 / a_half[group_idx], d) + cov_block
       df_block     <- prior$v + d - 1 + n
 
-      Sigma_block  <- riwish(df_block, B_half_block)
+      group_name <- if(!is.null(names(sampler$par_group))) {
+        paste(names(sampler$par_group)[group_idx], collapse = ", ")
+      } else {
+        paste(group_idx, collapse = ", ")
+      }
+      Sigma_block  <- riwish(
+        df_block,
+        B_half_block,
+        context = sprintf("standard Gibbs covariance block %s (subjects=%d; parameters=%s)",
+                          g, n, group_name)
+      )
       tvar_new[group_idx, group_idx] <- Sigma_block
       tvinv_new[group_idx, group_idx] <- chol2inv(chol(Sigma_block))
     }

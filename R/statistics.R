@@ -538,8 +538,56 @@ rwish <- function(v, S){
 }
 
 
-riwish <- function(v, S){
-  return(solve(rwish(v, solve(S))))
+.iwish_condition <- function(S, context = NULL,
+                             rcond_tol = getOption("emc2.iwish_rcond_tol", 1e-12)) {
+  label <- if(is.null(context) || !nzchar(context)) "inverse-Wishart scale" else context
+  if(length(rcond_tol) != 1L || !is.finite(rcond_tol) || rcond_tol <= 0) {
+    rcond_tol <- 1e-12
+  }
+  if(!is.matrix(S) || nrow(S) != ncol(S)) {
+    stop(sprintf("%s must be a finite square matrix", label), call. = FALSE)
+  }
+  if(any(!is.finite(S))) {
+    stop(sprintf("%s contains non-finite values", label), call. = FALSE)
+  }
+  scale <- max(1, max(abs(S)))
+  asym <- max(abs(S - t(S))) / scale
+  if(!is.finite(asym) || asym > 1e-8) {
+    stop(sprintf("%s is not symmetric (relative asymmetry %.3g)", label, asym),
+         call. = FALSE)
+  }
+  S_sym <- (S + t(S)) / 2
+  eig <- tryCatch(eigen(S_sym, symmetric = TRUE, only.values = TRUE)$values,
+                  error = function(e) NULL)
+  eig_min <- if(is.null(eig)) NA_real_ else min(eig)
+  eig_max <- if(is.null(eig)) NA_real_ else max(eig)
+  rcond <- tryCatch(1 / kappa(S_sym, exact = FALSE), error = function(e) NA_real_)
+  if(!is.finite(rcond) || rcond < rcond_tol ||
+     !is.finite(eig_min) || eig_min <= 0 || !is.finite(eig_max) || eig_max <= 0) {
+    stop(sprintf(paste0("%s is not numerically positive definite: ",
+                        "rcond=%.3g, eigen_min=%.3g, eigen_max=%.3g"),
+                 label, rcond, eig_min, eig_max), call. = FALSE)
+  }
+  invisible(S_sym)
+}
+
+riwish <- function(v, S, context = NULL){
+  S <- .iwish_condition(S, context = context)
+  S_inv <- tryCatch(solve(S), error = function(e) {
+    label <- if(is.null(context)) "inverse-Wishart scale" else context
+    stop(sprintf("%s could not be inverted: %s", label, conditionMessage(e)),
+         call. = FALSE)
+  })
+  W <- tryCatch(rwish(v, S_inv), error = function(e) {
+    label <- if(is.null(context)) "inverse-Wishart draw" else context
+    stop(sprintf("%s failed while drawing the Wishart proposal: %s",
+                 label, conditionMessage(e)), call. = FALSE)
+  })
+  tryCatch(solve(W), error = function(e) {
+    label <- if(is.null(context)) "inverse-Wishart draw" else context
+    stop(sprintf("%s produced a singular draw: %s", label, conditionMessage(e)),
+         call. = FALSE)
+  })
 }
 
 logdinvGamma <- function(x, shape, rate){

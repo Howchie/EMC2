@@ -234,10 +234,12 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr  = &frq_logS_at_t;
     out.col_spec       = emc2col::frq::spec();
     out.ctx.t0_index   = emc2col::frq::t0;
-    // Always defective: the accumulator terminates only with probability
-    // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
-    // no parameter setting that removes this, so the flag is unconditional.
+    // FRQ supports a defective atom 1 - h at +Inf, with h = 1 as the explicit
+    // proper boundary.  Keeping the capability enabled lets the same adapter
+    // handle both parameterisations; at h = 1 the atom is exactly zero.
     out.ctx.defective_upper_tail = true;
+    out.ctx.supports_batched_defective_truncation = true;
+    out.ctx.frq_cache = std::make_shared<FrqCache>();
   } else if (type_std.find("BTAwL_SEPARATE") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_local_race_scalar;
     out.cdf1_ptr       = &pbtawl_local_race_scalar;
@@ -651,7 +653,9 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dpcounter_raw;
     out.model_pfun_raw = &ppcounter_raw;
     out.logS_at_t_ptr = &pcounter_logS_at_t;
-    out.col_spec     = emc2col::pcounter::spec();
+    out.ctx.pcounter_correlated = (type_std.find("PCOUNTERcorr") != std::string::npos);
+    out.col_spec     = out.ctx.pcounter_correlated ? emc2col::pcounter_corr::spec()
+                                                    : emc2col::pcounter::spec();
     // PCOUNTER's t0 is an ordinary additive shift, so truncation/censoring
     // integration can skip its zero-density dead zone just like FRQ/LNR.
     out.ctx.t0_index = emc2col::pcounter::t0;
@@ -663,6 +667,19 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.gng = true;
   }
   return out;
+}
+
+void configure_pcounter_corr_context(RaceModelAdapter& adapter,
+                                     const Rcpp::CharacterVector& keep_names,
+                                     const std::string& caller) {
+  if (!adapter.ctx.pcounter_correlated) return;
+  for (int j = 0; j < keep_names.size(); ++j) {
+    if (Rcpp::as<std::string>(keep_names[j]) == "rho") {
+      adapter.ctx.pcounter_rho_index = j;
+      return;
+    }
+  }
+  Rcpp::stop("%s: PCOUNTERcorr requires a parameter column named 'rho'.", caller.c_str());
 }
 
 void configure_corr_drift_context(RaceModelAdapter& adapter,

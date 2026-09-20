@@ -625,6 +625,11 @@ run_stage <- function(pmwgs,
                             .EMC_REJECT_CLASSES))
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
+  identical_limit <- getOption("emc2.identical_iteration_limit", 25L)
+  if(length(identical_limit) != 1L || !is.finite(identical_limit) ||
+     identical_limit < 1) identical_limit <- 25L
+  identical_limit <- as.integer(identical_limit)
+  identical_run <- 0L
 
   for (i in 1:iter) {
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
@@ -640,15 +645,8 @@ run_stage <- function(pmwgs,
       error = identity
     )
     if (inherits(pars_attempt, c("error", "try-error"))) {
-      cls <- .emc_reject_record(pars_attempt, "gibbs")
-      if (identical(.emc_failure_action(cls), "abort")) {
-        .emc_failure_abort(cls, "gibbs", pars_attempt)
-      }
-      pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
-      if(any(nuisance)){
-        pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
-      }
-      next
+      .emc_reject_record(pars_attempt, "gibbs")
+      .emc_gibbs_abort(pars_attempt, stage = stage, iteration = j)
     }
     pars <- pars_comb <- pars_attempt
     if(any(nuisance)){
@@ -657,13 +655,9 @@ run_stage <- function(pmwgs,
         error = identity
       )
       if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
-        cls <- .emc_reject_record(pars_nuis_attempt, "gibbs")
-        if (identical(.emc_failure_action(cls), "abort")) {
-          .emc_failure_abort(cls, "gibbs", pars_nuis_attempt)
-        }
-        pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
-        pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
-        next
+        .emc_reject_record(pars_nuis_attempt, "gibbs")
+        .emc_gibbs_abort(pars_nuis_attempt, stage = stage, iteration = j,
+                         nuisance = TRUE)
       }
       pars_nuis <- pars_nuis_attempt
       pars_comb <- merge_group_level(pars$tmu, pars_nuis$tmu, pars$tvar, pars_nuis$tvar, nuisance, pars$subj_mu)
@@ -754,6 +748,15 @@ run_stage <- function(pmwgs,
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
+    if (.emc_sample_iteration_equal(pmwgs$samples, j)) {
+      identical_run <- identical_run + 1L
+    } else {
+      identical_run <- 0L
+    }
+    if (identical_run >= identical_limit) {
+      .emc_stall_abort(stage = stage, iteration = j,
+                       run_length = identical_run)
+    }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
@@ -834,19 +837,57 @@ run_stage <- function(pmwgs,
   return(pmwgs)
 }
 
+.emc_sample_iteration_equal <- function(samples, j) {
+  if(is.null(samples$stage) || j <= 1L) return(FALSE)
+  n_iter <- length(samples$stage)
+  if(j > n_iter) return(FALSE)
+  names_history <- names(samples)[vapply(samples, function(obj) {
+    is_iteration_array(obj, n_iter)
+  }, logical(1))]
+  names_history <- setdiff(names_history, "stage")
+  if(!length(names_history)) return(FALSE)
+  same_slice <- function(obj) {
+    d <- dim(obj)
+    idx_prev <- rep(list(TRUE), length(d))
+    idx_now <- idx_prev
+    idx_prev[[length(d)]] <- j - 1L
+    idx_now[[length(d)]] <- j
+    prev <- do.call(`[`, c(list(obj), idx_prev, list(drop = FALSE)))
+    now <- do.call(`[`, c(list(obj), idx_now, list(drop = FALSE)))
+    # Ignore per-iteration dimnames, if a caller supplied them, but require
+    # exact numerical equality so slow movement is not mistaken for a stall.
+    identical(unname(prev), unname(now))
+  }
+  all(vapply(samples[names_history], same_slice, logical(1)))
+}
+
 reject_sample_iteration <- function(samples, j) {
   if (j <= 1) {
     samples$idx <- j
     return(samples)
   }
+  # `last_theta_var_inv` is the current Gibbs-state covariance inverse, not a
+  # draw history.  It is a square 2-D matrix, so treating every 2-D object as
+  # an iteration matrix silently overwrites its columns whenever a Gibbs
+  # update is rejected.  The resulting repeated-column matrix is neither a
+  # covariance nor a valid sample store and later makes `filter_obj()` try to
+  # reshape (p x p) values to (p x n_iter).
+  n_iter <- length(samples$stage)
   for (nm in names(samples)) {
+    if (nm %in% .EMC_STATIC_SAMPLE_FIELDS) next
     obj <- samples[[nm]]
     d <- dim(obj)
     if (is.null(d)) next
-    if (length(d) == 2 && d[2] >= j) {
-      samples[[nm]][, j] <- samples[[nm]][, j - 1]
-    } else if (length(d) == 3 && d[3] >= j) {
-      samples[[nm]][, , j] <- samples[[nm]][, , j - 1]
+    # Use the allocated history length, rather than just the current column
+    # count.  This is the same rule used by extend_obj() and avoids mistaking
+    # any other fixed matrix for a history when its dimensions happen to be
+    # large enough to contain j.
+    if (is_iteration_array(obj, n_iter) && d[length(d)] >= j) {
+      if (length(d) == 2) {
+        samples[[nm]][, j] <- samples[[nm]][, j - 1]
+      } else if (length(d) == 3) {
+        samples[[nm]][, , j] <- samples[[nm]][, , j - 1]
+      }
     }
   }
   samples$idx <- j

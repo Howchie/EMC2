@@ -127,6 +127,14 @@ void pcounter_logS_at_t(double t, const double* const* cols,
                         const int* trunc_mask, int n_unique_trials,
                         const int* isok_all, void* ctx_, double* logS_out);
 
+double c_log_likelihood_pcounter_corr(Rcpp::NumericMatrix pars,
+                                      Rcpp::DataFrame dadm, int n_trials,
+                                      Rcpp::LogicalVector winner,
+                                      Rcpp::IntegerVector expand, double min_ll,
+                                      const Rcpp::LogicalVector isok, int n_lR,
+                                      int rho_col,
+                                      Rcpp::NumericVector* trial_ll_out = nullptr);
+
 // ---------------------------------------------------------------------------
 // R-callable entry points and their recycle helpers.
 // ---------------------------------------------------------------------------

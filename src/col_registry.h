@@ -83,6 +83,14 @@ namespace pcounter {
   }
 }
 
+namespace pcounter_corr {
+  enum : int { nu = 0, c, gamma, k, omega, t0, rho, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"nu", "c", "gamma", "k", "omega", "t0", "rho"};
+    return {n, N_REQ, "PCOUNTERcorr"};
+  }
+}
+
 // R/model_LNR.R — REXG
 namespace rexg {
   enum : int { mu = 0, sigma, tau, t0, N_REQ };
@@ -468,14 +476,15 @@ namespace bawdpsplit {
 // (R/design.R:251).  h is the eventual completion probability and tau the
 // conditional median decision time; the kernel inverts both to (p, lambda).
 // delta is between-trial threshold variability (half-width of the uniform
-// log-odds shift of the quorum percentile) and is REQUIRED rather than
-// optional even though it defaults to zero: an optional trailing column is
-// resolved positionally, so a design lacking it would silently read whatever
-// parameter happened to land in slot 5 instead of erroring.
+// log-odds shift of the quorum percentile) and cv_u is independent unit-rate
+// CV.  Both are REQUIRED rather than optional even though they default to zero:
+// an optional trailing column is resolved positionally, so a design lacking one
+// would silently read whatever parameter happened to land in its slot instead
+// of erroring.
 namespace frq {
-  enum : int { alpha = 0, beta, h, tau, t0, delta, N_REQ };
+  enum : int { alpha = 0, beta, h, tau, t0, delta, cv_u, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"alpha", "beta", "h", "tau", "t0", "delta"};
+    static const char* n[] = {"alpha", "beta", "h", "tau", "t0", "delta", "cv_u"};
     return {n, N_REQ, "FRQ"};
   }
 }

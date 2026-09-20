@@ -8,21 +8,19 @@
 # it is what makes the sampler robust -- but with the policy left implicit there
 # was no way to tell a rejected proposal from a broken worker.
 #
-# Two places catch everything:
+# The particle path catches numerical proposal failures and repeats the
+# subject's previous state.  A group Gibbs draw is different: it is the state
+# transition itself, so a failed draw aborts the chain with its location and
+# numerical diagnostics rather than manufacturing a repeated iteration.
 #
-#   safe_new_particle()   (R/sampling.R) repeats the subject's previous state
-#   the group Gibbs step  (R/sampling.R) repeats the previous iteration
+# Repeating a subject state is not a workaround. Under *particle numerical*
+# rejection it is the correct move: a proposal that lands where the model has
+# no density must be rejected, and rejection means keeping the current state.
 #
-# Repeating the previous state is not a workaround. Under *numerical* rejection
-# it is the correct move: it is what preserves the PMwG invariant, because a
-# proposal that lands where the model has no density must be rejected, and
-# rejection means keeping the current state. Any policy here has to leave that
-# untouched.
-#
-# The problem is that the same catch also swallows a failed allocation, a dead
-# worker, a missing file and a genuine bug in a model's R code, and answers all
-# of them the same way. C1 added the classification and the counters, which
-# changed nothing. This file decides what to do with them.
+# The particle catch can also swallow a failed allocation, a dead worker, a
+# missing file and a genuine bug in a model's R code, and answer all of them
+# the same way. C1 added the classification and counters; this file decides
+# what to do with those particle-path failures.
 #
 # --- the classes ------------------------------------------------------------
 #
@@ -31,10 +29,11 @@
 # below: a rule that aborts a fit on a heuristic will eventually abort a fit it
 # should not have.
 #
-#   numerical       the model has no density at this proposal, or a solver could
-#                   not converge there. Out-of-bounds parameters, a
-#                   non-positive-definite covariance, a non-finite likelihood.
-#                   Expected, and rejection is the right answer.
+#   numerical       the model has no density at this particle proposal, or a
+#                   solver could not converge there. Out-of-bounds parameters,
+#                   a non-positive-definite covariance, a non-finite
+#                   likelihood. Expected on the particle path; a group Gibbs
+#                   failure is fatal regardless of this classification.
 #
 #   infrastructure  the computation was never attempted: an allocation failure,
 #                   a closed connection, a worker that died, a missing shared
@@ -54,36 +53,28 @@
 #
 # `options(emc2.failure_policy = ...)`, one of:
 #
-#   "report"  (default)  Nothing aborts. Every class is counted as before, and
-#                        the first non-numerical failure of each kind raises an
-#                        immediate warning naming the class, where it happened
-#                        and the message; a stage that saw any of them prints a
-#                        summary when it finishes. The fit behaves exactly as it
-#                        did before this file existed -- what changes is that
-#                        the failures are no longer invisible.
+#   "report"  (default)  Particle numerical failures continue as rejections.
+#                        Every non-numerical particle failure is counted and
+#                        announced; group Gibbs failures always abort with
+#                        context. A stage that saw non-numerical particle
+#                        failures prints a summary when it finishes.
 #
-#   "strict"             Numerical failures still reject and continue. An
-#                        infrastructure, programming or unknown failure is
-#                        re-raised where it was caught, which ends the chain.
-#                        For a user who would rather find out than get a
-#                        posterior built partly from repeated states.
+#   "strict"             Same Gibbs behavior. On the particle path, numerical
+#                        failures still reject and continue; infrastructure,
+#                        programming and unknown failures are re-raised.
 #
 #   "silent"             The behaviour before C1: count, say nothing. For a
 #                        long production run whose failure modes are already
 #                        understood, and for reproducing an older result.
 #
-# The default is "report" and not "strict" deliberately. The audit's own warning
-# applies: "a wide fit that previously limped would now stop". Aborting on a
-# message-matching heuristic would turn a misclassified numerical corner into a
-# lost overnight fit, which is a worse failure than the one being fixed. Making
-# the failures visible is the part that is safe to do by default; deciding that
-# they are fatal is the user's call.
+# The default is "report" for particle failures. Group Gibbs errors are not
+# proposal rejections and are therefore fatal under every policy.
 #
 # --- what happens mid-block -------------------------------------------------
 #
-# Under "report" and "silent", nothing changes: the iteration completes with a
-# repeated state, the block finishes, and the samples up to that point are
-# preserved and saved as usual.
+# Under "report" and "silent", particle numerical rejections still complete
+# with a repeated subject state. A failed group Gibbs draw aborts immediately;
+# it is never converted into a complete repeated iteration.
 #
 # Under "strict", the error propagates out of `run_stage()`. In a worker, it is
 # caught by the pool and returned as a failed reply; the master then recomputes
@@ -184,6 +175,46 @@
             cls, source, msg[[1L]]),
     class = c("emc_failure", paste0("emc_failure_", cls)),
     emc_class = cls, emc_source = source, emc_cause = cond))
+}
+
+# A group Gibbs draw is a state transition, not a proposal.  Repeating the
+# previous complete iteration after it fails therefore hides a broken chain
+# rather than preserving a valid rejection.  Keep this separate from the
+# particle rejection policy: numerical particle failures may continue, while a
+# failed group update is always fatal and carries its stage/iteration context.
+.emc_gibbs_abort <- function(cond, stage = NULL, iteration = NULL,
+                             nuisance = FALSE) {
+  msg <- tryCatch(conditionMessage(cond), error = function(e) "")
+  if (!length(msg) || !nzchar(msg[[1L]])) msg <- "(no message)"
+  where <- if (isTRUE(nuisance)) "nuisance group Gibbs" else "group Gibbs"
+  location <- paste0(
+    if (!is.null(stage)) paste0(" stage=", stage) else "",
+    if (!is.null(iteration)) paste0(" iteration=", iteration) else ""
+  )
+  stop(errorCondition(
+    sprintf("EMC2 aborted after a failed %s update%s: %s",
+            where, location, msg[[1L]]),
+    class = c("emc_gibbs_failure", "emc_failure", "emc_failure_numerical"),
+    emc_class = "numerical", emc_source = "gibbs",
+    emc_stage = stage, emc_iteration = iteration,
+    emc_nuisance = isTRUE(nuisance), emc_cause = cond))
+}
+
+.emc_stall_abort <- function(stage = NULL, iteration = NULL,
+                             run_length = NULL) {
+  location <- paste0(
+    if (!is.null(stage)) paste0(" stage=", stage) else "",
+    if (!is.null(iteration)) paste0(" iteration=", iteration) else ""
+  )
+  run_text <- if(is.null(run_length)) "" else {
+    paste0(" (", run_length, " consecutive identical iterations)")
+  }
+  stop(errorCondition(
+    sprintf("EMC2 aborted after a stalled chain%s%s", location, run_text),
+    class = c("emc_sampler_stalled", "emc_failure"),
+    emc_class = "numerical", emc_source = "sampler",
+    emc_stage = stage, emc_iteration = iteration,
+    emc_run_length = run_length))
 }
 
 # --- stage summary ----------------------------------------------------------

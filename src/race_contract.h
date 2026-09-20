@@ -20,6 +20,7 @@ struct SolveCache;
 namespace btawl {
 struct SolveCache;
 }
+struct FrqCache;
 
 // Finite data-time queries that a PDE-backed likelihood may request after its
 // raw RT pass.  The model adapters convert these absolute times to their
@@ -136,6 +137,12 @@ struct ContextForRaceModels {
     int mean_k_index = -1;   // column of mK (kill-clock mean)
     // For models with infinite tails or defective upper mass (like LBA with sv).
     bool defective_upper_tail = false;
+    // FRQ has an analytic defective atom and can include it in the batched
+    // finite-UT truncation normaliser.  Other defective models stay on the
+    // scalar-safe route until their endpoint callback supplies the same
+    // guarantee.  An opted-in callback must return log S(+Inf) when queried
+    // at t = +Inf.
+    bool supports_batched_defective_truncation = false;
     // Optional per-particle fast-kernel hint:
     // 0 = auto detect in kernel; 1 = zero-variability branch; 2 = nonzero branch.
     int mode_hint = 0;
@@ -223,6 +230,11 @@ struct ContextForRaceModels {
     bool rdmswtn_correlated = false;
     int rdmswtn_rho_index = -1;
 
+    // Fixed-K PCOUNTER with a shared gamma input-rate component.  This is a
+    // separate joint-race kernel (not a product of marginal PCOUNTER kernels).
+    bool pcounter_correlated = false;
+    int pcounter_rho_index = -1;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;
@@ -236,6 +248,7 @@ struct ContextForRaceModels {
     // nothing.  Cleared once per particle; see fperace::SolveCache.
     std::shared_ptr<fperace::SolveCache> fpe_cache;
     std::shared_ptr<rlf::SolveCache> rlf_cache;
+    std::shared_ptr<FrqCache> frq_cache;
 
     bool has_global_kill() const {
       return is_global_kill && kill_active;

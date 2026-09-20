@@ -15,6 +15,7 @@
 #include "trend.h"
 #include "utils.h"
 #include "model_PCOUNTER.h"
+#include "model_FRQ.h"
 #include "wald_functions.h"
 #include "gsl_utils.h"
 #include "race_integrands.h"
@@ -899,6 +900,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
+    configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
@@ -985,7 +987,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above; avoids a redundant O(n) pass
-      !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated &&
+      !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated && !adapter.ctx.pcounter_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -1109,6 +1111,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       // this is about bounding memory, not about correctness.
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
+      if (adapter.ctx.frq_cache) adapter.ctx.frq_cache->clear();
       btawl_cache_new_particle(&adapter.ctx);
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
@@ -1262,6 +1265,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, nullptr,
             corr_materialize);
+      } else if (adapter.ctx.pcounter_correlated) {
+        pars = pt.materialize_reusable();
+        lls[i] = c_log_likelihood_pcounter_corr(pars, data, n_trials, winner,
+            expand, min_ll, is_ok, n_lR, adapter.ctx.pcounter_rho_index);
       } else {
         pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_race(pars, data,
@@ -1430,6 +1437,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo_pw");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
@@ -1550,6 +1558,10 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, &row_vec,
             corr_materialize);
+      } else if (adapter.ctx.pcounter_correlated) {
+        pars = pt.materialize_reusable();
+        c_log_likelihood_pcounter_corr(pars, data, n_trials, winner, expand,
+            min_ll, is_ok, n_lR, adapter.ctx.pcounter_rho_index, &row_vec);
       } else {
         pars = pt.materialize_reusable();
         c_log_likelihood_race(pars, data,
@@ -1708,6 +1720,13 @@ double c_log_likelihood_race(
   
   if (n_lR <= 0) Rcpp::stop("c_log_likelihood_race: n_lR must be positive and correctly determined before this call.");
   if (n_trials % n_lR != 0) Rcpp::stop("c_log_likelihood_race: dadm nrows not a multiple of n_lR.");
+
+  // FRQ's qbeta inversion cache is shared by the raw density/survivor passes,
+  // scalar fallbacks, and both truncation endpoints.  Its lifetime is one
+  // particle, matching the parameter matrix being evaluated.
+  auto* cache_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  if (cache_ctx != nullptr && cache_ctx->frq_cache)
+    cache_ctx->frq_cache->clear();
   
   // Here we check for a pC parameter corresponding to probability of contaminant OMISSION.
   // The column index is data-structure-fixed so we cache it in shared state after the
@@ -2467,17 +2486,20 @@ double c_log_likelihood_race(
       // the multi-accumulator one.
       // A defective model under FINITE upper truncation needs the retained
       // T = +Inf atom added to the normaliser (see
-      // get_trunc_normaliser_rowmajor_cpp).  Rather than ask every model's
-      // logS_at_t adapter to be correct at t = +Inf, these trials are sent to
-      // the per-trial scalar route, whose log_survivor_rowmajor() has an
-      // explicit defective +Inf branch.  UT == Inf is unaffected and stays
-      // batched: there the atom is already inside S(LT).
+      // get_trunc_normaliser_rowmajor_cpp).  FRQ opts into the batched form
+      // below because its endpoint callback supplies that atom analytically;
+      // other defective models stay on the scalar-safe route.  UT == Inf is
+      // unaffected and stays batched: there the atom is already inside S(LT).
       const bool defective_finite_UT =
           defective_upper_tail && uniform_UT != R_PosInf;
+      const bool batch_defective_atom =
+          defective_finite_UT && ctx != nullptr &&
+          ctx->supports_batched_defective_truncation;
       if (any_trunc && uniform_LT_ok && uniform_UT_ok && !has_RACE_col &&
-          !global_omission_active && !defective_finite_UT) {
-        // Pass 2: batch-compute logZ = log_diff_exp(logS(LT), logS(UT)) for all
-        // truncated trials simultaneously.
+          !global_omission_active &&
+          (!defective_finite_UT || batch_defective_atom)) {
+        // Pass 2: batch-compute the truncation normaliser for all trials
+        // simultaneously; FRQ adds log S(+Inf) to the finite-window mass.
         // RACE models are excluded: lba/rdm/lnr_logS_at_t always loops over the
         // global n_lR, but RACE trials may have fewer active accumulators (inactive
         // rows are NA-masked).  The per-trial scalar path handles n_lR_j correctly.
@@ -2499,7 +2521,17 @@ double c_log_likelihood_race(
           batch_logS_at_t(uniform_UT, trunc_mask, logS_UT_vec);
         }
 
-        // logZ = log(S(LT) - S(UT)) = log_diff_exp(logS_LT, logS_UT)
+        // FRQ is defective, but its endpoint callback also exposes the exact
+        // surviving +Inf atom when queried at +Inf.  Keep this opt-in so other
+        // defective models retain the scalar-safe route until they implement
+        // the same contract.
+        std::vector<double> logS_inf_vec;
+        if (batch_defective_atom) {
+          logS_inf_vec.assign(static_cast<size_t>(n_unique_trials), R_NegInf);
+          batch_logS_at_t(R_PosInf, trunc_mask, logS_inf_vec);
+        }
+
+        // Start with log(S(LT) - S(UT)) = log_diff_exp(logS_LT, logS_UT).
         // log_diff_exp handles R_NegInf inputs correctly:
         //   log_diff_exp(0, -Inf)  = 0   (LT=0,  UT=Inf → P=1)
         //   log_diff_exp(x, -Inf)  = x   (UT=Inf  → P=S(LT))
@@ -2512,7 +2544,11 @@ double c_log_likelihood_race(
           if (!trunc_mask[static_cast<size_t>(j)]) continue;
           const double logS_LT_j = logS_LT_vec[static_cast<size_t>(j)];
           const double logS_UT_j = logS_UT_vec[static_cast<size_t>(j)];
-          const double logP = log_diff_exp(logS_LT_j, logS_UT_j);
+          double logP = log_diff_exp(logS_LT_j, logS_UT_j);
+          if (batch_defective_atom) {
+            logP = log_sum_exp(logP,
+                               logS_inf_vec[static_cast<size_t>(j)]);
+          }
           if (R_FINITE(logP) && logP > kLogProbEps) {
             logZ_batch[static_cast<size_t>(j)] = logP;
           } else {

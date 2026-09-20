@@ -315,6 +315,21 @@ inline double mills_ratio_std(double z) {
   return fast_norm_phi(-z) * std::exp(0.5 * z * z + LOG_SQRT_2PI);
 }
 
+// -R'(z) = 1 - z R(z), the rate at which the Mills ratio falls.  Wherever a
+// Mills-ratio DIFFERENCE cancels, R(x1) - R(x2) has to be recovered from this
+// derivative rather than by subtraction, so it needs full relative accuracy on
+// both sides of the split: below it 1 - z R(z) is well conditioned (the
+// product stays away from one), and above it the continued fraction's own tail
+// c = f - z is available directly, so (f - z) / f never subtracts two values
+// that agree.  Limits: 1 at z = 0, ~1/z^2 as z grows.
+inline double mills_ratio_decrement(double z) {
+  if (z >= FAST_NORM_SPLIT) {
+    const double c = 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
+    return c / (z + c);  // (f - z) / f with f = z + c
+  }
+  return 1.0 - z * mills_ratio_std(z);
+}
+
 // Lognormal launch parameterization.  The SAMPLED pair for the plain
 // lognormal launch is the natural-scale arithmetic mean m = E[V] and the
 // coefficient of variation cv = SD(V)/E[V]; every downstream primitive works
@@ -1311,6 +1326,19 @@ inline double wald_pt_log_surv(double t, double d, double mu) {
   const double sqt = std::sqrt(t);
   const double z1 = (d - mu * t) / sqt;
   const double z2 = -(d + mu * t) / sqt;
+  const double dz = 2.0 * d / sqt;  // = z1 - z2, the width of the interval
+
+  // A very narrow interval cancels in BOTH of the routes below: the normal
+  // tails at z1 and z2 round to the same double, and so do their Mills ratios.
+  // S = phi(z1) * [R(-z1) - R(-z2)] is exact for every z1, and across a narrow
+  // interval that difference is just the width times the midpoint derivative,
+  // which -R' supplies without any subtraction.  |z1| <= 1 keeps phi(z1) and
+  // R(-z1) far from overflow, which is the only reason the branches split.
+  if (dz <= 1e-6 && std::fabs(z1) <= 1.0) {
+    const double g = mills_ratio_decrement(-0.5 * (z1 + z2));
+    if (!(g > 0.0)) return R_NegInf;
+    return std::fmin(log_phi_std(z1) + std::log(dz) + std::log(g), 0.0);
+  }
 
   if (z1 >= 0.0) {
     // Exact regrouping S = [Phi(z1) - Phi(z2)] - expm1(2 mu d) Phi(z2):
@@ -1338,10 +1366,22 @@ inline double wald_pt_log_surv(double t, double d, double mu) {
   const double dr = r1 - r2;
   if (dr > 0.0 && dr > 1e-6 * r1)
     return std::fmin(log_phi_std(z1) + std::log(dr), 0.0);
-  // Subtraction lost its digits: leading order R(x) ~ 1/x gives
-  // R(x1) - R(x2) ~ (x2 - x1)/(x1 x2) with x2 - x1 = 2 d / sqrt(t).
-  return std::fmin(log_phi_std(z1) + std::log(2.0 * d) - 0.5 * std::log(t) -
-                   std::log(x1) - std::log(x2), 0.0);
+  // Subtraction lost its digits.  R(x1) - R(x2) is the integral of -R' over
+  // [x1, x2], and this branch is only reached once that interval is narrow
+  // against the scale on which -R' varies, so the midpoint rule carries it:
+  //   R(x1) - R(x2) ~ (x2 - x1) * (-R'((x1 + x2)/2)),  x2 - x1 = 2 d / sqrt(t).
+  // The previous form used -R' ~ 1/(x1 x2), which is the LARGE-x limit alone.
+  // Small x is the corner where the scaled threshold d = b/s sits far below the
+  // diffusion scale, i.e. the accumulator has all but certainly finished; there
+  // -R' tends to 1, not to 1/(x1 x2), so the old expression overstated the
+  // survivor by that factor and fmin() clamped the result to log S = 0.  An
+  // accumulator certain to have finished was scored as certain to still be
+  // running, which silently drops it from the race in the likelihood while the
+  // truncation normaliser (a natural-scale 1 - F) keeps it.
+  const double g = mills_ratio_decrement(0.5 * (x1 + x2));
+  if (!(g > 0.0)) return R_NegInf;
+  return std::fmin(log_phi_std(z1) + std::log(2.0 * d) - 0.5 * std::log(t) +
+                   std::log(g), 0.0);
 }
 
 // --------------------------------------------------------------------------

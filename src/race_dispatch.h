@@ -26,7 +26,11 @@ void configure_corr_drift_context(RaceModelAdapter& adapter,
 
 void configure_rdmswtn_corr_context(
     RaceModelAdapter& adapter, const Rcpp::CharacterVector& keep_names,
-    const std::string& caller);
+                                  const std::string& caller);
+
+void configure_pcounter_corr_context(RaceModelAdapter& adapter,
+                                     const Rcpp::CharacterVector& keep_names,
+                                     const std::string& caller);
 
 bool is_stop_signal_type(const std::string& type_std);
 

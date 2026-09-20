@@ -266,6 +266,7 @@ test_that("the constructor exposes the documented contract", {
   # reordering here is a silent wrong answer, so it is pinned literally.
   expect_equal(names(m$p_types),
                c("alpha", "beta", "h", "tau", "t0", "delta",
+                 "cv_u",
                  "pContaminant", "pGuess"))
   expect_equal(m$p_types_canonical,
                c("alpha", "beta", "h", "tau", "t0"))
@@ -278,6 +279,9 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(exp(m$p_types[["delta"]]), 0)
   expect_equal(unname(m$bound$minmax[, "delta"]), c(1e-4, 6))
   expect_equal(m$bound$exception[["delta"]], 0)
+  expect_equal(unname(m$bound$minmax[, "cv_u"]), c(1e-4, Inf))
+  expect_equal(m$bound$exception[["cv_u"]], 0)
+  expect_equal(m$bound$exception[["h"]], 1)
   # The default must not declare an implausible omission rate for a parameter
   # the user left out of the formula.
   expect_equal(pnorm(m$p_types[["h"]]), 0.95, tolerance = 1e-12)
@@ -384,19 +388,23 @@ ref_race_ll <- function(dadm, pars) {
 # h and tau per accumulator under the fixture's ADmat contrast on lM.
 frq_truth <- list(hT = pnorm(qnorm(0.93) + 0.45), hF = pnorm(qnorm(0.93) - 0.45))
 
-frq_fixture <- function(n = 60, seed = 20260816) {
+frq_fixture <- function(n = 60, seed = 20260816, extensions = FALSE) {
   set.seed(seed)
   matchfun <- function(d) d$S == d$lR
   dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
   dat$subjects <- droplevels(dat$subjects)
   dat <- dat[seq_len(n), ]
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
+  formula <- list(alpha ~ 1, beta ~ 1, h ~ lM, tau ~ lM, t0 ~ 1)
+  if (extensions)
+    formula[c("delta", "cv_u")] <- list(delta ~ 1, cv_u ~ 1)
   des <- suppressMessages(design(
     data = dat, model = FRQ, matchfun = matchfun,
-    formula = list(alpha ~ 1, beta ~ 1, h ~ lM, tau ~ lM, t0 ~ 1),
+    formula = formula,
     contrasts = list(h = list(lM = ADmat), tau = list(lM = ADmat))))
   p <- c(alpha = log(2), beta = log(3), h = qnorm(0.93), h_lMd = 0.9,
-         tau = log(0.35), tau_lMd = -0.5, t0 = log(0.15))
+         tau = log(0.35), tau_lMd = -0.5, t0 = log(0.15),
+         delta = log(1.25), cv_u = log(0.55))
   list(dat = dat, des = des, p = p[names(sampled_pars(des))],
        emc = suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
                                        compress = FALSE, rt_resolution = NULL)))
@@ -405,6 +413,16 @@ frq_fixture <- function(n = 60, seed = 20260816) {
 test_that("the compiled race likelihood matches the R reference", {
   skip_on_cran()
   fx <- frq_fixture()
+  got <- frq_ll(fx$emc, fx$p)
+  expect_true(is.finite(got))
+  dadm <- fx$emc[[1]]$data[[1]]
+  pars <- EMC2:::get_pars_matrix_oo(fx$p, dadm, fx$emc[[1]]$model())
+  expect_equal(got, ref_race_ll(dadm, pars), tolerance = 1e-6)
+})
+
+test_that("the compiled likelihood propagates threshold variability and frailty", {
+  skip_on_cran()
+  fx <- frq_fixture(n = 40, extensions = TRUE)
   got <- frq_ll(fx$emc, fx$p)
   expect_true(is.finite(got))
   dadm <- fx$emc[[1]]$data[[1]]
@@ -697,6 +715,87 @@ test_that("delta defaults to zero and is exactly the untransformed model", {
                    EMC2:::frq_rate(2, 3, 0.9, 0.4))
   # and the base model is still the one the independent reference describes
   expect_equal(EMC2:::pfrq(x[1:4], 2, 3, 0.9, 0.4, 0), ref_p(x[1:4], 2, 3, 0.9, 0.4))
+})
+
+test_that("unit-rate frailty matches the closed-form registration mixture", {
+  a <- 2.5; b <- 1.4; h <- 0.85; tau <- 0.4; cv <- 0.7
+  pl <- EMC2:::frq_rate(a, b, h, tau, 0, cv)
+  p <- qbeta(h, a, b)
+  u <- qbeta(0.5 * h, a, b)
+  c2 <- cv^2
+  lambda <- (expm1(-c2 * log1p(-u / p)) / c2) / tau
+  expect_equal(unname(pl[1, "p"]), p, tolerance = 1e-12)
+  expect_equal(unname(pl[1, "lambda"]), lambda, tolerance = 1e-12)
+
+  x <- c(0.05, 0.2, 0.6, 1.5, 5)
+  sr <- (1 + c2 * lambda * x)^(-1 / c2)
+  g <- lambda * (1 + c2 * lambda * x)^(-1 / c2 - 1)
+  q <- p * (1 - sr)
+  want_p <- pbeta(q, a, b)
+  want_d <- p * g * q^(a - 1) * (1 - q)^(b - 1) / beta(a, b)
+  expect_equal(EMC2:::pfrq(x, a, b, h, tau, 0, cv_u = cv), want_p,
+               tolerance = 1e-11)
+  expect_equal(EMC2:::dfrq(x, a, b, h, tau, 0, cv_u = cv), want_d,
+               tolerance = 1e-11)
+  expect_equal(EMC2:::pfrq(tau, a, b, h, tau, 0, cv_u = cv), h / 2,
+               tolerance = 1e-11)
+  expect_equal(EMC2:::pfrq(Inf, a, b, h, tau, 0, cv_u = cv), h,
+               tolerance = 1e-11)
+  expect_equal(EMC2:::pfrq(Inf, a, b, h, tau, 0, cv_u = cv,
+                            lower_tail = FALSE), 1 - h,
+               tolerance = 1e-11)
+  expect_equal(integrate(function(z)
+    EMC2:::dfrq(z, a, b, h, tau, 0, cv_u = cv), 0, Inf,
+    rel.tol = 1e-9)$value, h, tolerance = 1e-8)
+})
+
+test_that("unit-rate frailty nests the exponential member exactly", {
+  x <- c(0.05, 0.2, 0.6, 2, Inf)
+  expect_identical(EMC2:::dfrq(x, 2, 3, 0.9, 0.4, 0),
+                   EMC2:::dfrq(x, 2, 3, 0.9, 0.4, 0, cv_u = 0))
+  expect_identical(EMC2:::pfrq(x, 2, 3, 0.9, 0.4, 0),
+                   EMC2:::pfrq(x, 2, 3, 0.9, 0.4, 0, cv_u = 0))
+  expect_identical(EMC2:::frq_rate(2, 3, 0.9, 0.4, 0),
+                   EMC2:::frq_rate(2, 3, 0.9, 0.4, 0, 0))
+})
+
+test_that("threshold variability and unit frailty compose", {
+  a <- 2.5; b <- 1.4; h <- 0.85; tau <- 0.4
+  d <- 1.25; cv <- 0.55
+  x <- c(0.05, 0.2, 0.6, 1.5, 5)
+  pl <- EMC2:::frq_rate(a, b, h, tau, d, cv)
+  p <- unname(pl[1, "p"]); lambda <- unname(pl[1, "lambda"])
+  c2 <- cv^2
+  q <- p * (1 - (1 + c2 * lambda * x)^(-1 / c2))
+  z <- pbeta(q, a, b)
+  want <- vapply(z, ref_H, numeric(1), d = d)
+  expect_equal(EMC2:::pfrq(x, a, b, h, tau, d, cv_u = cv), want,
+               tolerance = 1e-10)
+  expect_equal(EMC2:::pfrq(tau, a, b, h, tau, d, cv_u = cv), h / 2,
+               tolerance = 1e-10)
+  expect_equal(EMC2:::pfrq(Inf, a, b, h, tau, d, cv_u = cv), h,
+               tolerance = 1e-10)
+  expect_equal(integrate(function(t)
+    EMC2:::dfrq(t, a, b, h, tau, d, cv_u = cv), 0, Inf,
+    rel.tol = 1e-9)$value, h, tolerance = 1e-8)
+})
+
+test_that("the proper h = 1 boundary remains proper with unit frailty", {
+  pars <- cbind(alpha = 2, beta = 3, h = 1, tau = 0.4, t0 = 0,
+                delta = 0, cv_u = 0.7)
+  pl <- EMC2:::frq_rate(2, 3, 1, 0.4, 0, 0.7)
+  expect_equal(unname(pl[1, "p"]), 1)
+  expect_equal(EMC2:::pfrq(Inf, 2, 3, 1, 0.4, 0, cv_u = 0.7), 1)
+  expect_equal(EMC2:::pfrq(Inf, 2, 3, 1, 0.4, 0, cv_u = 0.7,
+                            lower_tail = FALSE), 0)
+  set.seed(20260920)
+  sim_cpp <- EMC2:::rfrq_cpp(pars[rep(1, 2000), ], "1", rep(TRUE, 2000))
+  expect_true(all(is.finite(sim_cpp$rt)))
+  sim_r <- EMC2:::rFRQ(factor(rep("1", 2000)),
+                       pars[rep(1, 2000), ])
+  expect_true(all(is.finite(sim_r$rt)))
+  out <- FRQ()$Ttransform(pars, NULL)
+  expect_equal(unname(out[1, "a_u"]), 1 / 0.7^2, tolerance = 1e-12)
 })
 
 test_that("the delta > 0 CDF matches the marginalised criterion state", {

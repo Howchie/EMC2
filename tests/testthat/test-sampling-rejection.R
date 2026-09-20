@@ -15,6 +15,41 @@ test_that("rejected sample iteration repeats previous stored draw", {
   expect_equal(out$idx, 3)
 })
 
+test_that("rejected iteration leaves the square covariance state untouched", {
+  samples <- list(
+    theta_mu = matrix(seq_len(18 * 100), nrow = 18, ncol = 100),
+    theta_var = array(seq_len(18 * 18 * 100), dim = c(18, 18, 100)),
+    last_theta_var_inv = diag(18),
+    stage = rep("burn", 100),
+    idx = 6
+  )
+
+  out <- reject_sample_iteration(samples, 7)
+
+  expect_identical(out$last_theta_var_inv, samples$last_theta_var_inv)
+  expect_equal(out$theta_mu[, 7], samples$theta_mu[, 6])
+  expect_equal(out$theta_var[, , 7], samples$theta_var[, , 6])
+  expect_equal(out$idx, 7)
+})
+
+test_that("filtering skips named fixed state but rejects unknown out-of-range history", {
+  state <- matrix(seq_len(18 * 18), nrow = 18, ncol = 18)
+  expect_error(filter_obj(state, 2:101), "outside the allocated iteration range")
+
+  square_history <- matrix(seq_len(9), nrow = 3, ncol = 3)
+  filtered_history <- filter_obj(square_history, 2:3)
+  expect_equal(dim(filtered_history), c(3, 2))
+
+  store <- list(
+    theta_mu = matrix(seq_len(18 * 100), nrow = 18, ncol = 100),
+    last_theta_var_inv = state,
+    stage = rep("burn", 100)
+  )
+  filtered <- filter_sample_store(store, 2:10)
+  expect_identical(filtered$last_theta_var_inv, state)
+  expect_equal(dim(filtered$theta_mu), c(18, 9))
+})
+
 test_that("failed particle proposal is rejected to previous subject state", {
   pm_settings <- list(list(epsilon = 1))
   parameters <- list(alpha = matrix(c(1, 2), ncol = 1))

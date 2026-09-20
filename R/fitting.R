@@ -612,6 +612,18 @@ sub_blocking <- function(emc, n_blocks){
   return(components)
 }
 
+.emc_empirical_covariance_ok <- function(S, subject = NULL) {
+  pd <- tryCatch(is.positive.definite(S), error = function(e) FALSE)
+  if(!isTRUE(pd)) return(FALSE)
+  context <- if(is.null(subject)) "empirical proposal covariance" else {
+    paste0("empirical proposal covariance subject ", subject)
+  }
+  isTRUE(tryCatch({
+    .iwish_condition(S, context = context)
+    TRUE
+  }, error = function(e) FALSE))
+}
+
 create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
   n_subjects <- emc[[1]]$n_subjects
   n_chains <- length(emc)
@@ -641,17 +653,27 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
       emp_covs <- moments$w_cov
       chains_mu[[sub]] <- moments$w_mu
       if(do_block) emp_covs[block_idx] <- 0
-      if(!is.positive.definite(emp_covs)){
+      if(!.emc_empirical_covariance_ok(emp_covs, subject = sub)){
         next
       } else{
         chains_var[[sub]] <- emp_covs
       }
     }
     null_idx <- sapply(chains_var, is.null)
+    covariance_fallback <- any(null_idx)
     if(all(null_idx)){
       mean_chains_var <- diag(n_pars) * .5
     } else{
       mean_chains_var <- Reduce(`+`, chains_var[!null_idx]) / sum(!null_idx)
+    }
+    mean_conditioned <- isTRUE(tryCatch({
+      .iwish_condition(mean_chains_var,
+                       context = "mean empirical proposal covariance")
+      TRUE
+    }, error = function(e) FALSE))
+    if(!mean_conditioned){
+      mean_chains_var <- diag(n_pars) * .5
+      covariance_fallback <- TRUE
     }
     if(any(null_idx)){
       for(q in 1:n_subjects){
@@ -660,13 +682,30 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
     }
 
     new_prop_var <- mean(diag(mean_chains_var))
-    if(is.null(attr(emc[[j]], "prop_var"))){
-      prop_var_ratio <- 2
-    } else{
-      prop_var_ratio <- attr(emc[[j]], "prop_var")/new_prop_var
+    if(!is.finite(new_prop_var) || new_prop_var <= 0){
+      # A failed empirical covariance is not a meaningful scale estimate.  Use
+      # the same conservative fallback as the all-subjects case and reset the
+      # proposal multipliers instead of comparing an invalid estimate with the
+      # previous block's variance.
+      mean_chains_var <- diag(n_pars) * .5
+      new_prop_var <- .5
+      covariance_fallback <- TRUE
     }
     if(stage != "sample"){
-      emc[[j]] <- update_epsilon_scale(emc[[j]], prop_var_ratio)
+      if(covariance_fallback){
+        emc[[j]] <- update_epsilon_scale(emc[[j]], reset = TRUE)
+      } else {
+        old_prop_var <- attr(emc[[j]], "prop_var")
+        prop_var_ratio <- if(is.null(old_prop_var)) 2 else {
+          if(length(old_prop_var) == 1L && is.finite(old_prop_var) &&
+             old_prop_var > 0) {
+            old_prop_var / new_prop_var
+          } else {
+            1
+          }
+        }
+        emc[[j]] <- update_epsilon_scale(emc[[j]], prop_var_ratio)
+      }
     }
     attr(emc[[j]], "prop_var") <- new_prop_var
     emc[[j]]$chains_var <- chains_var
@@ -683,7 +722,10 @@ reset_pm_settings <- function(emc, stage){
         for(i in 1:length(x)){
           x[[i]]$proposal_counts <- rep(0, length(x[[i]]$proposal_counts))
           x[[i]]$acc_counts <- rep(0, length(x[[i]]$proposal_counts))
-          if(stage != get_last_stage(emc)){
+          # Every burn block is a fresh adaptation window.  Leaving the
+          # iteration counter above tune$n0 after the first failed block makes
+          # the next block adapt from a single observation immediately.
+          if(stage == "burn" || stage != get_last_stage(emc)){
             x[[i]]$iter <- 25
             x[[i]]$mix <- NULL
           }
@@ -695,11 +737,42 @@ reset_pm_settings <- function(emc, stage){
   return(emc)
 }
 
-update_epsilon_scale <- function(pmwgs, prop_var_ratio){
+update_epsilon_scale <- function(pmwgs, prop_var_ratio = NULL, reset = FALSE){
+  scale_bounds <- getOption("emc2.epsilon_scale_bounds", c(.25, 4))
+  epsilon_bounds <- getOption("emc2.epsilon_bounds", c(.05, 5))
+  if(length(scale_bounds) != 2L || any(!is.finite(scale_bounds)) ||
+     scale_bounds[1] <= 0 || scale_bounds[2] < scale_bounds[1]){
+    scale_bounds <- c(.25, 4)
+  }
+  if(length(epsilon_bounds) != 2L || any(!is.finite(epsilon_bounds)) ||
+     epsilon_bounds[1] <= 0 || epsilon_bounds[2] < epsilon_bounds[1]){
+    epsilon_bounds <- c(.05, 5)
+  }
+  scale <- 1
+  if(!isTRUE(reset) && !is.null(prop_var_ratio) &&
+     length(prop_var_ratio) == 1L && is.finite(prop_var_ratio) &&
+     prop_var_ratio > 0){
+    # prop_var_ratio is a variance ratio, while epsilon multiplies a Cholesky
+    # factor in particle_draws().  Convert variance scaling to standard-
+    # deviation scaling before applying it, and bound the one-block jump.
+    scale <- sqrt(prop_var_ratio)
+    scale <- min(scale_bounds[2], max(scale_bounds[1], scale))
+  }
   pm_settings <- attr(pmwgs$samples, "pm_settings")
   pm_settings <- lapply(pm_settings, function(x){
     for(i in 1:length(x)){
-      x[[i]]$epsilon <- x[[i]]$epsilon * prop_var_ratio
+      epsilon <- x[[i]]$epsilon
+      if(isTRUE(reset)){
+        # The empirical covariance fallback is deliberately not compared with
+        # the old estimate: that comparison is what produced epsilon ~ 1e38 in
+        # the failed fit.  Start the next block at the neutral multiplier.
+        epsilon <- rep(1, length(epsilon))
+      } else {
+        epsilon <- epsilon * scale
+      }
+      epsilon[!is.finite(epsilon) | epsilon <= 0] <- 1
+      x[[i]]$epsilon <- pmin(epsilon_bounds[2],
+                             pmax(epsilon_bounds[1], epsilon))
     }
     return(x)
   })

@@ -6,8 +6,10 @@
 //
 // GENERATIVE STORY.  One accumulator draws on N potential evidence units and
 // responds once K distinct units have registered.  Each unit is available
-// independently with probability p, and an available unit registers at an
-// Exponential(lambda) latency; an unavailable unit never registers at all.  The
+// independently with probability p, and an available unit registers at a delay
+// with mean rate lambda; cv_u = 0 is exponential registration and cv_u > 0
+// integrates an independent Gamma-distributed unit rate.  An unavailable unit
+// never registers at all.  The
 // decision time is the K-th order statistic of the effective arrival times,
 // which is +Inf whenever fewer than K units happen to be available.  That is
 // the model's intrinsic omission mechanism, and it is NOT an additive
@@ -24,7 +26,10 @@
 //   h    = F(Inf) = I_p(alpha, beta)          eventual completion probability
 //
 // For exponential registration G(x) = 1 - e^{-lambda x}, so its density is
-// g(x) = G'(x) = lambda e^{-lambda x}.
+// g(x) = G'(x) = lambda e^{-lambda x}.  With unit-rate CV c = cv_u > 0, the
+// integrated registration CDF and density are
+//   G_c(x) = 1 - (1 + c^2 lambda x)^(-1/c^2)
+//   g_c(x) = lambda (1 + c^2 lambda x)^(-1/c^2 - 1).
 // Nothing here needs a first-passage solve or a quadrature: the entire
 // likelihood is four Rmath special functions.  The continuous relaxation is
 // just alpha, beta > 0 rather than positive integers; every formula above is
@@ -36,13 +41,14 @@
 // precision, so it is not offered.
 //
 // PARAMETERISATION.  Raw (p, lambda) are poor estimation coordinates, so the
-// exposed parameters are (alpha, beta, h, tau, t0) where h is the eventual
+// exposed parameters are (alpha, beta, h, tau, t0, delta, cv_u) where h is the eventual
 // completion probability and tau is the CONDITIONAL MEDIAN decision time,
 // P(T <= tau | T < Inf) = 1/2.  frq_derive() inverts that exactly:
 //
 //   p      = I^{-1}_{H^{-1}(h)}(alpha, beta)
 //   u_r    = I^{-1}_{H^{-1}(r h)}(alpha, beta)         with r = FRQ_QUANTILE
-//   lambda = -log1p(-u_r / p) / tau
+//   lambda = -log1p(-u_r / p) / tau       (cv_u = 0)
+//   lambda = expm1(-cv_u^2 log1p(-u_r / p)) / (cv_u^2 tau)  (cv_u > 0)
 //
 // (H is the identity at the default delta = 0, so those reduce to qbeta(h, .)
 // and qbeta(r h, .).)
@@ -117,6 +123,9 @@
 
 #include <Rcpp.h>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <unordered_map>
 
 using namespace Rcpp;
 
@@ -240,7 +249,7 @@ inline double frq_h_inv(double y, const FrqH& H) {
 }
 
 // ---------------------------------------------------------------------------
-// (alpha, beta, h, tau, delta) -> (p, lambda).  `ok` is false for any parameter
+// (alpha, beta, h, tau, delta, cv_u) -> (p, lambda).  `ok` is false for any parameter
 // combination that does not define a proper accumulator; every evaluator then
 // returns log 0 for the density and lets the caller floor the trial, which is
 // what the rest of the race machinery expects from an invalid row.
@@ -250,24 +259,32 @@ struct FrqPars {
   double beta = 0.0;
   double p = 0.0;
   double lambda = 0.0;
+  double cv_u = 0.0;
+  double cv2 = 0.0;
   double lbeta_val = 0.0;
   FrqH hh;
   bool ok = false;
 };
 
 inline FrqPars frq_derive(double alpha, double beta, double h, double tau,
-                          double delta = 0.0) {
+                          double delta = 0.0, double cv_u = 0.0) {
   FrqPars s;
-  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h) || ISNAN(tau)) return s;
+  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h) || ISNAN(tau) ||
+      ISNAN(cv_u)) return s;
   if (!(alpha >= FRQ_SHAPE_MIN) || !R_FINITE(alpha)) return s;
   if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
   if (!(h > 0.0) || !(h <= 1.0)) return s;
   if (!(tau > 0.0) || !R_FINITE(tau)) return s;
+  if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return s;
+  const double cv2 = cv_u * cv_u;
+  if (!R_FINITE(cv2)) return s;
   s.hh = frq_h_make(delta);
   if (!s.hh.ok) return s;
 
   s.alpha = alpha;
   s.beta = beta;
+  s.cv_u = cv_u;
+  s.cv2 = cv2;
   // p is the saturation level of q(x): the registered fraction the reservoir
   // can ever reach.  h = H(I_p(alpha, beta)) inverts to it exactly, in two
   // steps: undo the threshold-variability map, then undo the incomplete beta.
@@ -290,32 +307,114 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double tau,
   // so reject instead of returning a garbage rate.
   if (!(gap > 0.0)) return s;
 
-  s.lambda = -std::log1p(-u_r / s.p) / tau;
+  const double ratio = u_r / s.p;
+  if (!(ratio >= 0.0) || !(ratio < 1.0)) return s;
+  if (cv2 == 0.0) {
+    s.lambda = -std::log1p(-ratio) / tau;
+  } else {
+    s.lambda = std::expm1(-cv2 * std::log1p(-ratio)) / (cv2 * tau);
+  }
   if (ISNAN(s.lambda) || !(s.lambda > 0.0) || !R_FINITE(s.lambda)) return s;
   s.lbeta_val = R::lbeta(alpha, beta);
   s.ok = true;
   return s;
 }
 
-// q(x) = p (1 - e^{-lambda x}) together with its cancellation-free complement
-// 1 - q(x) = (1 - p) + p e^{-lambda x}.  x == Inf gives the saturated pair
+// Shared exact-key cache for the expensive (alpha, beta, h, tau, delta, cv_u) ->
+// (p, lambda) inversion.  The likelihood clears this once per particle, so
+// entries are shared across density, survivor, scalar and truncation callbacks
+// without accumulating proposals from earlier particles.
+struct FrqCacheKey {
+  std::uint64_t bits[6];
+
+  bool operator==(const FrqCacheKey& other) const {
+    for (int i = 0; i < 6; ++i) {
+      if (bits[i] != other.bits[i]) return false;
+    }
+    return true;
+  }
+};
+
+struct FrqCacheKeyHash {
+  std::size_t operator()(const FrqCacheKey& key) const {
+    std::size_t h = 0;
+    for (int i = 0; i < 6; ++i) {
+      h ^= std::hash<std::uint64_t>{}(key.bits[i]) +
+           static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) +
+           (h << 6) + (h >> 2);
+    }
+    return h;
+  }
+};
+
+inline std::uint64_t frq_cache_bits(double x) {
+  // Match the scalar memo's == semantics: +0 and -0 are the same key.
+  if (x == 0.0) return 0;
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &x, sizeof(bits));
+  return bits;
+}
+
+struct FrqCache {
+  std::unordered_map<FrqCacheKey, FrqPars, FrqCacheKeyHash> entries;
+
+  FrqCache() { entries.reserve(256); }
+
+  void clear() { entries.clear(); }
+
+  const FrqPars& get(double alpha, double beta, double h, double tau,
+                     double delta, double cv_u) {
+    const FrqCacheKey key{{frq_cache_bits(alpha), frq_cache_bits(beta),
+                           frq_cache_bits(h), frq_cache_bits(tau),
+                           frq_cache_bits(delta), frq_cache_bits(cv_u)}};
+    const auto found = entries.find(key);
+    if (found != entries.end()) return found->second;
+    const auto inserted = entries.emplace(
+      key, frq_derive(alpha, beta, h, tau, delta, cv_u));
+    return inserted.first->second;
+  }
+};
+
+// q(x) = p G_c(x) together with its cancellation-free complement
+// 1 - q(x) = (1 - p) + p S_c(x).  x == Inf gives the saturated pair
 // (p, 1 - p), which is exactly what makes F(Inf) = h fall out of the ordinary
 // CDF code path rather than needing a special case.
 struct FrqState {
   double q;
   double omq;
+  double log_g;
 };
+
+inline double frq_registration_inv(double ratio, const FrqPars& s) {
+  if (s.cv2 == 0.0)
+    return -std::log1p(-ratio) / s.lambda;
+  return std::expm1(-s.cv2 * std::log1p(-ratio)) /
+    (s.cv2 * s.lambda);
+}
 
 inline FrqState frq_state(double x, const FrqPars& s) {
   FrqState z;
   if (!R_FINITE(x)) {           // x == +Inf: fully saturated reservoir
     z.q = s.p;
     z.omq = 1.0 - s.p;
+    z.log_g = R_NegInf;
     return z;
   }
-  const double e = std::exp(-s.lambda * x);
-  z.q = s.p * (-std::expm1(-s.lambda * x));
-  z.omq = (1.0 - s.p) + s.p * e;
+  if (s.cv2 == 0.0) {
+    const double e = std::exp(-s.lambda * x);
+    z.q = s.p * (-std::expm1(-s.lambda * x));
+    z.omq = (1.0 - s.p) + s.p * e;
+    z.log_g = std::log(s.lambda) - s.lambda * x;
+  } else {
+    const double lx = std::log1p(s.cv2 * s.lambda * x);
+    const double log_sr = -lx / s.cv2;
+    const double sr = std::exp(log_sr);
+    z.q = s.p * (-std::expm1(log_sr));
+    z.omq = (1.0 - s.p) + s.p * sr;
+    // Split the exponent to avoid multiplying a potentially huge 1/cv^2 by a
+    // small log1p term; lx/cv^2 has a finite exponential-limit value.
+    z.log_g = std::log(s.lambda) - lx / s.cv2 - lx;
+  }
   return z;
 }
 
@@ -425,8 +524,7 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (!(x > 0.0)) return R_NegInf;
   if (!R_FINITE(x)) return R_NegInf;   // no atom at infinity in the density
   const FrqState z = frq_state(x, s);
-  double lp = std::log(s.p) + std::log(s.lambda) - s.lambda * x
-              - s.lbeta_val;
+  double lp = std::log(s.p) + z.log_g - s.lbeta_val;
   lp += frq_xlogy(s.alpha - 1.0, z.q);
   lp += frq_xlogy(s.beta - 1.0, z.omq);
   // Chain rule through the threshold-variability map.  Unlike the CDF, the base
@@ -492,20 +590,25 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
   return (out > 1.0) ? 1.0 : out;
 }
 
-// A single-entry memo for frq_derive().  The two qbeta inversions are by far
-// the most expensive part of an FRQ likelihood evaluation, and the batch
-// kernels walk a compressed parameter matrix in which consecutive rows very
-// often share (alpha, beta, h, tau) -- shapes are usually constant across
-// accumulators, and h/tau only vary across design cells.  Keyed on exact bit
-// equality, so it can never change an answer.
+// A small front-end memo for direct callers that do not provide a likelihood
+// context.  The likelihood adapters use FrqCache above, while this preserves
+// the cheap consecutive-row hit for exported/reference entry points.
 struct FrqMemo {
-  double alpha = R_NaN, beta = R_NaN, h = R_NaN, tau = R_NaN, delta = R_NaN;
+  FrqCache* shared = nullptr;
+  double alpha = R_NaN, beta = R_NaN, h = R_NaN, tau = R_NaN;
+  double delta = R_NaN, cv_u = R_NaN;
   FrqPars value;
 
-  const FrqPars& get(double a, double b, double hh, double t, double d = 0.0) {
-    if (a == alpha && b == beta && hh == h && t == tau && d == delta) return value;
-    alpha = a; beta = b; h = hh; tau = t; delta = d;
-    value = frq_derive(a, b, hh, t, d);
+  explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
+
+  const FrqPars& get(double a, double b, double hh, double t,
+                     double d = 0.0, double c = 0.0) {
+    if (a == alpha && b == beta && hh == h && t == tau &&
+        d == delta && c == cv_u) return value;
+    alpha = a; beta = b; h = hh; tau = t; delta = d; cv_u = c;
+    value = shared != nullptr
+      ? shared->get(a, b, hh, t, d, c)
+      : frq_derive(a, b, hh, t, d, c);
     return value;
   }
 };

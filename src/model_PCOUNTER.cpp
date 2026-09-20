@@ -11,6 +11,151 @@
 #include "col_registry.h"
 #include "race_contract.h"
 
+namespace {
+
+inline double pcorr_log_choose(int n, int k) {
+  if (k < 0 || k > n) return R_NegInf;
+  k = std::min(k, n - k);
+  double out = 0.0;
+  for (int i = 1; i <= k; ++i)
+    out += std::log(static_cast<double>(n - k + i)) - std::log(static_cast<double>(i));
+  return out;
+}
+
+inline double pcorr_log_rising(double x, int n) {
+  if (n == 0) return 0.0;
+  if (!(x > 0.0) || !R_FINITE(x)) return R_NegInf;
+  double out = 0.0;
+  for (int i = 0; i < n; ++i) out += std::log(x + static_cast<double>(i));
+  return out;
+}
+
+inline double pcorr_logsumexp_n(const double* x, int n) {
+  if (n <= 0) return R_NegInf;
+  double m = R_NegInf;
+  for (int i = 0; i < n; ++i) if (x[i] > m) m = x[i];
+  if (!R_FINITE(m)) return R_NegInf;
+  double s = 0.0;
+  for (int i = 0; i < n; ++i) if (R_FINITE(x[i])) s += std::exp(x[i] - m);
+  return m + std::log(s);
+}
+
+// log E[lambda_1^r lambda_2^q exp(-s1 lambda_1-s2 lambda_2)] for the
+// common-CV shared-shape construction.  All summands are non-negative.
+double pcorr_log_moment(int r, int q, double s1, double s2,
+                        double nu1, double nu2, double cv, double rho) {
+  if (cv <= PC_EPS) {
+    return r * std::log(nu1) + q * std::log(nu2) - s1 * nu1 - s2 * nu2;
+  }
+  const double a = 1.0 / (cv * cv), a0 = rho * a;
+  const double b1 = a / nu1, b2 = a / nu2;
+  const double l0 = std::log1p(s1 / b1 + s2 / b2);
+  const double l1 = std::log1p(s1 / b1), l2 = std::log1p(s2 / b2);
+  const int n_terms = (r + 1) * (q + 1);
+  double terms_fixed[64];
+  std::vector<double> terms;
+  if (n_terms <= 64)
+    std::fill(terms_fixed, terms_fixed + n_terms, R_NegInf);
+  if (n_terms > 64) terms.reserve(static_cast<size_t>(n_terms));
+  for (int u = 0; u <= r; ++u) for (int v = 0; v <= q; ++v) {
+    const int shared_power = u + v;
+    // (0)_m is zero for m>0; spelling this out avoids lgamma(0).
+    if ((a0 == 0.0 && shared_power > 0) ||
+        (a0 == a && r - u > 0) || (a0 == a && q - v > 0)) continue;
+    double z = pcorr_log_choose(r, u) + pcorr_log_choose(q, v) -
+      r * std::log(b1) - q * std::log(b2);
+    if (shared_power) z += pcorr_log_rising(a0, shared_power);
+    z -= (a0 + shared_power) * l0;
+    const int p1 = r - u, p2 = q - v;
+    if (p1) z += pcorr_log_rising(a - a0, p1);
+    if (p2) z += pcorr_log_rising(a - a0, p2);
+    z -= (a - a0 + p1) * l1 + (a - a0 + p2) * l2;
+    if (n_terms <= 64) terms_fixed[static_cast<size_t>(u * (q + 1) + v)] = z;
+    else terms.push_back(z);
+  }
+  return n_terms <= 64 ? pcorr_logsumexp_n(terms_fixed, n_terms) :
+    pcounter_logsumexp(terms);
+}
+
+double pcorr_log_density(double t, int w, const double* p1, const double* p2,
+                         int rho_col) {
+  const double nu1 = p1[emc2col::pcounter_corr::nu];
+  const double nu2 = p2[emc2col::pcounter_corr::nu];
+  const double cv = p1[emc2col::pcounter_corr::c];
+  const double rho = p1[rho_col];
+  const double x1 = t - p1[emc2col::pcounter_corr::t0];
+  const double x2 = t - p2[emc2col::pcounter_corr::t0];
+  const int k1 = pcounter_k_int(p1[emc2col::pcounter_corr::k]);
+  const int k2 = pcounter_k_int(p2[emc2col::pcounter_corr::k]);
+  if (w < 0 || w > 1 || !R_FINITE(t) || x1 <= 0.0 && w == 0 || x2 <= 0.0 && w == 1 ||
+      !R_FINITE(nu1) || !R_FINITE(nu2) || nu1 <= 0 || nu2 <= 0 || cv < 0 ||
+      !R_FINITE(cv) || !R_FINITE(rho) || rho < 0 || rho > 1 ||
+      std::fabs(cv - p2[emc2col::pcounter_corr::c]) > 1e-12 ||
+      std::fabs(rho - p2[rho_col]) > 1e-12 ||
+      p1[emc2col::pcounter_corr::gamma] != 0 || p2[emc2col::pcounter_corr::gamma] != 0 ||
+      p1[emc2col::pcounter_corr::omega] != 0 || p2[emc2col::pcounter_corr::omega] != 0 ||
+      (rho > 0 && cv <= PC_EPS) || k1 <= 0 || k2 <= 0) return R_NegInf;
+  const int kw = w == 0 ? k1 : k2, kl = w == 0 ? k2 : k1;
+  const double xw = w == 0 ? x1 : x2, xl = w == 0 ? x2 : x1;
+  double terms_fixed[64];
+  std::vector<double> terms;
+  if (xl <= 0.0) {
+    return (kw - 1) * std::log(xw) - R::lgammafn(kw) +
+      (w == 0 ? pcorr_log_moment(kw, 0, xw, 0, nu1, nu2, cv, rho)
+              : pcorr_log_moment(0, kw, 0, xw, nu1, nu2, cv, rho));
+  }
+  if (kl > 64) terms.reserve(static_cast<size_t>(kl));
+  for (int n = 0; n < kl; ++n) {
+    double z = (kw - 1) * std::log(xw) - R::lgammafn(kw) +
+      n * std::log(xl) - R::lgammafn(n + 1.0);
+    z += w == 0 ? pcorr_log_moment(kw, n, x1, x2, nu1, nu2, cv, rho)
+                : pcorr_log_moment(n, kw, x1, x2, nu1, nu2, cv, rho);
+    if (kl <= 64) terms_fixed[n] = z;
+    else terms.push_back(z);
+  }
+  return kl <= 64 ? pcorr_logsumexp_n(terms_fixed, kl) :
+    pcounter_logsumexp(terms);
+}
+} // namespace
+
+double c_log_likelihood_pcounter_corr(Rcpp::NumericMatrix pars,
+                                      Rcpp::DataFrame dadm, int n_trials,
+                                      Rcpp::LogicalVector winner,
+                                      Rcpp::IntegerVector expand, double min_ll,
+                                      const Rcpp::LogicalVector isok, int n_lR,
+                                      int rho_col, Rcpp::NumericVector* trial_ll_out) {
+  if (n_lR != 2 || n_trials % 2 || pars.nrow() != n_trials ||
+      pars.ncol() <= rho_col || isok.size() != n_trials || winner.size() != n_trials)
+    Rcpp::stop("PCOUNTERcorr requires exactly two parameter rows per trial.");
+  if (dadm.containsElementNamed("RACE") || dadm.hasAttribute("pGuess") ||
+      dadm.hasAttribute("pContaminant"))
+    Rcpp::stop("PCOUNTERcorr does not support variable races or nuisance mixtures.");
+  Rcpp::NumericVector rt = dadm["rt"];
+  const int n_unique = n_trials / 2;
+  std::vector<double> ll(static_cast<size_t>(n_unique), min_ll);
+  std::vector<double> p1(static_cast<size_t>(pars.ncol()));
+  std::vector<double> p2(static_cast<size_t>(pars.ncol()));
+  for (int j = 0; j < n_unique; ++j) {
+    const int at = 2 * j;
+    if (!isok[at] || !isok[at + 1] || winner[at] == winner[at + 1]) continue;
+    const int w = winner[at] ? 0 : 1;
+    const double t = rt[at];
+    for (int col = 0; col < pars.ncol(); ++col) {
+      p1[static_cast<size_t>(col)] = pars(at, col);
+      p2[static_cast<size_t>(col)] = pars(at + 1, col);
+    }
+    double z = pcorr_log_density(t, w, p1.data(), p2.data(), rho_col);
+    ll[static_cast<size_t>(j)] = R_FINITE(z) && z > min_ll ? z : min_ll;
+  }
+  if (trial_ll_out != nullptr) {
+    if (trial_ll_out->size() != expand.size()) Rcpp::stop("PCOUNTERcorr trial output size mismatch.");
+    for (int j = 0; j < expand.size(); ++j) (*trial_ll_out)[j] = ll[expand[j] - 1];
+  }
+  double total = 0.0;
+  for (int j = 0; j < expand.size(); ++j) total += ll[expand[j] - 1];
+  return total;
+}
+
 // ============================================================================
 // Rolling log Stirling numbers of the second kind.
 // ============================================================================
