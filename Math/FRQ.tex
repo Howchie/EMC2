@@ -1,0 +1,211 @@
+# Finite Reservoir Quorum (FRQ): fitted coordinates and likelihood
+
+This note is the live mathematical specification of the FRQ model. The
+sampler-facing coordinates are
+
+\[
+  (\alpha,\;\beta,\;h,\;\lambda,\;t_0,\;\delta,\;cv_u),
+\]
+
+with optional `delta` and `cv_u` extensions. Response-time summaries are
+derived quantities; they are not fitted coordinates.
+
+## 1. Finite-reservoir construction
+
+Consider a reservoir of \(N\) potential evidence units. A unit is available
+with probability \(p\), and an available unit registers after a latency with
+CDF \(G(u)\). The accumulator responds when a quorum is reached. With the
+continuous-shape extension
+
+\[
+  \alpha=K>0, \qquad \beta=N-K+1>0,
+\]
+
+the probability that one unit has registered by decision time \(u>0\) is
+
+\[
+  q(u)=pG(u).
+\]
+
+The quorum CDF, density, and survivor are
+
+\[
+  F(u)=I_{q(u)}(\alpha,\beta),
+  \qquad
+  f(u)=g_{\alpha,\beta}(q(u))q'(u),
+  \qquad
+  S(u)=I_{1-q(u)}(\beta,\alpha),
+\]
+
+where \(I_x\) is the regularized incomplete beta function and
+
+\[
+  g_{\alpha,\beta}(q)=
+  \frac{q^{\alpha-1}(1-q)^{\beta-1}}{B(\alpha,\beta)}.
+\]
+
+For the base model, \(G(u)=1-\exp(-\lambda u)\). Thus \(\lambda\) is the
+direct mean registration rate of an available unit, not a rate inferred from a
+time quantile. With unit-level rate variation `cv_u`, the registration CDF is
+
+\[
+  G_{cv_u}(u)=
+  1-\left(1+cv_u^2\lambda u\right)^{-1/cv_u^2},
+\]
+
+with the exponential expression recovered at \(cv_u=0\). Its derivative is
+
+\[
+  g_{cv_u}(u)=\lambda\left(1+cv_u^2\lambda u\right)^{-1/cv_u^2-1}.
+\]
+
+The observed response time is \(T=t_0+U\), where \(t_0\) is non-decision
+time. An FRQ accumulator may have \(U=+\infty\), so races retain a genuine
+omission probability.
+
+## 2. The fitted FRQ contract
+
+The accumulator-level completion probability is
+
+\[
+  h=F(\infty)=I_p(\alpha,\beta).
+\]
+
+This is the exposed availability coordinate because it is the quantity directly
+identified by the finite or infinite outcome of an accumulator. The evidence-
+level availability \(p\) is derived internally from \(h\), \(\alpha\), and
+\(\beta\). Let \(Q_{\alpha,\beta}\) denote the beta quantile function. For
+the base model (`delta = 0`),
+
+\[
+  p=Q_{\alpha,\beta}(h).
+\]
+
+For the threshold-variability extension below,
+
+\[
+  p=Q_{\alpha,\beta}\!\left(H_\delta^{-1}(h)\right).
+\]
+
+The mapping is analytic: it requires one inverse of \(H_\delta\) when needed
+and one beta quantile. No time-quantile inversion or numerical root finding is
+part of the likelihood or the sampler.
+
+The endpoint is exact:
+
+\[
+  h=1 \Longrightarrow p=1, \qquad F(\infty)=1.
+\]
+
+For \(h<1\), the defective mass is \(P(U=\infty)=1-h\). Consequently a
+race of independent accumulators has omission probability \(\prod_i(1-h_i)\)
+before any contaminant or guessing mechanism is added.
+
+The default sampler geometry uses log coordinates for positive \(\alpha\),
+\(\beta\), \(\lambda\), \(t_0\), \(\delta\), and \(cv_u\), and a probit
+coordinate for \(h\). The exact `h = 1` proper model is a bound exception, not
+a limiting approximation. This keeps the exposed design variables aligned
+with the model: \(h\) controls eventual availability, while \(\lambda\)
+controls registration speed conditional on availability.
+
+## 3. Continuous threshold variability
+
+To represent trial-to-trial variation in effective caution, let
+
+\[
+  \varepsilon\sim\operatorname{Uniform}(-\delta,\delta)
+\]
+
+shift the log-odds of the baseline quorum percentile. For \(z\in(0,1)\),
+
+\[
+  H_\delta(z)=\frac{1}{2\delta}
+  \int_{-\delta}^{\delta}
+  \operatorname{logit}^{-1}\!\bigl(\operatorname{logit}(z)+\varepsilon\bigr)\,d\varepsilon,
+\]
+
+and \(H_0(z)=z\). Writing \(x=\operatorname{logit}(z)\), the integral is
+
+\[
+  H_\delta(z)=
+  \frac{\log(1+e^{x+\delta})-\log(1+e^{x-\delta})}{2\delta}.
+\]
+
+The marginal FRQ law is therefore
+
+\[
+  F_\delta(u)=H_\delta\!\left(I_{q(u)}(\alpha,\beta)\right),
+\]
+
+\[
+  f_\delta(u)=H_\delta'\!\left(I_{q(u)}(\alpha,\beta)\right)
+  g_{\alpha,\beta}(q(u))q'(u).
+\]
+
+The useful identities are
+
+\[
+  H_\delta(1-z)=1-H_\delta(z),
+\]
+
+\[
+  H_\delta^{-1}(y)=
+  \frac{\sinh(\delta y)}
+  {\sinh(\delta y)+\sinh(\delta(1-y))},
+\]
+
+and
+
+\[
+  H_\delta'(z)=
+  \frac{\sinh(\delta)/\delta}
+  {1+2z(1-z)(\cosh(\delta)-1)}.
+\]
+
+Hence the fitted completion coordinate still maps directly to evidence
+availability:
+
+\[
+  z_h=H_\delta^{-1}(h),
+  \qquad p=Q_{\alpha,\beta}(z_h).
+\]
+
+The proper boundary remains \(h=1\), \(z_h=1\), and \(p=1\). The parameter
+\(\delta\) changes the dispersion of effective quorum percentiles while
+leaving the meaning of \(h\) and \(\lambda\) intact. The log-odds shift has
+standard deviation \(\delta/\sqrt{3}\).
+
+## 4. Unit-rate frailty
+
+With `cv_u > 0`, each available unit has a gamma-distributed latent rate with
+mean \(\lambda\) and coefficient of variation `cv_u`. Integrating the unit
+rate gives the Lomax-type registration law in Section 1. The parameter
+`cv_u` is unit-level heterogeneity; it is distinct from \(\delta\), which is a
+trial-level effective-quorum shift. Both extensions remain closed form.
+
+## 5. Relation to PCOUNTER
+
+On the non-defective boundary \(h=1\) (equivalently \(p=1\)), set
+
+\[
+  \alpha=K, \qquad \lambda=\gamma, \qquad
+  \beta=\frac{\nu}{\gamma}.
+\]
+
+Then
+
+\[
+  F_{\mathrm{FRQ}}(u)=I_{1-e^{-\gamma u}}
+  \left(K,\frac{\nu}{\gamma}\right),
+\]
+
+which is the first-passage law of the PCOUNTER pure-birth process with base
+rate \(\nu\), self-excitation \(\gamma\), and threshold \(K\). Integer
+\(\beta\) gives the literal finite-pool interpretation; non-integer shapes are
+the continuous extension used by FRQ.
+
+The shared design interpretation is direct: \(h\) is the availability or
+completion dimension, \(\lambda\) is the registration/drift-rate dimension,
+and \(\alpha,\beta\) determine the quorum shape. Derived \(p\), reservoir
+size \(N=\alpha+\beta-1\), quorum fraction \(\alpha/N\), and other summaries
+belong in mapped output rather than in the model's fitted design contract.

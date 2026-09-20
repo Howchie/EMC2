@@ -39,13 +39,14 @@
 // (R/model_FRQ.R) to preserve the finite-reservoir interpretation and a
 // bounded leading edge.
 //
-// PARAMETERISATION.  The fitted coordinates are the generative coordinates
-// (alpha, beta, p, lambda, t0, delta, cv_u).  `p` is the probability that an
-// evidence unit is available and `lambda` is the mean registration-rate
-// parameter.  The endpoint p = 1 is a proper, non-defective FRQ member; p < 1
-// leaves the intrinsic never-finish mass.  The old conditional-median chart is
-// deliberately not part of the model contract: a median is a derived RT
-// summary and changes when the quorum geometry changes even if lambda does not.
+// PARAMETERISATION.  The fitted coordinates are (alpha, beta, h, lambda, t0,
+// delta, cv_u). `h` is the accumulator-level eventual completion probability,
+// retained because it is directly observed and better identified than the
+// evidence-level availability p when alpha and beta are estimated. The kernel
+// derives p = I^{-1}_h(alpha, beta), while lambda remains the mean
+// registration-rate parameter. The endpoint h = 1 gives p = 1 and is a proper,
+// non-defective FRQ member. Response-time summaries are derived reports, not
+// fitted coordinates.
 //
 // THRESHOLD VARIABILITY (delta).  The quorum a trial actually demands is not
 // fixed.  Let U be the latent quorum percentile, so that the baseline model is
@@ -75,7 +76,7 @@
 //
 //       H^{-1}(y) = sinh(delta y) / [sinh(delta y) + sinh(delta (1 - y))],
 //
-//     so the generative p/lambda coordinates do not need a quantile inversion.
+//     so deriving p from h remains stable without a second time-scale anchor.
 //     Solve H(z) = y for e^x directly: (1+e^{x+d})/(1+e^{x-d}) = e^{2dy} gives
 //     e^x = (e^{2dy} - 1)/(e^d - e^{2dy-d}) = sinh(dy)/sinh(d(1-y)).
 //
@@ -233,7 +234,7 @@ inline double frq_h_inv(double y, const FrqH& H) {
 }
 
 // ---------------------------------------------------------------------------
-// (alpha, beta, p, lambda, delta, cv_u) -> compiled state.  `ok` is false for any parameter
+// (alpha, beta, h, lambda, delta, cv_u) -> compiled state.  `ok` is false for any parameter
 // combination that does not define a proper accumulator; every evaluator then
 // returns log 0 for the density and lets the caller floor the trial, which is
 // what the rest of the race machinery expects from an invalid row.
@@ -242,6 +243,7 @@ struct FrqPars {
   double alpha = 0.0;
   double beta = 0.0;
   double p = 0.0;
+  double h = 0.0;
   double lambda = 0.0;
   double cv_u = 0.0;
   double cv2 = 0.0;
@@ -250,14 +252,14 @@ struct FrqPars {
   bool ok = false;
 };
 
-inline FrqPars frq_derive(double alpha, double beta, double p, double lambda,
+inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
                           double delta = 0.0, double cv_u = 0.0) {
   FrqPars s;
-  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(p) || ISNAN(lambda) ||
+  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h) || ISNAN(lambda) ||
       ISNAN(cv_u)) return s;
   if (!(alpha >= FRQ_SHAPE_MIN) || !R_FINITE(alpha)) return s;
   if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
-  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p)) return s;
+  if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return s;
   if (!(lambda > 0.0) || !R_FINITE(lambda)) return s;
   if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return s;
   const double cv2 = cv_u * cv_u;
@@ -265,9 +267,18 @@ inline FrqPars frq_derive(double alpha, double beta, double p, double lambda,
   s.hh = frq_h_make(delta);
   if (!s.hh.ok) return s;
 
+  // h is the identified accumulator-level completion probability. Pull it
+  // back through the threshold-variability map before inverting the Beta CDF
+  // to obtain the evidence-level availability p used by the generative
+  // kernel. h = 1 maps exactly to p = 1.
+  const double z_h = frq_h_inv(h, s.hh);
+  const double p = R::qbeta(z_h, alpha, beta, 1, 0);
+  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p)) return s;
+
   s.alpha = alpha;
   s.beta = beta;
   s.p = p;
+  s.h = h;
   s.lambda = lambda;
   s.cv_u = cv_u;
   s.cv2 = cv2;
@@ -317,15 +328,15 @@ struct FrqCache {
 
   void clear() { entries.clear(); }
 
-  const FrqPars& get(double alpha, double beta, double p, double lambda,
+  const FrqPars& get(double alpha, double beta, double h, double lambda,
                      double delta, double cv_u) {
     const FrqCacheKey key{{frq_cache_bits(alpha), frq_cache_bits(beta),
-                           frq_cache_bits(p), frq_cache_bits(lambda),
+                           frq_cache_bits(h), frq_cache_bits(lambda),
                            frq_cache_bits(delta), frq_cache_bits(cv_u)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive(alpha, beta, p, lambda, delta, cv_u));
+      key, frq_derive(alpha, beta, h, lambda, delta, cv_u));
     return inserted.first->second;
   }
 };
@@ -550,20 +561,20 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
 // the cheap consecutive-row hit for exported/reference entry points.
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  double alpha = R_NaN, beta = R_NaN, p = R_NaN, lambda = R_NaN;
+  double alpha = R_NaN, beta = R_NaN, h = R_NaN, lambda = R_NaN;
   double delta = R_NaN, cv_u = R_NaN;
   FrqPars value;
 
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
-  const FrqPars& get(double a, double b, double pp, double l,
+  const FrqPars& get(double a, double b, double hh, double l,
                      double d = 0.0, double c = 0.0) {
-    if (a == alpha && b == beta && pp == p && l == lambda &&
+    if (a == alpha && b == beta && hh == h && l == lambda &&
         d == delta && c == cv_u) return value;
-    alpha = a; beta = b; p = pp; lambda = l; delta = d; cv_u = c;
+    alpha = a; beta = b; h = hh; lambda = l; delta = d; cv_u = c;
     value = shared != nullptr
-      ? shared->get(a, b, pp, l, d, c)
-      : frq_derive(a, b, pp, l, d, c);
+      ? shared->get(a, b, hh, l, d, c)
+      : frq_derive(a, b, hh, l, d, c);
     return value;
   }
 };

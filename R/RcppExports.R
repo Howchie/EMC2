@@ -252,16 +252,16 @@ btawl_vcrit_vec <- function(k, tau, b) {
     .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
 
-dfrq <- function(t, alpha, beta, p, lambda, delta = as.numeric( c(0.0)), log_out = FALSE, cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_dfrq`, t, alpha, beta, p, lambda, delta, log_out, cv_u)
+dfrq <- function(t, alpha, beta, h, lambda, delta = as.numeric( c(0.0)), log_out = FALSE, cv_u = as.numeric( c(0.0))) {
+    .Call(`_EMC2_dfrq`, t, alpha, beta, h, lambda, delta, log_out, cv_u)
 }
 
-pfrq <- function(t, alpha, beta, p, lambda, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_pfrq`, t, alpha, beta, p, lambda, delta, lower_tail, log_out, cv_u)
+pfrq <- function(t, alpha, beta, h, lambda, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, cv_u = as.numeric( c(0.0))) {
+    .Call(`_EMC2_pfrq`, t, alpha, beta, h, lambda, delta, lower_tail, log_out, cv_u)
 }
 
-frq_rate <- function(alpha, beta, p, lambda, delta = as.numeric( c(0.0)), cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_frq_rate`, alpha, beta, p, lambda, delta, cv_u)
+frq_rate <- function(alpha, beta, h, lambda, delta = as.numeric( c(0.0)), cv_u = as.numeric( c(0.0))) {
+    .Call(`_EMC2_frq_rate`, alpha, beta, h, lambda, delta, cv_u)
 }
 
 frq_h_inv_r <- function(y, delta) {

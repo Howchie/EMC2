@@ -1,0 +1,598 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, amsthm, bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{hyperref}
+
+\geometry{margin=1.05in}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{Poisson Counter and Finite Quorum Models:\\
+       Definitions, Distributions, and a Structural Correspondence}
+\author{}
+\date{\today}
+
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\PhiN}{\Phi}
+\newcommand{\phiN}{\phi}
+\newcommand{\e}{\mathrm{e}}
+\newcommand{\logit}{\operatorname{logit}}
+\newcommand{\BetaDist}{\operatorname{Beta}}
+\newcommand{\Binomial}{\operatorname{Binomial}}
+\newcommand{\GammaDist}{\operatorname{Gamma}}
+\newcommand{\Poisson}{\operatorname{Poisson}}
+
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{definition}{Definition}
+\newtheorem{corollary}{Corollary}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note gives a self-contained mathematical treatment of two continuous-time models for discrete evidence accumulation: the Poisson Counter Race (\textsc{PCOUNTER}) and the Finite Reservoir Quorum process (\textsc{FRQ}). In both, evidence is represented by discrete registration events rather than a continuous diffusion path. We derive the corresponding first-passage and order-statistic laws, then study rate variability, threshold variability, correlated rates, and the relation between the two constructions. For \textsc{PCOUNTER}, the main extensions are linear pure-birth self-excitation, gamma mixing of the trialwise input rate, a geometric excess over the threshold, and a shared-component gamma construction for two correlated rates. For \textsc{FRQ}, a finite pool of $N$ units with Bernoulli availability $p$ and exponential registration latency $\lambda$ leads to the regularized incomplete beta function $I_{q(u)}(\alpha,\beta)$, where $\alpha$ is the quorum shape and $\beta$ is the spare-capacity shape. We use accumulator-level completion probability $h$ and direct registration rate $\lambda$ as the fitted coordinates; $p$ is derived from $h$ by a beta quantile. We also derive the closed-form softplus marginalization of a proportional-odds caution shift. The final sections make precise the correspondence between an accelerating open counter and a finite order-statistic model, including the qualifications needed when the beta shapes are not integers.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Introduction, Scope, and Notation}
+%======================================================================
+
+Sequential sampling models in cognitive science typically fall into two broad mathematical classes. The first consists of continuous diffusion processes, such as the Wiener diffusion model \cite{Ratcliff1978} and the Ornstein--Uhlenbeck (OU) process \cite{BusemeyerTownsend1993, Smith1995}, where evidence accumulates continuously along sample paths governed by stochastic differential equations. The second consists of point processes and discrete counting models, originating in the classic counter models of Pike \cite{Pike1966}, LaBerge \cite{LaBerge1962}, and Townsend and Ashby \cite{TownsendAshby1983}. In counting models, decision evidence arrives as discrete, all-or-none events (e.g., spikes, micro-features, or evidence tokens) in continuous time.
+
+This note focuses on two counting and quorum architectures:
+\begin{enumerate}
+  \item \textbf{The Poisson Counter Race (\textsc{PCOUNTER})}: An open-reservoir race model in which each accumulator counts events from a pure-birth process. We consider linear self-excitation, trial-to-trial gamma-distributed input rates, geometric threshold excess, and shared-component gamma dependence between two rates.
+  \item \textbf{The Finite Reservoir Quorum Model (\textsc{FRQ})}: A closed-reservoir race model in which each accumulator waits for a quorum of registrations from a finite pool of potential evidence units. The order-statistic construction gives a natural defective distribution and a continuous beta-shape representation.
+\end{enumerate}
+
+Throughout this note, we focus strictly on the foundational mathematical mechanics, generative probability laws, exact analytic derivations, and structural relationships connecting these models.
+
+\subsection{Response Time Decomposition}
+Let $T$ denote the total observable response time on a given trial, and let $t_0 \ge 0$ denote the non-decision time, representing peripheral sensory encoding and motor execution latencies. The net decision time (or evidence-accumulation latency) is
+\begin{equation}
+  u = T - t_0.
+\end{equation}
+All probability density functions $f(u)$, cumulative distribution functions $F(u)$, and survivor functions $S(u)$ are derived with respect to decision time $u > 0$. When converting to observable response times, the distributions are shifted by $t_0$, such that $f_T(t) = f(t - t_0) \mathbf{1}_{\{t > t_0\}}$.
+
+\subsection{Race Architecture and Defective Distributions}
+In an $R$-alternative choice task, each alternative is represented by an independent accumulator $i \in \{1, \dots, R\}$. Each accumulator generates a decision latency $U_i \in (0, \infty]$. The observed response corresponds to the accumulator that finishes first:
+\begin{equation}
+  \text{Response} = \arg\min_{i \in \{1, \dots, R\}} (t_{0i} + U_i), \qquad T = \min_{i \in \{1, \dots, R\}} (t_{0i} + U_i).
+\end{equation}
+If all accumulators have non-defective finish-time distributions ($F_i(\infty) = 1$), a response is produced with probability 1. However, when an accumulator has an intrinsic defect ($F_i(\infty) < 1$), there is a non-zero probability $1 - F_i(\infty) > 0$ that the accumulator fails to terminate ($U_i = \infty$).
+
+Under independent race mechanics, the joint density of alternative $i$ winning at time $t$ is given by
+\begin{equation}
+  g_i(t) = f_i(t - t_{0i}) \prod_{j \neq i} S_j(t - t_{0j}), \label{eq:race-likelihood}
+\end{equation}
+where $S_j(u) = P(U_j > u)$ is the survivor function of competitor $j$, extended by $S_j(u)=1$ for $u\le 0$. An overall omission (a trial on which no response is executed) occurs when every competitor fails:
+\begin{equation}
+  P(\text{Omission}) = \prod_{j=1}^R S_j(\infty) = \prod_{j=1}^R \big(1 - F_j(\infty)\big).
+\end{equation}
+When trialwise inputs are correlated across accumulators, the finish times become dependent through the shared trial state, requiring joint integration over the shared mixing distribution.
+
+%======================================================================
+\section{The Poisson Counter Race Model (\textsc{PCOUNTER})}
+%======================================================================
+
+The Poisson counter race model formulates evidence accumulation as an open pure-birth process. Evidence arrives in unit steps, and a response is triggered as soon as the total count reaches an event criterion.
+
+\subsection{Baseline Homogeneous Poisson Counter (Erlang Race)}
+In the elementary Poisson counter \cite{Pike1966, RatcliffSmith2004}, evidence for accumulator $i$ accrues as a homogeneous Poisson process with constant event rate $\nu_i > 0$. The number of events $N_i(u)$ accumulated in decision interval $u$ follows a Poisson distribution:
+\begin{equation}
+  P(N_i(u) = n) = \frac{(\nu_i u)^n}{n!} \e^{-\nu_i u}, \qquad n = 0, 1, 2, \dots.
+\end{equation}
+Because the inter-arrival times between successive events are independent and identically distributed (i.i.d.) exponential random variables with rate $\nu_i$, the total time $U_i$ required to accumulate an integer threshold count of $K_i \in \{1, 2, \dots\}$ events is the sum of $K_i$ independent exponentials:
+\begin{equation}
+  U_i = \sum_{k=1}^{K_i} X_k, \qquad X_k \sim_{\text{i.i.d.}} \text{Exponential}(\nu_i).
+\end{equation}
+Consequently, $U_i$ follows an Erlang distribution (a Gamma distribution with integer shape parameter $K_i$ and rate parameter $\nu_i$). Its probability density function is
+\begin{equation}
+  f(u; K_i, \nu_i) = \frac{\nu_i^{K_i} u^{K_i - 1}}{(K_i - 1)!} \e^{-\nu_i u}, \qquad u > 0. \label{eq:erlang-pdf}
+\end{equation}
+The cumulative distribution function represents the probability that at least $K_i$ events have arrived by time $u$:
+\begin{equation}
+  F(u; K_i, \nu_i) = \sum_{n=K_i}^\infty \frac{(\nu_i u)^n}{n!} \e^{-\nu_i u} = 1 - \sum_{n=0}^{K_i - 1} \frac{(\nu_i u)^n}{n!} \e^{-\nu_i u}.
+\end{equation}
+The survivor function is the probability that fewer than $K_i$ events have arrived:
+\begin{equation}
+  S(u; K_i, \nu_i) = \sum_{n=0}^{K_i - 1} \frac{(\nu_i u)^n}{n!} \e^{-\nu_i u} = \frac{\Gamma(K_i, \nu_i u)}{\Gamma(K_i)}, \label{eq:erlang-survivor}
+\end{equation}
+where $\Gamma(a, z) = \int_z^\infty s^{a-1} \e^{-s} \dd s$ is the upper incomplete gamma function.
+
+\subsubsection{Two-Alternative Race Likelihood and Choice Probability}
+In a two-accumulator race with thresholds $K_1, K_2$ and rates $\nu_1, \nu_2$ (assuming $t_{01} = t_{02} = 0$ for simplicity), accumulator 1 wins at time $t$ if it reaches its $K_1$-th count while accumulator 2 has accumulated strictly fewer than $K_2$ counts. Applying Eq.~\eqref{eq:race-likelihood}:
+\begin{equation}
+  g_1(t) = f(t; K_1, \nu_1) S(t; K_2, \nu_2) = \frac{\nu_1^{K_1} t^{K_1 - 1}}{(K_1 - 1)!} \e^{-\nu_1 t} \sum_{n=0}^{K_2 - 1} \frac{(\nu_2 t)^n}{n!} \e^{-\nu_2 t}. \label{eq:pcounter-base-race}
+\end{equation}
+This directly reproduces Equation A10a of Ratcliff and Smith \cite{RatcliffSmith2004}. Integrating $g_1(t)$ over $t \in (0, \infty)$ yields the total choice probability $P_1$:
+\begin{align}
+  P_1 &= \int_0^\infty \frac{\nu_1^{K_1} t^{K_1 - 1}}{(K_1 - 1)!} \e^{-(\nu_1 + \nu_2) t} \sum_{n=0}^{K_2 - 1} \frac{(\nu_2 t)^n}{n!} \dd t \nonumber \\
+  &= \sum_{n=0}^{K_2 - 1} \frac{\nu_1^{K_1} \nu_2^n}{(K_1 - 1)! n!} \int_0^\infty t^{K_1 + n - 1} \e^{-(\nu_1 + \nu_2) t} \dd t.
+\end{align}
+Using $\int_0^\infty t^{K_1 + n - 1} \e^{-(\nu_1 + \nu_2) t} \dd t = \frac{(K_1 + n - 1)!}{(\nu_1 + \nu_2)^{K_1 + n}}$, we obtain the negative binomial sum (Equation A11a of \cite{RatcliffSmith2004}):
+\begin{equation}
+  P_1 = \sum_{n=0}^{K_2 - 1} \binom{K_1 + n - 1}{n} \left(\frac{\nu_1}{\nu_1 + \nu_2}\right)^{K_1} \left(\frac{\nu_2}{\nu_1 + \nu_2}\right)^n. \label{eq:pcounter-choice-prob}
+\end{equation}
+Because the sum of two independent Poisson processes is Poisson with rate $\nu_1 + \nu_2$, each arrival is independently assigned to accumulator 1 with probability $p = \nu_1/(\nu_1 + \nu_2)$ and to accumulator 2 with probability $1 - p$. Equation~\eqref{eq:pcounter-choice-prob} is thus the probability of observing $K_1$ successes before $K_2$ failures in Bernoulli trials.
+
+\subsubsection{Distributional Moments}
+For the baseline Erlang accumulator, the moments of decision time $u$ are:
+\begin{equation}
+  E[u] = \frac{K}{\nu}, \qquad \operatorname{Var}(u) = \frac{K}{\nu^2}, \qquad \operatorname{CV}(u) = \frac{1}{\sqrt{K}}, \qquad \operatorname{Skew}(u) = \frac{2}{\sqrt{K}}.
+\end{equation}
+As $K$ increases, the coefficient of variation (CV) and skewness diminish as $O(K^{-1/2})$, making the finish-time distribution progressively more symmetric and concentrated around its mean.
+
+%----------------------------------------------------------------------
+\subsection{Extension 1: Linear Pure-Birth Self-Excitation (\texorpdfstring{$\gamma > 0$}{gamma > 0})}
+%----------------------------------------------------------------------
+The baseline counter assumes that evidence accrual is history-independent. A self-exciting extension specifies a state-dependent transition rate:
+\begin{equation}
+  \lambda_n = \nu + \gamma n, \qquad n = 0, 1, 2, \dots,
+\end{equation}
+where $\nu > 0$ is the baseline external input rate and $\gamma \ge 0$ is the self-excitation increment per accumulated count.
+
+Let $\pi_n(u) = P(N(u) = n)$ be the probability that exactly $n$ counts have occurred by decision time $u$, given $N(0) = 0$. The process is governed by the Kolmogorov forward differential equations:
+\begin{equation}
+  \frac{\dd \pi_0(u)}{\dd u} = -\lambda_0 \pi_0(u), \qquad \frac{\dd \pi_n(u)}{\dd u} = \lambda_{n-1} \pi_{n-1}(u) - \lambda_n \pi_n(u) \quad (n \ge 1).
+\end{equation}
+Solving this linear recursive cascade yields the explicit state distribution:
+\begin{equation}
+  \pi_0(u) = \e^{-\nu u}, \qquad \pi_n(u) = \e^{-\nu u} \frac{(1 - \e^{-\gamma u})^n}{n!} \prod_{j=0}^{n-1} \left(\frac{\nu}{\gamma} + j\right).
+\end{equation}
+Using the rising factorial (Pochhammer symbol) $(a)_n = \frac{\Gamma(a + n)}{\Gamma(a)} = \prod_{j=0}^{n-1} (a + j)$, this simplifies to
+\begin{equation}
+  \pi_n(u) = \e^{-\nu u} \frac{(1 - \e^{-\gamma u})^n}{n!} \frac{\Gamma(\nu/\gamma + n)}{\Gamma(\nu/\gamma)}. \label{eq:pure-birth-state-prob}
+\end{equation}
+Recognizing that $\binom{-\nu/\gamma}{n} = (-1)^n \frac{(\nu/\gamma)_n}{n!}$, Eq.~\eqref{eq:pure-birth-state-prob} is a negative binomial distribution with success probability parameter $p(u) = \e^{-\gamma u}$ and stopping parameter $r = \nu/\gamma$.
+
+The probability flux $\phi_n(u)$ from state $n$ to $n+1$ at time $u$ is
+\begin{equation}
+  \phi_n(u) = \lambda_n \pi_n(u) = (\nu + \gamma n) \pi_n(u) = \gamma \e^{-\nu u} \frac{(1 - \e^{-\gamma u})^n}{n!} \frac{\Gamma(\nu/\gamma + n + 1)}{\Gamma(\nu/\gamma)}. \label{eq:pure-birth-flux}
+\end{equation}
+A response is triggered upon reaching threshold $K$. The first-passage time density is the probability flux exiting state $K - 1$:
+\begin{equation}
+  f(u; K, \nu, \gamma) = \phi_{K-1}(u) = \frac{\gamma \e^{-\nu u} (1 - \e^{-\gamma u})^{K-1}}{(K-1)!} \frac{\Gamma(\nu/\gamma + K)}{\Gamma(\nu/\gamma)}. \label{eq:self-exciting-pdf}
+\end{equation}
+Let $z = 1 - \e^{-\gamma u} \in [0, 1)$. Then $\dd z = \gamma \e^{-\gamma u} \dd u$ and $\e^{-\nu u} = (1 - z)^{\nu/\gamma}$. Substituting these into Eq.~\eqref{eq:self-exciting-pdf} reveals:
+\begin{align}
+  f(u) \dd u &= \frac{\Gamma(\nu/\gamma + K)}{\Gamma(K) \Gamma(\nu/\gamma)} z^{K-1} (1 - z)^{\nu/\gamma - 1} \dd z \nonumber \\
+  &= \frac{1}{B(K, \nu/\gamma)} z^{K-1} (1 - z)^{\nu/\gamma - 1} \dd z,
+\end{align}
+where $B(a, b) = \frac{\Gamma(a)\Gamma(b)}{\Gamma(a+b)}$ is the complete beta function. Thus, the cumulative distribution function is the regularized incomplete beta function:
+\begin{equation}
+\boxed{F(u; K, \nu, \gamma) = I_{1 - \e^{-\gamma u}}\left(K, \frac{\nu}{\gamma}\right)}. \label{eq:pcounter-frq-bridge}
+\end{equation}
+As $\gamma\downarrow 0$, this expression converges to the Erlang CDF
+\[
+  1-\e^{-\nu u}\sum_{j=0}^{K-1}\frac{(\nu u)^j}{j!},
+\]
+so the self-exciting family contains the homogeneous counter as a continuous limit. Equation~\eqref{eq:pcounter-frq-bridge} is the structural bridge to the beta/order-statistic family.
+
+%----------------------------------------------------------------------
+\subsection{Extension 2: Trialwise Gamma Rate Mixing (\texorpdfstring{$sv > 0$}{sv > 0})}
+%----------------------------------------------------------------------
+To account for trial-to-trial fluctuations in attention and stimulus encoding, the trial baseline rate $\Lambda$ is treated as a random variable across trials:
+\begin{equation}
+  \Lambda \sim \operatorname{Gamma}(a, b), \qquad a = \frac{\nu^2}{sv^2}, \quad b = \frac{\nu}{sv^2},
+\end{equation}
+where $\operatorname{Gamma}(a,b)$ is parameterized by shape $a$ and rate $b$. Thus $E[\Lambda] = \nu$ and $\operatorname{Var}(\Lambda) = sv^2$; when $sv \to 0$, $\Lambda$ degenerates to the fixed point mass at $\nu$.
+
+\subsubsection{Closed-Form State Evaluation via Stirling Numbers}
+When both self-excitation ($\gamma > 0$) and trialwise rate variability ($sv > 0$) are present, evaluating the state distribution requires computing expectations over $\Lambda$:
+\begin{equation}
+  \pi_n(u) = \frac{(1 - \e^{-\gamma u})^n}{n!} E_\Lambda \left[ \e^{-\Lambda u} \frac{\Gamma(\Lambda/\gamma + n)}{\Gamma(\Lambda/\gamma)} \right].
+\end{equation}
+The term $\frac{\Gamma(\Lambda/\gamma + n)}{\Gamma(\Lambda/\gamma)} = (\Lambda/\gamma)^{\overline{n}}$ is a rising factorial of degree $n$ in the random variable $\Lambda/\gamma$. The relevant expansion is
+\begin{equation}
+  x^{\overline n} = \sum_{j=0}^n \left[ \begin{matrix} n \\ j \end{matrix} \right] x^j,
+\end{equation}
+where $\left[ \begin{matrix} n \\ j \end{matrix} \right]$ are the unsigned Stirling numbers of the first kind. Stirling numbers of the second kind expand powers in falling factorials and are not the coefficients needed here.
+
+The mixture can be evaluated by factoring the marginal Laplace transform of $\Lambda$:
+\begin{equation}
+  L(u) = E_\Lambda[\e^{-u \Lambda}] = \left(1 + \frac{u}{b}\right)^{-a} = \left(1 + \frac{sv^2 u}{\nu}\right)^{-\nu^2/sv^2}. \label{eq:laplace-gamma}
+\end{equation}
+Its derivative gives the first exponentially tilted moment:
+\begin{equation}
+  M(u) = E_\Lambda[\Lambda \e^{-u \Lambda}] = -\frac{\dd L(u)}{\dd u} = \frac{a}{b + u} L(u).
+\end{equation}
+Using the gamma Laplace transform and the expansion above gives
+\begin{equation}
+  h_n(u) = E_\Lambda\left[\e^{-\Lambda u} \left(\frac{\Lambda}{\gamma}\right)^{\overline{n}}\right] = L(u) \sum_{j=0}^n \left[ \begin{matrix} n \\ j \end{matrix} \right] \frac{(a)_j}{\gamma^j (b + u)^j},
+\end{equation}
+The first-kind numbers obey
+\begin{equation}
+  \left[ \begin{matrix} n \\ j \end{matrix} \right] = (n-1) \left[ \begin{matrix} n-1 \\ j \end{matrix} \right] + \left[ \begin{matrix} n-1 \\ j-1 \end{matrix} \right],
+\end{equation}
+with $\left[\begin{smallmatrix}0\\0\end{smallmatrix}\right]=1$ and zero outside $0\le j\le n$. Thus the gamma mixture remains an exact finite sum.
+
+%----------------------------------------------------------------------
+\subsection{Extension 3: Geometric Threshold Excess (\texorpdfstring{$\omega > 0$}{omega > 0})}
+%----------------------------------------------------------------------
+In addition to baseline threshold $K$, one may introduce trial-to-trial threshold variability through a geometric excess:
+\begin{equation}
+  M = K + E, \qquad E \sim \operatorname{Geometric}(p_\omega), \quad p_\omega = \frac{1}{1 + \omega},
+\end{equation}
+where $E \in \{0, 1, 2, \dots\}$, $E[E] = \omega \ge 0$, and $\operatorname{Var}(E) = \omega(1 + \omega)$. When $\omega \to 0$, $p_\omega \to 1$, fixing $M = K$.
+
+Under this mixture, the total threshold distribution is
+\begin{equation}
+  P(M = m) = p_\omega (1 - p_\omega)^{m - K} = \frac{1}{1 + \omega} \left(\frac{\omega}{1 + \omega}\right)^{m - K}, \qquad m = K, K+1, K+2, \dots.
+\end{equation}
+The probability that the threshold exceeds a given count $n$ is
+\begin{equation}
+  P(M > n) = \begin{cases}
+    1, & n < K, \\
+    (1 - p_\omega)^{n - K + 1} = \left(\frac{\omega}{1 + \omega}\right)^{n - K + 1}, & n \ge K.
+  \end{cases}
+\end{equation}
+
+\subsubsection{Closed-Form Resummation of the Geometric Tail}
+The marginal survivor function is the sum over all states weighted by the probability that the threshold exceeds that state:
+\begin{equation}
+  S(u) = \sum_{n=0}^{K-2} \pi_n(u) + \sum_{n=K-1}^\infty \pi_n(u) \left(\frac{\omega}{1 + \omega}\right)^{n - K + 1}. \label{eq:geom-survivor-sum}
+\end{equation}
+Because $\pi_n(u)$ carries factors of $(1 - \e^{-\gamma u})^n$, the geometric tail can be summed through the probability generating function.
+
+Let $r = \frac{\omega}{1 + \omega}$ and $p = 1 - r = \frac{1}{1 + \omega}$. Define the effective operational time
+\begin{equation}
+  a_r = \begin{cases}
+    p u, & \gamma = 0, \\
+    u + \frac{1}{\gamma} \log\big(1 - r(1 - \e^{-\gamma u})\big), & \gamma > 0.
+  \end{cases}
+\end{equation}
+The generating function of the state probabilities is the baseline Laplace transform evaluated at $a_r$:
+\begin{equation}
+  \sum_{n=0}^\infty \pi_n(u) r^n = L(a_r).
+\end{equation}
+Consequently, the tail from $K-1$ to $\infty$ is obtained in closed form by subtracting the finite partial sum from the complete sum:
+\begin{equation}
+  \sum_{n=K-1}^\infty \pi_n(u) r^n = L(a_r) - \sum_{n=0}^{K-2} \pi_n(u) r^n.
+\end{equation}
+The total survivor function Eq.~\eqref{eq:geom-survivor-sum} becomes:
+\begin{equation}
+  \boxed{S(u) = \sum_{n=0}^{K-2} \pi_n(u) + r^{1-K} \left[ L(a_r) - \sum_{n=0}^{K-2} \pi_n(u) r^n \right]}.
+\end{equation}
+For $0<r<1$, the corresponding density is obtained from the flux generating function. Writing $q_\gamma(u)=1-\e^{-\gamma u}$ and
+\[
+  \phi_n(u)=E_\Lambda\!\left[(\Lambda+\gamma n)P\{N(u)=n\mid\Lambda\}\right]
+\]
+for the (possibly mixed) state-to-state flux, one has
+\begin{equation}
+  f(u) = p r^{1-K}\left\{\frac{M(a_r)}{1-rq_\gamma(u)}
+      - \sum_{n=0}^{K-2} r^n\phi_n(u)\right\},
+  \label{eq:geom-density-sum}
+\end{equation}
+where $M(s)=E_\Lambda[\Lambda\e^{-s\Lambda}]$ (and $M(s)=\nu\e^{-\nu s}$ when the rate is fixed). The formula is understood by continuity at $r=0$; there it reduces to the fixed-threshold flux $f(u)=\phi_{K-1}(u)$. Thus the geometric-threshold law is a proper mixture whenever the underlying counter has a proper hitting time.
+
+%----------------------------------------------------------------------
+\subsection{Extension 4: Shared-Component Gamma Rates (\texorpdfstring{$\rho > 0$}{rho > 0})}
+%----------------------------------------------------------------------
+When two accumulators race, trialwise fluctuations can induce positive dependence between their input rates. A convenient construction uses a shared gamma component together with independent gamma components.
+
+\subsubsection{Shared-Component Construction}
+Let $Z_0, Z_1, Z_2$ be mutually independent gamma variates with unit rate:
+\begin{equation}
+  Z_0 \sim \operatorname{Gamma}(a_0, 1), \quad Z_1 \sim \operatorname{Gamma}(a_1 - a_0, 1), \quad Z_2 \sim \operatorname{Gamma}(a_2 - a_0, 1),
+\end{equation}
+with $0 \le a_0 \le \min(a_1, a_2)$. Define the trialwise input rates:
+\begin{equation}
+  \Lambda_1 = \frac{Z_0 + Z_1}{b_1}, \qquad \Lambda_2 = \frac{Z_0 + Z_2}{b_2}.
+\end{equation}
+Marginally, $\Lambda_i \sim \operatorname{Gamma}(a_i, b_i)$. The joint covariance and Pearson correlation are:
+\begin{equation}
+  \operatorname{Cov}(\Lambda_1, \Lambda_2) = \frac{a_0}{b_1 b_2}, \qquad \rho = \operatorname{Cor}(\Lambda_1, \Lambda_2) = \frac{a_0}{\sqrt{a_1 a_2}}.
+\end{equation}
+If the two marginal rates have a common coefficient of variation, write $sv_i = c\nu_i$. Then $a_1 = a_2 = a = 1/c^2$, $a_0 = \rho a$, and any $\rho\in[0,1]$ is admissible.
+
+\subsubsection{Joint Laplace Transform and Tilted Moments}
+The joint Laplace transform $L(s_1, s_2) = E[\e^{-s_1 \Lambda_1 - s_2 \Lambda_2}]$ is
+\begin{equation}
+  L(s_1, s_2) = \left(1 + \frac{s_1}{b_1} + \frac{s_2}{b_2}\right)^{-a_0} \left(1 + \frac{s_1}{b_1}\right)^{-(a_1 - a_0)} \left(1 + \frac{s_2}{b_2}\right)^{-(a_2 - a_0)}.
+\end{equation}
+The fixed-threshold race density requires the exponentially tilted mixed moments:
+\begin{equation}
+  M_{rq}(s_1, s_2) = E\big[\Lambda_1^r \Lambda_2^q \e^{-s_1 \Lambda_1 - s_2 \Lambda_2}\big] = (-1)^{r+q} \frac{\partial^{r+q} L(s_1, s_2)}{\partial s_1^r \partial s_2^q}.
+\end{equation}
+Expanding through the binomial theorem yields the finite double sum:
+\begin{align}
+  M_{rq}(s_1, s_2) ={}& b_1^{-r} b_2^{-q} \sum_{u=0}^r \sum_{v=0}^q \binom{r}{u} \binom{q}{v} (a_0)_{u+v} \left(1 + \frac{s_1}{b_1} + \frac{s_2}{b_2}\right)^{-(a_0 + u + v)} \nonumber \\
+  &\times (a_1 - a_0)_{r-u} \left(1 + \frac{s_1}{b_1}\right)^{-(a_1 - a_0 + r - u)} \nonumber \\
+  &\times (a_2 - a_0)_{q-v} \left(1 + \frac{s_2}{b_2}\right)^{-(a_2 - a_0 + q - v)}. \label{eq:joint-tilted-moments}
+\end{align}
+
+\subsubsection{Two-Accumulator Correlated Density}
+For fixed thresholds $K_1, K_2$ and decision times $x_i = t - t_{0i} > 0$, accumulator 1 wins at time $t$ if it reaches count $K_1$ while accumulator 2 has accumulated $n < K_2$ counts. Integrating over the joint distribution of $(\Lambda_1, \Lambda_2)$ yields:
+\begin{equation}
+  \boxed{g_1(t) = \sum_{n=0}^{K_2 - 1} \frac{x_1^{K_1 - 1} x_2^n}{(K_1 - 1)! n!} M_{K_1, n}(x_1, x_2)}. \label{eq:pcounter-corr-density}
+\end{equation}
+Equation~\eqref{eq:pcounter-corr-density} is an exact finite sum. When $\rho = 0$ ($a_0 = 0$), $M_{rq}$ factorizes into the product of marginal moments, recovering the independent race in Eq.~\eqref{eq:pcounter-base-race}. If $x_2\le 0$, the survivor of accumulator 2 is one and the sum is replaced by its $n=0$ term; if $x_1\le 0$, the winning density is zero.
+
+%======================================================================
+\section{The Finite Reservoir Quorum Process (\textsc{FRQ})}
+%======================================================================
+
+The Finite Reservoir Quorum model (\textsc{FRQ}) is a closed-reservoir race model. Rather than assuming an inexhaustible supply of evidence tokens, each accumulator draws upon a finite, depletable pool of potential evidence units.
+
+\subsection{Generative Mechanism and Order-Statistic Representation}
+Let an accumulator possess a finite reservoir of $N \in \{1, 2, \dots\}$ potential evidence units. On any given trial:
+\begin{enumerate}
+  \item Each unit is independently \textbf{usable (available)} with probability $p \in [0, 1]$.
+  \item A usable unit registers after an independent, exponentially distributed latency with rate $\lambda > 0$. An unavailable unit never registers ($U_k = \infty$).
+  \item The accumulator executes a response as soon as a \textbf{quorum} of $K \in \{1, \dots, N\}$ units has registered.
+\end{enumerate}
+If fewer than $K$ units are usable, the quorum is never attained and the accumulator never responds.
+Equivalently, if $Y_k$ is the registration time of unit $k$ (with $Y_k=\infty$ when it is unavailable), then the decision time is the $K$th order statistic $U=Y_{(K)}$, with $Y_{(K)}=\infty$ whenever fewer than $K$ of the $Y_k$ are finite.
+
+By decision time $u$, the probability that any single unit from the reservoir has registered is
+\begin{equation}
+  q(u) = p G(u) = p (1 - \e^{-\lambda u}), \qquad u > 0.
+\end{equation}
+The binomial/order-statistic argument below only uses the single-unit registration CDF $G$; the exponential choice makes $q(u)$ explicit and gives $q'(u)=p\lambda\e^{-\lambda u}$.
+Because the $N$ units are independent, the total number of units $C(u)$ that have registered by time $u$ follows a binomial distribution:
+\begin{equation}
+  C(u) \sim \operatorname{Binomial}(N, q(u)).
+\end{equation}
+A response occurs by time $u$ if and only if $C(u) \ge K$. Hence, the cumulative distribution function is
+\begin{equation}
+  F(u) = P(C(u) \ge K) = \sum_{j=K}^N \binom{N}{j} q(u)^j \big(1 - q(u)\big)^{N - j}. \label{eq:frq-binomial-sum}
+\end{equation}
+A classical mathematical identity connects the upper tail of a binomial distribution to the regularized incomplete beta function:
+\begin{equation}
+  \sum_{j=K}^N \binom{N}{j} q^j (1 - q)^{N - j} = I_q(K, N - K + 1),
+\end{equation}
+where $I_q(a, b) = \frac{1}{B(a, b)} \int_0^q s^{a-1} (1 - s)^{b-1} \dd s$. Defining the \textbf{quorum size} $\alpha = K$ and the \textbf{spare capacity} $\beta = N - K + 1$, the CDF simplifies to
+\begin{equation}
+  \boxed{F(u) = I_{q(u)}(\alpha, \beta), \qquad q(u) = p (1 - \e^{-\lambda u})}. \label{eq:frq-cdf}
+\end{equation}
+
+\subsection{Continuous Shape Relaxation}
+The regularized incomplete beta function $I_q(\alpha, \beta)$ is well-defined for all real $\alpha > 0$ and $\beta > 0$. Thus the order-statistic formula has a natural continuous-shape extension beyond literal integer values of $K$ and $N$:
+\begin{itemize}
+  \item $\alpha > 0$ is the continuous quorum shape, governing how sharply the density rises at the leading edge.
+  \item $\beta > 0$ is the continuous spare-capacity shape, governing the thickness of the late tail as the reservoir saturates.
+\end{itemize}
+The restriction $\alpha,\beta\ge 1$ is a conservative subfamily that preserves the interpretation suggested by $\alpha=K$ and $\beta=N-K+1$; it is not required by the beta function itself.
+Differentiating Eq.~\eqref{eq:frq-cdf} yields the probability density function:
+\begin{equation}
+  f(u) = \frac{\dd F(u)}{\dd u} = q'(u) \frac{q(u)^{\alpha - 1} (1 - q(u))^{\beta - 1}}{B(\alpha, \beta)} = p \lambda \e^{-\lambda u} \frac{q(u)^{\alpha - 1} (1 - q(u))^{\beta - 1}}{B(\alpha, \beta)}. \label{eq:frq-pdf}
+\end{equation}
+The survivor function is computed via the reflection identity of the incomplete beta function:
+\begin{equation}
+  S(u) = 1 - F(u) = 1 - I_{q(u)}(\alpha, \beta) = I_{1 - q(u)}(\beta, \alpha). \label{eq:frq-survivor}
+\end{equation}
+Evaluating $1 - q(u) = (1 - p) + p \e^{-\lambda u}$ directly avoids numerical cancellation in floating-point arithmetic when $q(u) \approx 1$.
+
+\subsection{Intrinsic Omission Mechanism (The Defective Limit)}
+As decision time $u \to \infty$, the registration probability approaches $q(\infty) = p$. The asymptotic completion probability $h$ is
+\begin{equation}
+  h = F(\infty) = I_p(\alpha, \beta). \label{eq:frq-h}
+\end{equation}
+When $p < 1$, $h < 1$, meaning the accumulator has a defective finish-time distribution. The probability of never responding is
+\begin{equation}
+  S(\infty) = 1 - h = I_{1 - p}(\beta, \alpha) > 0.
+\end{equation}
+Thus the finite-reservoir construction has a genuine point mass at $+\infty$ whenever $p<1$; no separate omission mixture is needed.
+
+%----------------------------------------------------------------------
+\subsection{Fitted Coordinates: \texorpdfstring{$(h, \lambda)$}{(h, lambda)}}
+%----------------------------------------------------------------------
+The sampler-facing FRQ coordinates separate the two psychologically distinct
+dimensions of the model: $h$ is the accumulator-level probability of eventual
+completion, and $\lambda$ is the mean registration rate of an available unit.
+The evidence-level availability $p$ is a derived quantity, not a fitted
+coordinate. This avoids using a response-time quantile as a proxy for either
+drift/rate or threshold.
+
+Let $Q_{\alpha,\beta}(y)=I^{-1}_y(\alpha,\beta)$ denote the beta quantile
+function. With no threshold variability,
+\begin{equation}
+  h=I_p(\alpha,\beta), \qquad
+  p=Q_{\alpha,\beta}(h). \label{eq:frq-p-from-h}
+\end{equation}
+The registration law remains $q(u)=p(1-\e^{-\lambda u})$, so $\lambda$ is
+available directly for rate-versus-quorum design comparisons. The exact proper
+boundary is
+\begin{equation}
+  h=1 \Longleftrightarrow p=1,
+\end{equation}
+and the defective mass for $h<1$ is $1-h$.
+
+The inverse map is analytic and uses one beta quantile. Derived quantities such
+as $p$, $N=\alpha+\beta-1$, and the quorum fraction $\alpha/N$ are reported by
+the mapping layer rather than sampled. Positive parameters use log geometry and
+$h$ uses a probit coordinate, with $h=1$ represented as an exact bound
+exception.
+
+%----------------------------------------------------------------------
+\subsection{Extension: Proportional-Odds Caution Variability (\texorpdfstring{$\delta > 0$}{delta > 0})}
+%----------------------------------------------------------------------
+To introduce trial-to-trial variability in response caution, \textsc{FRQ} perturbs the effective quorum requirement on an odds scale.
+
+Let $V$ denote the latent quorum percentile. Without caution variation, $V\sim\operatorname{Beta}(\alpha,\beta)$ and the baseline CDF is $F(u)=P\{V\le q(u)\}$. Introduce a trialwise latent state $\varepsilon \sim \operatorname{Uniform}(-\delta, \delta)$ and define the conditional criterion law by
+\begin{equation}
+  P\{V \le z \mid \varepsilon\} = \operatorname{logit}^{-1}\big[ \operatorname{logit}(I_z(\alpha, \beta)) + \varepsilon \big], \qquad 0<z<1,
+\end{equation}
+where $\operatorname{logit}(z) = \log\frac{z}{1-z}$ and $\operatorname{logit}^{-1}(x) = \frac{1}{1 + \e^{-x}}$. Positive $\varepsilon$ lowers the effective criterion (a liberal trial), while negative $\varepsilon$ raises it (a conservative trial), with across-trial standard deviation $\operatorname{SD}(\varepsilon) = \delta/\sqrt{3}$.
+
+\subsubsection{Closed-Form Softplus Marginalization}
+Integrating over $\varepsilon \sim \operatorname{Uniform}(-\delta, \delta)$ is exact because the antiderivative of the logistic function is the softplus function $\int \frac{1}{1 + \e^{-x}} \dd x = \log(1 + \e^x)$:
+\begin{align}
+  H_\delta(z) &= \frac{1}{2\delta} \int_{-\delta}^\delta \operatorname{logit}^{-1}(x + \varepsilon) \dd \varepsilon \nonumber \\
+  &= \frac{\log(1 + \e^{x + \delta}) - \log(1 + \e^{x - \delta})}{2\delta}, \qquad x = \operatorname{logit}(z),\quad \delta>0. \label{eq:frq-softplus}
+\end{align}
+For $\delta=0$, define $H_0(z)=z$ by continuity.
+The caution-varied distribution is therefore
+\begin{equation}
+  F_\delta(u) = H_\delta\big(I_{q(u)}(\alpha, \beta)\big),
+  \qquad
+  f_\delta(u)=H_\delta'\big(I_{q(u)}(\alpha,\beta)\big)
+  \frac{q'(u)q(u)^{\alpha-1}(1-q(u))^{\beta-1}}{B(\alpha,\beta)}.
+  \label{eq:frq-delta-density}
+\end{equation}
+Its eventual completion probability is $h_\delta=F_\delta(\infty)=H_\delta(I_p(\alpha,\beta))$, which reduces to Eq.~\eqref{eq:frq-h} when $\delta=0$.
+
+The transformation $H_\delta$ exhibits three critical mathematical properties:
+\begin{enumerate}
+  \item \textbf{Symmetry}: $H_\delta(1 - z) = 1 - H_\delta(z)$, ensuring that survivor functions evaluate via reflection without separate kernels: $S_\delta(u) = H_\delta\big(I_{1 - q(u)}(\beta, \alpha)\big)$.
+  \item \textbf{Analytic Invertibility}: Solving $H_\delta(z) = y$ for $\e^x$ yields:
+  \begin{equation}
+    H_\delta^{-1}(y) = \frac{\sinh(\delta y)}{\sinh(\delta y) + \sinh(\delta (1 - y))}. \label{eq:frq-h-inv}
+  \end{equation}
+  At $\delta=0$, this inverse is interpreted by continuity as $H_0^{-1}(y)=y$.
+  Therefore the fitted $(h,\lambda)$ parameterization remains exact: set
+  $z_h=H_\delta^{-1}(h)$ and use
+  \begin{equation}
+    p=Q_{\alpha,\beta}(z_h). \label{eq:frq-p-from-h-delta}
+  \end{equation}
+  The rate $\lambda$ is unchanged and remains a direct registration-rate
+  coordinate; no time-quantile inversion is introduced.
+  \item \textbf{Elementary Derivative}: The density multiplier is
+  \begin{equation}
+    H_\delta'(z) = \frac{\sinh(\delta)/\delta}{1 + 2z(1 - z)(\cosh(\delta) - 1)},
+  \end{equation}
+  which satisfies $H_0'(z) = 1$ when $\delta \to 0$.
+\end{enumerate}
+
+%======================================================================
+\section{Mathematical Duality and Structural Unification}
+%======================================================================
+
+Although \textsc{PCOUNTER} and \textsc{FRQ} use different constructions---an open pure-birth counting process versus order statistics over a closed reservoir---their hitting-time laws are closely related.
+
+\subsection{Accelerating vs.\ Decelerating Dynamics}
+The distinction is seen in how the relevant hazard evolves as evidence accumulates:
+\begin{itemize}
+  \item \textbf{\textsc{PCOUNTER} (Accelerating)}: With self-excitation, the transition rate is $\lambda_n=\nu+\gamma n$, so successive inter-arrival times become shorter as the count increases.
+  \item \textbf{\textsc{FRQ} (Finite-pool depletion)}: Conditional on a fixed set of usable units, the total registration hazard is $\lambda$ times the number of usable units that remain. That number decreases after every registration, while unavailable units contribute no future hazard.
+\end{itemize}
+
+\subsection{The Non-Defective Boundary Isomorphism}
+Despite their opposite feedback dynamics, the two models have an exact intersection on the following non-defective boundary:
+
+\begin{theorem}[Non-Defective Equivalence Theorem]
+Let \textsc{PCOUNTER} have zero trialwise rate variability ($sv = 0$), zero geometric threshold excess ($\omega = 0$), integer threshold $K$, baseline rate $\nu > 0$, and positive self-excitation $\gamma > 0$.
+
+Let the continuous-shape extension of \textsc{FRQ} have the proper boundary $h = 1$ (equivalently $p = 1$), quorum shape $\alpha = K$, registration rate $\lambda = \gamma$, and spare-capacity shape
+\begin{equation}
+  \beta = \frac{\nu}{\gamma}.
+\end{equation}
+Then the first-passage time distributions of \textsc{PCOUNTER} and \textsc{FRQ} are mathematically identical for all $u > 0$:
+\begin{equation}
+  F_{\textsc{PCOUNTER}}(u) \equiv F_{\textsc{FRQ}}(u) = I_{1 - \e^{-\gamma u}}\left(K, \frac{\nu}{\gamma}\right).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+From Eq.~\eqref{eq:pcounter-frq-bridge}, the self-exciting pure-birth counter with $sv = 0$ and threshold $K$ has CDF:
+\begin{equation}
+  F_{\textsc{PCOUNTER}}(u) = I_{1 - \e^{-\gamma u}}\left(K, \frac{\nu}{\gamma}\right).
+\end{equation}
+In \textsc{FRQ}, at $h=1$ the derived availability is $p=1$, so the registration probability is $q(u) = 1 - \e^{-\lambda u}$. Setting $\lambda = \gamma$, $\alpha = K$, and $\beta = \nu/\gamma$, Eq.~\eqref{eq:frq-cdf} gives:
+\begin{equation}
+  F_{\textsc{FRQ}}(u) = I_{q(u)}(\alpha, \beta) = I_{1 - \e^{-\gamma u}}\left(K, \frac{\nu}{\gamma}\right).
+\end{equation}
+The densities and survivor functions match identically by differentiation and reflection.
+\end{proof}
+
+\begin{remark}[Physical Meaning of the Equivalence]
+This equivalence reveals that an open pure-birth process whose rate increases linearly by $\gamma$ per count has the same hitting-time law as the beta/order-statistic family with shapes $(K,\nu/\gamma)$ and registration rate $\gamma$. If $\nu/\gamma$ is an integer, this is literally a finite reservoir with $N=K+\nu/\gamma-1$ units; for non-integer $\nu/\gamma$, it is the continuous-shape extension rather than a literal finite population.
+\end{remark}
+
+\subsection{The Continuous vs.\ Discrete Threshold Dichotomy}
+The equivalence theorem highlights why the two models diverge when generalized:
+\begin{itemize}
+  \item \textbf{Why \textsc{FRQ} permits continuous threshold shape}: The model is defined directly through $I_q(\alpha,\beta)$, which is valid for every $\alpha,\beta>0$. The continuous parameter $\alpha$ is therefore part of the model definition, although only integer shapes correspond to a literal fixed quorum in a finite population.
+  \item \textbf{Why the counter threshold is discrete}: In the underlying counting process, the response event is the first visit to an integer state $K$. The beta expression can be analytically continued in $K$, but such a continuation is no longer the first-passage law of that count process. The gamma-mixed and geometric-threshold formulae likewise use finite sums indexed by integer states.
+\end{itemize}
+
+\subsection{Trialwise Rate Variability and Frailty Extensions}
+As described in Section~2, \textsc{PCOUNTER} incorporates trialwise rate variability ($sv > 0$) via gamma mixing over the baseline rate $\Lambda$. The basic \textsc{FRQ} construction instead uses finite-reservoir depletion, the tail shape $\beta$, and (optionally) the caution variability $\delta$.
+
+If one seeks a mathematically closed-form rate-variability extension in \textsc{FRQ}, mixing across trials generally breaks the incomplete beta form:
+\begin{itemize}
+  \item \textbf{Trial-Level Shared Rate Mixing}: Integrating $I_{p(1 - \e^{-\Lambda u})}(\alpha, \beta)$ over a gamma-distributed $\Lambda$ generally leaves the incomplete-beta family. For integer $\alpha,\beta$ it reduces to a finite sum of gamma Laplace transforms; for continuous shapes it is naturally represented by hypergeometric series or integrals.
+  \item \textbf{Unit-Level Frailty (Exact Closed Form)}: If rate heterogeneity is specified at the level of individual evidence units such that each unit's rate $\lambda_i \sim \operatorname{Gamma}(a, b)$, the unit registration latency becomes Lomax (Pareto Type II): $G(u) = 1 - (1 + u/b)^{-a}$. Because \textsc{FRQ} holds for any univariate CDF $G(u)$, setting $q(u) = p [1 - (1 + u/b)^{-a}]$ preserves the exact incomplete beta form $F(u) = I_{q(u)}(\alpha, \beta)$ in closed form.
+\end{itemize}
+
+%======================================================================
+\section{Summary Taxonomy and Structural Comparison}
+%======================================================================
+
+Table~\ref{tab:model-comparison} summarizes the structural, generative, and mathematical relationships between \textsc{PCOUNTER} and \textsc{FRQ}.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Mathematical comparison between \textsc{PCOUNTER} and \textsc{FRQ}.}
+\label{tab:model-comparison}
+\vspace{0.5em}
+\begin{tabular}{L{3.2cm} L{5.8cm} L{5.8cm}}
+\toprule
+\textbf{Attribute} & \textbf{\textsc{PCOUNTER}} & \textbf{\textsc{FRQ}} \\
+\midrule
+\textbf{Generative State} & Open pure-birth counting process ($N(u) \in \mathbb{N}$) & Finite reservoir order statistics ($C(u) \sim \operatorname{Binomial}$) \\
+\addlinespace
+\textbf{Feedback Dynamics} & Accelerating (positive self-excitation: $\lambda_n = \nu + \gamma n$) & Decelerating (reservoir depletion: $N - k$ units remain) \\
+\addlinespace
+\textbf{Threshold Nature} & Discrete integer threshold $K \ge 1$ & Continuous shape $\alpha>0$ (integer $\alpha=K$ gives a literal quorum) \\
+\addlinespace
+\textbf{Capacity Parameter} & Open reservoir (no finite-capacity ceiling) & Continuous spare-capacity shape $\beta>0$ (literal $\beta=N-K+1$ for integer $N,K$) \\
+\addlinespace
+\textbf{Closed-Form Kernel} & Gamma/Erlang laws and finite Stirling sums under mixing & Regularized incomplete beta function $I_q(\alpha, \beta)$ \\
+\addlinespace
+\textbf{Omission Mechanism} & None intrinsically for finite thresholds (the hitting time is proper) & Intrinsic defect ($h = I_p(\alpha, \beta) < 1$; accumulator fails when usable $< K$) \\
+\addlinespace
+\textbf{Observable Coordinates} & Input rate and integer threshold (with optional rate/threshold mixtures) & Completion probability $h$ and registration rate $\lambda$ \\
+\addlinespace
+\textbf{Threshold Variability} & Geometric excess $E \sim \operatorname{Geom}(\frac{1}{1+\omega})$ ($M = K + E$) & Log-odds uniform caution shift $\varepsilon \sim U(-\delta, \delta)$ (softplus map) \\
+\addlinespace
+\textbf{Rate Variability} & Trialwise Gamma mixing $\Lambda \sim \operatorname{Gamma}$ ($sv > 0$) & None in standard model (unit-level Lomax frailty possible) \\
+\addlinespace
+\textbf{Correlated Race} & Bivariate common-CV shared Gamma rates ($\rho > 0$) & Independent racing accumulators \\
+\addlinespace
+\textbf{Intersection Boundary} & $sv = 0, \omega = 0, \gamma > 0$ & $h = 1$ ($p = 1$), $\lambda = \gamma$, $\alpha=K$, $\beta = \nu/\gamma$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Conclusion}
+The Poisson Counter Race (\textsc{PCOUNTER}) and the Finite Reservoir Quorum model (\textsc{FRQ}) provide complementary descriptions of discrete evidence accumulation in continuous time. \textsc{PCOUNTER} captures positive self-excitation, geometric threshold excess, and correlated trialwise input variability in an open pure-birth counter. \textsc{FRQ} captures finite-pool depletion, continuous threshold-shape relaxation, intrinsic omissions, and proportional-odds caution variability through the regularized incomplete beta function. Their equality on the non-defective boundary gives a precise mathematical correspondence between open counting processes and finite-capacity order statistics.
+
+%======================================================================
+\begin{thebibliography}{9}
+\bibitem{Ratcliff1978}
+Ratcliff, R. (1978). A theory of memory retrieval. \emph{Psychological Review}, 85(2), 59--108.
+
+\bibitem{BusemeyerTownsend1993}
+Busemeyer, J.~R., \& Townsend, J.~T. (1993). Decision field theory: A dynamic-cognitive approach to decision making in an uncertain environment. \emph{Psychological Review}, 100(3), 432--459.
+
+\bibitem{Smith1995}
+Smith, P.~L. (1995). Psychophysically principled models of visual simple reaction time. \emph{Psychological Review}, 102(3), 567--593.
+
+\bibitem{Pike1966}
+Pike, A.~R. (1966). Stochastic models of choice reaction time. \emph{British Journal of Mathematical and Statistical Psychology}, 19(2), 159--179.
+
+\bibitem{LaBerge1962}
+LaBerge, D. (1962). A recruitment model of simple behavior. \emph{Psychometrika}, 27(4), 375--396.
+
+\bibitem{TownsendAshby1983}
+Townsend, J.~T., \& Ashby, F.~G. (1983). \emph{The Stochastic Modeling of Elementary Psychological Processes}. Cambridge University Press.
+
+\bibitem{RatcliffSmith2004}
+Ratcliff, R., \& Smith, P.~L. (2004). A comparison of sequential sampling models for two-choice reaction time. \emph{Psychological Review}, 111(2), 333--367.
+\end{thebibliography}
+
+\end{document}

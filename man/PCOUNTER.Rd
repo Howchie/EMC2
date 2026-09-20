@@ -21,7 +21,7 @@ avoiding a quadratic threshold-sized allocation.
 \details{
 The proper \code{sv = 0}, \code{omega = 0}, \code{gamma > 0} member overlaps with the
 non-defective boundary of FRQ: for integer \code{alpha = K}, \code{beta = nu/gamma},
-\code{p = 1}, and \code{lambda = gamma}, both have
+\code{h = 1}, and \code{lambda = gamma}, both have
 \verb{F(t) = I_\{1-exp(-gamma*t)\}(K, nu/gamma)}. FRQ is not otherwise redundant:
 it supplies a finite-reservoir defect (\code{h < 1}) and threshold-shape
 relaxation, while PCOUNTER supplies trialwise input variation,

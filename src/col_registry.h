@@ -473,8 +473,8 @@ namespace bawdpsplit {
 // shapes of the latent quorum U ~ Beta(alpha, beta), i.e. the quorum size K
 // and the residual redundancy N - K + 1.  The latter is called `beta` rather
 // than `R` because `R` is a reserved data column name in EMC2
-// (R/design.R:251).  p is the unit-availability probability and lambda the
-// mean registration rate; h is the derived eventual completion probability.
+// (R/design.R:251).  h is the accumulator-level completion probability and
+// lambda the mean registration rate; p is derived internally.
 // delta is between-trial threshold variability (half-width of the uniform
 // log-odds shift of the quorum percentile) and cv_u is independent unit-rate
 // CV.  Both are REQUIRED rather than optional even though they default to zero:
@@ -482,9 +482,9 @@ namespace bawdpsplit {
 // would silently read whatever parameter happened to land in its slot instead
 // of erroring.
 namespace frq {
-  enum : int { alpha = 0, beta, p, lambda, t0, delta, cv_u, N_REQ };
+  enum : int { alpha = 0, beta, h, lambda, t0, delta, cv_u, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"alpha", "beta", "p", "lambda", "t0", "delta", "cv_u"};
+    static const char* n[] = {"alpha", "beta", "h", "lambda", "t0", "delta", "cv_u"};
     return {n, N_REQ, "FRQ"};
   }
 }

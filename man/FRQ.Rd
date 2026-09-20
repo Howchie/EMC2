@@ -30,7 +30,7 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{alpha} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Quorum size (\code{K}): how many evidence units are needed to respond \cr
    \emph{beta} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Spare capacity (\code{N - K + 1}): how many units beyond the quorum the pool holds \cr
-   \emph{p} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that an evidence unit is available \cr
+   \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
    \emph{lambda} \tab log \tab [0, Inf] \tab log(log(2) / 0.5) \tab  \tab Registration rate of an available evidence unit \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{delta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Half-width of continuous threshold variability \cr
@@ -38,29 +38,31 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
 }
 
 
-The fitted parameters are the generative ones. \code{alpha} and \code{beta} are
-the quorum size \code{K} and the spare capacity \code{N - K + 1}, treated as
-continuous and bounded below at 1, so \code{alpha = beta = 1} is a single-unit
-pool. \code{p} is the probability that each evidence unit is available and
-\code{lambda} is the registration rate of an available unit. \code{mapped_pars()}
-reports the eventual completion probability \code{h} in addition to the pool
-size \code{N} = \code{alpha} + \code{beta} - 1, the quorum fraction \code{d} =
+The fitted parameters define the generative model in sampler-friendly
+coordinates.
+\code{alpha} and \code{beta} are the quorum size \code{K} and the spare
+capacity \code{N - K + 1}, treated as continuous and bounded below at 1, so
+\code{alpha = beta = 1} is a single-unit pool. \code{h} is the
+accumulator-level probability of eventual response and \code{lambda} is the
+registration rate of an available unit. The kernel derives the evidence-level
+availability \code{p} from \code{h}, \code{alpha}, and \code{beta};
+\code{mapped_pars()} reports that \code{p} alongside the pool size \code{N} =
+\code{alpha} + \code{beta} - 1, the quorum fraction \code{d} =
 \code{alpha}/\code{N}, and the unit-rate Gamma shape \code{a_u = 1/cv_u^2}
 (\code{Inf} at zero).
 
-\code{p} and \code{lambda} are the two mechanistic evidence dimensions:
-\code{p} changes whether the finite pool can supply a quorum at all, while
-\code{lambda} changes the speed of registration conditional on availability.
-This makes direct rate versus quorum/threshold tests possible. The derived
-\code{h} is useful for reporting omission risk, but it is not used as a
-substitute for either mechanism in a design formula.
+\code{h} and \code{lambda} are the two exposed evidence dimensions: \code{h}
+controls whether enough evidence is ultimately available, while \code{lambda}
+controls the speed of registration conditional on availability. This makes
+direct rate versus quorum/threshold tests possible while retaining the more
+identified accumulator-level response coordinate.
 
 \code{delta} adds between-trial variability in how much evidence the accumulator
 demands before responding, playing the role that start-point or threshold
 variability plays in the ballistic models. On a trial where \code{delta} is
 larger, the requirement is more often unusually lenient \emph{or} unusually
 strict, and less often typical; the average requirement is unchanged, so
-\code{p} and \code{lambda} keep their meanings exactly. At the default of zero there is
+\code{h} and \code{lambda} keep their meanings exactly. At the default of zero there is
 no such variability and the model reduces to the description above.
 \code{mapped_pars()} reports \code{sQ} = \code{delta}/sqrt(3), the standard deviation of
 the trial-to-trial shift on a log-odds scale. Note that \code{delta} is a
@@ -71,13 +73,13 @@ is worth fitting only with a lot of data or a strong prior.
 
 \code{cv_u} is independent unit-level rate heterogeneity, not a shared trialwise
 drift state. It is best held fixed or shared across racers initially. The
-proper/non-defective boundary is obtained by fixing \code{p = 1}, which makes
-every unit available. This boundary is exact and leaves \code{lambda} as the
-rate parameter rather than changing coordinates.
+proper/non-defective boundary is obtained by fixing \code{h = 1}, which maps
+to \code{p = 1} exactly. This boundary is exact and leaves \code{lambda} as
+the rate parameter rather than changing coordinates.
 
 \code{alpha} and \code{beta} control the shape of the distribution: \code{alpha} how
 sharply the density rises at the leading edge, \code{beta} how heavy the late
-tail is. Both are more weakly informed than \code{p} and \code{lambda}, so the
+tail is. Both are more weakly informed than \code{h} and \code{lambda}, so the
 recommended default is \code{alpha ~ 1} and \code{beta ~ 1}, shared across
 accumulators along with \code{t0}.
 
@@ -107,12 +109,12 @@ formula, typically for parameters related to the rate of accumulation.
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 matchfun <- function(d) d$S == d$lR
-# The shapes are held constant; the design acts on the two mechanistic
-# evidence dimensions, lambda (registration rate) and p (availability).
+# The shapes are held constant; the design acts on the two evidence
+# dimensions, lambda (registration rate) and h (eventual response).
 design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
-                     formula = list(alpha ~ 1, beta ~ 1, p ~ lM,
+                     formula = list(alpha ~ 1, beta ~ 1, h ~ lM,
                                     lambda ~ lM + E, t0 ~ 1),
-                     contrasts = list(p = list(lM = ADmat),
+                     contrasts = list(h = list(lM = ADmat),
                                       lambda = list(lM = ADmat)))
 # For all parameters that are not defined in the formula, default values are
 # assumed (see Table above).

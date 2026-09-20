@@ -163,7 +163,7 @@ LNR <- function() {
 #'
 #' The proper `sv = 0`, `omega = 0`, `gamma > 0` member overlaps with the
 #' non-defective boundary of FRQ: for integer `alpha = K`, `beta = nu/gamma`,
-#' `p = 1`, and `lambda = gamma`, both have
+#' `h = 1`, and `lambda = gamma`, both have
 #' `F(t) = I_{1-exp(-gamma*t)}(K, nu/gamma)`. FRQ is not otherwise redundant:
 #' it supplies a finite-reservoir defect (`h < 1`) and threshold-shape
 #' relaxation, while PCOUNTER supplies trialwise input variation,

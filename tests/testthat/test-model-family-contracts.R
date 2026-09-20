@@ -83,8 +83,8 @@ test_that("representative model kernels preserve the CDF/PDF contract", {
     ),
     FRQ = list(
       times = c(.01, .1, .4, 1, 4),
-      cdf = function(t) EMC2:::pfrq(t, 2, 3, .8, .4),
-      pdf = function(t) EMC2:::dfrq(t, 2, 3, .8, .4)
+      cdf = function(t) EMC2:::pfrq(t, 2, 3, pbeta(.8, 2, 3), .4),
+      pdf = function(t) EMC2:::dfrq(t, 2, 3, pbeta(.8, 2, 3), .4)
     )
   )
   for (nm in names(cases)) {

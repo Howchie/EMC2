@@ -1271,7 +1271,7 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQ simulator.  pars columns: alpha, beta, p, lambda, t0, delta, cv_u.
+// FRQ simulator.  pars columns: alpha, beta, h, lambda, t0, delta, cv_u.
 //
 // Exact, not approximate: the process is distributionally identical to drawing
 // the latent quorum U ~ Beta(alpha, beta) and inverting the registration CDF at
@@ -1301,9 +1301,9 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rfrq_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  for (const char* nm : {"alpha", "beta", "p", "lambda", "t0"})
+  for (const char* nm : {"alpha", "beta", "h", "lambda", "t0"})
     if (!ci.count(nm)) Rcpp::stop("rfrq_cpp: missing parameter column '%s'.", nm);
-  const int ia = ci.at("alpha"), ib = ci.at("beta"), ip = ci.at("p"),
+  const int ia = ci.at("alpha"), ib = ci.at("beta"), ih = ci.at("h"),
             il = ci.at("lambda"), it0 = ci.at("t0");
   // Absent delta means the documented default of no threshold variability.
   // Safe to default here, unlike on the likelihood path: this lookup is BY NAME,
@@ -1323,7 +1323,7 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       dt[r] = R_PosInf;
       continue;
     }
-    const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ip),
+    const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
                                  pars(r, il), idl >= 0 ? pars(r, idl) : 0.0,
                                  icv >= 0 ? pars(r, icv) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes
