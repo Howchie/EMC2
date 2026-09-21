@@ -73,7 +73,9 @@ struct BvnCornerValues {
   bool valid = true;
 };
 
-inline BvnCornerValues bawl_corr_bvn_corner(double x, double y, double rho) {
+inline BvnCornerValues bawl_corr_bvn_corner(
+    double x, double y, double rho,
+    double r_override = R_NaN, double sr_override = R_NaN) {
   BvnCornerValues out;
   if (x == R_NegInf || y == R_NegInf) return out;
   if (x == R_PosInf && y == R_PosInf) {
@@ -97,9 +99,10 @@ inline BvnCornerValues bawl_corr_bvn_corner(double x, double y, double rho) {
     return out;
   }
 
-  const double r = std::fmax(-1.0 + 1e-12, std::fmin(1.0 - 1e-12, rho));
-  const double one_minus_r2 = std::fmax(1.0 - r * r, 1e-24);
-  const double sr = std::sqrt(one_minus_r2);
+  const double r = R_FINITE(r_override)
+    ? r_override : std::fmax(-1.0 + 1e-12, std::fmin(1.0 - 1e-12, rho));
+  const double sr = R_FINITE(sr_override)
+    ? sr_override : std::sqrt(std::fmax(1.0 - r * r, 1e-24));
   if (std::fabs(r) <= 1e-15) {
     const double px = pnorm_std(x, true, false);
     const double py = pnorm_std(y, true, false);
@@ -121,15 +124,21 @@ inline BvnCornerValues bawl_corr_bvn_corner(double x, double y, double rho) {
   const double fy = dnormP(y);
   const double fxq = dnormP(qx);
   const double fyq = dnormP(qy);
-  out.dx = fx * pnorm_std(qx, true, false);
-  out.dy = fy * pnorm_std(qy, true, false);
+  // The same conditional CDFs feed both the first and second boundary
+  // derivatives.  Calling pnorm_std once per argument matters here: a
+  // finite two-racer cause rectangle visits four finite corners, and the
+  // lower-tail hybrid already makes the BVN CDF itself relatively expensive.
+  const double pxq = pnorm_std(qx, true, false);
+  const double pyq = pnorm_std(qy, true, false);
+  out.dx = fx * pxq;
+  out.dy = fy * pyq;
   // d/dy of d/dx Phi2 is phi(x) phi((y-rho*x)/s) / s.  Using the
   // symmetric conditional argument here is tempting, but it is paired with
   // the wrong marginal density away from the diagonal and corrupts M12 on
   // narrow asymmetric rectangles.
   out.dxy = fx * fxq / sr;
-  out.dxx = fx * (-x * pnorm_std(qx, true, false) - r * fxq / sr);
-  out.dyy = fy * (-y * pnorm_std(qy, true, false) - r * fyq / sr);
+  out.dxx = fx * (-x * pxq - r * fxq / sr);
+  out.dyy = fy * (-y * pyq - r * fyq / sr);
   if (!R_FINITE(out.cdf) || !R_FINITE(out.dx) || !R_FINITE(out.dy) ||
       !R_FINITE(out.dxx) || !R_FINITE(out.dyy) || !R_FINITE(out.dxy)) {
     out.valid = false;
@@ -167,13 +176,20 @@ inline BvnBoundaryGrid bawl_corr_make_boundary_grid(
       return g;
     }
   }
+  double r_grid = R_NaN;
+  double sr_grid = R_NaN;
+  if (R_FINITE(rho)) {
+    r_grid = std::fmax(-1.0 + 1e-12, std::fmin(1.0 - 1e-12, rho));
+    sr_grid = std::sqrt(std::fmax(1.0 - r_grid * r_grid, 1e-24));
+  }
   for (uint8_t i = 0; i < g.nx; ++i) {
     const double xs = (g.x[i] == R_NegInf || g.x[i] == R_PosInf)
       ? g.x[i] : (g.x[i] - mu1) / sd1;
     for (uint8_t j = 0; j < g.ny; ++j) {
       const double ys = (g.y[j] == R_NegInf || g.y[j] == R_PosInf)
         ? g.y[j] : (g.y[j] - mu2) / sd2;
-      const BvnCornerValues corner = bawl_corr_bvn_corner(xs, ys, rho);
+      const BvnCornerValues corner =
+        bawl_corr_bvn_corner(xs, ys, rho, r_grid, sr_grid);
       if (!corner.valid) g.status = BAwLCorrMomentStatus::unstable;
       g.cdf[i][j] = corner.cdf;
       g.dx[i][j] = corner.dx;

@@ -3,6 +3,7 @@
 
 #include <Rcpp.h>
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <vector>
 #include "utility_functions.h"
@@ -413,20 +414,197 @@ inline const LegendreHalfRule& get_legendre_half_rule(int order) {
   return unreachable;
 }
 
+// The accurate bivariate-normal route is called repeatedly with the same rho
+// while one correlated BAwL parameter cell is evaluated.  TVPACK's formula
+// spends a noticeable fraction of that time rebuilding the rho-only part of
+// its Legendre rule (asin, sin, and 1 - sin^2).  Keep the last rule in the
+// calling thread, just as the RDMSWTN BVN seed keeps its per-law table.  The
+// cache is deliberately one-entry: a likelihood call normally has one rho,
+// while a small cache would add linear scans to a much hotter path.
+struct BvnTvpackCache {
+  double rho = R_NaN;
+  int order = 0;
+  int n = 0;
+  double scale = 0.0;
+  std::array<double, 24> sn{};
+  std::array<double, 24> den{};
+  std::array<double, 24> weight{};
+
+  void prepare(double r, int requested_order) {
+    if (rho == r && order == requested_order) return;
+    const LegendreHalfRule& rule = get_legendre_half_rule(requested_order);
+    const double asr = std::asin(r);
+    const double half = 0.5 * asr;
+    n = static_cast<int>(rule.x.size()) * 2;
+    scale = asr / fourPI;
+    for (int ix = 0; ix < static_cast<int>(rule.x.size()); ++ix) {
+      const double xp = half * (1.0 + rule.x[ix]);
+      const double xn = half * (1.0 - rule.x[ix]);
+      const double sp = std::sin(xp);
+      const double snv = std::sin(xn);
+      sn[static_cast<size_t>(2 * ix)] = sp;
+      sn[static_cast<size_t>(2 * ix + 1)] = snv;
+      den[static_cast<size_t>(2 * ix)] = std::fma(-sp, sp, 1.0);
+      den[static_cast<size_t>(2 * ix + 1)] = std::fma(-snv, snv, 1.0);
+      weight[static_cast<size_t>(2 * ix)] = rule.w[ix];
+      weight[static_cast<size_t>(2 * ix + 1)] = rule.w[ix];
+    }
+    rho = r;
+    order = requested_order;
+  }
+};
+
+inline BvnTvpackCache& bvn_tvpack_cache() {
+  static thread_local BvnTvpackCache cache;
+  return cache;
+}
+
+// For |rho| >= .925 the high-correlation TVPACK branch has a second
+// rho-only setup: the transformed Legendre abscissas and their square-root
+// denominators.  Cache those too.  The x-dependent exponentials remain in the
+// hot loop, so this does not alter the numerical formula or its tail behaviour.
+struct BvnTvpackHighCache {
+  double rho = R_NaN;
+  double half_sqrt = 0.0;
+  int n = 0;
+  std::array<double, 24> xs{};
+  std::array<double, 24> rs{};
+  std::array<double, 24> weight{};
+
+  void prepare(double r) {
+    if (rho == r) return;
+    const LegendreHalfRule& rule = get_legendre_half_rule(20);
+    half_sqrt = 0.5 * std::sqrt(1.0 - r * r);
+    n = static_cast<int>(rule.x.size()) * 2;
+    for (int ix = 0; ix < static_cast<int>(rule.x.size()); ++ix) {
+      const double tp = half_sqrt * (1.0 + rule.x[ix]);
+      const double tn = half_sqrt * (1.0 - rule.x[ix]);
+      const double xp = tp * tp;
+      const double xn = tn * tn;
+      xs[static_cast<size_t>(2 * ix)] = xp;
+      xs[static_cast<size_t>(2 * ix + 1)] = xn;
+      rs[static_cast<size_t>(2 * ix)] = std::sqrt(1.0 - xp);
+      rs[static_cast<size_t>(2 * ix + 1)] = std::sqrt(1.0 - xn);
+      weight[static_cast<size_t>(2 * ix)] = half_sqrt * rule.w[ix];
+      weight[static_cast<size_t>(2 * ix + 1)] = half_sqrt * rule.w[ix];
+    }
+    rho = r;
+  }
+};
+
+inline BvnTvpackHighCache& bvn_tvpack_high_cache() {
+  static thread_local BvnTvpackHighCache cache;
+  return cache;
+}
+
+// Drezner's fast approximation has the same opportunity on its hot path.
+// The five-point rule is fixed, but its rho-scaled abscissas, square-root
+// denominators, and weights are not.  Trends on v make the CDF call count
+// large while rho is usually a cell constant, so retain this small table per
+// thread and per rho.
+struct BvnDreznerCache {
+  double rho = R_NaN;
+  bool high = false;
+  int n = 0;
+  double rho_var = 0.0;
+  double r3 = 0.0;
+  std::array<double, 8> node{};
+  std::array<double, 8> variance{};
+  std::array<double, 8> inv_sqrt{};
+  std::array<double, 8> denom{};
+  std::array<double, 8> weight{};
+
+  void prepare(double r) {
+    if (rho == r) return;
+    const LegendreHalfRule& rule = get_legendre_half_rule(5);
+    high = std::fabs(r) >= 0.7;
+    rho_var = 1.0 - r * r;
+    n = rule.pair_count * 2 + (rule.has_center ? 1 : 0);
+    if (high) {
+      r3 = std::sqrt(rho_var);
+      for (int ix = 0; ix < rule.pair_count; ++ix) {
+        const double rp = r3 * rule.xp[ix];
+        const double rn = r3 * rule.xn[ix];
+        node[static_cast<size_t>(2 * ix)] = rp * rp;
+        node[static_cast<size_t>(2 * ix + 1)] = rn * rn;
+        variance[static_cast<size_t>(2 * ix)] =
+          1.0 - node[static_cast<size_t>(2 * ix)];
+        variance[static_cast<size_t>(2 * ix + 1)] =
+          1.0 - node[static_cast<size_t>(2 * ix + 1)];
+        denom[static_cast<size_t>(2 * ix)] =
+          std::sqrt(variance[static_cast<size_t>(2 * ix)]);
+        denom[static_cast<size_t>(2 * ix + 1)] =
+          std::sqrt(variance[static_cast<size_t>(2 * ix + 1)]);
+        inv_sqrt[static_cast<size_t>(2 * ix)] =
+          1.0 / denom[static_cast<size_t>(2 * ix)];
+        inv_sqrt[static_cast<size_t>(2 * ix + 1)] =
+          1.0 / denom[static_cast<size_t>(2 * ix + 1)];
+        weight[static_cast<size_t>(2 * ix)] = rule.w_div_4pi[ix];
+        weight[static_cast<size_t>(2 * ix + 1)] = rule.w_div_4pi[ix];
+      }
+      if (rule.has_center) {
+        const int ix = rule.pair_count;
+        const double rp = r3 * rule.xp[ix];
+        const size_t k = static_cast<size_t>(2 * ix);
+        node[k] = rp * rp;
+        variance[k] = 1.0 - node[k];
+        denom[k] = std::sqrt(variance[k]);
+        inv_sqrt[k] = 1.0 / denom[k];
+        weight[k] = rule.w_div_4pi[ix];
+      }
+    } else {
+      for (int ix = 0; ix < rule.pair_count; ++ix) {
+        const double rp = r * rule.xp[ix];
+        const double rn = r * rule.xn[ix];
+        node[static_cast<size_t>(2 * ix)] = rp;
+        node[static_cast<size_t>(2 * ix + 1)] = rn;
+        variance[static_cast<size_t>(2 * ix)] = 1.0 - rp * rp;
+        variance[static_cast<size_t>(2 * ix + 1)] = 1.0 - rn * rn;
+        denom[static_cast<size_t>(2 * ix)] =
+          std::sqrt(variance[static_cast<size_t>(2 * ix)]);
+        denom[static_cast<size_t>(2 * ix + 1)] =
+          std::sqrt(variance[static_cast<size_t>(2 * ix + 1)]);
+        inv_sqrt[static_cast<size_t>(2 * ix)] =
+          1.0 / denom[static_cast<size_t>(2 * ix)];
+        inv_sqrt[static_cast<size_t>(2 * ix + 1)] =
+          1.0 / denom[static_cast<size_t>(2 * ix + 1)];
+        weight[static_cast<size_t>(2 * ix)] = rule.w_div_4pi[ix];
+        weight[static_cast<size_t>(2 * ix + 1)] = rule.w_div_4pi[ix];
+      }
+      if (rule.has_center) {
+        const int ix = rule.pair_count;
+        const double rp = r * rule.xp[ix];
+        const size_t k = static_cast<size_t>(2 * ix);
+        node[k] = rp;
+        variance[k] = 1.0 - rp * rp;
+        denom[k] = std::sqrt(variance[k]);
+        inv_sqrt[k] = 1.0 / denom[k];
+        weight[k] = rule.w_div_4pi[ix];
+      }
+    }
+    rho = r;
+  }
+};
+
+inline BvnDreznerCache& bvn_drezner_cache() {
+  static thread_local BvnDreznerCache cache;
+  return cache;
+}
+
 /* Bivariate normal CDF approximation using 5-point Gauss-Legendre quadrature
  * with p-split refinement and tail parameter cutoffs. */
 inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
 {
-  const int drezner_order = 5;
-  const LegendreHalfRule& drezner_rule = get_legendre_half_rule(drezner_order);
+  BvnDreznerCache& cache = bvn_drezner_cache();
+  cache.prepare(rho);
 
   double x12 = 0.5 * (x1*x1 + x2*x2);
   
   double out = 0;
-  double r1, x3;
-  if (std::fabs(rho) >= 0.7) {
-    double r2 = 1. - rho*rho;
-    double r3 = std::sqrt(r2);
+  double x3;
+  if (cache.high) {
+    const double r2 = cache.rho_var;
+    const double r3 = cache.r3;
     if (rho < 0) {
       x2 = -x2;
     }
@@ -442,29 +620,13 @@ inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
         x6 * ab * gaussian_cdf(-x6) -
           std::exp(-x5/r2) * std::fma(aa, r2, ab) * inv_sqrt2_pi
       );
-      double rr;
-      double nr1, nrr, nr2;
-      for (int ix = 0; ix < drezner_rule.pair_count; ix++) {
-        r1 = r3 * drezner_rule.xp[ix];
-        rr = r1*r1;
-        r2 = std::sqrt(1. - rr);
-        
-        nr1 = r3 * drezner_rule.xn[ix];
-        nrr = nr1*nr1;
-        nr2 = std::sqrt(1. - nrr);
-        
-        out -= drezner_rule.w_div_4pi[ix] * (
-          std::exp(-x5/rr) * (std::exp(-x3/(1. + r2))/r2/x7 - 1.- aa*rr) +
-            std::exp(-x5/nrr) * (std::exp(-x3/(1. + nr2))/nr2/x7 - 1.- aa*nrr)
-        );
-      }
-      if (drezner_rule.has_center) {
-        const int center_ix = drezner_rule.pair_count;
-        r1 = r3 * drezner_rule.xp[center_ix];
-        rr = r1*r1;
-        r2 = std::sqrt(1. - rr);
-        out -= drezner_rule.w_div_4pi[center_ix] *
-          std::exp(-x5/rr) * (std::exp(-x3/(1. + r2))/r2/x7 - 1.- aa*rr);
+      for (int ix = 0; ix < cache.n; ix++) {
+        const double xs = cache.node[static_cast<size_t>(ix)];
+        const double inv_s = cache.inv_sqrt[static_cast<size_t>(ix)];
+        const double rs = cache.denom[static_cast<size_t>(ix)];
+        out -= cache.weight[static_cast<size_t>(ix)] *
+          std::exp(-x5/xs) *
+          (std::exp(-x3/(1. + rs)) * inv_s / x7 - 1. - aa * xs);
       }
     }
     if (rho > 0) {
@@ -477,26 +639,12 @@ inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
   }
   else {
     x3 = x1*x2;
-    double rr2;
-    double nr1, nrr2;
-    for (int ix = 0; ix < drezner_rule.pair_count; ix++) {
-      r1 = rho * drezner_rule.xp[ix];
-      rr2 = 1. - r1*r1;
-      
-      nr1 = rho * drezner_rule.xn[ix];
-      nrr2 = 1. - nr1*nr1;
-      
-      out += drezner_rule.w_div_4pi[ix] * (
-        std::exp((r1*x3 - x12) / rr2) / std::sqrt(rr2) +
-          std::exp((nr1*x3 - x12) / nrr2) / std::sqrt(nrr2)
-      );
-    }
-    if (drezner_rule.has_center) {
-      const int center_ix = drezner_rule.pair_count;
-      r1 = rho * drezner_rule.xp[center_ix];
-      rr2 = 1. - r1*r1;
-      out += drezner_rule.w_div_4pi[center_ix] *
-        std::exp((r1*x3 - x12) / rr2) / std::sqrt(rr2);
+    for (int ix = 0; ix < cache.n; ix++) {
+      const double r1 = cache.node[static_cast<size_t>(ix)];
+      const double inv_s = cache.inv_sqrt[static_cast<size_t>(ix)];
+      const double rr2 = cache.variance[static_cast<size_t>(ix)];
+      out += cache.weight[static_cast<size_t>(ix)] *
+        std::exp((r1*x3 - x12) / rr2) * inv_s;
     }
     return std::fma(out, rho, gaussian_cdf(-x1) * gaussian_cdf(-x2));
   }
@@ -622,22 +770,17 @@ inline double norm_ucdf_2d(double x1, double x2, double rho)
     if (abs_rho > std::numeric_limits<double>::epsilon()) {
       hk = x1 * x2;
       double hs = 0.5 * (x1*x1 + x2*x2);
-      double asr = std::asin(rho);
-      double asr_half = 0.5 * asr;
-      double sn1, sn2;
-      
       const LegendreHalfRule& active_rule =
         (abs_rho < 0.3) ? low_rule : ((abs_rho < 0.5) ? mid_rule : high_rule);
-
-      for (int ix = 0; ix < static_cast<int>(active_rule.x.size()); ix++) {
-        sn1 = std::sin(asr_half * (1. + active_rule.x[ix]));
-        sn2 = std::sin(asr_half * (1. - active_rule.x[ix]));
-        out += active_rule.w[ix] * (
-          std::exp(std::fma(sn1, hk, -hs) / std::fma(-sn1, sn1, 1.)) +
-            std::exp(std::fma(sn2, hk, -hs) / std::fma(-sn2, sn2, 1.))
-        );
+      BvnTvpackCache& cache = bvn_tvpack_cache();
+      cache.prepare(rho, active_rule.x.size() == low_rule.x.size() ? 6 :
+                    (active_rule.x.size() == mid_rule.x.size() ? 12 : 20));
+      for (int ix = 0; ix < cache.n; ++ix) {
+        out += cache.weight[static_cast<size_t>(ix)] *
+          std::exp(std::fma(cache.sn[static_cast<size_t>(ix)], hk, -hs) /
+                   cache.den[static_cast<size_t>(ix)]);
       }
-      out *= asr / fourPI;
+      out *= cache.scale;
     }
     out = std::fma(gaussian_cdf(-x1), gaussian_cdf(-x2), out);
   }
@@ -663,27 +806,14 @@ inline double norm_ucdf_2d(double x1, double x2, double rho)
         b = std::sqrt(bs);
         out -= std::exp(-0.5 * hk) * sqrt_twoPI * gaussian_cdf(-b / a) * b * (1. - c*bs*rfdbs);
       }
-      a *= 0.5;
-      double xs;
-      double rs;
-      double temp;
-      
-      for (int ix = 0; ix < static_cast<int>(high_rule.x.size()); ix++) {
-        temp = a * (1. + high_rule.x[ix]);
-        xs = temp * temp;
-        rs = std::sqrt(1. - xs);
+      BvnTvpackHighCache& cache = bvn_tvpack_high_cache();
+      cache.prepare(rho);
+      for (int ix = 0; ix < cache.n; ++ix) {
+        const double xs = cache.xs[static_cast<size_t>(ix)];
+        const double rs = cache.rs[static_cast<size_t>(ix)];
         asr = -0.5 * (hk + bs / xs);
         if (asr > -100.) {
-          out += a * high_rule.w[ix] * std::exp(asr) *
-            (std::exp(-hk*xs/(2.*(1.+rs)*(1.+rs)))/rs - (1. + c*xs*std::fma(d, xs, 1.)));
-        }
-        
-        temp = a * (1. - high_rule.x[ix]);
-        xs = temp * temp;
-        rs = std::sqrt(1. - xs);
-        asr = -0.5 * (hk + bs / xs);
-        if (asr > -100.) {
-          out += a * high_rule.w[ix] * std::exp(asr) *
+          out += cache.weight[static_cast<size_t>(ix)] * std::exp(asr) *
             (std::exp(-hk*xs/(2.*(1.+rs)*(1.+rs)))/rs - (1. + c*xs*std::fma(d, xs, 1.)));
         }
       }
