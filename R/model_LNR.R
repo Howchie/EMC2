@@ -34,6 +34,87 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
   .apply_timed_guess_winner(out, levels(lR))
 }
 
+# Draw a Gaussian-copula LNR race.  The copula is applied to the complete
+# finishing-time marginals, so the ordinary LNR is recovered exactly when all
+# rho rows are zero.
+.rLNRcorr <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
+  if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+  if (.use_cpp_rfun()) {
+    res <- rlnr_corr_cpp(as.matrix(pars), levels(lR), ok)
+    return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
+  }
+  n_acc <- length(levels(lR)); n_rows <- nrow(pars)
+  if (n_acc < 1L || n_rows %% n_acc != 0L)
+    stop("Correlated LNR requires whole trials of accumulator rows.")
+  if (!all(c("m", "s", "t0", "rho") %in% colnames(pars)))
+    stop("Correlated LNR requires columns m, s, t0, and rho.")
+  if (any(!is.finite(pars[ok, "rho"]) | abs(pars[ok, "rho"]) > 1))
+    stop("Correlated LNR requires finite rho values in [-1, 1].")
+  n_trials <- n_rows / n_acc
+  dt <- matrix(Inf, nrow = n_acc, ncol = n_trials)
+  for (j in seq_len(n_trials)) {
+    rows <- ((j - 1L) * n_acc + 1L):(j * n_acc)
+    active <- rows[ok[rows]]
+    if (!length(active)) next
+    rho_rows <- active[abs(pars[active, "rho"]) > 1e-12]
+    if (length(rho_rows) > 2L)
+      stop("Correlated LNR supports at most two participating rows per trial.")
+    u <- stats::runif(length(active))
+    names(u) <- as.character(active)
+    if (length(rho_rows) == 2L) {
+      rho <- pars[rho_rows[1L], "rho"]
+      if (abs(pars[rho_rows[2L], "rho"] - rho) > 1e-12)
+        stop("Correlated LNR participating rows must share one rho.")
+      z <- c(stats::rnorm(1), stats::rnorm(1))
+      u[as.character(rho_rows)] <- stats::pnorm(c(z[1L],
+        rho * z[1L] + sqrt(max(0, 1 - rho^2)) * z[2L]))
+    }
+    for (ii in seq_along(active)) {
+      r <- active[ii]
+      dt[r - rows[1L] + 1L, j] <- pars[r, "t0"] + stats::qlnorm(u[as.character(r)],
+        meanlog = pars[r, "m"], sdlog = pars[r, "s"])
+    }
+  }
+  R <- max.col(-t(dt), ties.method = "first")
+  pick <- cbind(R, seq_len(n_trials))
+  out <- cbind.data.frame(
+    R = factor(levels(lR)[R], levels = levels(lR)),
+    rt = dt[pick]
+  )
+  .apply_timed_guess_winner(out, levels(lR))
+}
+
+.validate_lnr_corr_rows <- function(rho, dadm = NULL, tol = 1e-12) {
+  if (any(!is.finite(rho)) || any(abs(rho) > 1))
+    stop("LNRcorr requires finite natural-scale rho values in [-1, 1].")
+  if (is.null(dadm) || is.null(dadm$lR)) return(invisible(TRUE))
+  n_lR <- length(levels(dadm$lR))
+  if (n_lR < 1L || length(rho) %% n_lR != 0L)
+    stop("LNRcorr could not determine accumulator rows within trials.")
+  active <- rep(TRUE, length(rho))
+  if ("RACE" %in% names(dadm) && !is.null(attr(dadm, "RACE_mask"))) {
+    race_mask <- attr(dadm, "RACE_mask")
+    if (length(race_mask) == length(rho)) active <- race_mask
+  } else if ("RACE" %in% names(dadm)) {
+    for (j in seq_len(length(rho) / n_lR)) {
+      rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+      n_acc <- suppressWarnings(as.integer(as.character(dadm$RACE[rows[1L]])))
+      if (is.finite(n_acc)) active[rows] <- seq_len(n_lR) <= n_acc
+    }
+  }
+  for (j in seq_len(length(rho) / n_lR)) {
+    rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+    values <- rho[rows][active[rows] & abs(rho[rows]) > tol]
+    if (length(values) > 2L ||
+        (length(values) == 2L && abs(values[1L] - values[2L]) > tol)) {
+      stop("LNRcorr requires one directly specified accumulator pair per trial: " ,
+           "at most two active rows may have the same signed nonzero rho, " ,
+           "and all other rows must have rho = 0.")
+    }
+  }
+  invisible(TRUE)
+}
+
 
 #' The Log-Normal Race Model
 #'
@@ -52,6 +133,7 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #' | *m* | identity | \[-Inf, Inf\] | 1 | | Meanlog of the lognormal decision-time distribution. |
 #' | *s* | log | \[0, Inf\] | log(1) | | SDlog of the lognormal decision-time distribution. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Additive non-decision-time shift. |
+#' | *rho* | probit | \[-1, 1\] | 0 | correlated only | Gaussian-copula dependence for one accumulator pair. |
 #'
 #' Conditional on an accumulator's parameters, its decision time is
 #' `T = t0 + Y`, where `log(Y) ~ Normal(m, s^2)`. Thus `m` and `s` are the
@@ -78,12 +160,21 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #' *omission* probability that puts mass only at `rt = Inf`, and `pGuess`, a
 #' uniform-outlier probability mixed into observed RTs. Both are proportions
 #' among *retained* trials and are applied after truncation renormalisation.
+#' Set `correlated = TRUE`, or use [LNRcorr()], to couple one accumulator pair
+#' with a Gaussian copula on their complete finishing-time marginals. The
+#' participating rows must share one natural-scale `rho` in `[-1, 1]`; all
+#' other rows are independent.
 #'
 #' Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 #' The lognormal race: A cognitive-process model of choice and latency with
 #' desirable psychometric properties. *Psychometrika, 80*, 491-513.
 #' https://doi.org/10.1007/s11336-013-9396-3
 #'
+#' Reynolds, P. D., Kvam, P. D., Osth, A. F., et al. (2020). Correlated racing
+#' evidence accumulator models. *Journal of Mathematical Psychology, 96*, 102331.
+#'
+#' @param correlated Logical; if `TRUE`, include the finishing-time copula
+#' parameter `rho` and use the correlated race likelihood.
 #' @return A model list with all the necessary functions for EMC2 to sample
 #' @examples
 #' # When working with lM it is useful to design  an "average and difference"
@@ -101,35 +192,81 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #'
 
 
-LNR <- function() {
+LNR <- function(correlated = FALSE) {
+  correlated <- isTRUE(correlated)
+  rho_bound_eps <- 2 * .Machine$double.eps
+  p_types <- c(m = 1, s = log(1), t0 = log(0),
+               pContaminant = qnorm(0), pGuess = qnorm(0))
+  transform <- c(m = "identity", s = "exp", t0 = "exp",
+                 pContaminant = "pnorm", pGuess = "pnorm")
+  minmax <- cbind(m = c(-Inf, Inf), s = c(0, Inf), t0 = c(0.05, Inf),
+                  pGuess = c(0.001, 0.999))
+  exception <- c(pGuess = 0, t0 = 0)
+  if (correlated) {
+    p_types <- c(p_types, rho = qnorm(0.5))
+    transform <- c(transform, rho = "pnorm")
+    minmax <- cbind(minmax, rho = c(-.99 - rho_bound_eps, .99 + rho_bound_eps))
+    exception <- c(exception, rho = 0)
+  }
   list(
-    type="RACE",
-    c_name = "LNR",
-    p_types=c("m" = 1,"s" = log(1),"t0" = log(0), "pContaminant"=qnorm(0), "pGuess"=qnorm(0)),
+    type = "RACE",
+    c_name = if (correlated) "LNR_CORR" else "LNR",
+    correlated = correlated,
+    correlation_type = if (correlated) "lnr_gaussian_copula" else NULL,
+    p_types = p_types,
     p_types_canonical = c("m", "s", "t0"),
-    transform=list(func=c(m = "identity",s = "exp", t0 = "exp", pContaminant="pnorm", pGuess="pnorm")),
+    transform = {
+      out <- list(func = transform)
+      if (correlated) {
+        out$lower <- c(rho = -1)
+        out$upper <- c(rho = 1)
+      }
+      out
+    },
     # NOTE: pContaminant's bound sits outside cbind() (a long-standing slip, so
     # it is not actually a minmax column).  Left as-is deliberately: moving it
     # would change pContaminant's established behaviour.
     # pGuess needs the exception at 0: without it the [0.001, 0.999] minmax
     # clamps the default (pnorm(-Inf) = 0) up to 0.001, making the nuisance
     # parameter silently active.
-    bound=list(minmax=cbind(m=c(-Inf,Inf),s = c(0, Inf), t0=c(0.05,Inf),pGuess=c(0.001,0.999)),
-               exception=c(pGuess=0,t0=0),pContaminant=c(0.001,0.999)),
+    bound = list(minmax = minmax, exception = exception,
+                 pContaminant = c(0.001, 0.999)),
     # Trial dependent parameter transform
-    Ttransform = function(pars,dadm) pars,
+    Ttransform = function(pars, dadm) {
+      if (correlated) .validate_lnr_corr_rows(pars[, "rho"], dadm = dadm)
+      pars
+    },
     # Random function for racing accumulators
-    rfun=function(data=NULL,pars) rLNR(data$lR, pars, ok = attr(pars, "ok")),
+    rfun = function(data = NULL, pars) {
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      if (correlated) .rLNRcorr(data$lR, pars, ok = ok) else
+        rLNR(data$lR, pars, ok = ok)
+    },
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLNR(rt,pars),
     # Probability function (CDF) for single accumulator
     pfun=function(rt,pars) pLNR(rt,pars),
     # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-      log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    log_likelihood = if (correlated) {
+      function(pars, dadm, model, min_ll = log(1e-10))
+        stop("LNRcorr likelihood is implemented in the C++ race path; use fast_path=TRUE.")
+    } else {
+      function(pars, dadm, model, min_ll = log(1e-10))
+        log_likelihood_race_missing(pars = pars, dadm = dadm, model = model,
+                                     min_ll = min_ll)
     }
   )
 }
+
+#' Correlated Log-Normal Race Model
+#'
+#' Convenience constructor for the correlated form of [LNR()]. It adds a
+#' Gaussian-copula correlation parameter `rho` for one accumulator pair.
+#'
+#' @return A model list compatible with [design()].
+#' @export
+LNRcorr <- function() LNR(correlated = TRUE)
 
 
 # `k` is sampled as a non-negative offset.  The canonical count criterion is

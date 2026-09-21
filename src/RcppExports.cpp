@@ -2467,6 +2467,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rlnr_corr_cpp
+Rcpp::List rlnr_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok);
+RcppExport SEXP _EMC2_rlnr_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    rcpp_result_gen = Rcpp::wrap(rlnr_corr_cpp(pars, lR_levels, ok));
+    return rcpp_result_gen;
+END_RCPP
+}
 // fft_convolve_equiv_cpp
 arma::vec fft_convolve_equiv_cpp(const arma::vec& x, const arma::vec& y, bool conj_flag);
 RcppExport SEXP _EMC2_fft_convolve_equiv_cpp(SEXP xSEXP, SEXP ySEXP, SEXP conj_flagSEXP) {
@@ -3528,6 +3541,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rrdmswtn_tt_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_cpp, 4},
     {"_EMC2_rrdmswtn_tt_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_drift_corr_cpp, 4},
     {"_EMC2_rrdmswtn_tt_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_corr_cpp, 4},
+    {"_EMC2_rlnr_corr_cpp", (DL_FUNC) &_EMC2_rlnr_corr_cpp, 3},
     {"_EMC2_fft_convolve_equiv_cpp", (DL_FUNC) &_EMC2_fft_convolve_equiv_cpp, 3},
     {"_EMC2_compute_gamma_diff_hrf", (DL_FUNC) &_EMC2_compute_gamma_diff_hrf, 9},
     {"_EMC2_compute_hrf", (DL_FUNC) &_EMC2_compute_hrf, 9},

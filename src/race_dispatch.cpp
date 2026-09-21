@@ -648,6 +648,9 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr = &lnr_logS_at_t;
     out.col_spec     = emc2col::lnr::spec();
     out.ctx.t0_index = emc2col::lnr::t0;
+    // LNRcorr uses the same generic Gaussian-copula race evaluator as the
+    // RDMSWTN finishing-time copula; only the marginal callbacks differ.
+    out.ctx.rdmswtn_correlated = (type_std.find("_CORR") != std::string::npos);
   } else if (type_std.find("PCOUNTER") != std::string::npos) {
     out.pdf1_ptr = &dpcounter_scalar;
     out.cdf1_ptr = &ppcounter_scalar;

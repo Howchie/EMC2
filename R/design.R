@@ -254,7 +254,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   }
   model_spec <- tryCatch(model(), error = function(e) NULL)
   if (is.list(model_spec) && isTRUE(model_spec$correlated) &&
-      !identical(model_spec$correlation_type, "rdmswtn_gaussian_copula") &&
+      !isTRUE(model_spec$correlation_type %in%
+        c("rdmswtn_gaussian_copula", "lnr_gaussian_copula")) &&
       is.null(matchfun)) {
     stop("BAwLcorr requires matchfun so it can construct the lM role indicator.")
   }
@@ -1185,7 +1186,8 @@ design_model <- function(data,design,model=NULL,
   # likelihood data in make_emc/design_model(add_acc = TRUE).
   model_spec <- tryCatch(model(), error = function(e) NULL)
   if (is.list(model_spec) && isTRUE(model_spec$correlated) && isTRUE(add_acc) &&
-      !identical(model_spec$correlation_type, "rdmswtn_gaussian_copula")) {
+      !isTRUE(model_spec$correlation_type %in%
+        c("rdmswtn_gaussian_copula", "lnr_gaussian_copula"))) {
     rho_dm <- out[["rho"]]
     if (is.null(rho_dm) || is.null(da$lM)) {
       stop("BAwLcorr requires a matchfun-generated lM role indicator in the expanded data.")
@@ -1222,11 +1224,12 @@ design_model <- function(data,design,model=NULL,
     }
   }
   if (is.list(model_spec) &&
-      identical(model_spec$correlation_type, "rdmswtn_gaussian_copula") &&
+      isTRUE(model_spec$correlation_type %in%
+        c("rdmswtn_gaussian_copula", "lnr_gaussian_copula")) &&
       isTRUE(add_acc)) {
     rho_dm <- out[["rho"]]
     if (is.null(rho_dm)) {
-      stop("RDMSWTNcorr requires a rho design.")
+      stop("The correlated race model requires a rho design.")
     }
     rho_expand <- attr(rho_dm, "expand")
     rho_full <- if (!is.null(rho_expand) && length(rho_expand) == nrow(da)) {
@@ -1237,15 +1240,19 @@ design_model <- function(data,design,model=NULL,
     n_lR <- length(levels(da$lR))
     if (n_lR < 1L || nrow(rho_full) != nrow(da) ||
         nrow(da) %% n_lR != 0L) {
-      stop("RDMSWTNcorr could not verify the direct-pair rho design.")
+      stop("The correlated race model could not verify the direct-pair rho design.")
     }
     free_cols <- !(colnames(rho_full) %in% names(design$constants))
     rho_free <- rho_full[, free_cols, drop = FALSE]
+    rho_constant <- if ("rho" %in% names(design$constants))
+      unname(design$constants[["rho"]]) else 0
     for (j in seq_len(nrow(da) / n_lR)) {
       rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
       block <- rho_free[rows, , drop = FALSE]
       active <- if (ncol(block)) rowSums(abs(block) > 1e-12) > 0 else
         rep(FALSE, n_lR)
+      if (is.finite(rho_constant) && abs(rho_constant) > 1e-12)
+        active[] <- TRUE
       if ("RACE" %in% names(da)) {
         n_acc <- suppressWarnings(as.integer(as.character(da$RACE[rows[1L]])))
         if (is.finite(n_acc)) {
@@ -1253,13 +1260,13 @@ design_model <- function(data,design,model=NULL,
         }
       }
       if (sum(active) > 2L) {
-        stop("RDMSWTNcorr rho design may select at most two accumulator rows per trial; use a participation factor and fix opted-out coefficients to zero.")
+        stop("The correlated race rho design may select at most two accumulator rows per trial; use a participation factor and fix opted-out coefficients to zero.")
       }
       if (sum(active) == 2L &&
           !isTRUE(all.equal(as.numeric(block[active, , drop = FALSE][1L, ]),
                             as.numeric(block[active, , drop = FALSE][2L, ]),
                             tolerance = 1e-12))) {
-        stop("RDMSWTNcorr's two participating rows must share the same rho design.")
+        stop("The two participating rows must share the same rho design.")
       }
     }
   }
@@ -2336,7 +2343,8 @@ plot.emc.design <- function(x, p_vector, data = NULL, factors = NULL, plot_facto
   data <- design_model(data, x, compress = FALSE, rt_resolution = 1e-15)
 
   if(is.null(x$model()$c_name)) stop("Current design type not supported for plotting")
-  type <- ifelse(x$model()$c_name == "DDM", "DDM", ifelse(x$model()$c_name == "LNR", "LNR", "race"))
+  type <- ifelse(x$model()$c_name == "DDM", "DDM",
+                 ifelse(grepl("^LNR", x$model()$c_name), "LNR", "race"))
   within_noise <- ifelse(x$model()$c_name == "LBA", FALSE, TRUE)
   # Split only relevant for DDM
   dots <- add_defaults(list(...), split = "R", within_noise = within_noise, plot_legend = TRUE)

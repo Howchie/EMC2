@@ -552,6 +552,10 @@ rrdmswtn_tt_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rrdmswtn_tt_corr_cpp`, pars, lR_levels, ok, posdrift)
 }
 
+rlnr_corr_cpp <- function(pars, lR_levels, ok) {
+    .Call(`_EMC2_rlnr_corr_cpp`, pars, lR_levels, ok)
+}
+
 fft_convolve_equiv_cpp <- function(x, y, conj_flag = TRUE) {
     .Call(`_EMC2_fft_convolve_equiv_cpp`, x, y, conj_flag)
 }

@@ -1885,3 +1885,76 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
+
+// Gaussian-copula simulator for LNR finishing-time marginals.  The marginal
+// inverse is analytic, so this is the same copula construction as the
+// RDMSWTN finishing-time route without a model-specific numerical inversion.
+// [[Rcpp::export]]
+Rcpp::List rlnr_corr_cpp(Rcpp::NumericMatrix pars,
+                         Rcpp::CharacterVector lR_levels,
+                         Rcpp::LogicalVector ok) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rlnr_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rlnr_corr_cpp: ok has the wrong length.");
+  }
+  const auto ci = col_index_map(pars);
+  const int im = ci.at("m"), is = ci.at("s"), it0 = ci.at("t0");
+  const int irho = ci.at("rho");
+  const int n_trials = n_rows / n_acc;
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  for (int tr = 0; tr < n_trials; ++tr) {
+    const int start = tr * n_acc;
+    int pair[2] = {-1, -1};
+    int n_pair = 0;
+    double pair_rho = 0.0;
+    for (int a = 0; a < n_acc; ++a) {
+      const int r = start + a;
+      if (!ok[r]) continue;
+      const double rho = pars(r, irho);
+      if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+        Rcpp::stop("rlnr_corr_cpp: rho must be finite and lie in [-1, 1].");
+      }
+      if (std::fabs(rho) <= 1e-12) continue;
+      if (n_pair < 2) pair[n_pair] = r;
+      ++n_pair;
+      if (n_pair == 1) pair_rho = rho;
+      else if (std::fabs(rho - pair_rho) > 1e-12) {
+        Rcpp::stop("rlnr_corr_cpp: participating rows must share one signed nonzero rho.");
+      }
+    }
+    if (n_pair > 2) {
+      Rcpp::stop("rlnr_corr_cpp: at most two active rows may have nonzero rho.");
+    }
+    std::vector<double> u(static_cast<size_t>(n_acc), 0.5);
+    for (int a = 0; a < n_acc; ++a) {
+      const int r = start + a;
+      if (ok[r] && std::fabs(pars(r, irho)) <= 1e-12)
+        u[static_cast<size_t>(a)] = R::unif_rand();
+    }
+    if (n_pair == 2) {
+      const double z1 = R::norm_rand();
+      const double z2 = pair_rho * z1 +
+        std::sqrt(std::fmax(0.0, 1.0 - pair_rho * pair_rho)) * R::norm_rand();
+      u[static_cast<size_t>(pair[0] - start)] = pnorm_std(z1, true, false);
+      u[static_cast<size_t>(pair[1] - start)] = pnorm_std(z2, true, false);
+    } else if (n_pair == 1) {
+      u[static_cast<size_t>(pair[0] - start)] = R::unif_rand();
+    }
+    for (int a = 0; a < n_acc; ++a) {
+      const int r = start + a;
+      if (!ok[r]) continue;
+      const double m = pars(r, im), s = pars(r, is), t0 = pars(r, it0);
+      const double q = R::qnorm(u[static_cast<size_t>(a)], 0.0, 1.0, 1, 0);
+      const double finish = t0 + std::exp(m + s * q);
+      if (R_FINITE(finish)) dt[static_cast<size_t>(r)] = finish;
+    }
+  }
+  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}

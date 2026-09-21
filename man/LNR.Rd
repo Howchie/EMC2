@@ -4,7 +4,11 @@
 \alias{LNR}
 \title{The Log-Normal Race Model}
 \usage{
-LNR()
+LNR(correlated = FALSE)
+}
+\arguments{
+\item{correlated}{Logical; if \code{TRUE}, include the finishing-time copula
+parameter \code{rho} and use the correlated race likelihood.}
 }
 \value{
 A model list with all the necessary functions for EMC2 to sample
@@ -50,10 +54,18 @@ evaluated. Optional fitting parameters are \code{pContaminant}, a Bernoulli
 uniform-outlier probability mixed into observed RTs. Both are proportions
 among \emph{retained} trials and are applied after truncation renormalisation.
 
+Set \code{correlated = TRUE}, or use \code{LNRcorr()}, to couple one
+accumulator pair with a Gaussian copula on their complete finishing-time
+marginals. The participating rows share one natural-scale \code{rho} in
+\code{[-1, 1]}; all other rows are independent.
+
 Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 The lognormal race: A cognitive-process model of choice and latency with
 desirable psychometric properties. \emph{Psychometrika, 80}, 491-513.
 https://doi.org/10.1007/s11336-013-9396-3
+
+Reynolds, P. D., Kvam, P. D., Osth, A. F., et al. (2020). Correlated racing
+evidence accumulator models. \emph{Journal of Mathematical Psychology, 96}, 102331.
 }
 \examples{
 # When working with lM it is useful to design  an "average and difference"
