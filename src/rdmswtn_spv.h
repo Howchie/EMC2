@@ -49,8 +49,9 @@
 //    series keeps relative accuracy (m >= 0, correlation below 0.925, the
 //    univariate tail argument above -4, no cancellation), otherwise the same
 //    quantity written as a posterior-normal expectation of a Mills ratio: in
-//    closed form when the drift truncation is negligible, otherwise
-//    integrated around the mode of its log-concave integrand.
+//    closed form when the drift truncation is negligible, as that closed
+//    form less a one-sided integral when the truncated mass is small, and
+//    otherwise integrated around the mode of its log-concave integrand.
 // ==========================================================================
 
 namespace rdmswtn_spv {
@@ -85,36 +86,65 @@ constexpr int    kPostNodes   = 24;     // Gauss-Legendre nodes per posterior pa
 constexpr double kPostPanel   = 12.0;   // width of the first posterior panel
 constexpr double kPostDrop    = 40.0;   // log-integrand drop that ends a posterior window
 
-// Normal tail functions at full double precision.  The rational fast_norm_phi
-// is used only inside |x| <= 3, where its relative error is below 1e-14; its
-// tail branch is accurate to only about 1e-8 relative, so tails use erfc and,
-// past the point where erfc underflows, the Laplace continued fraction for
-// the Mills ratio.
+// Normal tail functions at full double precision, through the Mills ratio
+// R(x) = Phi(-x)/phi(x).  On [-3, 26) log R comes from a Chebyshev table
+// (degree 12 on half-unit intervals, about 4e-16 absolute) built once from
+// extended-precision erfc; beyond 26 the Laplace continued fraction is used,
+// and below -3 the complement of the rational fast_norm_phi, whose relative
+// error there is irrelevant next to 1.
 inline double mills_cf_inverse(double x) {  // 1/R(x) for x >= 26
   double v = x;
   for (int k = 14; k >= 1; --k) v = x + k / v;
   return v;
 }
 
-// log Phi(-z) for z > 3.
-inline double log_upper_tail(double z) {
-  if (z < 26.0) return std::log(0.5 * std::erfc(z * M_SQRT1_2));
-  return log_phi_std(z) - std::log(mills_cf_inverse(z));
+struct MillsTable {
+  static constexpr double lo = -3.0, hi = 26.0;
+  static constexpr int per = 2, deg = 12, n = static_cast<int>((hi - lo) * per);
+  double c[n][deg];
+  MillsTable() {
+    const long double hw = 0.5L / per, pi = 3.141592653589793238462643383279502884L;
+    for (int k = 0; k < n; ++k) {
+      const long double ctr = lo + (k + 0.5L) / per;
+      long double f[deg];
+      for (int j = 0; j < deg; ++j) {
+        const long double x = ctr + hw * std::cos(pi * (j + 0.5L) / deg);
+        f[j] = 0.5L * std::log(pi / 2) + 0.5L * x * x + std::log(std::erfc(x / std::sqrt(2.0L)));
+      }
+      for (int m = 0; m < deg; ++m) {
+        long double acc = 0;
+        for (int j = 0; j < deg; ++j) acc += f[j] * std::cos(pi * m * (j + 0.5L) / deg);
+        c[k][m] = static_cast<double>(acc * (m == 0 ? 1.0L : 2.0L) / deg);
+      }
+    }
+  }
+  double operator()(double x) const {   // lo <= x < hi
+    const double y = (x - lo) * per;
+    const int k = std::min(static_cast<int>(y), n - 1);
+    const double u = 2.0 * (y - k) - 1.0, u2 = 2.0 * u;
+    const double* a = c[k];
+    double b1 = 0.0, b2 = 0.0;
+    for (int m = deg - 1; m >= 1; --m) {
+      const double b0 = std::fma(u2, b1, a[m] - b2);
+      b2 = b1;
+      b1 = b0;
+    }
+    return std::fma(u, b1, a[0] - b2);
+  }
+};
+inline const MillsTable& mills_table() { static const MillsTable t; return t; }
+
+// log R(x) for either sign of x.
+inline double log_mills(double x) {
+  RDMSWTN_SPV_COUNT(mills, 1);
+  if (x >= MillsTable::hi) return -std::log(mills_cf_inverse(x));
+  if (x >= MillsTable::lo) return mills_table()(x);
+  return std::log1p(-fast_norm_phi(x)) + 0.5 * x * x + LOG_SQRT_2PI;
 }
 
 inline double log_Phi(double x) {
-  if (x < -3.0) return log_upper_tail(-x);
-  if (x <= 3.0) return std::log(fast_norm_phi(x));
-  return std::log1p(-fast_norm_phi(-x));
-}
-
-// log R(x), R(x) = Phi(-x)/phi(x), for either sign of x.
-inline double log_mills(double x) {
-  RDMSWTN_SPV_COUNT(mills, 1);
-  if (x >= 26.0) return -std::log(mills_cf_inverse(x));
-  if (x > 3.0) return std::log(0.5 * std::erfc(x * M_SQRT1_2)) + 0.5 * x * x + LOG_SQRT_2PI;
-  if (x >= 0.0) return std::log(fast_norm_phi(-x)) + 0.5 * x * x + LOG_SQRT_2PI;
-  return std::log1p(-fast_norm_phi(x)) + 0.5 * x * x + LOG_SQRT_2PI;
+  if (x <= 0.0) return log_phi_std(x) + log_mills(-x);
+  return std::log1p(-std::exp(log_phi_std(x) + log_mills(x)));
 }
 
 // Normal hazard phi(x)/Phi(-x) = 1/R(x).
@@ -163,15 +193,27 @@ inline Law make_law(double t, double mu, double s, double sv, bool pos) {
     const double asr = std::asin(L.rho);
     const double half = 0.5 * asr;
     const double scale = asr / (4.0 * M_PI);
+    // Every angle below is at most asin(kBvnRhoMax)/2 < 0.6, where these
+    // Taylor series are exact to double precision.
+    auto sin_cos = [](double a, double& sa, double& ca) {
+      const double z = a * a;
+      sa = a * (1.0 + z * (-1.0 / 6 + z * (1.0 / 120 + z * (-1.0 / 5040 + z * (1.0 / 362880 +
+               z * (-1.0 / 39916800 + z * (1.0 / 6227020800.0 + z * (-1.0 / 1307674368000.0))))))));
+      ca = 1.0 + z * (-0.5 + z * (1.0 / 24 + z * (-1.0 / 720 + z * (1.0 / 40320 + z * (-1.0 / 3628800 +
+               z * (1.0 / 479001600 + z * (-1.0 / 87178291200.0 + z * (1.0 / 20922789888000.0))))))));
+    };
+    double sh, ch;
+    sin_cos(half, sh, ch);
     // sin(half (1 -+ x)) = sin(half) cos(half x) -+ cos(half) sin(half x).
-    const double sh = std::sin(half), ch = std::cos(half);
     const int m = static_cast<int>(rule.x.size());
+    const double* xs = rule.x.data();
+    const double* ws = rule.w.data();
     for (int ix = 0; ix < m; ++ix) {
-      const double a = half * rule.x[ix];
-      const double sa = std::sin(a), ca = std::cos(a);
+      double sa, ca;
+      sin_cos(half * xs[ix], sa, ca);
       L.bs[2 * ix] = sh * ca - ch * sa;
       L.bs[2 * ix + 1] = sh * ca + ch * sa;
-      L.bw[2 * ix] = L.bw[2 * ix + 1] = scale * rule.w[ix];
+      L.bw[2 * ix] = L.bw[2 * ix + 1] = scale * ws[ix];
     }
     L.bn = 2 * m;
     for (int j = 0; j < L.bn; ++j) L.bi[j] = 1.0 / std::fma(-L.bs[j], L.bs[j], 1.0);
@@ -195,8 +237,10 @@ inline double bvn(const Law& L, double x, double y) {
 // Without truncation the integral is closed form: R(x) = int_0^inf
 // exp(-x u - u^2/2) du, so E[R(x0 + sl Z)] = R(x0/k)/k with k = sqrt(1 - sl^2).
 // When f is still rising at zlo, concavity bounds the mass below zlo by
-// exp(f(zlo))/f'(zlo); if that is below exp(-kPostDrop) of the closed form,
-// the closed form is returned.
+// exp(f(zlo))/f'(zlo).  If that is below exp(-kPostDrop) of the closed form,
+// the closed form is returned; if it is below half, the integral is the
+// closed form minus the mass below zlo, which is the same kind of integral
+// mirrored (z -> -z) and has its maximum at its boundary.
 //
 // Otherwise the mode is found by safeguarded Newton and the integration
 // window runs to where f has fallen by kPostDrop, or to zlo.  Each side of
@@ -226,8 +270,16 @@ inline double log_posterior_mills(double x0, double sl, double zlo,
     const double x = x0 + sl * zlo;
     const double lm = log_mills(x);
     const double slope = -zlo + sl * (x - std::exp(-lm));
-    if (slope > 0.0 && log_phi_std(zlo) + lm - std::log(slope) <= full - kPostDrop)
-      return full;
+    if (slope > 0.0) {
+      const double log_bound = log_phi_std(zlo) + lm - std::log(slope);
+      if (log_bound <= full - kPostDrop) return full;
+      if (log_bound < full - M_LN2) {
+        // The mass below zlo, int_{-inf}^{zlo} = I(x0, -sl, -zlo), starts at
+        // its own maximum: one side of quadrature, and less than half of full.
+        const double log_below = log_posterior_mills(x0, -sl, -zlo, nodes, first_panel, false);
+        return full + std::log1p(-std::exp(log_below - full));
+      }
+    }
   }
 
   // Mode.  f' is decreasing, so a bracket [lo, hi] with f'(lo) > 0 > f'(hi)
