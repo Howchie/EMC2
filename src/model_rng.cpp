@@ -1316,6 +1316,7 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
   std::vector<int> ok_row(n_rows);
+  FrqMemo memo;
   for (int r = 0; r < n_rows; ++r) {
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
@@ -1323,9 +1324,9 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       dt[r] = R_PosInf;
       continue;
     }
-    const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
-                                 pars(r, il), idl >= 0 ? pars(r, idl) : 0.0,
-                                 icv >= 0 ? pars(r, icv) : 0.0);
+    const FrqPars& s = memo.get(pars(r, ia), pars(r, ib), pars(r, ih),
+                                pars(r, il), idl >= 0 ? pars(r, idl) : 0.0,
+                                icv >= 0 ? pars(r, icv) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes
     const double u = s.hh.active
       ? R::qbeta(frq_h_inv(R::unif_rand(), s.hh), s.alpha, s.beta, 1, 0)

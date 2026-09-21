@@ -243,11 +243,19 @@ struct FrqPars {
   double alpha = 0.0;
   double beta = 0.0;
   double p = 0.0;
+  double log_p = 0.0;
+  double om_p = 0.0;
   double h = 0.0;
   double lambda = 0.0;
+  double log_lambda = 0.0;
   double cv_u = 0.0;
   double cv2 = 0.0;
+  double cv2_lambda = 0.0;
+  double inv_cv2 = 0.0;
   double lbeta_val = 0.0;
+  double log_p_minus_lbeta = 0.0;
+  double alpha_minus_1 = 0.0;
+  double beta_minus_1 = 0.0;
   FrqH hh;
   bool ok = false;
 };
@@ -273,16 +281,25 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
   // kernel. h = 1 maps exactly to p = 1.
   const double z_h = frq_h_inv(h, s.hh);
   const double p = R::qbeta(z_h, alpha, beta, 1, 0);
-  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p)) return s;
+  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p) ||
+      (h < 1.0 && !(p < 1.0))) return s;
 
   s.alpha = alpha;
   s.beta = beta;
   s.p = p;
+  s.log_p = std::log(p);
+  s.om_p = 1.0 - p;
   s.h = h;
   s.lambda = lambda;
+  s.log_lambda = std::log(lambda);
   s.cv_u = cv_u;
   s.cv2 = cv2;
+  s.cv2_lambda = cv2 * lambda;
+  s.inv_cv2 = (cv2 > 0.0) ? (1.0 / cv2) : 0.0;
   s.lbeta_val = R::lbeta(alpha, beta);
+  s.log_p_minus_lbeta = s.log_p - s.lbeta_val;
+  s.alpha_minus_1 = alpha - 1.0;
+  s.beta_minus_1 = beta - 1.0;
   s.ok = true;
   return s;
 }
@@ -354,32 +371,31 @@ struct FrqState {
 inline double frq_registration_inv(double ratio, const FrqPars& s) {
   if (s.cv2 == 0.0)
     return -std::log1p(-ratio) / s.lambda;
-  return std::expm1(-s.cv2 * std::log1p(-ratio)) /
-    (s.cv2 * s.lambda);
+  return std::expm1(-s.cv2 * std::log1p(-ratio)) / s.cv2_lambda;
 }
 
 inline FrqState frq_state(double x, const FrqPars& s) {
   FrqState z;
   if (!R_FINITE(x)) {           // x == +Inf: fully saturated reservoir
     z.q = s.p;
-    z.omq = 1.0 - s.p;
+    z.omq = s.om_p;
     z.log_g = R_NegInf;
     return z;
   }
   if (s.cv2 == 0.0) {
     const double e = std::exp(-s.lambda * x);
     z.q = s.p * (-std::expm1(-s.lambda * x));
-    z.omq = (1.0 - s.p) + s.p * e;
-    z.log_g = std::log(s.lambda) - s.lambda * x;
+    z.omq = s.om_p + s.p * e;
+    z.log_g = s.log_lambda - s.lambda * x;
   } else {
-    const double lx = std::log1p(s.cv2 * s.lambda * x);
-    const double log_sr = -lx / s.cv2;
+    const double lx = std::log1p(s.cv2_lambda * x);
+    const double log_sr = -lx * s.inv_cv2;
     const double sr = std::exp(log_sr);
     z.q = s.p * (-std::expm1(log_sr));
-    z.omq = (1.0 - s.p) + s.p * sr;
+    z.omq = s.om_p + s.p * sr;
     // Split the exponent to avoid multiplying a potentially huge 1/cv^2 by a
     // small log1p term; lx/cv^2 has a finite exponential-limit value.
-    z.log_g = std::log(s.lambda) - lx / s.cv2 - lx;
+    z.log_g = s.log_lambda - lx * s.inv_cv2 - lx;
   }
   return z;
 }
@@ -490,9 +506,9 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (!(x > 0.0)) return R_NegInf;
   if (!R_FINITE(x)) return R_NegInf;   // no atom at infinity in the density
   const FrqState z = frq_state(x, s);
-  double lp = std::log(s.p) + z.log_g - s.lbeta_val;
-  lp += frq_xlogy(s.alpha - 1.0, z.q);
-  lp += frq_xlogy(s.beta - 1.0, z.omq);
+  double lp = s.log_p_minus_lbeta + z.log_g;
+  lp += frq_xlogy(s.alpha_minus_1, z.q);
+  lp += frq_xlogy(s.beta_minus_1, z.omq);
   // Chain rule through the threshold-variability map.  Unlike the CDF, the base
   // density does not need the incomplete beta at all, so this is the one place
   // where delta > 0 costs real work: H' is a function of z = I_q(alpha, beta).
