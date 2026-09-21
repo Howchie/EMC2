@@ -424,7 +424,7 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
                    s = "exp")
     minmax <- cbind(v = c(1e-3, Inf), k = c(0, Inf), B = c(0, Inf),
                     A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
-    exception <- c(A = 0, v = 0, k = 0)
+    exception <- c(A = 0, v = 0, k = 0,t0=0)
   } else if (par == "curvature") {
     # Defaults map to the rate default: tstar = 1, k = 0, s = 1, B = 1, A = 0.
     p_types <- c("tstar" = log(1), "k" = log(0), "s" = log(1), "B" = log(1),

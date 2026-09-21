@@ -145,14 +145,15 @@ NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
 // FRQ (Finite Reservoir Quorum) adapters
 // Column layout: alpha=0, beta=1, h=2, lambda=3, t0=4, delta=5, cv_u=6.
 // delta is the threshold-variability half-width and cv_u is unit-rate CV; both
-// are zero by default, and frq_derive() then uses the base exponential kernel.
+// are zero by default, and the kernel then uses the base exponential form.
 //
 // The upper tail may be defective: an accumulator terminates with probability
 // h = I_p(alpha, beta), and the leftover mass 1 - h sits at t = +Inf.  At
 // h = 1 the survivor reaches zero and the same paths become proper.
 //
-// Every entry point validates h and lambda through frq_derive(), memoised on
-// exact parameter bits; consecutive compressed rows usually repeat.
+// Every entry point resolves its row through FrqMemo, which splits the state
+// on (alpha, beta, h, delta) -- the beta-quantile half, cached per particle --
+// and (lambda, cv_u), which is recomputed per row for the cost of one log.
 // ============================================================
 
 double dfrq_scalar(double t, const double* par, void* ctx_) {

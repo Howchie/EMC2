@@ -28,8 +28,8 @@ Default values are used for all parameters that are not explicitly listed in
 the \code{formula} argument of \code{design()}. They can also be accessed with
 \code{FRQ()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{alpha} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Quorum size (\code{K}): how many evidence units are needed to respond \cr
-   \emph{beta} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Spare capacity (\code{N - K + 1}): how many units beyond the quorum the pool holds \cr
+   \emph{alpha} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Quorum size (\code{K}): how many evidence units are needed to respond \cr
+   \emph{beta} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Spare capacity (\code{N - K + 1}): how many units beyond the quorum the pool holds \cr
    \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
    \emph{lambda} \tab log \tab [0, Inf] \tab log(log(2) / 0.5) \tab  \tab Registration rate of an available evidence unit \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr

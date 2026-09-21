@@ -149,7 +149,7 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *s* | log | \[0, Inf\] | log(1) | | Symmetric stable-noise scale. |
-#' | *alpha* | probit | \[1, 2\] | qnorm(.7) | | Symmetric stable-law index; 2 is the diffusion limit. |
+#' | *alpha* | probit | \[1, 2\] | qnorm(1) | | Symmetric stable-law index; the default 2 is the diffusion (Wald) limit. |
 #'
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
@@ -166,7 +166,7 @@ RLF <- function() {
     compress_ok = FALSE,
     p_types = c(
       v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1),
-      alpha = qnorm(0.7), pContaminant = qnorm(0), pGuess = qnorm(0)
+      alpha = qnorm(1), pContaminant = qnorm(0), pGuess = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "alpha"),
     transform = list(
@@ -179,19 +179,27 @@ RLF <- function() {
     ),
     # Unlike the analytic race models, the parameters here set the solver's
     # discretisation as well as the process: the mesh is h = (b + extent)/nx, so
-    # B near zero and alpha near its endpoints are not merely extreme, they are
-    # numerically degenerate.  alpha is held off 2 because the heavy-tail term
-    # that keeps the domain open scales as sin(pi*alpha/2) and vanishes there,
-    # collapsing the domain onto b; B is floored for the same reason.  alpha = 2
-    # is deliberately not an exception value: the pnorm transform returns
-    # exactly 1 for sampled values past ~8.3, so the endpoint is reachable.
+    # B near zero and alpha in the OPEN interval near 2 are not merely extreme,
+    # they are numerically degenerate.  The heavy-tail term that keeps the
+    # domain open scales as sin(pi*alpha/2), which thins as alpha climbs; B is
+    # floored for the same reason.
+    #
+    # alpha = 2 itself is the Gaussian limit and IS an exception value: there
+    # is no heavy tail left to represent, and the solver returns the Wald.  It
+    # is the default, because it is the member of the family with a meaning
+    # rather than an arbitrary interior point.  Note this reaches the Wald
+    # through the RLF solver, NOT by dispatching to the RDM code -- deliberately,
+    # so that a fit which moves off the limit is continuous with one that sits
+    # on it.  Without the exception the endpoint was unusable: the pnorm
+    # transform returns exactly 1 past ~8.3, so a sampled alpha could land on 2
+    # and then be rejected by the 1.99 bound.
     bound = list(
       minmax = cbind(
         v = c(1e-3, Inf), B = c(1e-4, Inf), A = c(1e-4, Inf),
         t0 = c(0.05, Inf), s = c(0, Inf), alpha = c(1.01, 1.99),
         pContaminant = c(0.001, 0.999), pGuess = c(0.001, 0.999)
       ),
-      exception = c(A = 0, pContaminant = 0, pGuess = 0)
+      exception = c(A = 0, pContaminant = 0, pGuess = 0, t0 = 0, alpha = 2)
     ),
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])

@@ -32,7 +32,11 @@ test_that("REXG dfun/pfun use shifted zero-truncated ex-Gaussian", {
 test_that("REXG uses the common 0.05-second t0 lower bound", {
   model <- REXG()
   expect_equal(unname(model$bound$minmax[1, "t0"]), 0.05)
-  expect_false("t0" %in% names(model$bound$exception))
+  # The 0.05 floor is the point; t0 = 0 stays an exception, as in every other
+  # race model.  Without it REXG's own p_types default (log(0)) is outside its
+  # bound, so a design that leaves t0 out of the formula fixes it at a value
+  # do_bound() rejects and the likelihood floors for every proposal.
+  expect_equal(unname(model$bound$exception[["t0"]]), 0)
 })
 
 test_that("REXG simulation draws positive processes and races shifted finishes", {

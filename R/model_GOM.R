@@ -172,7 +172,7 @@ GOM <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
                  A = "exp", t0 = "exp")
   minmax <- cbind(alpha = c(1e-4, Inf), beta = c(1e-4, Inf), K = c(1e-4, Inf),
                   B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf))
-  exception <- c(A = 0)
+  exception <- c(A = 0,t0=0)
   if (kind != "fixed") {
     p_types <- c(p_types, Binf = log(1.5), tau = log(1))
     transform <- c(transform, Binf = "exp", tau = "exp")

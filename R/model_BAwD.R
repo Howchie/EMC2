@@ -647,7 +647,7 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   # ell = 0 (the static-start BAwL limit) and a zero decay coordinate (the
   # no-decay limit -- k = 0, or r = 0 under the ratio chart) must stay exactly
   # reachable, so both are bound exceptions rather than clamped.
-  exception <- stats::setNames(c(0, 0, 0), c("A", decay_par, "ell"))
+  exception <- stats::setNames(c(0, 0, 0, 0), c("A", decay_par, "ell", "t0"))
   launch_pars <- .ba_par_names(launch)
   # The launch mean is the first column for the normal (v) and lognormal (mean)
   # launches, but the SECOND for the Weibull one, whose pair is (shape, mean).
@@ -844,7 +844,7 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"
   # A = 0, k = 0, and lambda = 0 are exact, useful boundaries.  k = 0 gives the
   # standard LBA limit (with effective drift scaled by 1 - lambda), while
   # lambda = 0 gives the pure drive-decay model with unbounded support.
-  exception <- c(A = 0, k = 0, lambda = 0)
+  exception <- c(A = 0, k = 0, lambda = 0, t0 = 0)
   .tw <- add_time_warp_par(p_types, transform, minmax, exception)
   p_types <- .tw$p_types; transform <- .tw$transform
   minmax <- .tw$minmax; exception <- .tw$exception

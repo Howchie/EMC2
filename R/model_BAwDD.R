@@ -149,7 +149,7 @@ BAwDD <- function(drift_distribution = c("lognormal", "normal",
                  ell = "exp", alpha = "exp")
   minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                   t0 = c(0.05, Inf), k = c(1e-4, Inf), ell = c(0, Inf), alpha = c(0, Inf))
-  exception <- c(A = 0, k = 0, ell = 0, alpha = 0)
+  exception <- c(A = 0, k = 0, ell = 0, alpha = 0, t0 = 0)
 
   .tw <- add_time_warp_par(p_types, transform, minmax, exception)
   p_types <- .tw$p_types; transform <- .tw$transform

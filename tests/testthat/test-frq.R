@@ -282,7 +282,7 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(unname(m$bound$minmax[, "cv_u"]), c(1e-4, Inf))
   expect_equal(m$bound$exception[["cv_u"]], 0)
   expect_equal(m$bound$exception[["h"]], 1)
-  expect_equal(pnorm(m$p_types[["h"]]), 0.95, tolerance = 1e-12)
+  expect_equal(pnorm(m$p_types[["h"]]), 1, tolerance = 1e-12)
   expect_equal(unname(m$bound$minmax[, "alpha"]), c(1, Inf))
   expect_equal(unname(m$bound$minmax[, "beta"]), c(1, Inf))
   expect_equal(unname(m$bound$minmax[, "lambda"]), c(1e-4, Inf))

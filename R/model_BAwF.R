@@ -344,7 +344,7 @@ BAwF <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
                   t0 = c(0.05, Inf), k = c(1e-4, Inf))
   # k = 0 is the exact LBA limit and must stay reachable, so it is a bound
   # exception rather than clamped.
-  exception <- c(A = 0, k = 0)
+  exception <- c(A = 0, k = 0, t0 = 0)
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   .tw <- add_time_warp_par(p_types, transform, minmax, exception)
   p_types <- .tw$p_types; transform <- .tw$transform

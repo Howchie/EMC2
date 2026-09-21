@@ -629,6 +629,14 @@ run_stage <- function(pmwgs,
   if(length(identical_limit) != 1L || !is.finite(identical_limit) ||
      identical_limit < 1) identical_limit <- 25L
   identical_limit <- as.integer(identical_limit)
+  # Preburn is exempt.  Its proposals come from the prior rather than from an
+  # adapted covariance, so a chain sitting on its start point for tens of
+  # iterations is ordinary rather than broken: measured on stock LBA/forstmann,
+  # run lengths reach 18 in 20 fits and EVERY one recovered, the longest ending
+  # at iteration 19 of 400.  Applying the later stages' limit here aborted fits
+  # that were about to move.  Once the proposals are tuned, a run that long
+  # really is a stuck chain, so burn/adapt/sample keep the check.
+  check_stall <- !identical(stage, "preburn")
   identical_run <- 0L
 
   for (i in 1:iter) {
@@ -729,7 +737,10 @@ run_stage <- function(pmwgs,
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
                                          total_cores = n_cores)
-    proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
+    # SIMPLIFY = FALSE: the 3 x n_subjects matrix the simplified form produces
+    # cannot represent a missing worker, and unlisting it recycles.  A plain
+    # list keeps each result whole, tag and all, for .emc_assemble_proposals().
+    raw_proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,
                                                     model = pmwgs$model,
@@ -740,22 +751,30 @@ run_stage <- function(pmwgs,
                                                     r_cores = core_budget$likelihood,
                                                     group_chol = group_chol_it),
                                     chol_cache = chol_caches,
-                                    mc.cores = core_budget$subject)
-    pm_settings <- proposals[3,]
-    proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
+                                    mc.cores = core_budget$subject,
+                                    SIMPLIFY = FALSE)
+    assembled <- .emc_assemble_proposals(
+      raw_proposals, n_pars = pmwgs$n_pars, n_subjects = pmwgs$n_subjects,
+      prev_alpha = matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
+      prev_ll = pmwgs$samples$subj_ll[, j - 1L], prev_pm = pm_settings,
+      stage = stage, iteration = j)
+    pm_settings <- assembled$pm_settings
+    proposals <- assembled$proposals
     }
 
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
-    if (.emc_sample_iteration_equal(pmwgs$samples, j)) {
-      identical_run <- identical_run + 1L
-    } else {
-      identical_run <- 0L
-    }
-    if (identical_run >= identical_limit) {
-      .emc_stall_abort(stage = stage, iteration = j,
-                       run_length = identical_run)
+    if (check_stall) {
+      if (.emc_sample_iteration_equal(pmwgs$samples, j)) {
+        identical_run <- identical_run + 1L
+      } else {
+        identical_run <- 0L
+      }
+      if (identical_run >= identical_limit) {
+        .emc_stall_abort(stage = stage, iteration = j,
+                         run_length = identical_run)
+      }
     }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
@@ -921,13 +940,64 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       .emc_failure_abort(cls, "particle", attempt)
     }
     old <- if (is.null(current_alpha)) parameters$alpha[, s] else current_alpha
-    return(reject_particle(old, prev_ll, pm_settings))
+    attempt <- reject_particle(old, prev_ll, pm_settings)
   }
+  # Tag the subject this result belongs to.  parallel::mclapply DROPS the
+  # element of a worker that dies below R level, so position is not a reliable
+  # identifier: without the tag the survivors shift into the wrong subjects'
+  # slots.  Callers that index by name (the worker pool) ignore it.
+  attempt$subject <- s
   attempt
 }
 
 reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   list(proposal = subj_mu, ll = prev_ll, pm_settings = pm_settings)
+}
+
+# Reassemble one iteration's particle results into the (n_pars + 1) x n_subjects
+# proposal matrix, matching each result to its subject by the tag
+# safe_new_particle() attaches.
+#
+# Matching by tag rather than by position is the whole point.  A worker that
+# dies below R level is not an R error -- mclapply drops its element and warns
+# "N function calls resulted in an error", nothing more.  The result therefore
+# comes back SHORT.  The previous code did
+#     array(unlist(proposals[1:2, ]), dim = c(n_pars + 1, n_subjects))
+# which silently RECYCLED the survivors to fill the gap, so one dead worker
+# handed another subject's parameters to the subject that lost, and the chain
+# wedged with no error raised.  Here a lost subject repeats its own previous
+# state -- exactly what safe_new_particle() does for an error it CAN catch --
+# and no other subject is touched.
+.emc_assemble_proposals <- function(raw, n_pars, n_subjects, prev_alpha,
+                                    prev_ll, prev_pm, stage = NULL,
+                                    iteration = NULL) {
+  props <- matrix(NA_real_, nrow = n_pars + 1L, ncol = n_subjects)
+  pm <- vector("list", n_subjects)
+  seen <- logical(n_subjects)
+  for (res in raw) {
+    if (inherits(res, c("error", "try-error")) || !is.list(res)) next
+    s <- res[["subject"]]
+    if (!is.numeric(s) || length(s) != 1L || is.na(s) ||
+        s < 1L || s > n_subjects || seen[[s]]) next
+    prop <- res[["proposal"]]
+    ll <- res[["ll"]]
+    if (!is.numeric(prop) || length(prop) != n_pars ||
+        !is.numeric(ll) || length(ll) != 1L) next
+    props[, s] <- c(prop, ll)
+    pm[[s]] <- res[["pm_settings"]]
+    seen[[s]] <- TRUE
+  }
+  if (!all(seen)) {
+    lost <- which(!seen)
+    for (s in lost) {
+      props[, s] <- c(prev_alpha[, s], prev_ll[[s]])
+      pm[[s]] <- prev_pm[[s]]
+    }
+    # Under the strict policy this stops; otherwise it warns and the repeated
+    # states above stand.
+    .emc_worker_loss(lost, stage = stage, iteration = iteration)
+  }
+  list(proposals = props, pm_settings = pm)
 }
 
 

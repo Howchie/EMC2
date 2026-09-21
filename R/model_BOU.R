@@ -228,7 +228,7 @@ BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
   minmax <- cbind(v = c(-20, 20), a = c(0, 10), sv = c(.01, 10),
                   t0 = c(0.05, Inf), st0 = c(0, .5), s = c(0, Inf),
                   Z = c(.01, .99), SZ = c(.01, .99), beta = c(0, 50))
-  exception <- c(sv = 0, SZ = 0, st0 = 0, beta = 0)
+  exception <- c(sv = 0, SZ = 0, st0 = 0, beta = 0, t0 = 0)
 
   # Optional columns for the collapsing forms, in the order declared after
   # N_REQ in emc2col::bou (src/col_registry.h).  Only the columns the selected

@@ -759,7 +759,7 @@ SSEXG <- function(stop_method = c("auto", "integrate", "gl", "analytic"),
       ),
       exception = c(
         tf = 0, gf = 0,
-        exg_lb = -Inf, exgS_lb = -Inf
+        exg_lb = -Inf, exgS_lb = -Inf,t0=0
       )
     ),
     # Trial dependent parameter transform
@@ -1131,7 +1131,7 @@ SSRDEX <- function(stop_method = c("auto", "integrate", "gl"),
       exception = c(
         v = 0, A = 0,
         tf = 0, gf = 0,
-        exgS_lb = -Inf
+        exgS_lb = -Inf,t0=0
       )
     ),
     # Trial dependent parameter transform

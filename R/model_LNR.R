@@ -115,7 +115,7 @@ LNR <- function() {
     # clamps the default (pnorm(-Inf) = 0) up to 0.001, making the nuisance
     # parameter silently active.
     bound=list(minmax=cbind(m=c(-Inf,Inf),s = c(0, Inf), t0=c(0.05,Inf),pGuess=c(0.001,0.999)),
-               exception=c(pGuess=0),pContaminant=c(0.001,0.999)),
+               exception=c(pGuess=0,t0=0),pContaminant=c(0.001,0.999)),
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) pars,
     # Random function for racing accumulators
@@ -363,7 +363,7 @@ REXG <- function() {
       minmax = cbind(mu = c(0, Inf), sigma = c(1e-6, Inf), tau = c(1e-6, Inf),
                      t0 = c(0.05, Inf), pContaminant = c(0.001, 0.999),
                      pGuess = c(0.001, 0.999)),
-      exception = c(pContaminant = 0, pGuess = 0)
+      exception = c(pContaminant = 0, pGuess = 0, t0 = 0)
     ),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rREXG(data$lR, pars, ok = attr(pars, "ok")),

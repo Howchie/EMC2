@@ -379,7 +379,7 @@ ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive"
                     tau_S = c(1e-3, Inf), tau_T = c(1e-3, Inf),
                     k = c(0, Inf), B = c(0, Inf),
                     A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
-    exception <- c(A = 0, v_S = 0, v_T = 0, tau_S = 0, tau_T = 0, k = 0)
+    exception <- c(A = 0, v_S = 0, v_T = 0, tau_S = 0, tau_T = 0, k = 0,t0=0)
   } else if (par == "area") {
     p_types <- c("v_S" = log(1), "E_T" = log(1), "tau_S" = log(1), "tau_T" = log(1),
                  "k" = log(0), "B" = log(1), "A" = log(0),
@@ -392,7 +392,7 @@ ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive"
                     A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
     # tau_T remains strictly positive in this chart: E_T/tau_T is undefined
     # at a zero time constant, even when E_T is fixed at its zero exception.
-    exception <- c(A = 0, v_S = 0, E_T = 0, tau_S = 0, k = 0)
+    exception <- c(A = 0, v_S = 0, E_T = 0, tau_S = 0, k = 0,t0=0)
   } else {
     stop("ROUp parameterization must be 'rate' or 'area'.")
   }

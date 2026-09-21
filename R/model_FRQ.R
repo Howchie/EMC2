@@ -23,7 +23,7 @@
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("FRQ requires parameter columns ", paste(missing, collapse = ", "))
-  need
+  invisible(NULL)
 }
 
 dFRQ <- function(rt, pars) {
@@ -174,7 +174,6 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' Model file to estimate the Finite Reservoir Quorum (FRQ) process in EMC2.
 #'
 #' @details
-#' Model files are almost exclusively used in `design()`.
 #'
 #' Each accumulator draws on a finite pool of `N` potential evidence units and
 #' responds once a quorum of `K` of them has registered. A unit is usable on a
@@ -182,18 +181,15 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' with mean rate `lambda`. At `cv_u = 0` the delay is exponential; at positive
 #' `cv_u` its latent unit rate is Gamma-distributed. If fewer than `K` of
 #' the `N` units happen to be usable, the quorum is never reached and the
-#' accumulator never responds, so the model produces omissions without needing
+#' accumulator never responds, so the model can produce omissions without needing
 #' a contaminant parameter.
 #'
-#' Default values are used for all parameters that are not explicitly listed in
-#' the `formula` argument of `design()`. They can also be accessed with
-#' `FRQ()$p_types`.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *alpha* | log | \[1, Inf\] | log(1) | | Quorum size (`K`): how many evidence units are needed to respond |
-#' | *beta* | log | \[1, Inf\] | log(1) | | Spare capacity (`N - K + 1`): how many units beyond the quorum the pool holds |
-#' | *h* | probit | \[0, 1\] | qnorm(0.95) | | Probability that the accumulator ever responds |
+#' | *alpha* | 1 + exp | \[1, Inf\] | log(0) | | Quorum size (`K`): how many evidence units are needed to respond |
+#' | *beta* | 1 + exp | \[1, Inf\] | log(0) | | Spare capacity (`N - K + 1`): how many units beyond the quorum the pool holds |
+#' | *h* | probit | \[0, 1\] | qnorm(1) | | Probability that the accumulator ever responds |
 #' | *lambda* | log | \[0, Inf\] | log(log(2) / 0.5) | | Registration rate of an available evidence unit |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
 #' | *delta* | log | \[0, Inf\] | log(0) | | Half-width of continuous threshold variability |
@@ -226,21 +222,16 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `mapped_pars()` reports `sQ` = `delta`/sqrt(3), the standard deviation of
 #' the trial-to-trial shift on a log-odds scale. Note that `delta` is a
 #' property of a single accumulator rather than a state shared by the whole
-#' race, and that it is only weakly identified: values below about 2 are
-#' difficult to distinguish from a small change in `alpha` and `beta`, so it
-#' is worth fitting only with a lot of data or a strong prior.
+#' race, and that it is only weakly identified.
 #'
 #' `cv_u` is independent unit-level rate heterogeneity, not a shared trialwise
-#' drift state. It is best held fixed or shared across racers initially. The
-#' proper/non-defective boundary is obtained by fixing `h = 1`, which maps to
+#' drift state. The proper/non-defective boundary is obtained by fixing `h = 1`, which maps to
 #' `p = 1` exactly. This boundary is exact and leaves `lambda` as the rate
-#' parameter rather than changing coordinates.
+#' parameter.
 #'
 #' `alpha` and `beta` control the shape of the distribution: `alpha` how
 #' sharply the density rises at the leading edge, `beta` how heavy the late
-#' tail is. Both are more weakly informed than `h` and `lambda`, so the
-#' recommended default is `alpha ~ 1` and `beta ~ 1`, shared across
-#' accumulators along with `t0`.
+#' tail is.
 #'
 #' A race produces an omission only when every accumulator in it fails, with
 #' probability `prod(1 - h)` over accumulators, so an appreciable failure rate
@@ -251,19 +242,6 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' threshold-variability `delta` and unit-rate `cv_u` parameters are log/exp
 #' transformed with default `log(0)`.
 #'
-#' Because the FRQ is a race model, it has one accumulator per response
-#' option. EMC2 automatically constructs a factor representing the
-#' accumulators `lR` (i.e., the latent response) with level names taken from
-#' the `R` column in the data. For race models, the `design()` argument
-#' `matchfun` can be provided, a function that takes the `lR` factor (defined
-#' in the augmented data (d) in the following function) and returns a logical
-#' defining the correct response. In the example below, the match is simply
-#' such that the `S` factor equals the latent response factor:
-#' `matchfun=function(d)d$S==d$lR`. Then `matchfun` is used to automatically
-#' create a latent match (`lM`) factor with levels `FALSE` (i.e., the stimulus
-#' does not match the accumulator) and `TRUE` (i.e., the stimulus does match
-#' the accumulator). This is added internally and can also be used in model
-#' formula, typically for parameters related to the rate of accumulation.
 #'
 #' @return A model list defining the FRQ race model.
 #' @examples
@@ -272,21 +250,25 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' # The shapes are held constant; the design acts on the two evidence
 #' # dimensions, lambda (registration rate) and h (eventual response).
 #' design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
-#'                      formula = list(alpha ~ 1, beta ~ 1, h ~ lM,
+#'                      formula = list(alpha ~ 1, beta ~ 1, h ~ 1,
 #'                                     lambda ~ lM + E, t0 ~ 1),
 #'                      contrasts = list(h = list(lM = ADmat),
-#'                                       lambda = list(lM = ADmat)))
+#'                                       lambda = list(lM = ADmat)),
+#'                      constants = c(h=qnorm(1))) # default non-defective race
 #' # For all parameters that are not defined in the formula, default values are
 #' # assumed (see Table above).
 #' @export
 FRQ <- function() {
-  # Shapes on the log scale: alpha = 1 (K = 1) and beta = 1 (K = N) are both
-  # exactly reachable defaults, and together they are the one-unit reservoir.
-  p_types <- c("alpha" = log(1), "beta" = log(1),
-               # A high, but not proper, completion probability. The default
-               # remains defective so omissions are available when a design
-               # leaves h out of its formula.
-               "h" = qnorm(0.95),
+  # Shapes on an OFFSET log scale: the transform below is alpha = 1 + exp(x),
+  # so the sampler coordinate x is unbounded while the natural shape keeps its
+  # alpha >= 1 support.  A plain log scale would put a hard wall at x = 0
+  # exactly where the default sits, halving the acceptance rate of any chain
+  # that wants a near-exponential leading edge.  log(0) = -Inf is therefore the
+  # one-unit reservoir alpha = beta = 1, reached the same way t0 reaches zero.
+  p_types <- c("alpha" = log(0), "beta" = log(0),
+               # A proper completion probability. The default
+               # remains non-defective intentionally.
+               "h" = qnorm(1),
                # For alpha = beta = 1, lambda = log(2) / 0.5 gives a
                # one-unit registration timescale of about 0.5 seconds.
                "lambda" = log(log(2) / 0.5), "t0" = log(0),
@@ -296,6 +278,9 @@ FRQ <- function() {
                "delta" = log(0), "cv_u" = log(0))
   transform <- c(alpha = "exp", beta = "exp", h = "pnorm", lambda = "exp",
                  t0 = "exp", delta = "exp", cv_u = "exp")
+  # `lower` shifts the exp link: natural = lower + exp(free).  Only the shapes
+  # use it, and only to move their boundary off the sampling scale.
+  transform_lower <- c(alpha = 1, beta = 1)
   # alpha, beta >= 1 is the conservative continuous FRQ relaxation: it is the
   # region a literal finite reservoir can reach (K >= 1 and N - K + 1 >= 1),
   # and it keeps the density bounded at the leading edge, where
@@ -313,10 +298,10 @@ FRQ <- function() {
   # boundary.  Keeping a small positive lower bound avoids a near-zero
   # transformed region with essentially no shape information.
   minmax <- cbind(alpha = c(1, Inf), beta = c(1, Inf),
-                  h = c(1e-6, 1 - 1e-9), lambda = c(1e-4, Inf),
+                  h = c(1e-6, 1), lambda = c(1e-4, Inf),
                   t0 = c(0.05, Inf), delta = c(1e-4, 6),
                   cv_u = c(1e-4, Inf))
-  exception <- c(t0 = 0, delta = 0, cv_u = 0, h = 1)
+  exception <- c(t0 = 0, delta = 0, cv_u = 0, h = 1, alpha = 1, beta = 1)
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   # FRQ already produces omissions intrinsically through 1 - h, so
@@ -332,7 +317,7 @@ FRQ <- function() {
     c_name = "FRQ",
     p_types = p_types,
     p_types_canonical = c("alpha", "beta", "h", "lambda", "t0"),
-    transform = list(func = transform),
+    transform = list(func = transform, lower = transform_lower),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       # Reporting only: Ttransform does not run on the compiled likelihood

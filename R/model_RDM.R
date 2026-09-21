@@ -214,7 +214,7 @@ RDM <- function() {
     transform = list(func = c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(
       minmax = cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf), pContaminant = c(0.001, 0.999), pGuess = c(0.001, 0.999)),
-      exception = c(A = 0, v = 0, pContaminant = 0, pGuess = 0)
+      exception = c(A = 0, v = 0, pContaminant = 0, pGuess = 0,t0=0)
     ),
     # Trial dependent parameter transform
     Ttransform = function(pars, dadm) {
@@ -625,7 +625,7 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
     t0 = c(0.05, Inf), s = c(0, Inf)
   )
-  exception <- c(A = 0, v = 0)
+  exception <- c(A = 0, v = 0,t0=0)
 
   p_types  <- c(p_types,  mG = log(1))
   transform <- c(transform, mG = "exp")
@@ -876,7 +876,7 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
     v = .v$minmax, B = c(0, Inf), A = c(0, Inf),
     t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf)
   )
-  exception <- c(A = 0, v = 0, sv = 0)
+  exception <- c(A = 0, v = 0, sv = 0,t0=0)
   p_types  <- c(p_types,  mG = log(1))
   transform <- c(transform, mG = "exp")
   minmax   <- cbind(minmax, mG = c(1e-4, Inf))
@@ -1211,7 +1211,7 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE,
     tau = c(1e-4, Inf), pContaminant = c(0.001, 0.999),
     pGuess = c(0.001, 0.999)
   )
-  exception <- c(A = 0, v = 0, sv = 0, pContaminant = 0, pGuess = 0)
+  exception <- c(A = 0, v = 0, sv = 0, pContaminant = 0, pGuess = 0,t0=0)
   if (correlated) {
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")

@@ -37,7 +37,8 @@
 // I_q(alpha, beta) and the Beta density exist, which they do for any
 // alpha, beta > 0. The fitted model bounds both shapes below at 1
 // (R/model_FRQ.R) to preserve the finite-reservoir interpretation and a
-// bounded leading edge.
+// bounded leading edge, and reaches that bound through an offset link,
+// alpha = 1 + exp(x), so the sampler coordinate x stays unbounded.
 //
 // PARAMETERISATION.  The fitted coordinates are (alpha, beta, h, lambda, t0,
 // delta, cv_u). `h` is the accumulator-level eventual completion probability,
@@ -234,11 +235,43 @@ inline double frq_h_inv(double y, const FrqH& H) {
 }
 
 // ---------------------------------------------------------------------------
-// (alpha, beta, h, lambda, delta, cv_u) -> compiled state.  `ok` is false for any parameter
-// combination that does not define a proper accumulator; every evaluator then
-// returns log 0 for the density and lets the caller floor the trial, which is
-// what the rest of the race machinery expects from an invalid row.
+// Compiled state, split by what each half actually depends on.
+//
+// The evidence-level availability p is the expensive half: it comes from the
+// fitted completion probability h by an incomplete-beta INVERSION, an iterative
+// solve costing roughly fourteen density evaluations.  It is a function of
+// (alpha, beta, h, delta) ONLY -- neither lambda nor cv_u enters it.  The rate
+// half is one log and a reciprocal.
+//
+// Keeping them on separate keys matters whenever the rate varies faster than
+// the shapes, which is the normal case once a trend or a covariate touches
+// lambda: a per-trial rate against constant shapes then costs one log per row
+// instead of one beta quantile per row.  FrqAvail is what the shared cache
+// stores; FrqPars is what the evaluators read, assembled by pasting a cached
+// FrqAvail together with the row's rate.
+//
+// In both halves `ok` is false for any combination that does not define a
+// proper accumulator; every evaluator then returns log 0 for the density and
+// lets the caller floor the trial, which is what the rest of the race
+// machinery expects from an invalid row.
 // ---------------------------------------------------------------------------
+
+// The (alpha, beta, h, delta) half -- everything the beta quantile touches.
+struct FrqAvail {
+  double alpha = 0.0;
+  double beta = 0.0;
+  double p = 0.0;
+  double log_p = 0.0;
+  double om_p = 0.0;
+  double h = 0.0;
+  double lbeta_val = 0.0;
+  double log_p_minus_lbeta = 0.0;
+  double alpha_minus_1 = 0.0;
+  double beta_minus_1 = 0.0;
+  FrqH hh;
+  bool ok = false;
+};
+
 struct FrqPars {
   double alpha = 0.0;
   double beta = 0.0;
@@ -260,18 +293,13 @@ struct FrqPars {
   bool ok = false;
 };
 
-inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
-                          double delta = 0.0, double cv_u = 0.0) {
-  FrqPars s;
-  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h) || ISNAN(lambda) ||
-      ISNAN(cv_u)) return s;
+inline FrqAvail frq_derive_avail(double alpha, double beta, double h,
+                                 double delta = 0.0) {
+  FrqAvail s;
+  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h)) return s;
   if (!(alpha >= FRQ_SHAPE_MIN) || !R_FINITE(alpha)) return s;
   if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
   if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return s;
-  if (!(lambda > 0.0) || !R_FINITE(lambda)) return s;
-  if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return s;
-  const double cv2 = cv_u * cv_u;
-  if (!R_FINITE(cv2)) return s;
   s.hh = frq_h_make(delta);
   if (!s.hh.ok) return s;
 
@@ -290,12 +318,6 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
   s.log_p = std::log(p);
   s.om_p = 1.0 - p;
   s.h = h;
-  s.lambda = lambda;
-  s.log_lambda = std::log(lambda);
-  s.cv_u = cv_u;
-  s.cv2 = cv2;
-  s.cv2_lambda = cv2 * lambda;
-  s.inv_cv2 = (cv2 > 0.0) ? (1.0 / cv2) : 0.0;
   s.lbeta_val = R::lbeta(alpha, beta);
   s.log_p_minus_lbeta = s.log_p - s.lbeta_val;
   s.alpha_minus_1 = alpha - 1.0;
@@ -304,14 +326,63 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
   return s;
 }
 
-// Shared exact-key cache for the compiled state.  The likelihood clears this
-// once per particle, so entries are shared across density, survivor, scalar and
-// truncation callbacks without accumulating proposals from earlier particles.
+// Paste the availability half into the full state.  Runs only when one of
+// (alpha, beta, h, delta) actually changes.
+inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
+  s.alpha = av.alpha;
+  s.beta = av.beta;
+  s.p = av.p;
+  s.log_p = av.log_p;
+  s.om_p = av.om_p;
+  s.h = av.h;
+  s.lbeta_val = av.lbeta_val;
+  s.log_p_minus_lbeta = av.log_p_minus_lbeta;
+  s.alpha_minus_1 = av.alpha_minus_1;
+  s.beta_minus_1 = av.beta_minus_1;
+  s.hh = av.hh;
+}
+
+// Fill the rate half.  This is the part that is allowed to run per row.  On
+// rejection only `ok` is meaningful; every evaluator bails on `!ok` before
+// reading anything else, so the stale rate fields are never observed.
+inline void frq_set_rate(FrqPars& s, bool avail_ok, double lambda,
+                         double cv_u) {
+  s.ok = false;
+  if (!avail_ok) return;
+  if (ISNAN(lambda) || ISNAN(cv_u)) return;
+  if (!(lambda > 0.0) || !R_FINITE(lambda)) return;
+  if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return;
+  const double cv2 = cv_u * cv_u;
+  if (!R_FINITE(cv2)) return;
+  s.lambda = lambda;
+  s.log_lambda = std::log(lambda);
+  s.cv_u = cv_u;
+  s.cv2 = cv2;
+  s.cv2_lambda = cv2 * lambda;
+  s.inv_cv2 = (cv2 > 0.0) ? (1.0 / cv2) : 0.0;
+  s.ok = true;
+}
+
+// One-shot derive, for callers that hold no memo.
+inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
+                          double delta = 0.0, double cv_u = 0.0) {
+  FrqPars s;
+  const FrqAvail av = frq_derive_avail(alpha, beta, h, delta);
+  frq_copy_avail(s, av);
+  frq_set_rate(s, av.ok, lambda, cv_u);
+  return s;
+}
+
+// Shared exact-key cache for the availability half.  The likelihood clears
+// this once per particle, so entries are shared across density, survivor,
+// scalar and truncation callbacks without accumulating proposals from earlier
+// particles.  The key is exactly the beta quantile's arguments, so a rate that
+// varies per trial does not multiply the number of inversions.
 struct FrqCacheKey {
-  std::uint64_t bits[6];
+  std::uint64_t bits[4];
 
   bool operator==(const FrqCacheKey& other) const {
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 4; ++i) {
       if (bits[i] != other.bits[i]) return false;
     }
     return true;
@@ -321,7 +392,7 @@ struct FrqCacheKey {
 struct FrqCacheKeyHash {
   std::size_t operator()(const FrqCacheKey& key) const {
     std::size_t h = 0;
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 4; ++i) {
       h ^= std::hash<std::uint64_t>{}(key.bits[i]) +
            static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) +
            (h << 6) + (h >> 2);
@@ -339,21 +410,22 @@ inline std::uint64_t frq_cache_bits(double x) {
 }
 
 struct FrqCache {
-  std::unordered_map<FrqCacheKey, FrqPars, FrqCacheKeyHash> entries;
+  std::unordered_map<FrqCacheKey, FrqAvail, FrqCacheKeyHash> entries;
 
   FrqCache() { entries.reserve(256); }
 
   void clear() { entries.clear(); }
 
-  const FrqPars& get(double alpha, double beta, double h, double lambda,
-                     double delta, double cv_u) {
+  // std::unordered_map is node-based, so a reference handed out here survives
+  // later insertions; only clear() invalidates it, and that runs between
+  // particles, outside any evaluator call.
+  const FrqAvail& get(double alpha, double beta, double h, double delta) {
     const FrqCacheKey key{{frq_cache_bits(alpha), frq_cache_bits(beta),
-                           frq_cache_bits(h), frq_cache_bits(lambda),
-                           frq_cache_bits(delta), frq_cache_bits(cv_u)}};
+                           frq_cache_bits(h), frq_cache_bits(delta)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive(alpha, beta, h, lambda, delta, cv_u));
+      key, frq_derive_avail(alpha, beta, h, delta));
     return inserted.first->second;
   }
 };
@@ -572,25 +644,40 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
   return (out > 1.0) ? 1.0 : out;
 }
 
-// A small front-end memo for direct callers that do not provide a likelihood
-// context.  The likelihood adapters use FrqCache above, while this preserves
-// the cheap consecutive-row hit for exported/reference entry points.
+// Front-end memo for every call site.  It keeps the two halves on separate
+// keys, so a row that moves only the rate -- a trend or a covariate on lambda,
+// against constant shapes -- redoes one log rather than one beta quantile.
+// The likelihood adapters hand it the per-particle FrqCache; the exported
+// entry points run without one and memoise locally.
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  double alpha = R_NaN, beta = R_NaN, h = R_NaN, lambda = R_NaN;
-  double delta = R_NaN, cv_u = R_NaN;
+  double alpha = R_NaN, beta = R_NaN, h = R_NaN, delta = R_NaN;
+  double lambda = R_NaN, cv_u = R_NaN;
+  // The memo owns its copy rather than holding a pointer into the shared
+  // cache: the copy runs only when the shape key changes -- the same branch
+  // that would otherwise pay a hash lookup or a beta quantile -- and it keeps
+  // the memo's lifetime independent of when the cache is cleared.
+  FrqAvail avail;
   FrqPars value;
 
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
   const FrqPars& get(double a, double b, double hh, double l,
                      double d = 0.0, double c = 0.0) {
-    if (a == alpha && b == beta && hh == h && l == lambda &&
-        d == delta && c == cv_u) return value;
-    alpha = a; beta = b; h = hh; lambda = l; delta = d; cv_u = c;
-    value = shared != nullptr
-      ? shared->get(a, b, hh, l, d, c)
-      : frq_derive(a, b, hh, l, d, c);
+    // NaN never compares equal, so a NaN parameter always re-derives, and the
+    // NaN-initialised keys make the first call always miss -- the same
+    // behaviour the single-key memo had.
+    const bool same_avail =
+      a == alpha && b == beta && hh == h && d == delta;
+    if (same_avail && l == lambda && c == cv_u) return value;
+    if (!same_avail) {
+      alpha = a; beta = b; h = hh; delta = d;
+      avail = (shared != nullptr) ? shared->get(a, b, hh, d)
+                                  : frq_derive_avail(a, b, hh, d);
+      frq_copy_avail(value, avail);
+    }
+    lambda = l; cv_u = c;
+    frq_set_rate(value, avail.ok, l, c);
     return value;
   }
 };

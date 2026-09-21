@@ -200,6 +200,42 @@
     emc_nuisance = isTRUE(nuisance), emc_cause = cond))
 }
 
+# A forked particle worker that dies BELOW R level -- a segfault, or the OOM
+# killer -- never raises an R error, so `safe_new_particle`'s tryCatch cannot
+# see it.  `parallel::mclapply` then simply DROPS that element: the result comes
+# back short, with no indication of which subject is missing.  Assembling it
+# positionally therefore slid the survivors into the wrong subjects' slots, and
+# unlisting into a fixed-size array recycled a survivor into the gap -- one dead
+# worker silently overwrote another subject's draw and the chain wedged with
+# nothing reported.  `.emc_assemble_proposals()` matches results to subjects by
+# tag instead; this is the channel that says a worker was lost.
+.emc_worker_loss <- function(lost, stage = NULL, iteration = NULL) {
+  location <- paste0(
+    if (!is.null(stage)) paste0(" stage=", stage) else "",
+    if (!is.null(iteration)) paste0(" iteration=", iteration) else ""
+  )
+  subs <- paste(lost, collapse = ", ")
+  if (identical(.emc_failure_policy(), "strict")) {
+    stop(errorCondition(
+      sprintf(paste0("EMC2 lost %d particle worker(s)%s (subject(s) %s). The ",
+                     "worker died below R level, so no R error was raised."),
+              length(lost), location, subs),
+      class = c("emc_worker_lost", "emc_failure"),
+      emc_class = "crashed", emc_source = "particle",
+      emc_stage = stage, emc_iteration = iteration, emc_subjects = lost))
+  }
+  if (identical(.emc_failure_policy(), "silent")) return(invisible(FALSE))
+  # Not once-per-process like `.emc_failure_announce`: a lost worker is rare and
+  # each loss costs a real update, so every one is worth a line.
+  warning(sprintf(
+    paste0("EMC2: %d particle worker(s) died%s (subject(s) %s). Those subjects ",
+           "repeat their previous state for this iteration; every other ",
+           "subject is unaffected.\n",
+           "  options(emc2.failure_policy = \"strict\") to stop instead."),
+    length(lost), location, subs), call. = FALSE, immediate. = TRUE)
+  invisible(TRUE)
+}
+
 .emc_stall_abort <- function(stage = NULL, iteration = NULL,
                              run_length = NULL) {
   location <- paste0(

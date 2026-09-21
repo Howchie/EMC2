@@ -324,7 +324,7 @@ BAwR <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   # exception rather than clamped. p has no such limit: p = 0 would make the
   # drive lose a constant, degenerating to an LBA with a shifted launch and an
   # infinite T_max, so its lower bound is enforced.
-  exception <- c(A = 0, kappa = 0)
+  exception <- c(A = 0, kappa = 0, t0 = 0)
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   .tw <- add_time_warp_par(p_types, transform, minmax, exception)
   p_types <- .tw$p_types; transform <- .tw$transform

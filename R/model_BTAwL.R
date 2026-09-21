@@ -600,7 +600,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                     t0 = c(0.05, Inf), k = c(0, Inf),
                     tau_s = c(1e-4, Inf), tau_t = c(1e-4, Inf))
-    exception <- c(A = 0, k = 0)
+    exception <- c(A = 0, k = 0, t0 = 0)
     .tw <- add_time_warp_par(p_types, transform, minmax, exception)
     p_types <- .tw$p_types; transform <- .tw$transform
     minmax <- .tw$minmax; exception <- .tw$exception
@@ -645,7 +645,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                     t0 = c(0.05, Inf), k = c(1e-4, Inf),
                     tau = c(1e-4, Inf))
-    exception <- c(A = 0, k = 0)
+    exception <- c(A = 0, k = 0, t0 = 0)
     c_name <- paste0("BTAwL_TRANSIENT", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                      if (splitlognormal) "_SPLIT" else "", "_RATE",
                      if (!lognormal && !posdrift) "_IO" else "")
@@ -696,7 +696,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                    tau_s = "exp")
     minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                     t0 = c(0.05, Inf), k = c(0, Inf), tau_s = c(1e-4, Inf))
-    exception <- c(A = 0, k = 0)
+    exception <- c(A = 0, k = 0, t0 = 0)
     c_name <- paste0("BTAwL_SUSTAINED", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                      if (splitlognormal) "_SPLIT" else "",
                      if (!lognormal && !posdrift) "_IO" else "")
@@ -746,7 +746,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   # reachable from the full kernel: pi = 0 is a pure transient race (tau_s is
   # then inert) and pi = 1 a pure sustained one (tau_t is inert).  The compiled
   # kernel dispatches both exactly, so each matches its dedicated wrapper.
-  exception <- c(A = 0, k = 0, pi = 0, pi = 1)
+  exception <- c(A = 0, k = 0, pi = 0, pi = 1, t0 = 0)
   .tw <- add_time_warp_par(p_types, transform, minmax, exception)
   p_types <- .tw$p_types; transform <- .tw$transform
   minmax <- .tw$minmax; exception <- .tw$exception

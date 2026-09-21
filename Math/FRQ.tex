@@ -87,9 +87,11 @@ For the threshold-variability extension below,
   p=Q_{\alpha,\beta}\!\left(H_\delta^{-1}(h)\right).
 \]
 
-The mapping is analytic: it requires one inverse of \(H_\delta\) when needed
-and one beta quantile. No time-quantile inversion or numerical root finding is
-part of the likelihood or the sampler.
+The mapping is one closed-form inverse of \(H_\delta\) when needed, followed
+by one beta quantile. No time quantile is inverted anywhere. The beta quantile
+itself is an iterative solve, so the kernel caches it on
+\((\alpha,\beta,h,\delta)\) -- the only arguments it depends on -- and a rate
+that varies per trial therefore costs no extra inversions.
 
 The endpoint is exact:
 
@@ -101,10 +103,12 @@ For \(h<1\), the defective mass is \(P(U=\infty)=1-h\). Consequently a
 race of independent accumulators has omission probability \(\prod_i(1-h_i)\)
 before any contaminant or guessing mechanism is added.
 
-The default sampler geometry uses log coordinates for positive \(\alpha\),
-\(\beta\), \(\lambda\), \(t_0\), \(\delta\), and \(cv_u\), and a probit
-coordinate for \(h\). The exact `h = 1` proper model is a bound exception, not
-a limiting approximation. This keeps the exposed design variables aligned
+The default sampler geometry uses log coordinates for \(\lambda\),
+\(t_0\), \(\delta\), and \(cv_u\), a probit coordinate for \(h\), and an
+offset log coordinate \(\alpha=1+e^{x}\), \(\beta=1+e^{y}\) for the shapes,
+so that the constraint \(\alpha,\beta\ge 1\) costs the sampler no boundary.
+The exact `h = 1` proper model is a bound exception, not a limiting
+approximation. This keeps the exposed design variables aligned
 with the model: \(h\) controls eventual availability, while \(\lambda\)
 controls registration speed conditional on availability.
 
