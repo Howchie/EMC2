@@ -123,6 +123,18 @@ run_emc <- function(emc, stage, stop_criteria,
   emc <- progress$emc
   progress <- progress[!names(progress) == 'emc']
   cur_thin <- ifelse(is.numeric(thin), thin, 1)
+  # Stall detection, counted in tries.  It lives here rather than in
+  # run_stage() because run_stage() only ever sees ONE try: a counter there
+  # restarts every step_size iterations, so the limit could only ever be
+  # expressed in iterations -- and a 25-iteration limit aborted healthy burn-in
+  # on RDM, RDMGBM and LBA.  Preburn is exempt: it proposes from the prior, not
+  # an adapted covariance, so long rejection runs there are ordinary.
+  stall_limit <- .emc_stall_try_limit()
+  check_stall <- !identical(stage, "preburn") && is.finite(stall_limit)
+  if (check_stall) {
+    frozen_tries <- integer(length(emc))
+    last_snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
+  }
   block_no <- 0L
   while(!progress$done){
     block_no <- block_no + 1L
@@ -181,6 +193,17 @@ run_emc <- function(emc, stage, stop_criteria,
                                verbose, progress, n_blocks, rhat_version = rhat_version)
     emc <- progress$emc
     progress <- progress[!names(progress) == 'emc']
+    if (check_stall) {
+      snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
+      moved <- !mapply(identical, snap, last_snap)
+      frozen_tries <- ifelse(moved, 0L, frozen_tries + 1L)
+      last_snap <- snap
+      if (any(frozen_tries >= stall_limit)) {
+        .emc_stall_abort(stage = stage, iteration = chain_n(emc)[1, stage],
+                         run_length = max(frozen_tries),
+                         chains = which(frozen_tries >= stall_limit))
+      }
+    }
     check_elapsed <- proc.time()[["elapsed"]] - check_started
     save_started <- proc.time()[["elapsed"]]
     if(!is.null(fileName)){

@@ -625,19 +625,6 @@ run_stage <- function(pmwgs,
                             .EMC_REJECT_CLASSES))
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
-  identical_limit <- getOption("emc2.identical_iteration_limit", 25L)
-  if(length(identical_limit) != 1L || !is.finite(identical_limit) ||
-     identical_limit < 1) identical_limit <- 25L
-  identical_limit <- as.integer(identical_limit)
-  # Preburn is exempt.  Its proposals come from the prior rather than from an
-  # adapted covariance, so a chain sitting on its start point for tens of
-  # iterations is ordinary rather than broken: measured on stock LBA/forstmann,
-  # run lengths reach 18 in 20 fits and EVERY one recovered, the longest ending
-  # at iteration 19 of 400.  Applying the later stages' limit here aborted fits
-  # that were about to move.  Once the proposals are tuned, a run that long
-  # really is a stuck chain, so burn/adapt/sample keep the check.
-  check_stall <- !identical(stage, "preburn")
-  identical_run <- 0L
 
   for (i in 1:iter) {
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
@@ -765,17 +752,6 @@ run_stage <- function(pmwgs,
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
-    if (check_stall) {
-      if (.emc_sample_iteration_equal(pmwgs$samples, j)) {
-        identical_run <- identical_run + 1L
-      } else {
-        identical_run <- 0L
-      }
-      if (identical_run >= identical_limit) {
-        .emc_stall_abort(stage = stage, iteration = j,
-                         run_length = identical_run)
-      }
-    }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
@@ -878,6 +854,26 @@ run_stage <- function(pmwgs,
     identical(unname(prev), unname(now))
   }
   all(vapply(samples[names_history], same_slice, logical(1)))
+}
+
+# The last iteration of every iteration-indexed field -- the same fields
+# .emc_sample_iteration_equal() compares.  run_emc() takes one per try: two
+# consecutive tries ending on bit-identical snapshots mean the chain did not
+# move for the whole of the later try, because a continuous proposal does not
+# return to the same bits by accident.
+.emc_chain_snapshot <- function(samples) {
+  n_iter <- length(samples$stage)
+  if (!n_iter) return(NULL)
+  nms <- names(samples)[vapply(samples, function(obj) {
+    is_iteration_array(obj, n_iter)
+  }, logical(1))]
+  nms <- setdiff(nms, "stage")
+  lapply(samples[nms], function(obj) {
+    d <- dim(obj)
+    idx <- rep(list(TRUE), length(d))
+    idx[[length(d)]] <- n_iter
+    unname(do.call(`[`, c(list(obj), idx, list(drop = FALSE))))
+  })
 }
 
 reject_sample_iteration <- function(samples, j) {

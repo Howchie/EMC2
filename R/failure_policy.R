@@ -236,21 +236,39 @@
   invisible(TRUE)
 }
 
+# How many consecutive TRIES a chain may go without moving at all before the
+# fit is stopped -- the "[stage | try=N | ...]" blocks the console reports,
+# step_size iterations each.  Not iterations: burn-in routinely rejects for
+# tens of iterations in a row and then moves on (RDMGBM burn reached 32), and a
+# limit of 25 iterations killed RDM, RDMGBM and LBA fits that were about to
+# recover.  A healthy chain moves many times within one try -- 0/12 healthy
+# fits tripped even a ONE-try limit -- so three whole tries without a single
+# accepted move only happens to a chain that is genuinely stuck.
+# Inf disables the check.
+.emc_stall_try_limit <- function() {
+  lim <- getOption("emc2.stall_try_limit", 3L)
+  if (length(lim) != 1L || !is.numeric(lim) || is.na(lim) || lim < 1) lim <- 3L
+  lim
+}
+
 .emc_stall_abort <- function(stage = NULL, iteration = NULL,
-                             run_length = NULL) {
+                             run_length = NULL, chains = NULL) {
   location <- paste0(
     if (!is.null(stage)) paste0(" stage=", stage) else "",
-    if (!is.null(iteration)) paste0(" iteration=", iteration) else ""
+    if (!is.null(iteration)) paste0(" iteration=", iteration) else "",
+    if (!is.null(chains)) paste0(" chain=", paste(chains, collapse = ",")) else ""
   )
   run_text <- if(is.null(run_length)) "" else {
-    paste0(" (", run_length, " consecutive identical iterations)")
+    paste0(" (", run_length, " consecutive tries without moving)")
   }
   stop(errorCondition(
-    sprintf("EMC2 aborted after a stalled chain%s%s", location, run_text),
+    sprintf(paste0("EMC2 aborted after a stalled chain%s%s.\n",
+                   "  options(emc2.stall_try_limit = Inf) to disable the check."),
+            location, run_text),
     class = c("emc_sampler_stalled", "emc_failure"),
     emc_class = "numerical", emc_source = "sampler",
     emc_stage = stage, emc_iteration = iteration,
-    emc_run_length = run_length))
+    emc_run_length = run_length, emc_chains = chains))
 }
 
 # --- stage summary ----------------------------------------------------------
