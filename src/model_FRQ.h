@@ -307,8 +307,15 @@ inline FrqAvail frq_derive_avail(double alpha, double beta, double h,
   // back through the threshold-variability map before inverting the Beta CDF
   // to obtain the evidence-level availability p used by the generative
   // kernel. h = 1 maps exactly to p = 1.
-  const double z_h = frq_h_inv(h, s.hh);
-  const double p = R::qbeta(z_h, alpha, beta, 1, 0);
+  // The proper boundary is exact: h = 1 means every accumulator eventually
+  // completes, so the evidence-level availability is p = 1 regardless of the
+  // Beta shape or threshold-variability map.  Avoid qbeta() here; this branch
+  // is common for non-defective FRQ fits and qbeta(1, ...) is needlessly costly
+  // when alpha/beta vary over rows.  Values just below one still take the
+  // inversion path so the defective tail remains numerically unchanged.
+  const double p = (h == 1.0)
+    ? 1.0
+    : R::qbeta(frq_h_inv(h, s.hh), alpha, beta, 1, 0);
   if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p) ||
       (h < 1.0 && !(p < 1.0))) return s;
 

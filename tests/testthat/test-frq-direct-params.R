@@ -33,3 +33,17 @@ test_that("h = 1 is an exact non-defective FRQ boundary", {
   mapped <- EMC2::FRQ()$Ttransform(pars, NULL)
   expect_equal(unname(mapped[, "p"]), 1, tolerance = 1e-12)
 })
+
+test_that("the proper FRQ boundary stays exact with threshold variability", {
+  mapped <- EMC2:::frq_rate(
+    alpha = c(2, 5), beta = c(3, 2), h = 1, lambda = 1.3,
+    delta = c(0.5, 2)
+  )
+  expect_equal(unname(mapped[, "p"]), c(1, 1), tolerance = 0)
+
+  near <- EMC2:::frq_rate(
+    alpha = c(2, 5), beta = c(3, 2), h = 1 - 1e-9, lambda = 1.3,
+    delta = c(0.5, 2)
+  )
+  expect_true(all(near[, "p"] < 1))
+})

@@ -356,8 +356,8 @@ dSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, la
     .Call(`_EMC2_dSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega)
 }
 
-pSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE, erlang_omega = 1.0) {
-    .Call(`_EMC2_pSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega)
+pSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE, erlang_omega = 1.0, lower_tail = TRUE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega, lower_tail)
 }
 
 dGBMspv <- function(t, v, b, A, t0 = 0.0, s = 1.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, erlang_omega = 1.0) {

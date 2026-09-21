@@ -80,15 +80,13 @@ void prdmswtn_tt_raw(
       out[i] = 0.0;
       continue;
     }
-    const double log_cdf = prdmswtn_tt(
+    const double log_s = prdmswtn_tt_log_surv(
         rt[i], v_[i], B_[i] + A_[i], A_[i], s_[i], t0_[i], sv_[i],
-        tau_[i], true, pd);
-    if (log_cdf == R_NegInf) {
-      out[i] = 0.0;
-    } else if (ISNAN(log_cdf) || log_cdf >= 0.0) {
+        tau_[i], pd);
+    if (ISNAN(log_s) || log_s == R_NegInf) {
       out[i] = raw_log_zero(min_ll, floor_raw);
     } else {
-      out[i] = log1m_exp(log_cdf);
+      out[i] = std::fmin(log_s, 0.0);
     }
   }
 }
@@ -117,14 +115,14 @@ void rdmswtn_tt_logS_at_t(
         bad = true;
         break;
       }
-      const double log_cdf = prdmswtn_tt(
+      const double log_s = prdmswtn_tt_log_surv(
           t, v_[r], B_[r] + A_[r], A_[r], s_[r], t0_[r], sv_[r],
-          tau_[r], true, pd);
-      if (ISNAN(log_cdf) || log_cdf >= 0.0) {
+          tau_[r], pd);
+      if (ISNAN(log_s) || log_s == R_NegInf) {
         bad = true;
         break;
       }
-      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+      logS += std::fmin(log_s, 0.0);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -342,10 +340,14 @@ void prdmswtn_raw(const double* rt, const double* const* cols, int n_rows,
                       s_[i], t0_i, dispatch.lambda_g, dispatch.lambda_k,
                       true, kill_shape, dispatch.guess, pd, omega);
     } else {
-      log_cdf = prdmswtn(rt[i], v_[i], B_[i] + A_[i],
-                         A_[i], s_[i], t0_i, sv_[i],
-                         dispatch.lambda_g, dispatch.lambda_k,
-                         20, true, kill_shape, dispatch.guess, pd, omega);
+      const double log_s = prdmswtn_log_surv(rt[i], v_[i], B_[i] + A_[i],
+                                             A_[i], s_[i], t0_i, sv_[i],
+                                             dispatch.lambda_g, dispatch.lambda_k,
+                                             20, kill_shape, dispatch.guess, pd, omega);
+      if (ISNAN(log_s)) { out[i] = 0.0; continue; }
+      out[i] = (log_s == R_NegInf) ? raw_log_zero(min_ll, floor_raw)
+                                   : std::fmin(log_s, 0.0);
+      continue;
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -409,15 +411,13 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
                             dispatch.lambda_g, dispatch.lambda_k,
                             true, kill_shape, dispatch.guess, pd, omega);
           } else {
-            log_cdf = prdmswtn(t,
-                               v_[r],
-                               B_[r] + A_[r],
-                               A_[r],
-                               s_[r],
-                               t0_r,
-                               sv_[r],
-                               dispatch.lambda_g, dispatch.lambda_k,
-                               20, true, kill_shape, dispatch.guess, pd, omega);
+            const double log_s = prdmswtn_log_surv(t, v_[r], B_[r] + A_[r],
+                                                   A_[r], s_[r], t0_r, sv_[r],
+                                                   dispatch.lambda_g, dispatch.lambda_k,
+                                                   20, kill_shape, dispatch.guess, pd, omega);
+            if (!R_FINITE(log_s)) { bad = true; break; }
+            logS += std::fmin(log_s, 0.0);
+            continue;
           }
           if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
           logS += log1m_exp(log_cdf);
@@ -451,15 +451,13 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
                           true, kill_shape, dispatch.guess, pd, omega);
         }
       } else if (mode_hint == 2) {
-        log_cdf = prdmswtn(t,
-                           v_[r],
-                           B_[r] + A_[r],
-                           A_[r],
-                           s_[r],
-                           t0_r,
-                           sv_[r],
-                           dispatch.lambda_g, dispatch.lambda_k,
-                           20, true, kill_shape, dispatch.guess, pd, omega);
+        const double log_s = prdmswtn_log_surv(t, v_[r], B_[r] + A_[r],
+                                               A_[r], s_[r], t0_r, sv_[r],
+                                               dispatch.lambda_g, dispatch.lambda_k,
+                                               20, kill_shape, dispatch.guess, pd, omega);
+        if (log_s == R_NegInf) { bad = true; break; }
+        if (!ISNAN(log_s)) logS += std::fmin(log_s, 0.0);
+        continue;
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
           logS += rdmswtn_k0_logsurv(tt, v_[r], B_[r] + A_[r],
@@ -476,15 +474,13 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
                           true, kill_shape, dispatch.guess, pd, omega);
         }
       } else {
-        log_cdf = prdmswtn(t,
-                           v_[r],
-                           B_[r] + A_[r],
-                           A_[r],
-                           s_[r],
-                           t0_r,
-                           sv_[r],
-                           dispatch.lambda_g, dispatch.lambda_k,
-                           20, true, kill_shape, dispatch.guess, pd, omega);
+        const double log_s = prdmswtn_log_surv(t, v_[r], B_[r] + A_[r],
+                                               A_[r], s_[r], t0_r, sv_[r],
+                                               dispatch.lambda_g, dispatch.lambda_k,
+                                               20, kill_shape, dispatch.guess, pd, omega);
+        if (log_s == R_NegInf) { bad = true; break; }
+        if (!ISNAN(log_s)) logS += std::fmin(log_s, 0.0);
+        continue;
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

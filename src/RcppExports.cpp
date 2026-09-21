@@ -1659,8 +1659,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // pSWTNspv
-NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector lambda_g, NumericVector lambda_k, int n_gauss_nodes, bool log_out, int kill_shape, bool posdrift, NumericVector erlang_omega);
-RcppExport SEXP _EMC2_pSWTNspv(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP posdriftSEXP, SEXP erlang_omegaSEXP) {
+NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector lambda_g, NumericVector lambda_k, int n_gauss_nodes, bool log_out, int kill_shape, bool posdrift, NumericVector erlang_omega, bool lower_tail);
+RcppExport SEXP _EMC2_pSWTNspv(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP posdriftSEXP, SEXP erlang_omegaSEXP, SEXP lower_tailSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1678,7 +1678,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type erlang_omega(erlang_omegaSEXP);
-    rcpp_result_gen = Rcpp::wrap(pSWTNspv(t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega));
+    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
+    rcpp_result_gen = Rcpp::wrap(pSWTNspv(t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega, lower_tail));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3478,7 +3479,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_drdmswtn_tt", (DL_FUNC) &_EMC2_drdmswtn_tt, 10},
     {"_EMC2_prdmswtn_tt", (DL_FUNC) &_EMC2_prdmswtn_tt, 10},
     {"_EMC2_dSWTNspv", (DL_FUNC) &_EMC2_dSWTNspv, 14},
-    {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 14},
+    {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 15},
     {"_EMC2_dGBMspv", (DL_FUNC) &_EMC2_dGBMspv, 11},
     {"_EMC2_pGBMspv", (DL_FUNC) &_EMC2_pGBMspv, 11},
     {"_EMC2_drdmswtn", (DL_FUNC) &_EMC2_drdmswtn, 15},
