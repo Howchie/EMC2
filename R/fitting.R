@@ -110,6 +110,7 @@ run_emc <- function(emc, stage, stop_criteria,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc)
+  emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
@@ -161,12 +162,15 @@ run_emc <- function(emc, stage, stop_criteria,
     stage_iter <- progress$step_size*max(1,cur_thin)
     core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain,
                               cores_for_chains = cores_for_chains)
-    sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
+    sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
+                             sampler <- .emc_set_sampler_rng(sampler)
+                             run_stages(sampler, ...)
+                           }, stage = stage, iter= stage_iter,
                              verbose=verbose,  verboseProgress = verboseProgress,
                              particle_factor=particle_factor,search_width=search_width,
                              n_cores=cores_per_chain, mc.cores = cores_for_chains,
                              r_cores = r_cores, core_ctl = core_ctl,
-                             mc.preschedule = FALSE)
+                             mc.preschedule = FALSE, mc.set.seed = FALSE)
     if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
     sample_elapsed <- proc.time()[["elapsed"]] - sample_started
     concat_started <- proc.time()[["elapsed"]]
@@ -274,6 +278,10 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
                        particle_factor=50, search_width= NULL, n_cores=1, r_cores = 1,
                        core_ctl = NULL)
 {
+  sampler <- .emc_prepare_sampler_rng(sampler)
+  if (!is.null(sampler$rng$gibbs)) {
+    assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
+  }
   if (!isTRUE(sampler$init)) .emc_ll_route_reset()
   on.exit(.emc_core_release(core_ctl), add = TRUE)
   chain_cores <- .emc_cores_now(core_ctl, n_cores)
@@ -1219,7 +1227,8 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
   invisible(NULL)
 }
 
-auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
+auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
+                          mc.set.seed = TRUE){
   if(mc.cores <= 1) return(lapply(X, FUN, ...))
   if(Sys.info()[1] == "Windows"){
     cluster <- parallel::makeCluster(mc.cores)
@@ -1227,7 +1236,8 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
   } else{
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
-                                   mc.preschedule = mc.preschedule, ...)
+                                   mc.preschedule = mc.preschedule,
+                                   mc.set.seed = mc.set.seed, ...)
     failed <- vapply(list_out, inherits, logical(1), what = "try-error")
     if (any(failed)) {
       first <- list_out[[which(failed)[1]]]
@@ -1245,8 +1255,10 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
 strip_duplicates <- function(emc, incl_props = TRUE) {
   for (i in seq_along(emc)[-1]) {
     samples <- emc[[i]]$samples
+    rng <- emc[[i]]$rng
     prop_var <- attr(emc[[i]], "prop_var")
     emc[[i]] <- list(samples = samples)
+    emc[[i]]$rng <- rng
     attr(emc[[i]], "prop_var") <- prop_var
   }
   if(incl_props){
@@ -1290,10 +1302,12 @@ weighted_moments <- function(chain, ll = NULL) {
 #' @noRd
 restore_duplicates <- function(emc) {
   if (length(emc) > 1) {
+    rngs <- lapply(emc, `[[`, "rng")
     for (i in 2:length(emc)) {
       samples <- emc[[i]]$samples
       emc[[i]] <- emc[[1]]
       emc[[i]]$samples <- samples
+      emc[[i]]$rng <- rngs[[i]]
     }
   }
   return(emc)

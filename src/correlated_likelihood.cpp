@@ -281,6 +281,12 @@ static inline bool bawl_corr_make_pair_data(
   out.rho = (r1 * r2 < 0.0 ? -1.0 : 1.0) *
     std::sqrt(std::fabs(r1 * r2));
   out.positive = ctx->use_posdrift;
+  // Without joint positivity the orthant normalizer is identically one, so
+  // there is nothing to look up or remember.
+  if (!out.positive) {
+    out.normalizer = 1.0;
+    return true;
+  }
   const double key[5] = {out.mu1, out.sd1, out.mu2, out.sd2, out.rho};
   for (const auto& e : s.qab_cache) {
     if (e.key[0] == key[0] && e.key[1] == key[1] && e.key[2] == key[2] &&
@@ -334,35 +340,46 @@ static inline double bawl_corr_single_log_density(
                     ctx->bawl_k_fixed_zero ? LBA_DENOM_FLOOR : BAWL_DENOM_FLOOR);
 }
 
+// How a pair trial is evaluated.  `exact` is the rectangle algebra on
+// norm_cdf_2d_hybrid corners; `precise` the same algebra on tvpack corners
+// (absolute error 1e-15 instead of Drezner's up to 1e-6); `numeric` the
+// log-space 1-D integral.  The dispatcher escalates through them in order.
+enum class BAwLCorrPairMode : uint8_t { exact, precise, numeric };
+
 static inline double bawl_corr_log_pair_survival(
     const BAwLCorrPairData& pair, double t, const double* const* cols,
-    const ContextForRaceModels* ctx, bool numeric,
-    BAwLCorrMomentStatus* status_out = nullptr) {
+    const ContextForRaceModels* ctx, BAwLCorrPairMode mode,
+    BAwLCorrMomentStatus* status_out = nullptr, double* noise_out = nullptr) {
   const BAwLTimeGeometry g1 = bawl_corr_row_geometry(t, cols, pair.row1, ctx);
   const BAwLTimeGeometry g2 = bawl_corr_row_geometry(t, cols, pair.row2, ctx);
-  const bool use_numeric = numeric || std::fabs(pair.rho) >= 1.0 - 1e-10;
+  const bool use_numeric = mode == BAwLCorrPairMode::numeric ||
+    std::fabs(pair.rho) >= 1.0 - 1e-10;
   const BAwLCorrPairResult result = use_numeric
     ? bawl_corr_pair_survival_numeric(g1, g2, pair.mu1, pair.sd1, pair.mu2,
                                       pair.sd2, pair.rho, pair.positive,
                                       pair.normalizer)
     : bawl_corr_pair_survival_exact(g1, g2, pair.mu1, pair.sd1, pair.mu2,
                                     pair.sd2, pair.rho, pair.positive,
-                                    pair.normalizer);
+                                    pair.normalizer,
+                                    mode == BAwLCorrPairMode::precise);
   if (status_out != nullptr) *status_out = result.status;
+  if (noise_out != nullptr) *noise_out = result.noise;
   if (!(result.value > 0.0) || !R_FINITE(result.value)) return R_NegInf;
   return std::log(result.value);
 }
 
 static inline double bawl_corr_log_pair_cause(
     const BAwLCorrPairData& pair, int winner_row, double t,
-    const double* const* cols, const ContextForRaceModels* ctx, bool numeric,
-    BAwLCorrMomentStatus* status_out = nullptr) {
+    const double* const* cols, const ContextForRaceModels* ctx,
+    BAwLCorrPairMode mode,
+    BAwLCorrMomentStatus* status_out = nullptr, double* noise_out = nullptr) {
   const bool first = winner_row == pair.row1;
   const int rw = first ? pair.row1 : pair.row2;
   const int rl = first ? pair.row2 : pair.row1;
   const BAwLTimeGeometry gw = bawl_corr_row_geometry(t, cols, rw, ctx);
   const BAwLTimeGeometry gl = bawl_corr_row_geometry(t, cols, rl, ctx);
-  const bool use_numeric = numeric || std::fabs(pair.rho) >= 1.0 - 1e-10;
+  const bool use_numeric = mode == BAwLCorrPairMode::numeric ||
+    std::fabs(pair.rho) >= 1.0 - 1e-10;
   const BAwLCorrPairResult result = use_numeric
     ? bawl_corr_pair_cause_numeric(
         gw, gl, cols[emc2col::bawl::v][rw], cols[emc2col::bawl::sv][rw],
@@ -371,8 +388,9 @@ static inline double bawl_corr_log_pair_cause(
     : bawl_corr_pair_cause_exact(
         gw, gl, cols[emc2col::bawl::v][rw], cols[emc2col::bawl::sv][rw],
         cols[emc2col::bawl::v][rl], cols[emc2col::bawl::sv][rl], pair.rho,
-        pair.positive, pair.normalizer);
+        pair.positive, pair.normalizer, mode == BAwLCorrPairMode::precise);
   if (status_out != nullptr) *status_out = result.status;
+  if (noise_out != nullptr) *noise_out = result.noise;
   if (!(result.value > 0.0) || !R_FINITE(result.value)) return R_NegInf;
   return std::log(result.value);
 }
@@ -381,60 +399,80 @@ static inline bool bawl_corr_row_active(const CorrDriftSharedState& s, int row) 
   return !s.has_RACE || s.race_mask[row];
 }
 
+// Component evaluators report, through noise_out, the absolute error bound
+// of exp(return value): the pair's bound times the singleton factors, which
+// are exact log-space kernels.
 static inline double bawl_corr_log_component_survival(
     const CorrDriftSharedState& s, const BAwLCorrPairData& pair, int j,
     double t, const double* const* cols, const ContextForRaceModels* ctx,
-    bool numeric, BAwLCorrMomentStatus* status_out = nullptr) {
+    BAwLCorrPairMode mode, BAwLCorrMomentStatus* status_out = nullptr,
+    double* noise_out = nullptr) {
   BAwLCorrMomentStatus pair_status = BAwLCorrMomentStatus::ok;
-  double out = bawl_corr_log_pair_survival(pair, t, cols, ctx, numeric,
-                                           &pair_status);
+  double pair_noise = 0.0;
+  if (noise_out != nullptr) *noise_out = 0.0;
+  double out = bawl_corr_log_pair_survival(pair, t, cols, ctx, mode,
+                                           &pair_status, &pair_noise);
   if (status_out != nullptr) *status_out = pair_status;
   if (pair_status == BAwLCorrMomentStatus::unstable ||
       pair_status == BAwLCorrMomentStatus::invalid) return R_NaN;
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  double log_others = 0.0;
   for (int k = 0; k < n_lR_j; ++k) {
     const int row = start + k;
     if (!bawl_corr_row_active(s, row) || row == pair.row1 || row == pair.row2) continue;
     const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
     if (!R_FINITE(ls)) return R_NegInf;
     out += ls;
+    log_others += ls;
   }
+  if (noise_out != nullptr) *noise_out = pair_noise * std::exp(log_others);
   return out;
 }
 
 static inline double bawl_corr_log_component_cause(
     const CorrDriftSharedState& s, const BAwLCorrPairData& pair, int j,
     int winner_row, double t, const double* const* cols,
-    const ContextForRaceModels* ctx, bool numeric,
-    BAwLCorrMomentStatus* status_out = nullptr) {
+    const ContextForRaceModels* ctx, BAwLCorrPairMode mode,
+    BAwLCorrMomentStatus* status_out = nullptr, double* noise_out = nullptr) {
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  double pair_noise = 0.0;
+  if (noise_out != nullptr) *noise_out = 0.0;
   if (winner_row == pair.row1 || winner_row == pair.row2) {
     BAwLCorrMomentStatus ps = BAwLCorrMomentStatus::ok;
     double out = bawl_corr_log_pair_cause(pair, winner_row, t, cols, ctx,
-                                          numeric, &ps);
+                                          mode, &ps, &pair_noise);
     if (status_out != nullptr) *status_out = ps;
     if (ps == BAwLCorrMomentStatus::unstable ||
         ps == BAwLCorrMomentStatus::invalid) return R_NaN;
+    double log_others = 0.0;
     for (int k = 0; k < n_lR_j; ++k) {
       const int row = start + k;
       if (!bawl_corr_row_active(s, row) || row == pair.row1 || row == pair.row2) continue;
       const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
       if (!R_FINITE(ls)) return R_NegInf;
       out += ls;
+      log_others += ls;
     }
+    if (noise_out != nullptr) *noise_out = pair_noise * std::exp(log_others);
     return out;
   }
   if (!bawl_corr_row_active(s, winner_row)) return R_NegInf;
   double out = bawl_corr_single_log_density(t, winner_row, cols, ctx);
   if (!R_FINITE(out)) return out;
+  double log_others = out;
   BAwLCorrMomentStatus ps = BAwLCorrMomentStatus::ok;
-  const double lp = bawl_corr_log_pair_survival(pair, t, cols, ctx, numeric, &ps);
+  const double lp = bawl_corr_log_pair_survival(pair, t, cols, ctx, mode,
+                                                &ps, &pair_noise);
   if (status_out != nullptr) *status_out = ps;
   if (ps == BAwLCorrMomentStatus::unstable || ps == BAwLCorrMomentStatus::invalid)
     return R_NaN;
-  if (!R_FINITE(lp)) return R_NegInf;
+  if (!R_FINITE(lp)) {
+    // The pair survivor is zero only to within its bound.
+    if (noise_out != nullptr) *noise_out = pair_noise * std::exp(log_others);
+    return R_NegInf;
+  }
   out += lp;
   for (int k = 0; k < n_lR_j; ++k) {
     const int row = start + k;
@@ -443,10 +481,14 @@ static inline double bawl_corr_log_component_cause(
     const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
     if (!R_FINITE(ls)) return R_NegInf;
     out += ls;
+    log_others += ls;
   }
+  if (noise_out != nullptr) *noise_out = pair_noise * std::exp(log_others);
   return out;
 }
 
+// log_integrand(t, node_weight) receives the node's natural-scale quadrature
+// weight (Jacobian included) so it can weight any error bound it reports.
 template <typename LogIntegrand>
 static double bawl_corr_integrate_log_interval(double lo, double hi,
                                                LogIntegrand log_integrand) {
@@ -467,8 +509,9 @@ static double bawl_corr_integrate_log_interval(double lo, double hi,
       t = 0.5 * (hi - lo) * x + 0.5 * (hi + lo);
       log_jac = std::log(0.5 * (hi - lo));
     }
-    values[static_cast<size_t>(i)] = log_jac + std::log(rule.w[i]) +
-      log_integrand(t);
+    const double log_weight = log_jac + std::log(rule.w[i]);
+    values[static_cast<size_t>(i)] = log_weight +
+      log_integrand(t, std::exp(log_weight));
     max_log = std::max(max_log, values[static_cast<size_t>(i)]);
   }
   if (!R_FINITE(max_log)) return R_NegInf;
@@ -489,7 +532,7 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     const CorrDriftSharedState& s, const BAwLCorrTrialLayout& layout, int j,
     const double* const* cols, const ContextForRaceModels* ctx,
     const Rcpp::IntegerVector& response, const Rcpp::LogicalVector& winner,
-    double min_ll, bool force_numeric = false) {
+    double min_ll, BAwLCorrPairMode mode = BAwLCorrPairMode::exact) {
   BAwLCorrExactTrialResult out;
   BAwLCorrPairData pair;
   if (!bawl_corr_make_pair_data(layout, s, cols, ctx, pair)) return out;
@@ -502,31 +545,43 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
   const double UT = s.UT[start];
   const double LC = s.LC[start];
   const double UC = s.UC[start];
-  bool numeric = force_numeric;
+  const bool numeric = mode == BAwLCorrPairMode::numeric;
   BAwLCorrMomentStatus st = BAwLCorrMomentStatus::ok;
   auto absorb_status = [&](BAwLCorrMomentStatus value) {
     if (value == BAwLCorrMomentStatus::invalid) st = value;
     else if (value == BAwLCorrMomentStatus::unstable &&
              st != BAwLCorrMomentStatus::invalid) st = value;
   };
-  auto component_survival_mode = [&](double t, bool numeric_survival,
-                                     BAwLCorrMomentStatus* status) {
-    BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
-    const double value = bawl_corr_log_component_survival(
-        s, pair, j, t, cols, ctx, numeric_survival, &local);
-    if (status != nullptr) *status = local;
-    absorb_status(local);
-    return value;
+  // Absolute error bounds (natural scale) of the numerator and of the
+  // truncation normaliser.  Each component evaluation adds its bound, times
+  // the current quadrature weight, to whichever of the two is being built;
+  // every component enters those quantities linearly with coefficient +-1 or
+  // a quadrature weight, so the bounds add.  Only the exact route reports a
+  // nonzero bound.
+  double noise_num = 0.0, noise_z = 0.0;
+  double* noise_acc = &noise_num;
+  double noise_weight = 1.0;
+  auto add_noise = [&](double bound) {
+    if (bound > 0.0) *noise_acc += noise_weight * bound;
   };
   auto component_survival = [&](double t, BAwLCorrMomentStatus* status) {
-    return component_survival_mode(t, numeric, status);
+    BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+    double bound = 0.0;
+    const double value = bawl_corr_log_component_survival(
+        s, pair, j, t, cols, ctx, mode, &local, &bound);
+    if (status != nullptr) *status = local;
+    absorb_status(local);
+    add_noise(bound);
+    return value;
   };
   auto component_cause = [&](int row, double t, BAwLCorrMomentStatus* status) {
     BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+    double bound = 0.0;
     const double value = bawl_corr_log_component_cause(
-        s, pair, j, row, t, cols, ctx, numeric, &local);
+        s, pair, j, row, t, cols, ctx, mode, &local, &bound);
     if (status != nullptr) *status = local;
     absorb_status(local);
+    add_noise(bound);
     return value;
   };
 
@@ -543,9 +598,13 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
   };
   auto interval_cause = [&](double lo, double hi, int row,
                             BAwLCorrMomentStatus* st) {
-    return bawl_corr_integrate_log_interval(lo, hi, [&](double t) {
-      return finite_cause(t, row, st);
-    });
+    const double value = bawl_corr_integrate_log_interval(
+        lo, hi, [&](double t, double node_weight) {
+          noise_weight = node_weight;
+          return finite_cause(t, row, st);
+        });
+    noise_weight = 1.0;
+    return value;
   };
   auto survival_difference = [&](double lo, double hi,
                                  BAwLCorrMomentStatus* st) {
@@ -556,110 +615,14 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     const double z = log_diff_exp(a, b);
     return z;
   };
-  bool denominator_requires_numeric = false;
-  auto stable_survival_difference = [&](double lo, double hi,
-                                        BAwLCorrMomentStatus* st) {
-    // The exact rectangle formula obtains a survivor by subtracting four BVN
-    // CDF corners.  In a rare positive orthant those corners can agree to all
-    // available digits while leaving a small, positive residual that looks
-    // valid.  Dividing by that residual as an LT/UT normaliser then rewards
-    // the parameter point with an arbitrarily large finite likelihood.
-    //
-    // The deterministic pair route integrates one marginal drift against the
-    // conditional survivor of the other.  It is independent of the corner
-    // derivative algebra and serves as an independent check on the data-window
-    // normaliser, which is cached by parameter cell below.  An exact event is
-    // retained only with an exact denominator; selecting the numeric
-    // denominator makes the dispatcher retry the whole trial numerically.
-    // Both routes use the same positive-orthant normaliser, so q cancels
-    // exactly in their log ratio.
-    // The numeric integral is an independent check, but its marginal scan is
-    // deliberately finite.  When the surviving mass sits beyond that scan
-    // (high positive rho with very asymmetric drift means), it can
-    // underestimate Z by hundreds of log units even though the exact
-    // rectangle result is well resolved.  Conversely, the exact corner
-    // subtraction can under-resolve central rare-positive-orthant cases that
-    // the numeric route handles well.  Both known failures lose positive
-    // mass, so retain the larger valid estimate rather than unconditionally
-    // replacing the exact denominator with the numeric one.
-    auto difference_for_mode = [&](bool use_numeric,
-                                   BAwLCorrMomentStatus* mode_status) {
-      BAwLCorrMomentStatus combined = BAwLCorrMomentStatus::ok;
-      auto survivor = [&](double t) {
-        BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
-        const double value = bawl_corr_log_component_survival(
-            s, pair, j, t, cols, ctx, use_numeric, &local);
-        if (local == BAwLCorrMomentStatus::invalid) combined = local;
-        else if (local == BAwLCorrMomentStatus::unstable &&
-                 combined != BAwLCorrMomentStatus::invalid) combined = local;
-        else if (local == BAwLCorrMomentStatus::zero_mass &&
-                 combined == BAwLCorrMomentStatus::ok) combined = local;
-        return value;
-      };
-      const double a = (lo == 0.0) ? 0.0 : survivor(lo);
-      if (hi == R_PosInf) {
-        *mode_status = combined;
-        return a;
-      }
-      const double b = survivor(hi);
-      *mode_status = combined;
-      if (a == R_NegInf) return R_NegInf;
-      return log_diff_exp(a, b);
-    };
-
-    auto valid_difference = [](double log_z, BAwLCorrMomentStatus status) {
-      return R_FINITE(log_z) && status != BAwLCorrMomentStatus::unstable &&
-        status != BAwLCorrMomentStatus::invalid;
-    };
-    if (numeric) {
-      BAwLCorrMomentStatus numeric_status = BAwLCorrMomentStatus::ok;
-      const double numeric_log_z = difference_for_mode(true, &numeric_status);
-      const bool numeric_valid = valid_difference(numeric_log_z, numeric_status);
-      if (numeric_valid) {
-        *st = numeric_status;
-        absorb_status(*st);
-        return numeric_log_z;
-      }
-      *st = numeric_status == BAwLCorrMomentStatus::invalid
-        ? BAwLCorrMomentStatus::invalid : BAwLCorrMomentStatus::unstable;
-      absorb_status(*st);
-      return R_NegInf;
-    }
-
-    BAwLCorrMomentStatus exact_status = BAwLCorrMomentStatus::ok;
-    const double exact_log_z = difference_for_mode(false, &exact_status);
-    const bool exact_valid = valid_difference(exact_log_z, exact_status);
-    // Corner cancellation is an absolute-precision problem.  A resolved
-    // normaliser above 1e-8 is far from that regime and does not need the
-    // substantially more expensive 64-node independent cross-check.
-    constexpr double kLogZCrosscheckThreshold = -18.420680743952367; // log(1e-8)
-    if (exact_valid && exact_log_z > kLogZCrosscheckThreshold) {
-      *st = exact_status;
-      absorb_status(*st);
-      return exact_log_z;
-    }
-
-    BAwLCorrMomentStatus numeric_status = BAwLCorrMomentStatus::ok;
-    const double numeric_log_z = difference_for_mode(true, &numeric_status);
-    const bool numeric_valid = valid_difference(numeric_log_z, numeric_status);
-    if (exact_valid || numeric_valid) {
-      constexpr double kLogZAgreementTol = 1e-8;
-      const bool take_exact = exact_valid &&
-        (!numeric_valid || numeric_log_z <= exact_log_z + kLogZAgreementTol);
-      *st = take_exact ? exact_status : numeric_status;
-      absorb_status(*st);
-      // Do not combine an exact event density with a numeric denominator.
-      // Ask the existing outer dispatcher to repeat the whole trial on the
-      // numeric-pair route, where an unrepresentable event is conservatively
-      // floored instead of becoming an artificial finite likelihood spike.
-      denominator_requires_numeric = !take_exact;
-      return take_exact ? exact_log_z : numeric_log_z;
-    }
-    *st = (exact_status == BAwLCorrMomentStatus::invalid ||
-           numeric_status == BAwLCorrMomentStatus::invalid)
-      ? BAwLCorrMomentStatus::invalid : BAwLCorrMomentStatus::unstable;
-    absorb_status(*st);
-    return R_NegInf;
+  // An unknown-response observation above UC: the finite window (UC, UT]
+  // plus the never-finish atom when the trial retains it (see
+  // defective_upper_log_mass).  The component survivor at +Inf is the joint
+  // probability that neither racer ever finishes.
+  const bool keep_atom = ctx->retains_defective_atom(UT);
+  auto upper_mass = [&](BAwLCorrMomentStatus* st) {
+    return defective_upper_log_mass(
+        [&](double t) { return component_survival(t, st); }, UC, UT, keep_atom);
   };
 
   double log_value = R_NegInf;
@@ -670,14 +633,14 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     else log_value = survival_difference(LT, LC, &st);
   } else if (rt == R_PosInf) {
     if (known) log_value = interval_cause(UC, UT, known_row, &st);
-    else log_value = survival_difference(UC, UT, &st);
+    else log_value = upper_mass(&st);
   } else if (Rcpp::NumericVector::is_na(rt)) {
     if (known) {
       log_value = log_sum_exp(interval_cause(LT, LC, known_row, &st),
                               interval_cause(UC, UT, known_row, &st));
     } else {
       log_value = log_sum_exp(survival_difference(LT, LC, &st),
-                              survival_difference(UC, UT, &st));
+                              upper_mass(&st));
     }
   }
   if (st == BAwLCorrMomentStatus::unstable || st == BAwLCorrMomentStatus::invalid) {
@@ -685,14 +648,38 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     return out;
   }
 
+  // Resolution.  The exact rectangle obtains every pair value by
+  // subtracting BVN corners whose errors are absolute (see
+  // bawl_corr_drezner_abs_err), so a small value can be pure cancellation
+  // noise -- including a positive residual that looks valid.  In a log ratio two
+  // such residuals make an arbitrarily large finite likelihood (+344 per
+  // trial was seen with RT 26 SD into the winner's tail and LT 12 SD into
+  // it).  A value is trusted only when it clears its accumulated bound by
+  // kBawlCorrResolveRatio; otherwise the whole trial is repeated on the next
+  // route (precise corners, then the numeric route, which works in log space
+  // wherever the mass is), so routes are never mixed within a trial.
+  auto resolved = [](double log_x, double bound) {
+    return !(bound > 0.0) ||
+      (R_FINITE(log_x) && log_x > std::log(bound) + std::log(kBawlCorrResolveRatio));
+  };
+  auto unresolved = [&]() {
+    if (bawl_corr_counters_active()) ++bawl_corr_counters().unresolved_exact_trials;
+    out.status = BAwLCorrMomentStatus::unstable;
+    return out;
+  };
+  const bool num_resolved = numeric || resolved(log_value, noise_num);
+
+  double log_z = 0.0;
+  bool z_resolved = true;
   if (s.has_trunc_trial[static_cast<size_t>(j)]) {
     // Z depends only on the parameter cell and the data-constant truncation
     // window, never on rt, so unique trials sharing a cell share Z.  Only
     // pure pair trials are cacheable: a singleton survivor's parameters
-    // would otherwise need to join the key.
+    // would otherwise need to join the key.  Only resolved exact values are
+    // cached.
     const bool z_cacheable = !numeric && layout.n_active == 2;
     double zkey[15] = {0.0};
-    const double* z_hit = nullptr;
+    const CorrDriftSharedState::ZCacheEntry* z_hit = nullptr;
     if (z_cacheable) {
       const double* t0c = cols[emc2col::bawl::t0];
       const double* Ac = cols[emc2col::bawl::A];
@@ -706,23 +693,44 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
       zkey[12] = pair.rho; zkey[13] = LT; zkey[14] = UT;
       for (const auto& e : s.z_cache) {
         if (std::memcmp(e.key, zkey, sizeof(zkey)) == 0) {
-          z_hit = &e.log_z;
+          z_hit = &e;
           break;
         }
       }
     }
     if (z_hit != nullptr) {
-      log_value -= *z_hit;
+      log_z = z_hit->log_z;
+      noise_z = z_hit->noise;
     } else {
+      noise_acc = &noise_z;
       BAwLCorrMomentStatus zst = BAwLCorrMomentStatus::ok;
-      const double log_z = stable_survival_difference(LT, UT, &zst);
-      if (zst == BAwLCorrMomentStatus::unstable || zst == BAwLCorrMomentStatus::invalid ||
-          !R_FINITE(log_z)) {
-        out.status = zst == BAwLCorrMomentStatus::ok
-          ? BAwLCorrMomentStatus::unstable : zst;
+      auto z_survival = [&](double t) {
+        BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+        const double value = component_survival(t, &local);
+        if (local == BAwLCorrMomentStatus::invalid) zst = local;
+        else if (local == BAwLCorrMomentStatus::unstable &&
+                 zst != BAwLCorrMomentStatus::invalid) zst = local;
+        return value;
+      };
+      const double z_lo = (LT == 0.0) ? 0.0 : z_survival(LT);
+      log_z = z_lo;
+      if (UT != R_PosInf && z_lo != R_NegInf)
+        log_z = log_diff_exp(z_lo, z_survival(UT));
+      if (keep_atom && UT != R_PosInf) {
+        // Retained omissions: Z = S(LT) - S(UT) + S(+Inf), as in
+        // get_trunc_normaliser_rowmajor_cpp.  UT = +Inf needs nothing, since
+        // S(LT) already contains the atom.
+        log_z = log_sum_exp(log_z, z_survival(R_PosInf));
+      }
+      noise_acc = &noise_num;
+      if (zst == BAwLCorrMomentStatus::unstable ||
+          zst == BAwLCorrMomentStatus::invalid) {
+        out.status = zst;
         return out;
       }
-      if (denominator_requires_numeric) {
+      z_resolved = numeric || resolved(log_z, noise_z);
+      if (!z_resolved) return unresolved();
+      if (!R_FINITE(log_z)) {
         out.status = BAwLCorrMomentStatus::unstable;
         return out;
       }
@@ -730,11 +738,24 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
         CorrDriftSharedState::ZCacheEntry e;
         std::memcpy(e.key, zkey, sizeof(zkey));
         e.log_z = log_z;
+        e.noise = noise_z;
         s.z_cache.push_back(e);
       }
-      log_value -= log_z;
     }
   }
+  if (!num_resolved) {
+    // An unresolved numerator is at most value + bound.  When even that,
+    // over the smallest Z the normaliser's bound allows, is below the floor,
+    // the trial floors on any route and the numeric pass can be skipped.
+    const double log_hi = log_sum_exp(log_value, std::log(noise_num));
+    const double log_z_lo = (noise_z > 0.0)
+      ? log_diff_exp(log_z, std::log(noise_z)) : log_z;
+    if (!(log_hi - log_z_lo < min_ll)) return unresolved();
+    if (bawl_corr_counters_active())
+      ++bawl_corr_counters().unresolved_bound_floored_trials;
+    log_value = R_NegInf;
+  }
+  log_value -= log_z;
   // Contaminant mixture; see src/contaminant_mixture.h.
   if (s.pc_col >= 0 || (s.pg_col >= 0 && s.guess.active())) {
     const double pC = (s.pc_col >= 0) ? cols[static_cast<size_t>(s.pc_col)][start] : 0.0;
@@ -947,11 +968,19 @@ double c_log_likelihood_corr_drift(
     BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
     if (L.route != BAwLCorrRoute::exact_pair) continue;
     BAwLCorrExactTrialResult exact = bawl_corr_exact_trial_loglik(
-        cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll, false);
+        cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll,
+        BAwLCorrPairMode::exact);
+    if (exact.status == BAwLCorrMomentStatus::unstable) {
+      if (count_routes) ++route_counters.precise_pair_trials;
+      exact = bawl_corr_exact_trial_loglik(
+          cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll,
+          BAwLCorrPairMode::precise);
+    }
     if (exact.status == BAwLCorrMomentStatus::unstable) {
       L.route = BAwLCorrRoute::numeric_pair;
       exact = bawl_corr_exact_trial_loglik(
-          cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll, true);
+          cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll,
+          BAwLCorrPairMode::numeric);
     }
     if (exact.status == BAwLCorrMomentStatus::ok) {
       exact_done[static_cast<size_t>(j)] = 1;
@@ -1595,6 +1624,12 @@ double c_log_likelihood_corr_drift(
             } else {
               log_z = log_diff_exp(log_s_lt[static_cast<size_t>(j)],
                                    log_s_ut[static_cast<size_t>(j)]);
+              // A retained never-finish atom joins S(LT) - S(UT), as in the
+              // scalar normaliser.  Given the node the racers are
+              // independent, so S(+Inf | z) is the per-racer plateau product
+              // (the batched callbacks cannot all be queried at +Inf).
+              if (R_FINITE(log_z) && node_ctx.retains_defective_atom(ut))
+                log_z = log_sum_exp(log_z, log_surv_trial(R_PosInf, j));
               need_scalar_fallback =
                 !(R_FINITE(log_z) && log_z > log_prob_eps);
             }
@@ -2038,13 +2073,50 @@ static inline double rdmswtn_corr_eval_selected(
   return fn(t, par.data(), ctx);
 }
 
+// The scalar RDMSWTN CDF adapter is intentionally a natural-scale callback.
+// Near either tail it can therefore round to exactly 0 or 1 before the
+// Gaussian-copula quantile is formed.  Reuse the model's authoritative
+// log-survivor callback in that case, on a one-row scratch view of the
+// selected parameter row.  This keeps the copula in log space without
+// changing the public adapter contract.
+static inline double rdmswtn_corr_logsurv_selected(
+    double t, int row, const double* const* cols, int n_par,
+    RaceLogSAtTFun logS_at_t, ContextForRaceModels* ctx) {
+  if (logS_at_t == nullptr || n_par > 32) return R_NaN;
+  std::array<std::array<double, 1>, 32> values{};
+  std::array<const double*, 32> one_cols{};
+  for (int c = 0; c < n_par; ++c) {
+    values[static_cast<size_t>(c)][0] = cols[c][row];
+    one_cols[static_cast<size_t>(c)] = values[static_cast<size_t>(c)].data();
+  }
+  const int trunc_mask = 1;
+  const int isok = 1;
+  double out = R_NaN;
+  logS_at_t(t, one_cols.data(), 1, 1, n_par, &trunc_mask, 1, &isok,
+            ctx, &out);
+  return out;
+}
+
 static inline double rdmswtn_corr_logcdf(
     double t, int row, const double* const* cols, int n_par,
-    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
+    RaceCdf1Fun cdf1, RaceLogSAtTFun logS_at_t,
+    ContextForRaceModels* ctx) {
   if (!(t > 0.0)) return R_NegInf;
   const double value = rdmswtn_corr_eval_selected(
       t, row, cols, n_par, cdf1, ctx);
   if (ISNAN(value)) return R_NaN;
+  // Recover the CDF from log S whenever the natural callback has saturated.
+  // The same route also handles a natural underflow to zero, which otherwise
+  // turns a finite left-tail copula coordinate into -Inf.
+  if (logS_at_t != nullptr &&
+      (!(value > 0.0) || value >= 1.0 - EMC2_CDF_SAT_MARGIN)) {
+    const double log_s = rdmswtn_corr_logsurv_selected(
+        t, row, cols, n_par, logS_at_t, ctx);
+    if (ISNAN(log_s)) return R_NaN;
+    if (log_s == R_NegInf) return 0.0;
+    if (log_s >= 0.0) return R_NegInf;
+    return log1m_exp(log_s);
+  }
   if (!(value > 0.0)) return R_NegInf;
   if (value >= 1.0) return 0.0;
   return std::log(value);
@@ -2116,9 +2188,12 @@ static double rdmswtn_corr_log_bvn_upper(double z1, double z2, double rho) {
 
 static inline double rdmswtn_corr_log_pair_survival(
     double t, int row1, int row2, double rho, const double* const* cols,
-    int n_par, RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
-  const double lf1 = rdmswtn_corr_logcdf(t, row1, cols, n_par, cdf1, ctx);
-  const double lf2 = rdmswtn_corr_logcdf(t, row2, cols, n_par, cdf1, ctx);
+    int n_par, RaceCdf1Fun cdf1, RaceLogSAtTFun logS_at_t,
+    ContextForRaceModels* ctx) {
+  const double lf1 = rdmswtn_corr_logcdf(
+      t, row1, cols, n_par, cdf1, logS_at_t, ctx);
+  const double lf2 = rdmswtn_corr_logcdf(
+      t, row2, cols, n_par, cdf1, logS_at_t, ctx);
   if (ISNAN(lf1) || ISNAN(lf2)) return R_NaN;
   return rdmswtn_corr_log_bvn_upper(
       rdmswtn_corr_z_from_logcdf(lf1),
@@ -2127,8 +2202,10 @@ static inline double rdmswtn_corr_log_pair_survival(
 
 static inline double rdmswtn_corr_log_single_survival(
     double t, int row, const double* const* cols, int n_par,
-    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
-  const double lf = rdmswtn_corr_logcdf(t, row, cols, n_par, cdf1, ctx);
+    RaceCdf1Fun cdf1, RaceLogSAtTFun logS_at_t,
+    ContextForRaceModels* ctx) {
+  const double lf = rdmswtn_corr_logcdf(
+      t, row, cols, n_par, cdf1, logS_at_t, ctx);
   if (ISNAN(lf)) return R_NaN;
   if (lf == R_NegInf) return 0.0;
   if (lf >= 0.0) return R_NegInf;
@@ -2139,10 +2216,10 @@ static double rdmswtn_corr_log_component_survival(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout, double t, double rho,
     const double* const* cols, RaceCdf1Fun cdf1,
-    ContextForRaceModels* ctx) {
+    RaceLogSAtTFun logS_at_t, ContextForRaceModels* ctx) {
   double out = rdmswtn_corr_log_pair_survival(
       t, layout.pair_row[0], layout.pair_row[1], rho, cols,
-      s.n_par, cdf1, ctx);
+      s.n_par, cdf1, logS_at_t, ctx);
   if (ISNAN(out)) return out;
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
@@ -2151,7 +2228,7 @@ static double rdmswtn_corr_log_component_survival(
     if (!rdmswtn_corr_row_active(s, row) ||
         row == layout.pair_row[0] || row == layout.pair_row[1]) continue;
     const double ls = rdmswtn_corr_log_single_survival(
-        t, row, cols, s.n_par, cdf1, ctx);
+        t, row, cols, s.n_par, cdf1, logS_at_t, ctx);
     if (ISNAN(ls)) return ls;
     out += ls;
   }
@@ -2162,7 +2239,8 @@ static double rdmswtn_corr_log_component_cause(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout, int winner_row, double t,
     double rho, const double* const* cols, RacePdf1Fun pdf1,
-    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
+    RaceCdf1Fun cdf1, RaceLogSAtTFun logS_at_t,
+    ContextForRaceModels* ctx) {
   const int pair1 = layout.pair_row[0], pair2 = layout.pair_row[1];
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
@@ -2174,9 +2252,9 @@ static double rdmswtn_corr_log_component_cause(
   if (winner_row == pair1 || winner_row == pair2) {
     const int loser = winner_row == pair1 ? pair2 : pair1;
     const double lfw = rdmswtn_corr_logcdf(
-        t, winner_row, cols, s.n_par, cdf1, ctx);
+        t, winner_row, cols, s.n_par, cdf1, logS_at_t, ctx);
     const double lfl = rdmswtn_corr_logcdf(
-        t, loser, cols, s.n_par, cdf1, ctx);
+        t, loser, cols, s.n_par, cdf1, logS_at_t, ctx);
     if (ISNAN(lfw) || ISNAN(lfl)) return R_NaN;
     const double zw = rdmswtn_corr_z_from_logcdf(lfw);
     const double zl = rdmswtn_corr_z_from_logcdf(lfl);
@@ -2189,8 +2267,8 @@ static double rdmswtn_corr_log_component_cause(
       out += log_normal_upper_tail((zl - rho * zw) / sd);
     }
   } else {
-    out += rdmswtn_corr_log_pair_survival(
-        t, pair1, pair2, rho, cols, s.n_par, cdf1, ctx);
+      out += rdmswtn_corr_log_pair_survival(
+        t, pair1, pair2, rho, cols, s.n_par, cdf1, logS_at_t, ctx);
   }
 
   for (int k = 0; k < n_lR_j; ++k) {
@@ -2198,7 +2276,7 @@ static double rdmswtn_corr_log_component_cause(
     if (!rdmswtn_corr_row_active(s, row) || row == winner_row ||
         row == pair1 || row == pair2) continue;
     out += rdmswtn_corr_log_single_survival(
-        t, row, cols, s.n_par, cdf1, ctx);
+        t, row, cols, s.n_par, cdf1, logS_at_t, ctx);
   }
   return out;
 }
@@ -2207,7 +2285,8 @@ static double rdmswtn_corr_trial_loglik(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout,
     ContextForRaceModels* ctx, const Rcpp::IntegerVector& response,
-    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, double min_ll) {
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, RaceLogSAtTFun logS_at_t,
+    double min_ll) {
   if (!layout.params_ok) return min_ll;
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
@@ -2232,7 +2311,8 @@ static double rdmswtn_corr_trial_loglik(
 
   auto single_cause = [&](int row, double t) {
     return rdmswtn_corr_log_component_cause(
-        s, j, layout, row, t, rho, s.cols.data(), pdf1, cdf1, ctx);
+        s, j, layout, row, t, rho, s.cols.data(), pdf1, cdf1,
+        logS_at_t, ctx);
   };
   auto finite_cause = [&](int row, double t) {
     if (row < 0) {
@@ -2267,12 +2347,19 @@ static double rdmswtn_corr_trial_loglik(
   auto survivor = [&](double t) {
     if (t == 0.0) return 0.0;
     return rdmswtn_corr_log_component_survival(
-        s, j, layout, t, rho, s.cols.data(), cdf1, ctx);
+        s, j, layout, t, rho, s.cols.data(), cdf1, logS_at_t, ctx);
   };
   auto survivor_difference = [&](double lo, double hi) {
     const double a = lo == 0.0 ? 0.0 : survivor(lo);
     if (hi == R_PosInf) return a;
     return log_diff_exp(a, survivor(hi));
+  };
+  // Unknown-response mass above UC, and the truncation normaliser: the
+  // finite window plus the joint never-finish atom (uniforms above both
+  // marginal plateaus) when the trial retains it.
+  const bool keep_atom = ctx->retains_defective_atom(UT);
+  auto upper_mass = [&](double lo) {
+    return defective_upper_log_mass(survivor, lo, UT, keep_atom);
   };
 
   double value = R_NegInf;
@@ -2294,7 +2381,7 @@ static double rdmswtn_corr_trial_loglik(
       value = log_sum_exp(interval_cause(LT, UC, nogo_row), survivor(UC));
     } else {
       value = known ? interval_cause(UC, UT, known_row)
-                    : survivor_difference(UC, UT);
+                    : upper_mass(UC);
     }
   } else if (Rcpp::NumericVector::is_na(rt)) {
     if (known) {
@@ -2302,12 +2389,12 @@ static double rdmswtn_corr_trial_loglik(
                           interval_cause(UC, UT, known_row));
     } else {
       value = log_sum_exp(survivor_difference(LT, LC),
-                          survivor_difference(UC, UT));
+                          upper_mass(UC));
     }
   }
 
   if (LT != 0.0 || UT != R_PosInf) {
-    const double log_z = survivor_difference(LT, UT);
+    const double log_z = upper_mass(LT);
     if (!R_FINITE(log_z)) return min_ll;
     value -= log_z;
   }
@@ -2429,7 +2516,7 @@ double c_log_likelihood_rdmswtn_correlated(
       s.layout[static_cast<size_t>(j)];
     if (!layout.ordinary) {
       unique_ll[static_cast<size_t>(j)] = rdmswtn_corr_trial_loglik(
-          s, j, layout, ctx, response, pdf1, cdf1, min_ll);
+          s, j, layout, ctx, response, pdf1, cdf1, logS_at_t, min_ll);
     }
   }
 

@@ -263,6 +263,25 @@ inline double log_diff_exp(double a, double b) {
   }
 }
 
+// Mass of a defective race's upper window [lo, UT] (lo = UC for a censored
+// trial, LT for the truncation normaliser), plus the atom P(T = +Inf) when
+// the trial retains it.  logS is the race log-survivor, with logS(+Inf) the
+// atom.  UT = +Inf already runs into the atom, so logS(lo) is used as is.
+// NA when the finite difference does not resolve, so callers keep their
+// numerical fallback rather than silently dropping the finite part.
+template <typename LogS>
+inline double defective_upper_log_mass(LogS&& logS, double lo, double UT,
+                                       bool keep_atom) {
+  if (UT == R_PosInf) return logS(lo);
+  double out = R_NegInf;
+  if (lo < UT) {
+    out = log_diff_exp(lo == 0.0 ? 0.0 : logS(lo), logS(UT));
+    if (ISNAN(out)) return NA_REAL;
+  }
+  if (keep_atom) out = log_sum_exp(out, logS(R_PosInf));
+  return out;
+}
+
 /**
  * @brief Compute log(exp(a) - exp(b)) for vectors in a numerically stable way
  *

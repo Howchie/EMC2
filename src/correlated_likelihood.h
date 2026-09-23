@@ -81,7 +81,7 @@ struct CorrDriftSharedState {
   // because the ParamTable base storage is refilled in place.  Mutable so the
   // const-view trial evaluators can memoize.
   struct QabCacheEntry { double key[5]; double value; };
-  struct ZCacheEntry { double key[15]; double log_z; };
+  struct ZCacheEntry { double key[15]; double log_z; double noise; };
   mutable std::vector<QabCacheEntry> qab_cache;
   mutable std::vector<ZCacheEntry> z_cache;
 };

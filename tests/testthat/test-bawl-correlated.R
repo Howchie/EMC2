@@ -636,11 +636,13 @@ test_that("rare positive orthants cannot corrupt the LT normalizer", {
 
 test_that("deep correlated tails cannot be clipped out of the LT normalizer", {
   skip_on_cran()
-  # Regression geometry from a PMWG ridge: the numeric pair integral scans the
-  # first marginal only over +/-12 SD, but the joint survivor is concentrated
+  # Regression geometry from a PMWG ridge: the joint survivor is concentrated
   # around -17 SD when rho is close to one and the drift means are asymmetric.
-  # A 100-digit conditional-normal integral gives -12.285299613635544 for the
-  # correctly lower-truncated target density in the fitted UC design.
+  # The numeric pair integral once scanned the first marginal only over
+  # +/-12 SD and missed it entirely; it now locates the mass, so both routes
+  # must agree.  A 100-digit conditional-normal integral gives
+  # -12.285299613635544 for the correctly lower-truncated target density in
+  # the fitted UC design.
   dat <- data.frame(
     subjects = factor(1),
     S = factor("target", levels = c("non_target", "target")),
@@ -680,7 +682,7 @@ test_that("deep correlated tails cannot be clipped out of the LT normalizer", {
   numeric_lt <- probe(dat$LT, numeric = TRUE)$survival
   expect_equal(log(exact_lt), log(1.5870894835666893e-69),
                tolerance = 1e-7)
-  expect_lt(numeric_lt, exact_lt * 1e-100)
+  expect_equal(log(numeric_lt), log(exact_lt), tolerance = 1e-8)
 
   got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
   got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
@@ -743,6 +745,123 @@ test_that("exact events are not mixed with numeric tail normalizers", {
   got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
   expect_equal(got, log(1e-10), tolerance = 1e-12)
   expect_equal(got_pw, got, tolerance = 1e-12)
+})
+
+test_that("cancellation residuals cannot turn an impossible trial into a spike", {
+  skip_on_cran()
+  # N-back trend7 fit (subject 52331): with the winner's sv at .096 and a
+  # strong negative pair correlation, RT .5 lies 26 SD into the winner's
+  # tail and LT .25 12 SD into it.  The exact rectangle returned corner-
+  # cancellation residuals for both the event (e^-348; true e^-1904) and
+  # S(LT) (e^-692; true e^-280), and their ratio scored +343.7 on every such
+  # trial.  Per-accumulator B matters: a common B leaves an exact zero.
+  # References: 256-bit conditional survivor, adaptive outer integral.
+  v <- c(3.5526884595349930, -1.1048184440400888)
+  sv <- c(0.095659580557433913, 1)
+  B <- c(0.00468391123834695482, 0.00073196420493188764)
+  A <- 0.47067759689485983
+  t0 <- 0.052119685662906361
+  rho <- -0.92012211260307009
+  probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
+    t, t0, A, B[1], 0, v[1], sv[1], t0, A, B[2], 0, v[2], sv[2], rho,
+    posdrift = FALSE, numeric = numeric)
+  event <- probe(.5, numeric = FALSE)
+  window <- probe(.25, numeric = FALSE)
+  # The residuals are positive but do not clear their own error bounds.
+  expect_gt(event$cause1, 0)
+  expect_lt(event$cause1, event$cause1_noise)
+  expect_gt(window$survival, 0)
+  expect_lt(window$survival, window$survival_noise)
+  # The numeric route resolves both to relative precision.
+  lt <- probe(.25, numeric = TRUE)
+  expect_equal(log(lt$survival), -280.450858619519, tolerance = 1e-9)
+  expect_equal(log(lt$cause1), -271.548413589331, tolerance = 1e-9)
+  expect_equal(log(lt$cause2), -274.061560984818, tolerance = 1e-9)
+  expect_equal(probe(.5, numeric = TRUE)$cause1, 0)
+
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("non_target", levels = c("non_target", "target")),
+    R = factor("non_target", levels = c("non_target", "target")),
+    rt = .5, LT = .25, UT = 4
+  )
+  formula <- list(v ~ 0 + lR, sv ~ 0 + lR, B ~ 0 + lR, A ~ 1,
+                  t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
+  for (fd in c(FALSE, TRUE)) {
+    des <- design(data = dat, Rlevels = levels(dat$R),
+                  matchfun = function(d) as.character(d$S) == as.character(d$lR),
+                  formula = formula, model = BAwLcorr(posdrift = FALSE),
+                  TC = if (fd) list(filter_defective = TRUE) else NULL,
+                  report_p_vector = FALSE)
+    emc <- make_emc(dat, des, type = "single", n_chains = 1,
+                    compress = FALSE, verbose = FALSE, rt_resolution = NULL)
+    ctx <- list(emc = emc[[1]], design = des)
+    p <- set_bawl_values(sampled_pars(des, doMap = FALSE), rho = rho,
+                         v = 0, sv = 1, B = 1, A = A, t0 = t0, k = 0)
+    p[grep("^v_", names(p))] <- v
+    p[grep("^sv_", names(p))] <- log(sv)
+    p[grep("^B_", names(p))] <- log(B)
+    mapped <- mapped_pars_for(ctx, p)
+    expect_equal(as.numeric(mapped[, "rho"]), c(-rho, rho), tolerance = 1e-12)
+    got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+    got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
+    expect_equal(got, log(1e-10), tolerance = 1e-12)
+    expect_equal(got_pw, got, tolerance = 1e-12)
+  }
+})
+
+test_that("ordinary pair trials stay on the exact routes", {
+  skip_on_cran()
+  # The hybrid corner bound is conservative (up to 1e-6 per Drezner corner),
+  # so a central value may only clear it after the tvpack retry; it must
+  # never need the numeric route, and the numeric route must agree with it.
+  probe <- function(t, numeric, rho) EMC2:::bawl_corr_pair_probe(
+    t, .2, .5, .6, 0, 1.5, .8, .2, .5, .5, 0, .5, .6, rho,
+    posdrift = FALSE, numeric = numeric)
+  for (rho in c(-.9, -.4, .3, .95)) {
+    for (t in c(.45, .7, 1.2)) {
+      ex <- probe(t, FALSE, rho)
+      nu <- probe(t, TRUE, rho)
+      # The numeric route is accurate to ~1e-14 here (e.g. rho = .95,
+      # t = 1.2: hybrid cause2 is off by 1.1e-5 against a 2% bound), so it
+      # checks that the reported bound really bounds the hybrid error.
+      for (q in c("survival", "cause1", "cause2")) {
+        expect_lte(abs(ex[[q]] - nu[[q]]), ex[[paste0(q, "_noise")]])
+        expect_equal(nu[[q]], ex[[q]], tolerance = 1e-4)
+      }
+      expect_equal(nu$survival_noise, 0)
+    }
+  }
+
+  rts <- c(.32, .38, .45, .52, .6, .7, .85, 1.05, 1.4, 2.2)
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor(rep(c("left", "right"), each = 10), levels = c("left", "right")),
+    R = factor(rep(c("left", "right", "right", "left"), each = 5),
+               levels = c("left", "right")),
+    rt = c(rts, rev(rts)), LT = .25, UT = 4
+  )
+  formula <- list(v ~ 0 + lM, sv ~ 0 + lM, B ~ 1, A ~ 1,
+                  t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
+  ctx <- make_bawl_context(dat, BAwLcorr(posdrift = FALSE),
+                           rho_formula = rho ~ 1, formula = formula)
+  old <- Sys.getenv("EMC2_BAWLCORR_COUNTERS", unset = NA)
+  Sys.setenv(EMC2_BAWLCORR_COUNTERS = "1")
+  on.exit(if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_COUNTERS") else
+            Sys.setenv(EMC2_BAWLCORR_COUNTERS = old), add = TRUE)
+  for (rho in c(-.8, .5)) {
+    p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = rho,
+                         v = 0, sv = 1, B = .6, A = .5, t0 = .2, k = 0)
+    p[grep("^v_", names(p))] <- c(.5, 1.6)
+    p[grep("^sv_", names(p))] <- log(c(.9, .6))
+    EMC2:::bawl_corr_counters_reset()
+    got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+    counts <- EMC2:::bawl_corr_counter_values()
+    expect_true(is.finite(got))
+    expect_equal(counts$exact_pair_trials, nrow(dat))
+    expect_equal(counts$numeric_pair_trials, 0)
+    expect_equal(counts$unresolved_bound_floored_trials, 0)
+  }
 })
 
 test_that("the direct correlation sign changes the likelihood and role sign", {

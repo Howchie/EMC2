@@ -96,6 +96,23 @@ if the conventional bound aren't desired.
 see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
 the likelihood landscape that cannot reasonable be achieved with \code{transform}}
 
+\item{TC}{Optional list of truncation/censoring settings (\code{LT}, \code{LC}, \code{UC},
+\code{UT}, \code{pContaminant}, ..., as for \code{\link{make_missing}}), used for
+simulation and, via the bound columns, for the likelihood. It also takes
+\code{filter_defective}: \code{FALSE} (default) keeps a defective model's
+never-finish outcome (\code{rt = Inf}) in the retained sample space, so the
+truncation normaliser is \verb{P(LT <= RT <= UT) + P(RT = Inf)}, and the model's
+omissions are part of what is fitted. \code{TRUE} declares that the data were
+filtered to finite responses: a finite \code{UT} then also truncates the
+never-finish outcome, the normaliser is \verb{P(LT <= RT <= UT)}, and the fit
+conditions on a response being observed. Omissions left in the data can
+then only be explained by \code{pContaminant}. Simulation (\code{\link{make_data}},
+\code{predict()}) follows the same setting. \code{UT = Inf} retains the
+never-finish outcome either way.}
+
+\item{LT, LC, UC, UT}{Optional truncation/censoring bounds, overriding the
+corresponding \code{TC} entries.}
+
 \item{marginalise}{Optional. Names one shared race-model parameter (e.g.
 \code{"t0"}) to be \emph{marginalised} out of the sampler by numerical quadrature
 rather than sampled directly. This is available for group-level samplers and

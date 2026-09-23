@@ -566,16 +566,21 @@ credint.emc.prior <- function(x, selection="mu", probs = c(0.025, .5, .975),
 #' @param data A data frame needed to exactly match the original design
 #' @param n_trials An integer. If `data` isn't provided (although preferred),
 #' can generate data based on `n_trials` per cell of `design`
+#' @param filter_defective Logical. If `TRUE`, intrinsically defective
+#' omissions are removed when `UT` is finite during simulation. The default
+#' `NULL` follows the design's `TC$filter_defective` (see \code{\link{design}}),
+#' i.e. the retained sample space the model was fitted under.
 #' @rdname predict.emc
 #' @export
 predict.emc.prior <- function(object,data = NULL,n_post=50,n_cores=1,
-                               n_trials = NULL, ...)
+                               n_trials = NULL, filter_defective = NULL, ...)
 {
   object <- restore_custom_kernel_pointers(object, quiet = TRUE)
   if(is.data.frame(data)) data <- list(data)
   prior <- object
   design <- get_design(prior)
   dots <- add_defaults(list(...), selection = "alpha")
+  dots$filter_defective <- filter_defective
   post_out <- vector('list', length(design))
   for(k in 1:length(design)){
     subjects <- design[[k]]$Ffactors$subjects

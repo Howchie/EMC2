@@ -478,9 +478,10 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
   // omission score keeps its (undivided) atom -- the conditional distribution
   // then integrates to more than one, badly so when F(UT) < S(Inf). Proper
   // models have S(Inf) = 0 and log_defective_atom stays -Inf, so this is a
-  // no-op for them.
+  // no-op for them.  filter_defective = TRUE declares that the data were
+  // filtered to finite responses, so the atom is outside the window too.
   const double log_defective_atom =
-      (race_ctx && race_ctx->defective_upper_tail)
+      (race_ctx && race_ctx->retains_defective_atom(UT))
         ? log_survivor_rowmajor(R_PosInf, pars_rowmajor, isok_int, n_lR, n_par,
                                 cdf1, model_specific_context)
         : R_NegInf;

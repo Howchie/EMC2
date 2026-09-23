@@ -162,6 +162,21 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' (iii) use an intercept-only design (`~ 1`), and (iv) have a finite lower
 #' bound. See Details. This is a sampling/efficiency feature and does not change
 #' the model's likelihood.
+#' @param TC Optional list of truncation/censoring settings (`LT`, `LC`, `UC`,
+#'   `UT`, `pContaminant`, ..., as for \code{\link{make_missing}}), used for
+#'   simulation and, via the bound columns, for the likelihood. It also takes
+#'   `filter_defective`: `FALSE` (default) keeps a defective model's
+#'   never-finish outcome (`rt = Inf`) in the retained sample space, so the
+#'   truncation normaliser is `P(LT <= RT <= UT) + P(RT = Inf)`, and the model's
+#'   omissions are part of what is fitted. `TRUE` declares that the data were
+#'   filtered to finite responses: a finite `UT` then also truncates the
+#'   never-finish outcome, the normaliser is `P(LT <= RT <= UT)`, and the fit
+#'   conditions on a response being observed. Omissions left in the data can
+#'   then only be explained by `pContaminant`. Simulation (\code{\link{make_data}},
+#'   \code{predict()}) follows the same setting. `UT = Inf` retains the
+#'   never-finish outcome either way.
+#' @param LT,LC,UC,UT Optional truncation/censoring bounds, overriding the
+#'   corresponding `TC` entries.
 #' @param ... Additional, optional arguments
 #'
 #' @details
@@ -234,6 +249,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!is.null(LC)) TC$LC <- LC
   if (!is.null(UC)) TC$UC <- UC
   if (!is.null(UT)) TC$UT <- UT
+  if (!is.null(TC$filter_defective) &&
+      !(is.logical(TC$filter_defective) && length(TC$filter_defective) == 1L &&
+        !is.na(TC$filter_defective)))
+    stop("TC$filter_defective must be a single TRUE or FALSE")
 
   optionals <- list(...)
   if (is.null(behavioral_functions)) {
@@ -1018,6 +1037,30 @@ rt_check_function <- function(data){
   }
 }
 
+check_filter_defective <- function(data, lR_levels, constants, sampled_p_names)
+  # Data consistent with filter_defective = TRUE: at a finite UT the model's
+  # omissions were truncated, so an omission left in the data has zero process
+  # mass and only pContaminant (applied after truncation) can explain it.
+{
+  UT <- if ("UT" %in% names(data)) data$UT else rep(Inf, nrow(data))
+  if (!any(is.finite(UT))) return(invisible(TRUE))
+  if ("nogo" %in% lR_levels)
+    stop("filter_defective = TRUE is not supported for go/no-go races: a ",
+         "withheld response is an observed outcome, not a filtered omission.")
+  UC <- if ("UC" %in% names(data)) data$UC else rep(Inf, nrow(data))
+  omitted <- !is.na(data$rt) & data$rt == Inf & is.na(data$R) &
+    is.finite(UT) & UC >= UT
+  pc <- if ("pContaminant" %in% names(constants)) constants[["pContaminant"]] else -Inf
+  pc_active <- "pContaminant" %in% sampled_p_names || is.finite(pc)
+  if (any(omitted) && !pc_active)
+    stop(sum(omitted), " trial(s) are omissions (rt = Inf, R = NA) under a ",
+         "finite UT, but filter_defective = TRUE means the model's omissions ",
+         "were truncated away and no pContaminant is estimated to explain ",
+         "them. Remove them, or use filter_defective = FALSE to fit them as ",
+         "model omissions.")
+  invisible(TRUE)
+}
+
 check_dm_identifiability <- function(designs, constants)
   # Warns if the design matrix for any parameter type is rank deficient over
   # its sampled (non-constant) columns, i.e., some sampled parameters trade off
@@ -1326,6 +1369,15 @@ design_model <- function(data,design,model=NULL,
   attr(dadm,"constants") <- design$constants
   attr(dadm,"ok_trials") <- is.finite(data$rt)
   attr(dadm,"s_data") <- data$subjects
+  # design(TC = list(filter_defective = TRUE)): a finite UT also truncates the
+  # never-finish atom (ContextForRaceModels::filter_defective in C++).  Like the
+  # guess window it is fixed per dadm and survives dm_list()'s row subsetting.
+  if (isTRUE(design$TC$filter_defective)) {
+    if (rt_check)
+      check_filter_defective(data, levels(dadm$lR), design$constants,
+                             sampled_p_names)
+    attr(dadm, "emc2_filter_defective") <- TRUE
+  }
   # One scalar guess window per dadm, attached AFTER compression so it needs no
   # place in the compression key and cannot be lost by contraction.  Only
   # resolved when the model actually declares pGuess; see resolve_guess_window().

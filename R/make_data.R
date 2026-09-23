@@ -96,6 +96,11 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #'        The default is 1/60 as in make_emc, but when make_missing is called by make_data the default is to
 #'        do nothing unless an explicit is value passed in the missing list.
 #' @param digits Integer. Number of decimal places for verbose output, default 2.
+#' @param filter_defective Logical. If `TRUE`, intrinsically defective omissions
+#'   (`rt = Inf`, `R = NA`) are removed by finite upper truncation. The default
+#'   is `FALSE` for direct calls to `make_missing`; \code{\link{make_data}} and
+#'   `predict()` pass the design's `TC$filter_defective` (see
+#'   \code{\link{design}}), the setting the likelihood also uses.
 #' @return A filtered and modified data frame with added/updated LC, UC, LT and UT columns
 #' @examples
 #' \dontrun{
@@ -118,8 +123,13 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   LCresponse = NULL, UCresponse = NULL,LCdirection = NULL, UCdirection = NULL,
   no_truncate=FALSE,no_censor=FALSE,
   pContaminant=NULL,pGuess=NULL,guess_window=NULL,
-  verbose=FALSE,rt_resolution=1/60,digits = 2)
+  verbose=FALSE,rt_resolution=1/60,digits = 2, filter_defective = FALSE)
 {
+
+  if (!is.logical(filter_defective) || length(filter_defective) != 1L ||
+      is.na(filter_defective)) {
+    stop("filter_defective must be a single non-missing logical")
+  }
 
   no_truncate <- get_missing(no_truncate, data, "no_truncate",FALSE,"logical")
   LT <- get_missing(LT, data, "LT",0,"numeric")
@@ -214,10 +224,16 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
     }
   }
 
-  # Only keep trials in LT-UT (inclusive) or infinite or NA
+  # Keep trials in LT-UT (inclusive); non-finite RTs are retained unless
+  # simulation explicitly asks to filter intrinsic defective omissions.
   cutL <- is.finite(data$rt) & (data$rt < LT_eff & is.finite(data$rt))
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- (data$rt > UT_eff & is.finite(data$rt))
+  # Direct calls to make_missing generally operate on observed data, where an
+  # existing rt = Inf may be a recorded omission and must be retained. During
+  # simulation, filter_defective enables finite UT to remove intrinsic
+  # omissions before pContaminant is applied.
+  cutU <- data$rt > UT_eff
+  if (!filter_defective) cutU <- cutU & is.finite(data$rt)
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
     if (!all(LT_eff==0)) {
@@ -381,6 +397,12 @@ check_missing <- function(TC,data=NULL,design=NULL) {
 #' @param return_functions Logical, should factors created by functions be returned, default FALSE.
 #' @param TC List of truncation/censoring arguments passed to \code{make_missing}
 #'   (e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.
+#' @param filter_defective Logical. If `TRUE`, intrinsically defective
+#'   omissions are removed when `UT` is finite, as ordinary responses outside
+#'   the truncation window would be. The default `NULL` takes
+#'   `TC$filter_defective`, else the design's `TC$filter_defective` (see
+#'   \code{\link{design}}), else `FALSE`, so data are simulated under the same
+#'   retained sample space the likelihood assumes.
 #' @param ... Additional optional arguments
 #' @return A data frame with simulated data
 #' @examples
@@ -410,7 +432,7 @@ check_missing <- function(TC,data=NULL,design=NULL) {
 
 make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1, staircase = NULL,
                       functions = NULL,return_functions = FALSE,
-                      TC = NULL,...)
+                      TC = NULL, filter_defective = NULL, ...)
 
 {
 
@@ -437,6 +459,14 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # Run this after the emc block so fitted settings are available.
   # Otherwise check_missing() would silently fall back to no-censoring defaults.
   TC <- check_missing(TC,design=design,data=data)
+  # One declaration governs simulation and the likelihood (design_model()).
+  if (is.null(filter_defective))
+    filter_defective <- isTRUE(if (!is.null(TC$filter_defective))
+      TC$filter_defective else design$TC$filter_defective)
+  if (!is.logical(filter_defective) || length(filter_defective) != 1L ||
+      is.na(filter_defective)) {
+    stop("filter_defective must be a single non-missing logical")
+  }
 
   # Make sure parameters are in the right format, either matrix or vector.
   # predict.emc() can provide the already-mapped parameter matrix; when the
@@ -621,7 +651,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
         pContaminant = TC$pContaminant, pGuess = TC$pGuess,
         guess_window = TC$guess_window, no_truncate = TC$no_truncate,
         no_censor = TC$no_censor, verbose = TC$verbose,
-        rt_resolution = TC$rt_resolution, digits = TC$digits)
+        rt_resolution = TC$rt_resolution, digits = TC$digits,
+        filter_defective = filter_defective)
     }
     attr(data, "p_vector") <- parameters
     if (return_trialwise_parameters) attr(data, "trialwise_parameters") <- trialwise_parameters
@@ -734,7 +765,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
     pContaminant=TC$pContaminant,pGuess=TC$pGuess,guess_window=TC$guess_window,
     no_truncate=TC$no_truncate,no_censor=TC$no_censor,
-    verbose=TC$verbose,rt_resolution=TC$rt_resolution,digits=TC$digits)
+    verbose=TC$verbose,rt_resolution=TC$rt_resolution,digits=TC$digits,
+    filter_defective=filter_defective)
 
   attr(data,"p_vector") <- parameters;
   if(!is.null(post_functions)){

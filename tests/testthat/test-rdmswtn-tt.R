@@ -371,13 +371,17 @@ test_that("correlated likelihood uses finite plateaus and nests rho zero", {
     F <- EMC2:::pRDMSWTN_TT(t, pars[rows, , drop = FALSE])
     EMC2:::pbvn_tvpack(-qnorm(F[1]), -qnorm(F[2]), rho)
   }
-  finite <- finite - log(
-    pair_survival(.2, 1:2) - pair_survival(1.1, 1:2)
-  )
   Fq <- EMC2:::pRDMSWTN_TT(Inf, pars[3:4, , drop = FALSE])
   omitted <- log(EMC2:::pbvn_tvpack(
     -qnorm(Fq[1]), -qnorm(Fq[2]), rho
   ))
+  # The never-finish atom stays in the retained sample space by default
+  # (design(TC = list(filter_defective = TRUE)) removes it), as it does at
+  # rho = 0 on the ordinary route.
+  atom <- pair_survival(Inf, 1:2)
+  finite <- finite - log(
+    pair_survival(.2, 1:2) - pair_survival(1.1, 1:2) + atom
+  )
   expect_equal(as.numeric(ll), finite + omitted, tolerance = 3e-8)
 })
 

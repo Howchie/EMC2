@@ -21,7 +21,8 @@ make_missing(
   guess_window = NULL,
   verbose = FALSE,
   rt_resolution = 1/60,
-  digits = 2
+  digits = 2,
+  filter_defective = FALSE
 )
 }
 \arguments{
@@ -67,6 +68,12 @@ The default is 1/60 as in make_emc, but when make_missing is called by make_data
 do nothing unless an explicit is value passed in the missing list.}
 
 \item{digits}{Integer. Number of decimal places for verbose output, default 2.}
+
+\item{filter_defective}{Logical. If \code{TRUE}, intrinsically defective omissions
+(\code{rt = Inf}, \code{R = NA}) are removed by finite upper truncation. The default
+is \code{FALSE} for direct calls to \code{make_missing}; \code{\link{make_data}} and
+\code{predict()} pass the design's \code{TC$filter_defective} (see
+\code{\link{design}}), the setting the likelihood also uses.}
 }
 \value{
 A filtered and modified data frame with added/updated LC, UC, LT and UT columns

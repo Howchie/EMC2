@@ -247,6 +247,24 @@ static inline bool read_all_finite_trials_attr(const Rcpp::DataFrame& data,
   return false;
 }
 
+// design(TC = list(filter_defective = TRUE)) marks the dadm in design_model();
+// see ContextForRaceModels::filter_defective.  LogicalRules forms its
+// never-respond masses separately and has not been converted, so a defective
+// LogicalRules race refuses the option instead of normalising inconsistently.
+static inline void configure_filter_defective(RaceModelAdapter& adapter,
+                                              const Rcpp::DataFrame& data,
+                                              bool is_logicalrules) {
+  bool on = false;
+  if (data.hasAttribute("emc2_filter_defective")) {
+    Rcpp::LogicalVector v = data.attr("emc2_filter_defective");
+    on = v.size() == 1 && v[0] != NA_LOGICAL && v[0];
+  }
+  if (on && is_logicalrules && adapter.ctx.defective_upper_tail)
+    Rcpp::stop("filter_defective = TRUE is not supported for LogicalRules "
+               "races with a defective upper tail.");
+  adapter.ctx.filter_defective = on;
+}
+
 
 // ---------------------------------------------------------------------------
 // Per-call ParamTable machinery shared by calc_ll_oo and calc_ll_oo_pw:
@@ -902,6 +920,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
     configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo");
+    configure_filter_defective(adapter, data, is_logicalrules);
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
     }
@@ -1439,6 +1458,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_filter_defective(adapter, data, is_logicalrules);
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
     }
@@ -2490,8 +2510,10 @@ double c_log_likelihood_race(
       // below because its endpoint callback supplies that atom analytically;
       // other defective models stay on the scalar-safe route.  UT == Inf is
       // unaffected and stays batched: there the atom is already inside S(LT).
+      // Under filter_defective the atom is truncated with the finite tail, so
+      // S(LT) - S(UT) is the whole normaliser and every model batches.
       const bool defective_finite_UT =
-          defective_upper_tail && uniform_UT != R_PosInf;
+          defective_upper_tail && uniform_UT != R_PosInf && !ctx->filter_defective;
       const bool batch_defective_atom =
           defective_finite_UT && ctx != nullptr &&
           ctx->supports_batched_defective_truncation;
@@ -2674,6 +2696,10 @@ double c_log_likelihood_race(
     const double UCj = UC[start_row_idx];
     const bool has_trunc = apply_truncation_correction &&
       (LTj != 0.0 || UTj != R_PosInf);
+    // Read from UTj even when the caller normalises (the GH factor route runs
+    // this loop with apply_truncation_correction = false), so the numerator
+    // and its normaliser always agree on whether the atom is retained.
+    const bool keep_atom = ctx->retains_defective_atom(UTj);
     const bool trial_has_active_nogo =
       (static_cast<size_t>(unique_trial_idx) < active_nogo_trial_mask.size()) &&
       (active_nogo_trial_mask[static_cast<size_t>(unique_trial_idx)] != 0);
@@ -2804,7 +2830,8 @@ double c_log_likelihood_race(
             };
             const double logP = (!defective_upper_tail)
               ? log_diff_exp(logS_single(lower_for_trial), logS_single(upper_for_trial))
-              : logS_single(lower_for_trial);
+              : defective_upper_log_mass(logS_single, lower_for_trial,
+                                         upper_for_trial, keep_atom);
             if (R_FINITE(logP) && logP > log_prob_eps) {
               current_ll_val = logP;
               goto apply_trial_trunc;
@@ -2815,18 +2842,27 @@ double c_log_likelihood_race(
           // and degenerate integration bounds [Inf,Inf].
           if (!defective_upper_tail && !R_FINITE(lower_for_trial)) {
             // current_ll_val stays at min_ll
+          } else if (defective_upper_tail && !keep_atom &&
+                     !(lower_for_trial < upper_for_trial)) {
+            // filter_defective with UC >= UT: the process retains no mass for
+            // an omission, which only pContaminant (mixed in below) explains.
           } else {
+            // A defective race also keeps its never-finish atom unless
+            // filter_defective truncated it; finite mass above UT is gone
+            // either way (make_missing cuts it before censoring).
             const double logP = (!defective_upper_tail)
               ? log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
                              log_surv_cm(upper_for_trial, start_row_idx, n_lR_j))
-              : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // include intrinsic never-finish mass
+              : defective_upper_log_mass(
+                  [&](double t) { return log_surv_cm(t, start_row_idx, n_lR_j); },
+                  lower_for_trial, upper_for_trial, keep_atom);
             if (R_FINITE(logP) && logP > log_prob_eps) {
               current_ll_val = logP;
             } else { // numerical integration fallback
               for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
                 current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
               }
-              if (defective_upper_tail) { // include defective upper-tail mass
+              if (keep_atom) { // include defective upper-tail mass
                 const double log_p_I = log_surv_cm(R_PosInf, start_row_idx, n_lR_j);
                 current_ll_val = log_sum_exp(current_ll_val, log_p_I);
               }
@@ -2834,7 +2870,7 @@ double c_log_likelihood_race(
           }
         } else {
           current_ll_val = integrate_timed(R_j_idx, lower_for_trial, upper_for_trial);
-          if (defective_upper_tail && n_lR_j == 1) {
+          if (keep_atom && n_lR_j == 1) {
             current_ll_val = log_sum_exp(current_ll_val,
                                          log_surv_cm(R_PosInf, start_row_idx, n_lR_j));
           }
@@ -2868,7 +2904,7 @@ double c_log_likelihood_race(
           const double logP1 = log_diff_exp(logS_single(lower1), logS_single(upper1));
           const double logP2 = (!defective_upper_tail)
             ? log_diff_exp(logS_single(lower2), logS_single(upper2))
-            : logS_single(lower2);
+            : defective_upper_log_mass(logS_single, lower2, upper2, keep_atom);
           const double logPsum = log_sum_exp(logP1, logP2);
           if (R_FINITE(logPsum) && logPsum > log_prob_eps) {
             current_ll_val = logPsum;
@@ -2880,7 +2916,9 @@ double c_log_likelihood_race(
         const double logP2 = (!defective_upper_tail)
           ? log_diff_exp(log_surv_cm(lower2, start_row_idx, n_lR_j),
                          log_surv_cm(upper2, start_row_idx, n_lR_j))
-          : log_surv_cm(lower2, start_row_idx, n_lR_j);
+          : defective_upper_log_mass(
+              [&](double t) { return log_surv_cm(t, start_row_idx, n_lR_j); },
+              lower2, upper2, keep_atom);
         const double logPsum = log_sum_exp(logP1, logP2);
         if (R_FINITE(logPsum) && logPsum > log_prob_eps) {
           current_ll_val = logPsum;
@@ -2890,7 +2928,7 @@ double c_log_likelihood_race(
             const double ll_U_k = integrate_interval(k_win, lower2, upper2);
             current_ll_val = log_sum_exp(current_ll_val, log_sum_exp(ll_L_k, ll_U_k));
           }
-          if (defective_upper_tail) {
+          if (keep_atom) {
             const double log_p_I = log_surv_cm(R_PosInf, start_row_idx, n_lR_j);
             current_ll_val = log_sum_exp(current_ll_val, log_p_I);
           }
@@ -3011,9 +3049,12 @@ Rcpp::List bawl_corr_counter_values() {
       Rcpp::Named("exact_pair_independent_winner_trials") = (double)c.exact_pair_independent_winner_trials,
       Rcpp::Named("exact_pair_point_start_trials") = (double)c.exact_pair_point_start_trials,
       Rcpp::Named("numeric_pair_trials") = (double)c.numeric_pair_trials,
+      Rcpp::Named("precise_pair_trials") = (double)c.precise_pair_trials,
       Rcpp::Named("gh_no_clock_trials") = (double)c.gh_no_clock_trials,
       Rcpp::Named("gh_generic_clock_trials") = (double)c.gh_generic_clock_trials,
       Rcpp::Named("unstable_pair_floored_trials") = (double)c.unstable_pair_floored_trials,
+      Rcpp::Named("unresolved_exact_trials") = (double)c.unresolved_exact_trials,
+      Rcpp::Named("unresolved_bound_floored_trials") = (double)c.unresolved_bound_floored_trials,
       Rcpp::Named("loaded_dimension_0") = (double)c.loaded_dimension_0,
       Rcpp::Named("loaded_dimension_1") = (double)c.loaded_dimension_1,
       Rcpp::Named("loaded_dimension_2") = (double)c.loaded_dimension_2,
@@ -3021,6 +3062,8 @@ Rcpp::List bawl_corr_counter_values() {
       Rcpp::Named("prepared_rows") = (double)c.prepared_rows,
       Rcpp::Named("fused_node_evaluations") = (double)c.fused_node_evaluations,
       Rcpp::Named("bvn_corner_evaluations") = (double)c.bvn_corner_evaluations,
+      Rcpp::Named("numeric_pair_integrals") = (double)c.numeric_pair_integrals,
+      Rcpp::Named("numeric_pair_integrand_evaluations") = (double)c.numeric_pair_integrand_evaluations,
       Rcpp::Named("analytic_center_eligible_trials") = (double)c.analytic_center_eligible_trials,
       Rcpp::Named("analytic_center_success_trials") = (double)c.analytic_center_success_trials,
       Rcpp::Named("survivor_scan_trials") = (double)c.survivor_scan_trials,
@@ -3084,7 +3127,10 @@ Rcpp::List bawl_corr_pair_probe(double t, double t01, double A1, double B1,
       Rcpp::Named("cause2") = c2.value,
       Rcpp::Named("survival_status") = static_cast<int>(s.status),
       Rcpp::Named("cause1_status") = static_cast<int>(c1.status),
-      Rcpp::Named("cause2_status") = static_cast<int>(c2.status));
+      Rcpp::Named("cause2_status") = static_cast<int>(c2.status),
+      Rcpp::Named("survival_noise") = s.noise,
+      Rcpp::Named("cause1_noise") = c1.noise,
+      Rcpp::Named("cause2_noise") = c2.noise);
 }
 
 // Test probes for the shared correlated-BAwL geometry (T1).  `B` is the

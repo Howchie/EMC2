@@ -162,15 +162,7 @@ test_that("subject streams are independent and reproducible", {
                                     character(1)))), 5L)
 })
 
-test_that("block structure is part of the reproducibility specification", {
-  # Documented deliberately, because it looks like a bug and is not.
-  # run_stage() derives fresh subject streams from the master RNG at the start
-  # of every block (R/sampling.R, `.emc_subject_streams(pmwgs$n_subjects)`), so
-  # ten iterations run as one block and as two blocks of five consume the master
-  # generator differently and land on different draws.  Both are reproducible
-  # from their own seed; neither is wrong.  Pinning it here stops a later commit
-  # from being blamed for it, and stops one from "fixing" it without deciding
-  # to.
+test_that("block structure does not change the random streams", {
   skip_on_os("windows")
   skip_on_cran()
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
@@ -188,10 +180,8 @@ test_that("block structure is part of the reproducibility specification", {
   one_block <- fit(10)
   two_blocks <- fit(5)
   expect_identical(one_block[[1]]$samples$idx, two_blocks[[1]]$samples$idx)
-  # Same shape, same seed, different draws -- by construction.
-  expect_false(identical(one_block[[1]]$samples$alpha,
-                         two_blocks[[1]]$samples$alpha))
-  # Each is reproducible on its own terms, which is the property that matters.
+  expect_identical(one_block[[1]]$samples$alpha,
+                   two_blocks[[1]]$samples$alpha)
   expect_identical(fit(10)[[1]]$samples$alpha, one_block[[1]]$samples$alpha)
   expect_identical(fit(5)[[1]]$samples$alpha, two_blocks[[1]]$samples$alpha)
 })

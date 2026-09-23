@@ -137,6 +137,12 @@ struct ContextForRaceModels {
     int mean_k_index = -1;   // column of mK (kill-clock mean)
     // For models with infinite tails or defective upper mass (like LBA with sv).
     bool defective_upper_tail = false;
+    // design(TC = list(filter_defective = TRUE)), read from
+    // attr(dadm, "emc2_filter_defective").  A finite UT then also removes the
+    // never-finish atom T = +Inf, so the retained sample space is the finite
+    // window [LT, UT] alone.  By default the atom is retained: make_missing()
+    // cuts only finite RTs, and an omission is not a slow response.
+    bool filter_defective = false;
     // FRQ has an analytic defective atom and can include it in the batched
     // finite-UT truncation normaliser.  Other defective models stay on the
     // scalar-safe route until their endpoint callback supplies the same
@@ -252,6 +258,12 @@ struct ContextForRaceModels {
 
     bool has_global_kill() const {
       return is_global_kill && kill_active;
+    }
+
+    // Whether P(T = +Inf) is part of the retained sample space of a trial
+    // with upper truncation bound UT.
+    bool retains_defective_atom(double UT) const {
+      return defective_upper_tail && !(filter_defective && std::isfinite(UT));
     }
 };
 

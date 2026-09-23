@@ -307,6 +307,7 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
   blas_before <- .emc_blas_threads()
   on.exit(if (!is.null(blas_before)) .emc_set_blas_threads(blas_before), add = TRUE)
   pmwgs$samples <- emc_clone_sample_store(pmwgs$samples)
+  pmwgs <- .emc_prepare_sampler_rng(pmwgs)
   if (!is.null(pmwgs$sampler_nuis$samples)) {
     pmwgs$sampler_nuis$samples <- emc_clone_sample_store(pmwgs$sampler_nuis$samples)
   }
@@ -329,18 +330,22 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
     pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores,
     total_cores = total_cores
   )
-  start_streams <- .emc_subject_streams(pmwgs$n_subjects)
-  proposals <- .emc_with_preserved_rng(
-    parallel::mclapply(X=1:pmwgs$n_subjects,
-                       FUN=function(s, ...) {
-                         assign(".Random.seed", start_streams[[s]],
-                                envir = globalenv())
-                         start_proposals(s, ...)
-                       },
-                       parameters = startpoints_comb, n_particles = particles,
-                       pmwgs = pmwgs, type = type,
-                       mc.cores = core_budget$subject,
-                       r_cores = core_budget$likelihood))
+  start_streams <- pmwgs$rng$subjects
+  raw_proposals <- .emc_with_preserved_rng(
+    auto_mclapply(X=seq_len(pmwgs$n_subjects),
+                  FUN=function(s) {
+                    assign(".Random.seed", start_streams[[s]],
+                           envir = globalenv())
+                    out <- start_proposals(s, parameters = startpoints_comb,
+                                           n_particles = particles,
+                                           pmwgs = pmwgs, type = type,
+                                           r_cores = core_budget$likelihood)
+                    list(out = out,
+                         seed = get(".Random.seed", envir = globalenv()))
+                  },
+                  mc.cores = core_budget$subject, mc.set.seed = FALSE))
+  proposals <- lapply(raw_proposals, `[[`, "out")
+  pmwgs$rng$subjects <- lapply(raw_proposals, `[[`, "seed")
   proposals <- array(unlist(proposals), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 
 
@@ -392,11 +397,15 @@ init_chains <- function(emc, start_mu = NULL, start_var = NULL, particles = 1000
                         ...)
 {
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
+  emc <- .emc_prepare_chain_rng(emc)
   dots <- add_defaults(list(...),r_cores=1)
-  emc <- mclapply(emc,init,start_mu = start_mu, start_var = start_var,
-           verbose = FALSE, particles = particles,r_cores=dots$r_cores,
+  emc <- auto_mclapply(emc, function(sampler, ...) {
+           sampler <- .emc_set_sampler_rng(sampler)
+           init(sampler, ...)
+         }, start_mu = start_mu, start_var = start_var,
+           verbose = FALSE, particles = particles, r_cores = dots$r_cores,
            n_cores = cores_per_chain, total_cores = cores_per_chain,
-           mc.cores=cores_for_chains)
+           mc.cores = cores_for_chains, mc.set.seed = FALSE)
   class(emc) <- "emc"
   return(emc)
 }
@@ -504,7 +513,11 @@ run_stage <- function(pmwgs,
                       verbose = TRUE,
                       verboseProgress = TRUE,
                       r_cores = 1,
-                      core_ctl = NULL) {
+  core_ctl = NULL) {
+  pmwgs <- .emc_prepare_sampler_rng(pmwgs)
+  if (!is.null(pmwgs$rng$gibbs)) {
+    assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
+  }
   blas_before <- .emc_blas_threads()
   on.exit(if (!is.null(blas_before)) .emc_set_blas_threads(blas_before), add = TRUE)
   n_pars <- pmwgs$n_pars
@@ -547,6 +560,7 @@ run_stage <- function(pmwgs,
 
   data <- pmwgs$data
   nuisance <- pmwgs$nuisance
+  wpool_streams <- pmwgs$rng$subjects
 
   marginal_idx_blk <- .marginal_par_idx(par_names, marginalise = pmwgs$marginalise)
   if (length(marginal_idx_blk) != length(par_names)) {
@@ -579,7 +593,6 @@ run_stage <- function(pmwgs,
                   rcs = list(), alive = FALSE)
   }
   if (!is.null(wpool)) {
-    wpool_streams <- .emc_subject_streams(pmwgs$n_subjects)
     wpool_cost <- .emc_subject_cost(data)
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
@@ -634,6 +647,7 @@ run_stage <- function(pmwgs,
     }
     j <- start_iter + i
 
+    assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
     gibbs_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pars_attempt <- tryCatch(
       gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type),
@@ -664,6 +678,7 @@ run_stage <- function(pmwgs,
                                                                         n_pars = n_pars, type = pmwgs$sampler_nuis$type)
       pmwgs$sampler_nuis$samples$idx <- j
     }
+    pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started
     } else NA_real_
@@ -724,22 +739,33 @@ run_stage <- function(pmwgs,
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
                                          total_cores = n_cores)
-    # SIMPLIFY = FALSE: the 3 x n_subjects matrix the simplified form produces
-    # cannot represent a missing worker, and unlisting it recycles.  A plain
-    # list keeps each result whole, tag and all, for .emc_assemble_proposals().
-    raw_proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
-                                    chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
-                                    MoreArgs = list(parameters = pars_comb,
-                                                    model = pmwgs$model,
-                                                    stage = stage,
-                                                    type = pmwgs$type,
-                                                    tune = tune,
-                                                    marginalise = pmwgs$marginalise,
-                                                    r_cores = core_budget$likelihood,
-                                                    group_chol = group_chol_it),
-                                    chol_cache = chol_caches,
-                                    mc.cores = core_budget$subject,
-                                    SIMPLIFY = FALSE)
+    # Keep each result whole, including its subject tag and post-draw RNG state,
+    # so a missing worker cannot shift or recycle another subject's result.
+    raw_proposals <- auto_mclapply(seq_len(pmwgs$n_subjects), function(s) {
+      assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
+      out <- safe_new_particle(
+        s = s, data = data[[s]], pm_settings = pm_settings[[s]],
+        eff_mu = eff_mu[[s]], eff_var = eff_var[[s]],
+        chains_mu = chains_mu[[s]], chains_var = chains_var[[s]],
+        prev_ll = pmwgs$samples$subj_ll[s, j - 1L], parameters = pars_comb,
+        model = pmwgs$model, stage = stage, type = pmwgs$type, tune = tune,
+        marginalise = pmwgs$marginalise,
+        r_cores = core_budget$likelihood, chol_cache = chol_caches[[s]],
+        group_chol = group_chol_it)
+      out$rng_seed <- get(".Random.seed", envir = globalenv())
+      out
+    }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
+    next_streams <- wpool_streams
+    for (res in raw_proposals) {
+      if (!is.list(res)) next
+      s_res <- res$subject
+      if (!is.numeric(s_res) || length(s_res) != 1L || is.na(s_res) ||
+          s_res < 1L || s_res > pmwgs$n_subjects || is.null(res$rng_seed)) {
+        next
+      }
+      next_streams[[as.integer(s_res)]] <- res$rng_seed
+    }
+    wpool_streams <- next_streams
     assembled <- .emc_assemble_proposals(
       raw_proposals, n_pars = pmwgs$n_pars, n_subjects = pmwgs$n_subjects,
       prev_alpha = matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
@@ -825,6 +851,8 @@ run_stage <- function(pmwgs,
   }
   .emc_failure_report_stage(stage_rejects, stage)
   attr(pmwgs$samples, "pm_settings") <- pm_settings
+  pmwgs$rng$subjects <- wpool_streams
+  assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
   if (sampler_profile) {
     attr(pmwgs$samples, "sampler_profile") <- .emc_profile_bind(profile_rows)
   }
@@ -1416,8 +1444,21 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
 extend_sampler <- function(sampler, n_samples, stage) {
   n_iter <- length(sampler$samples$stage)
   sampler$samples$stage <- c(sampler$samples$stage, rep(stage, n_samples))
-  if(any(sampler$nuisance)) sampler$sampler_nuis$samples <- rapply(sampler$sampler_nuis$samples, f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
+  static <- lapply(.EMC_STATIC_SAMPLE_FIELDS, function(nm) sampler$samples[[nm]])
+  names(static) <- .EMC_STATIC_SAMPLE_FIELDS
+  if(any(sampler$nuisance) && !is.null(sampler$sampler_nuis$samples)) {
+    nuis_static <- lapply(.EMC_STATIC_SAMPLE_FIELDS,
+                          function(nm) sampler$sampler_nuis$samples[[nm]])
+    names(nuis_static) <- .EMC_STATIC_SAMPLE_FIELDS
+    sampler$sampler_nuis$samples <- rapply(
+      sampler$sampler_nuis$samples,
+      f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
+    for (nm in .EMC_STATIC_SAMPLE_FIELDS) {
+      sampler$sampler_nuis$samples[[nm]] <- nuis_static[[nm]]
+    }
+  }
   sampler$samples <- rapply(sampler$samples, f = function(x) extend_obj(x, n_samples, n_iter), how = "replace")
+  for (nm in .EMC_STATIC_SAMPLE_FIELDS) sampler$samples[[nm]] <- static[[nm]]
   return(sampler)
 }
 

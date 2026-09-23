@@ -1576,24 +1576,84 @@
   }, numeric(1))
 }
 
-.emc_subject_streams <- function(n_subjects) {
+.emc_l_ecuyer_seed <- function() {
   old_kind <- RNGkind()
-  if (!identical(old_kind[1], "L'Ecuyer-CMRG")) {
-    s <- sample.int(.Machine$integer.max, 1L)
-    old_seed <- get(".Random.seed", envir = globalenv())
-    on.exit({
-      RNGkind(old_kind[1], old_kind[2], old_kind[3])
-      assign(".Random.seed", old_seed, envir = globalenv())
-    }, add = TRUE)
-    set.seed(s, kind = "L'Ecuyer-CMRG")
+  had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
+  old_seed <- if (had_seed) get(".Random.seed", envir = globalenv()) else NULL
+  caller_seed <- old_seed
+  on.exit({
+    do.call(RNGkind, as.list(old_kind))
+    if (had_seed) assign(".Random.seed", caller_seed, envir = globalenv())
+    else suppressWarnings(rm(".Random.seed", envir = globalenv()))
+  }, add = TRUE)
+  if (!had_seed) stats::runif(1)
+  s <- sample.int(.Machine$integer.max, 1L)
+  caller_seed <- get(".Random.seed", envir = globalenv())
+  set.seed(s, kind = "L'Ecuyer-CMRG")
+  get(".Random.seed", envir = globalenv())
+}
+
+.emc_subject_streams <- function(n_subjects, seed = NULL) {
+  if (is.null(seed)) seed <- .emc_l_ecuyer_seed()
+  if (!is.numeric(seed) || length(seed) != 7L || seed[[1L]] != 10407L) {
+    stop("seed must be an L'Ecuyer-CMRG RNG state", call. = FALSE)
   }
-  if (!exists(".Random.seed", envir = globalenv())) stats::runif(1)
-  seed <- get(".Random.seed", envir = globalenv())
   streams <- vector("list", n_subjects)
   for (s in seq_len(n_subjects)) {
-    seed <- parallel::nextRNGStream(seed)
+    seed <- parallel::nextRNGSubStream(seed)
     streams[[s]] <- seed
   }
-  assign(".Random.seed", parallel::nextRNGStream(seed), envir = globalenv())
   streams
+}
+
+.emc_chain_rng <- function(chain_seed, n_subjects) {
+  gibbs <- parallel::nextRNGSubStream(chain_seed)
+  subjects <- .emc_subject_streams(n_subjects, seed = gibbs)
+  list(chain = chain_seed, gibbs = gibbs, subjects = subjects)
+}
+
+.emc_rng_valid <- function(x, n_subjects = NULL) {
+  if (!is.list(x) || is.null(x$chain) || is.null(x$gibbs) ||
+      is.null(x$subjects) || !is.list(x$subjects)) return(FALSE)
+  state_ok <- function(s) is.numeric(s) && length(s) == 7L &&
+    identical(as.integer(s[[1L]]), 10407L)
+  state_ok(x$chain) && state_ok(x$gibbs) &&
+    (is.null(n_subjects) || length(x$subjects) == n_subjects) &&
+    all(vapply(x$subjects, state_ok, logical(1)))
+}
+
+.emc_prepare_chain_rng <- function(emc) {
+  if (!length(emc)) return(emc)
+  n_subjects <- suppressWarnings(as.integer(emc[[1L]]$n_subjects))
+  if (length(n_subjects) != 1L || is.na(n_subjects) || n_subjects < 0L) {
+    return(emc)
+  }
+  if (all(vapply(emc, function(x) .emc_rng_valid(x$rng, n_subjects), logical(1)))) {
+    return(emc)
+  }
+  base <- .emc_l_ecuyer_seed()
+  for (i in seq_along(emc)) {
+    base <- parallel::nextRNGStream(base)
+    emc[[i]]$rng <- .emc_chain_rng(base, n_subjects)
+  }
+  emc
+}
+
+.emc_prepare_sampler_rng <- function(sampler) {
+  n_subjects <- suppressWarnings(as.integer(sampler$n_subjects))
+  if (length(n_subjects) != 1L || is.na(n_subjects) || n_subjects < 0L) {
+    return(sampler)
+  }
+  if (!.emc_rng_valid(sampler$rng, n_subjects)) {
+    base <- .emc_l_ecuyer_seed()
+    sampler$rng <- .emc_chain_rng(base, n_subjects)
+  }
+  sampler
+}
+
+.emc_set_sampler_rng <- function(sampler) {
+  if (!is.null(sampler$rng$gibbs)) {
+    assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
+  }
+  sampler
 }

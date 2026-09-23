@@ -1,6 +1,46 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Truncating defective omissions:** `design(TC = list(filter_defective =
+    TRUE))` declares that data were filtered to observed responses. A finite
+    `UT` then also truncates a defective model's never-finish outcome, so the
+    likelihood normalises by `P(LT <= RT <= UT)` and conditions on a response
+    being observed; omissions left in the data can only come from
+    `pContaminant`, and `make_emc()` rejects them otherwise. The default
+    (`FALSE`) keeps the outcome in the retained sample space,
+    `P(LT <= RT <= UT) + P(RT = Inf)`. `make_data()` and `predict()` follow the
+    design's setting (`filter_defective = NULL`), or an explicit argument.
+-   **Fix (truncated defective races):** an upper-censored trial with unknown
+    response and `UC < UT < Inf` counted the finite mass above `UT`, giving
+    probabilities above one. The correlated BAwL pair, drift-factor and
+    finishing-time copula routes left the never-finish outcome out of their
+    finite-`UT` normaliser while the `rho = 0` route kept it, scored retained
+    omissions as `min_ll`, and (drift factor) mixed both conventions; every
+    route now applies the declared one. For correlated fits to data with
+    omissions filtered out, `filter_defective = TRUE` reproduces the previous
+    likelihood of every trial on a correlated route exactly (trials in
+    `rho = 0` cells now match them). Defective LogicalRules races refuse the
+    option.
+-   **Fix (correlated BAwL likelihood spikes):** the exact two-racer route
+    builds each pair value by subtracting bivariate normal CDF corners, whose
+    errors are absolute. Deep in a racer's tail it returned cancellation
+    residuals, and a truncated trial divided one by another: with a small
+    winner `sv` and strong negative `rho`, ordinary trials scored up to +344
+    log-likelihood where the true value floors, and the region absorbed the
+    sampler. Every exact pair value now carries an error bound. A trial whose
+    numerator or truncation normaliser does not clear its bound is retried
+    with tvpack corners, then on a numeric route that works in log space
+    wherever the mass is (it previously scanned a fixed +/-12 SD window).
+    Typical posterior draws are unchanged apart from far-tail trials, which
+    move by up to 2e-3.
+-   **Fix (normal upper tails):** under the fast normal CDF,
+    `pnorm_std(x, lower = FALSE)` was computed as `1 - Phi(x)`, which has no
+    relative precision beyond `x ~ 5` and is zero beyond `x ~ 8.3`. It now
+    uses `Phi(-x)`. This affects the natural-space helpers in
+    `wald_functions.h` (normal intervals, stop-loss terms, the point-start
+    Wald CDF, e.g. -3% at an early RT), the lognormal survivor and the
+    correlated BAwL numeric route. Results for `x <= 0` are unchanged.
+
 -   **BOU performance:** The default bounded-OU solver grid is now 256 cells
     with a 1 ms target step and five drift/start quadrature nodes. BOU now
     anchors decay at the interval midpoint by default, integrating start-point

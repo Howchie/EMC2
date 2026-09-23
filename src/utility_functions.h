@@ -103,6 +103,14 @@ inline double pnorm_std(double x, bool lower = true, bool log_p = false) {
     // so log1p is stable — no cancellation.
     return std::log1p(-fast_norm_phi(-std::fabs(x)));
   }
+  // The non-log upper tail is taken in the tail itself.  1 - Phi(x) keeps no
+  // relative precision once Phi(x) is near one (x > ~5) and is exactly zero
+  // past x ~ 8.3 -- which silently defeats callers that take Q(x) "in
+  // whichever tail avoids cancellation" (normal_interval_nat, the stop-loss
+  // twins, pigt0, plnorm_std's survivor, the correlated-BAwL conditional
+  // survivor).  Q(x) = Phi(-x) is bit-identical for x <= 0; NaN keeps its old
+  // result.
+  if (!lower && x > 0.0) return fast_norm_phi(-x);
   double p = fast_norm_phi(x);
   if (!lower) p = 1.0 - p;
   return p;

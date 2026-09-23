@@ -228,6 +228,10 @@
   if (any(UC > UT, na.rm = TRUE)) {
     stop("upper censoring (UC > UT) is not supported by decompose_omissions()")
   }
+  if (isTRUE(tc$filter_defective) && any(is.finite(UT))) {
+    stop("decompose_omissions(): the design sets filter_defective = TRUE, so ",
+         "a finite UT truncates the model's omissions and none are predicted")
+  }
   UCresp <- if (!is.null(dadm$UCresponse)) {
     as.logical(trial$UCresponse)
   } else {

@@ -1606,8 +1606,12 @@ inline double wald_k0_log_cdf_closed(double t, double mu, double A,
   if (ISNAN(log_I1)) return NA_REAL;
 
   double log_I2;
-  if (std::fabs(mu) <= 1e-12) {
-    // mu = 0: the reflected component equals the direct one exactly.
+  // The zero-drift limit is uniform only when both dimensionless drift
+  // products, |mu|*sqrt(t) and |mu|*d, are small.  An absolute cutoff on mu
+  // alone is wrong for large thresholds/times (e.g. mu=1e-12, d=1e12).
+  const double mu_scale = std::fmax(1.0, std::fmax(std::fabs(d_hi), sqt));
+  if (std::fabs(mu) * mu_scale <= 1e-12) {
+    // In the zero-drift limit the reflected component equals the direct one.
     log_I2 = log_I1;
   } else {
     const signed_log T_hi = wald_k0_cdf_exp_antideriv(t, d_hi, mu);
@@ -1655,6 +1659,81 @@ inline double wald_k0_log_cdf(double t, double b, double mu, double A) {
   return std::fmin(out, 0.0);
 }
 
+// Antiderivative helper for the reflected component of the point-Wald survivor.
+// Evaluates T(d) = e^{2 mu d} Phi(z2) - Phi(-v) when use_V is false, or
+// V(d) = e^{2 mu d} Phi(z2) + Phi(v) = phi(v) * [ R(x1) + R(x2) ] when use_V is true.
+// When z1 = -v > 0, T(d) = V(d) - 1, and the constant -1 cancels identically when differencing.
+inline signed_log wald_k0_surv_exp_antideriv(double t, double d, double mu, bool use_V) {
+  const double sqt = std::sqrt(t);
+  const double z1 = (mu * t - d) / sqt;
+  const double z2 = -(d + mu * t) / sqt;
+
+  if (use_V) {
+    const double r1 = mills_ratio_std(z1);
+    const double r2 = mills_ratio_std(-z2);
+    return make_signed_log(log_phi_std(z1) + std::log(r1 + r2), 1);
+  }
+  if (z1 < 0.0 && z2 < 0.0) {
+    const double x1 = -z1, x2 = -z2;
+    const double r1 = mills_ratio_std(x1);
+    const double r2 = mills_ratio_std(x2);
+    const double adr = std::fabs(r2 - r1);
+    if (!(adr > 1e-6 * std::fmax(r1, r2))) {
+      if (mu == 0.0) return make_signed_log(R_NegInf, 0);
+      return make_signed_log(log_phi_std(z1) + std::log(2.0 * std::fabs(mu)) +
+                                 0.5 * std::log(t) - std::log(x1) - std::log(x2),
+                             (mu > 0.0) ? -1 : 1);
+    }
+    return make_signed_log(log_phi_std(z1) + std::log(adr), (r2 > r1) ? 1 : -1);
+  }
+  return signed_log_sub(
+      make_signed_log(2.0 * mu * d + pnorm_log_direct(z2, true), 1),
+      make_signed_log(pnorm_log_direct(z1, true), 1));
+}
+
+// Closed-form log survivor for the A > 0 start-point average, built from:
+//   A * S_A(t) = int Phi((d - mu t)/sqrt(t)) dd
+//              - int e^{2 mu d} Phi(z2(d)) dd    over d in [d_lo, d_hi].
+// The first integral is evaluated via log_normal_phi_integral(); the second
+// integrates to (T(d_hi) - T(d_lo)) / (2 mu).  When z1_lo > 0 and z1_hi > 0,
+// T(d) = V(d) - 1, and the difference is formed directly from V(d) without subtracting 1.
+// Returns NaN when an outer signed-log difference has cancelled past its accuracy;
+// the caller then uses panelled quadrature as fallback.
+inline double wald_k0_log_surv_closed(double t, double mu, double A,
+                                      double d_lo, double d_hi) {
+  const double sqt = std::sqrt(t);
+  const double v_lo = (d_lo - mu * t) / sqt;
+  const double v_hi = (d_hi - mu * t) / sqt;
+  const double log_J1 = 0.5 * std::log(t) + log_normal_phi_integral(v_lo, v_hi);
+  if (ISNAN(log_J1) || log_J1 == R_NegInf) return NA_REAL;
+
+  double log_I2;
+  // As in the CDF, use the zero-drift limit only when the dimensionless drift
+  // products are small; |mu| alone is not a valid scale-free criterion.
+  const double mu_scale = std::fmax(1.0, std::fmax(std::fabs(d_hi), sqt));
+  if (std::fabs(mu) * mu_scale <= 1e-12) {
+    log_I2 = 0.5 * std::log(t) + log_normal_phi_integral(-d_hi / sqt, -d_lo / sqt);
+    if (ISNAN(log_I2) || log_I2 == R_NegInf) return NA_REAL;
+  } else {
+    const double z1_lo = -v_lo;
+    const double z1_hi = -v_hi;
+    const bool use_V = (z1_lo > 0.0 && z1_hi > 0.0);
+
+    const signed_log T_hi = wald_k0_surv_exp_antideriv(t, d_hi, mu, use_V);
+    const signed_log T_lo = wald_k0_surv_exp_antideriv(t, d_lo, mu, use_V);
+    const signed_log diff = signed_log_sub(T_hi, T_lo);
+    const int want_sign = (mu > 0.0) ? 1 : -1;
+    if (diff.sign != want_sign || ISNAN(diff.log_abs)) return NA_REAL;
+    const double max_term = std::fmax(T_hi.log_abs, T_lo.log_abs);
+    if (emc2_isfinite(max_term) &&
+        diff.log_abs <= max_term + EMC2_LOG_CANCEL_MIN)
+      return NA_REAL;
+    log_I2 = diff.log_abs - std::log(2.0 * std::fabs(mu));
+  }
+  const double out = log_diff_exp(log_J1, log_I2) - std::log(A);
+  return ISNAN(out) ? NA_REAL : out;
+}
+
 inline double wald_k0_log_surv(double t, double b, double mu, double A) {
   if (!(b > 0.0)) return R_NegInf;
   if (!(t > 0.0)) return 0.0;
@@ -1665,9 +1744,15 @@ inline double wald_k0_log_surv(double t, double b, double mu, double A) {
   if (d_hi <= d_lo) return R_NegInf;  // all starts at/above threshold
   // Starts with d <= 0 are absorbed immediately and contribute no survivor
   // mass, so the average runs over the positive-d part only.
-  const double out = wald_k0_log_avg_over_d(d_lo, d_hi, [&](double d) {
-    return wald_pt_log_surv(t, d, mu);
-  }) - std::log(A);
+  double out = NA_REAL;
+  if (emc2_isfinite(t)) {
+    out = wald_k0_log_surv_closed(t, mu, A, d_lo, d_hi);
+  }
+  if (ISNAN(out)) {
+    out = wald_k0_log_avg_over_d(d_lo, d_hi, [&](double d) {
+      return wald_pt_log_surv(t, d, mu);
+    }) - std::log(A);
+  }
   return std::fmin(out, 0.0);
 }
 

@@ -20,9 +20,15 @@ struct BAwLCorrCounters {
   long long exact_pair_independent_winner_trials = 0;
   long long exact_pair_point_start_trials = 0;
   long long numeric_pair_trials = 0;
+  long long precise_pair_trials = 0;   // exact retried on tvpack corners
   long long gh_no_clock_trials = 0;
   long long gh_generic_clock_trials = 0;
   long long unstable_pair_floored_trials = 0;
+  // Exact pair trials whose numerator or truncation normaliser did not clear
+  // its error bound: re-evaluated on the numeric route, or floored outright
+  // when even the bound's upper end is below the likelihood floor.
+  long long unresolved_exact_trials = 0;
+  long long unresolved_bound_floored_trials = 0;
 
   // Loaded (nonzero-loading) dimension of the positivity denominator.
   long long loaded_dimension_0 = 0;
@@ -34,6 +40,8 @@ struct BAwLCorrCounters {
   long long prepared_rows = 0;
   long long fused_node_evaluations = 0;
   long long bvn_corner_evaluations = 0;
+  long long numeric_pair_integrals = 0;
+  long long numeric_pair_integrand_evaluations = 0;
 
   // Adaptive-GH behaviour.
   long long analytic_center_eligible_trials = 0;

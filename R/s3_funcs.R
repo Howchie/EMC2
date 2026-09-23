@@ -128,6 +128,10 @@ plot.emc <- function(x, stage = "sample", selection = c("mu", "sigma2", "alpha")
 #' @param n_cores Integer. Number of cores across which there should be parallellized
 #' @param stat Character. Can be `mean`, `median` or `random` (i.e., the default).
 #' Will take either random samples from the chain(s) or use the mean or median of the parameter estimates.
+#' @param filter_defective Logical. If `TRUE`, intrinsically defective
+#' omissions are removed when `UT` is finite during simulation. The default
+#' `NULL` follows the design's `TC$filter_defective` (see \code{\link{design}}),
+#' i.e. the retained sample space the model was fitted under.
 #' @param ... Optional additional arguments passed to `get_pars` or `make_data`
 #' @return A list of simulated data sets of length `n_post`
 #' @examples \donttest{
@@ -136,7 +140,8 @@ plot.emc <- function(x, stage = "sample", selection = c("mu", "sigma2", "alpha")
 #' }
 #' @export
 predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
-                        stat=c("random","mean","median")[1], ...)
+                        stat=c("random","mean","median")[1],
+                        filter_defective = NULL, ...)
 {
   # #' @param force_direction Boolean, take censor direction from argument not samples (default FALSE)
   # #' @param force_response Boolean, take censor response from argument not samples (default FALSE)
@@ -147,6 +152,7 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   # #' @param expand Integer. Default is 1, exact same design for each subject. Larger values will replicate designs, so more trials per subject.
   emc <- restore_custom_kernel_pointers(object)
   dots <- list(...)
+  dots$filter_defective <- filter_defective
   data <- dots$data
   dots$data <- NULL
   if (is.null(data)) data <- get_data(emc)

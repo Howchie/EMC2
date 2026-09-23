@@ -14,6 +14,7 @@ make_data(
   functions = NULL,
   return_functions = FALSE,
   TC = NULL,
+  filter_defective = NULL,
   ...
 )
 }
@@ -41,6 +42,13 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 
 \item{TC}{List of truncation/censoring arguments passed to \code{make_missing}
 (e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.}
+
+\item{filter_defective}{Logical. If \code{TRUE}, intrinsically defective
+omissions are removed when \code{UT} is finite, as ordinary responses outside
+the truncation window would be. The default \code{NULL} takes
+\code{TC$filter_defective}, else the design's \code{TC$filter_defective} (see
+\code{\link{design}}), else \code{FALSE}, so data are simulated under the same
+retained sample space the likelihood assumes.}
 
 \item{...}{Additional optional arguments}
 }

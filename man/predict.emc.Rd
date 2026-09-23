@@ -5,7 +5,15 @@
 \alias{predict.emc}
 \title{Generate Posterior/Prior Predictives}
 \usage{
-\method{predict}{emc.prior}(object, data = NULL, n_post = 50, n_cores = 1, n_trials = NULL, ...)
+\method{predict}{emc.prior}(
+  object,
+  data = NULL,
+  n_post = 50,
+  n_cores = 1,
+  n_trials = NULL,
+  filter_defective = NULL,
+  ...
+)
 
 \method{predict}{emc}(
   object,
@@ -13,6 +21,7 @@
   n_post = 50,
   n_cores = 1,
   stat = c("random", "mean", "median")[1],
+  filter_defective = NULL,
   ...
 )
 }
@@ -27,6 +36,11 @@
 
 \item{n_trials}{An integer. If \code{data} isn't provided (although preferred),
 can generate data based on \code{n_trials} per cell of \code{design}}
+
+\item{filter_defective}{Logical. If \code{TRUE}, intrinsically defective
+omissions are removed when \code{UT} is finite during simulation. The default
+\code{NULL} follows the design's \code{TC$filter_defective} (see \code{\link{design}}),
+i.e. the retained sample space the model was fitted under.}
 
 \item{...}{Optional additional arguments passed to \code{get_pars} or \code{make_data}}
 
