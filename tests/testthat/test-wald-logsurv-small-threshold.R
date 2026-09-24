@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Regression: a Wald accumulator whose threshold sits far below its diffusion
 # scale, i.e. b/s small.
 #

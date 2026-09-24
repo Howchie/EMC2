@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # The fault half of the architecture-efficiency audit's C2 harness: "interrupt
 # and parent exit, death before/after notification, partial payload, partial
 # startup/grow/recycle failure, repeated teardown, stale generation replies,

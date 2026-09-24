@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # The stop-signal branch of calc_ll_oo evaluates likelihoods directly from
 # ParamTable column pointers (src/ss_raw.h) and only falls back to
 # materializing a per-trial NumericMatrix when a required column is missing

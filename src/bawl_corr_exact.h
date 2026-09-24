@@ -121,11 +121,24 @@ constexpr double kBawlCorrResolveRatio = 1e3;
 // produced the value.  `precise` skips the Drezner branch: the same exact
 // algebra on tvpack corners is the cheap second tier for a value that the
 // hybrid's Drezner corner bound leaves unresolved.
+//
+// `marg`, when given, holds the boundary grid's per-axis marginals for this
+// corner (see BvnFastMarginals; in Drezner's upper-orthant arguments -x, -y
+// they are Phi(x), Phi(y) and Phi(-y)), and `cache` the grid's Drezner table,
+// so neither is re-derived per corner.
 inline double bawl_corr_bvn_cdf(double x, double y, double r, double& abs_err,
-                                bool precise = false) {
+                                bool precise = false,
+                                const BvnFastMarginals* marg = nullptr,
+                                BvnDreznerCache* cache = nullptr) {
   if (!precise &&
       !(std::fabs(r) > 0.9999 || x < EMC2_BVN_MIN_Z || y < EMC2_BVN_MIN_Z)) {
-    const double fast = norm_cdf_2d_fast(x, y, r);
+    double fast;
+    if (marg != nullptr && cache != nullptr) {
+      cache->prepare(r);
+      fast = norm_ucdf_2d_fast_core(-x, -y, r, *cache, *marg);
+    } else {
+      fast = norm_cdf_2d_fast(x, y, r);
+    }
     if (fast >= EMC2_BVN_DREZNER_MIN_P) {
       abs_err = bawl_corr_drezner_abs_err(r);
       return fast;
@@ -183,10 +196,16 @@ inline void bawl_corr_phi_Phi(double x, double& phi, double& Phi) {
 // fx_pre/fy_pre, when finite, are dnormP(x)/dnormP(y) supplied by a caller
 // that visits the same boundary at several corners (the boundary grid below),
 // so each boundary density is evaluated once rather than once per corner.
+//
+// px_pre/py_pre, when finite, are pnorm_std(x)/pnorm_std(y) and qy_pre is
+// pnorm_std(-y), from the same per-axis pass; `dcache` is the grid's Drezner
+// table (nullptr: look it up per call, as a standalone corner does).
 inline BvnCornerValues bawl_corr_bvn_corner(
     double x, double y, double rho,
     double r_override = R_NaN, double sr_override = R_NaN,
-    double fx_pre = R_NaN, double fy_pre = R_NaN, bool precise = false) {
+    double fx_pre = R_NaN, double fy_pre = R_NaN, bool precise = false,
+    double px_pre = R_NaN, double py_pre = R_NaN, double qy_pre = R_NaN,
+    BvnDreznerCache* dcache = nullptr) {
   BvnCornerValues out;
   if (x == R_NegInf || y == R_NegInf) return out;
   if (x == R_PosInf && y == R_PosInf) {
@@ -194,14 +213,14 @@ inline BvnCornerValues bawl_corr_bvn_corner(
     return out;
   }
   if (x == R_PosInf) {
-    out.cdf = pnorm_std(y, true, false);
+    out.cdf = R_FINITE(py_pre) ? py_pre : pnorm_std(y, true, false);
     out.cdf_err = kBvnRelErr * out.cdf;
     out.dy = R_FINITE(fy_pre) ? fy_pre : dnormP(y);
     out.dyy = -y * out.dy;
     return out;
   }
   if (y == R_PosInf) {
-    out.cdf = pnorm_std(x, true, false);
+    out.cdf = R_FINITE(px_pre) ? px_pre : pnorm_std(x, true, false);
     out.cdf_err = kBvnRelErr * out.cdf;
     out.dx = R_FINITE(fx_pre) ? fx_pre : dnormP(x);
     out.dxx = -x * out.dx;
@@ -219,8 +238,8 @@ inline BvnCornerValues bawl_corr_bvn_corner(
   const double fx = R_FINITE(fx_pre) ? fx_pre : dnormP(x);
   const double fy = R_FINITE(fy_pre) ? fy_pre : dnormP(y);
   if (std::fabs(r) <= 1e-15) {
-    const double px = pnorm_std(x, true, false);
-    const double py = pnorm_std(y, true, false);
+    const double px = R_FINITE(px_pre) ? px_pre : pnorm_std(x, true, false);
+    const double py = R_FINITE(py_pre) ? py_pre : pnorm_std(y, true, false);
     out.cdf = px * py;
     out.cdf_err = kBvnRelErr * out.cdf;
     out.dx = fx * py;
@@ -231,7 +250,12 @@ inline BvnCornerValues bawl_corr_bvn_corner(
     return out;
   }
 
-  out.cdf = bawl_corr_bvn_cdf(x, y, r, out.cdf_err, precise);
+  BvnFastMarginals marg;
+  marg.g1 = px_pre; marg.has_g1 = R_FINITE(px_pre);
+  marg.g2 = py_pre; marg.has_g2 = R_FINITE(py_pre);
+  marg.h2 = qy_pre; marg.has_h2 = R_FINITE(qy_pre);
+  out.cdf = bawl_corr_bvn_cdf(x, y, r, out.cdf_err, precise, &marg,
+                              dcache != nullptr ? dcache : &bvn_drezner_cache());
   const double qx = (y - r * x) / sr;
   const double qy = (x - r * y) / sr;
   // The same conditional CDFs feed both the first and second boundary
@@ -293,23 +317,34 @@ inline BvnBoundaryGrid bawl_corr_make_boundary_grid(
     r_grid = std::fmax(-1.0 + 1e-12, std::fmin(1.0 - 1e-12, rho));
     sr_grid = std::sqrt(std::fmax(1.0 - r_grid * r_grid, 1e-24));
   }
-  // Standardised boundaries and their marginal densities are per axis, not
-  // per corner: a 2x2 finite grid otherwise evaluates each of them twice.
-  double xs[4], ys[4], fxs[4], fys[4];
+  // Standardised boundaries, their marginal densities and marginal CDFs are
+  // per axis, not per corner: a 2x2 finite grid otherwise evaluates each of
+  // them twice.  Phi(-y) is needed only on Drezner's high negative-rho branch.
+  // A corner whose x or y is -Inf returns before using any of them, so those
+  // axes are skipped.
+  const bool need_qy = R_FINITE(r_grid) && r_grid <= -0.7;
+  double xs[4], ys[4], fxs[4], fys[4], pxs[4], pys[4], qys[4];
   for (uint8_t i = 0; i < g.nx; ++i) {
     const bool inf = g.x[i] == R_NegInf || g.x[i] == R_PosInf;
     xs[i] = inf ? g.x[i] : (g.x[i] - mu1) / sd1;
-    fxs[i] = R_FINITE(xs[i]) ? dnormP(xs[i]) : R_NaN;
+    const bool fin = R_FINITE(xs[i]);
+    fxs[i] = fin ? dnormP(xs[i]) : R_NaN;
+    pxs[i] = fin ? pnorm_std(xs[i], true, false) : R_NaN;
   }
   for (uint8_t j = 0; j < g.ny; ++j) {
     const bool inf = g.y[j] == R_NegInf || g.y[j] == R_PosInf;
     ys[j] = inf ? g.y[j] : (g.y[j] - mu2) / sd2;
-    fys[j] = R_FINITE(ys[j]) ? dnormP(ys[j]) : R_NaN;
+    const bool fin = R_FINITE(ys[j]);
+    fys[j] = fin ? dnormP(ys[j]) : R_NaN;
+    pys[j] = fin ? pnorm_std(ys[j], true, false) : R_NaN;
+    qys[j] = (fin && need_qy) ? pnorm_std(-ys[j], true, false) : R_NaN;
   }
+  BvnDreznerCache& dcache = bvn_drezner_cache();
   for (uint8_t i = 0; i < g.nx; ++i) {
     for (uint8_t j = 0; j < g.ny; ++j) {
       const BvnCornerValues corner = bawl_corr_bvn_corner(
-          xs[i], ys[j], rho, r_grid, sr_grid, fxs[i], fys[j], precise);
+          xs[i], ys[j], rho, r_grid, sr_grid, fxs[i], fys[j], precise,
+          pxs[i], pys[j], qys[j], &dcache);
       if (!corner.valid) g.status = BAwLCorrMomentStatus::unstable;
       g.cdf[i][j] = corner.cdf;
       g.cdf_err[i][j] = corner.cdf_err;

@@ -2,6 +2,8 @@
 #define utility_h
 
 #include <Rcpp.h>
+#include <cstdint>
+#include <cstring>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +34,30 @@ using namespace Rcpp;
 // `x == R_PosInf` / `std::isnan` comparisons honest; these wrappers are correct
 // regardless, so prefer them over std::isfinite/std::isnan in new code.
 // ---------------------------------------------------------------------------
+//
+// R_FINITE and ISNAN themselves are redefined below as inline bit-pattern
+// tests.  R's own definitions are out-of-line calls into libR (R_finite, and
+// R_isnancpp for C++), which cost ~5% of a correlated-BAwL likelihood
+// evaluation in call overhead alone.  An IEEE-754 exponent/mantissa test is
+// integer arithmetic, so -ffinite-math-only can no more fold it away than it
+// can fold R's call; it gives the same answers, NA_real_ included (NA is a
+// NaN payload).  Only code that includes this header after the R headers sees
+// the override; everything else keeps R's definition, which agrees.
+static inline int emc2_bits_isfinite(double x) {
+  uint64_t b;
+  std::memcpy(&b, &x, sizeof(b));
+  return (b & 0x7FF0000000000000ull) != 0x7FF0000000000000ull;
+}
+static inline int emc2_bits_isnan(double x) {
+  uint64_t b;
+  std::memcpy(&b, &x, sizeof(b));
+  return (b & 0x7FFFFFFFFFFFFFFFull) > 0x7FF0000000000000ull;
+}
+#undef R_FINITE
+#define R_FINITE(x) emc2_bits_isfinite(x)
+#undef ISNAN
+#define ISNAN(x) emc2_bits_isnan(x)
+
 static inline bool emc2_isfinite(double x) { return (bool)R_FINITE(x); }
 static inline bool emc2_isinf(double x)    { return !R_FINITE(x) && !ISNAN(x); }
 static inline bool emc2_isnan(double x)    { return (bool)ISNAN(x); }

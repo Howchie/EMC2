@@ -4,6 +4,8 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <vector>
 #include "utility_functions.h"
@@ -21,6 +23,69 @@ constexpr double log_twoPI = 1.83787706640934548356;
 constexpr double inv3sqrt2pi = 0.13298076013381089265;
 constexpr double fourPI = 12.566370614359172953;
 constexpr double minus_inv_twoPI = -0.15915494309189533577;
+
+// exp(x) as straight-line arithmetic, so that `#pragma omp simd` loops over
+// quadrature nodes vectorise.  The package builds with -fno-finite-math-only,
+// which keeps __FAST_MATH__ undefined and therefore keeps GCC from calling
+// glibc's vector exp (libmvec): std::exp in a node loop stays one scalar call
+// per node.  Cody-Waite reduction by ln 2 (split constant, fma, so the
+// reduction is exact to well below an ulp for |k| < 2^11), a degree-12 Taylor
+// polynomial on |r| <= ln2/2 (truncation < 2e-16), and the scale 2^k applied
+// as two factors 2^k1 * 2^k2 so that results in the subnormal range round
+// correctly instead of wrapping the exponent field.  Measured over 2e7 random
+// arguments in [-745, 709]: max relative error 3.2e-16 (1.4 ulp) in the normal
+// range and no mismatch against std::exp in the subnormal range; x < -1000
+// returns 0 and x >= 709.79 overflows to +Inf, as std::exp does.
+// It must be inlined into the node loop to vectorise: GCC declined to inline
+// it into the (large) BVN kernels on its own, which left the `omp simd` loops
+// as scalar calls slower than glibc's exp.
+#if defined(__GNUC__)
+#define EMC2_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define EMC2_ALWAYS_INLINE inline
+#endif
+EMC2_ALWAYS_INLINE double emc2_exp_simd(double x) {
+  x = x < -1000.0 ? -1000.0 : (x > 710.0 ? 710.0 : x);
+  const double k = std::rint(x * 1.4426950408889634074);
+  double r = std::fma(-k, 6.93147180369123816490e-01, x);
+  r = std::fma(-k, 1.90821492927058770002e-10, r);
+  double p = 1.0 / 479001600.0;
+  p = std::fma(p, r, 1.0 / 39916800.0);
+  p = std::fma(p, r, 1.0 / 3628800.0);
+  p = std::fma(p, r, 1.0 / 362880.0);
+  p = std::fma(p, r, 1.0 / 40320.0);
+  p = std::fma(p, r, 1.0 / 5040.0);
+  p = std::fma(p, r, 1.0 / 720.0);
+  p = std::fma(p, r, 1.0 / 120.0);
+  p = std::fma(p, r, 1.0 / 24.0);
+  p = std::fma(p, r, 1.0 / 6.0);
+  p = std::fma(p, r, 0.5);
+  p = std::fma(p, r, 1.0);
+  p = std::fma(p, r, 1.0);
+  // Biased exponents k_i + 1023 lie in [301, 1535] for the clamped range, so
+  // adding 2^52 leaves each as the integer in the low mantissa bits.
+  const double k1 = std::floor(0.5 * k);
+  const double k2 = k - k1;
+  const double m1 = (k1 + 1023.0) + 4503599627370496.0;
+  const double m2 = (k2 + 1023.0) + 4503599627370496.0;
+  uint64_t b1, b2;
+  std::memcpy(&b1, &m1, sizeof(b1));
+  std::memcpy(&b2, &m2, sizeof(b2));
+  b1 = (b1 & 0xFFFFFFFFFFFFFull) << 52;
+  b2 = (b2 & 0xFFFFFFFFFFFFFull) << 52;
+  double s1, s2;
+  std::memcpy(&s1, &b1, sizeof(s1));
+  std::memcpy(&s2, &b2, sizeof(s2));
+  return p * s1 * s2;
+}
+
+// The BVN node loops call EMC2_BVN_EXP.  Build with -DEMC2_BVN_SCALAR_EXP to
+// fall back to std::exp there (benchmarking; the loops are then scalar).
+#ifdef EMC2_BVN_SCALAR_EXP
+#define EMC2_BVN_EXP(x) std::exp(x)
+#else
+#define EMC2_BVN_EXP(x) emc2_exp_simd(x)
+#endif
 
 // Useful Distribution Functions
 inline double gaussian_pdf(double x, double mean = 0.0, double var = 1.0, bool log_p = false) {
@@ -425,6 +490,7 @@ struct BvnTvpackCache {
   double rho = R_NaN;
   int order = 0;
   int n = 0;
+  int n_vec = 0;  // n rounded up to a multiple of 4; lanes past n are inert
   double scale = 0.0;
   std::array<double, 24> sn{};
   std::array<double, 24> den{};
@@ -436,6 +502,12 @@ struct BvnTvpackCache {
     const double asr = std::asin(r);
     const double half = 0.5 * asr;
     n = static_cast<int>(rule.x.size()) * 2;
+    n_vec = (n + 3) & ~3;
+    for (int ix = n; ix < n_vec; ++ix) {
+      sn[static_cast<size_t>(ix)] = 0.0;
+      den[static_cast<size_t>(ix)] = 1.0;
+      weight[static_cast<size_t>(ix)] = 0.0;
+    }
     scale = asr / fourPI;
     for (int ix = 0; ix < static_cast<int>(rule.x.size()); ++ix) {
       const double xp = half * (1.0 + rule.x[ix]);
@@ -582,6 +654,15 @@ struct BvnDreznerCache {
         weight[k] = rule.w_div_4pi[ix];
       }
     }
+    // Inert lanes n..7 for the fixed-width vector pass in norm_ucdf_2d_fast:
+    // finite in both branches' formulas, zero weight, never summed.
+    for (int ix = n; ix < 8; ++ix) {
+      node[static_cast<size_t>(ix)] = 0.5;
+      variance[static_cast<size_t>(ix)] = 0.75;
+      denom[static_cast<size_t>(ix)] = std::sqrt(0.75);
+      inv_sqrt[static_cast<size_t>(ix)] = 1.0 / std::sqrt(0.75);
+      weight[static_cast<size_t>(ix)] = 0.0;
+    }
     rho = r;
   }
 };
@@ -591,20 +672,37 @@ inline BvnDreznerCache& bvn_drezner_cache() {
   return cache;
 }
 
-/* Bivariate normal CDF approximation using 5-point Gauss-Legendre quadrature
- * with p-split refinement and tail parameter cutoffs. */
-inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
-{
-  BvnDreznerCache& cache = bvn_drezner_cache();
-  cache.prepare(rho);
+// Marginal normal CDFs that norm_ucdf_2d_fast would otherwise evaluate itself,
+// supplied by a caller that visits the same boundary at several corners (the
+// correlated-BAwL boundary grid).  In the upper-orthant arguments (x1, x2):
+//   g1 = gaussian_cdf(-x1), g2 = gaussian_cdf(-x2), h2 = gaussian_cdf(x2),
+// the last used only on the high-|rho|, rho < 0 branch.  A flag that is false
+// means "not supplied": the value is computed exactly as before, so a supplied
+// value must be the bit-identical pnorm_std result of the same argument.
+struct BvnFastMarginals {
+  double g1 = 0.0, g2 = 0.0, h2 = 0.0;
+  bool has_g1 = false, has_g2 = false, has_h2 = false;
+};
 
+/* Bivariate normal CDF approximation using 5-point Gauss-Legendre quadrature
+ * with p-split refinement and tail parameter cutoffs.  `cache` must already be
+ * prepared for rho. */
+inline double norm_ucdf_2d_fast_core(double x1, double x2, double rho,
+                                     const BvnDreznerCache& cache,
+                                     const BvnFastMarginals& m)
+{
+  auto g1 = [&]() { return m.has_g1 ? m.g1 : gaussian_cdf(-x1); };
   double x12 = 0.5 * (x1*x1 + x2*x2);
-  
+
   double out = 0;
   double x3;
+  // Node exponentials are computed for all eight lanes in one vector pass
+  // (lanes past cache.n are inert) and summed in the original node order.
+  double e_a[8], e_b[8];
   if (cache.high) {
     const double r2 = cache.rho_var;
     const double r3 = cache.r3;
+    const double x2_in = x2;
     if (rho < 0) {
       x2 = -x2;
     }
@@ -620,34 +718,55 @@ inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
         x6 * ab * gaussian_cdf(-x6) -
           std::exp(-x5/r2) * std::fma(aa, r2, ab) * inv_sqrt2_pi
       );
-      for (int ix = 0; ix < cache.n; ix++) {
+#pragma omp simd
+      for (int ix = 0; ix < 8; ++ix) {
+        const double xs = cache.node[static_cast<size_t>(ix)];
+        const double rs = cache.denom[static_cast<size_t>(ix)];
+        e_a[ix] = EMC2_BVN_EXP(-x5/xs);
+        e_b[ix] = EMC2_BVN_EXP(-x3/(1. + rs));
+      }
+      for (int ix = 0; ix < cache.n; ++ix) {
         const double xs = cache.node[static_cast<size_t>(ix)];
         const double inv_s = cache.inv_sqrt[static_cast<size_t>(ix)];
-        const double rs = cache.denom[static_cast<size_t>(ix)];
         out -= cache.weight[static_cast<size_t>(ix)] *
-          std::exp(-x5/xs) *
-          (std::exp(-x3/(1. + rs)) * inv_s / x7 - 1. - aa * xs);
+          e_a[ix] * (e_b[ix] * inv_s / x7 - 1. - aa * xs);
       }
     }
     if (rho > 0) {
-      out = std::fma(out, r3*x7, gaussian_cdf(-std::fmax(x1, x2)));
+      // gaussian_cdf(-max(x1, x2)) is whichever marginal has the larger x.
+      const double gmax = (x1 >= x2)
+        ? g1() : (m.has_g2 ? m.g2 : gaussian_cdf(-x2));
+      out = std::fma(out, r3*x7, gmax);
     }
     else {
-      out = std::fmax(0., gaussian_cdf(-x1) - gaussian_cdf(-x2)) - out*r3*x7;
+      // x2 was negated above, so gaussian_cdf(-x2) here is gaussian_cdf(x2_in).
+      const double h2 = m.has_h2 ? m.h2 : gaussian_cdf(x2_in);
+      out = std::fmax(0., g1() - h2) - out*r3*x7;
     }
     return out;
   }
   else {
     x3 = x1*x2;
-    for (int ix = 0; ix < cache.n; ix++) {
+#pragma omp simd
+    for (int ix = 0; ix < 8; ++ix) {
       const double r1 = cache.node[static_cast<size_t>(ix)];
-      const double inv_s = cache.inv_sqrt[static_cast<size_t>(ix)];
       const double rr2 = cache.variance[static_cast<size_t>(ix)];
-      out += cache.weight[static_cast<size_t>(ix)] *
-        std::exp((r1*x3 - x12) / rr2) * inv_s;
+      e_a[ix] = EMC2_BVN_EXP((r1*x3 - x12) / rr2);
     }
-    return std::fma(out, rho, gaussian_cdf(-x1) * gaussian_cdf(-x2));
+    for (int ix = 0; ix < cache.n; ++ix) {
+      out += cache.weight[static_cast<size_t>(ix)] * e_a[ix] *
+        cache.inv_sqrt[static_cast<size_t>(ix)];
+    }
+    const double g2 = m.has_g2 ? m.g2 : gaussian_cdf(-x2);
+    return std::fma(out, rho, g1() * g2);
   }
+}
+
+inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
+{
+  BvnDreznerCache& cache = bvn_drezner_cache();
+  cache.prepare(rho);
+  return norm_ucdf_2d_fast_core(x1, x2, rho, cache, BvnFastMarginals());
 }
 
 inline double norm_cdf_2d_fast(double x1, double x2, double rho)
@@ -775,10 +894,17 @@ inline double norm_ucdf_2d(double x1, double x2, double rho)
       BvnTvpackCache& cache = bvn_tvpack_cache();
       cache.prepare(rho, active_rule.x.size() == low_rule.x.size() ? 6 :
                     (active_rule.x.size() == mid_rule.x.size() ? 12 : 20));
+      // Exponentials in one vector pass; the weighted sum keeps its
+      // sequential order.
+      double node_exp[24];
+#pragma omp simd
+      for (int ix = 0; ix < cache.n_vec; ++ix) {
+        node_exp[ix] = EMC2_BVN_EXP(
+          std::fma(cache.sn[static_cast<size_t>(ix)], hk, -hs) /
+            cache.den[static_cast<size_t>(ix)]);
+      }
       for (int ix = 0; ix < cache.n; ++ix) {
-        out += cache.weight[static_cast<size_t>(ix)] *
-          std::exp(std::fma(cache.sn[static_cast<size_t>(ix)], hk, -hs) /
-                   cache.den[static_cast<size_t>(ix)]);
+        out += cache.weight[static_cast<size_t>(ix)] * node_exp[ix];
       }
       out *= cache.scale;
     }
@@ -808,13 +934,25 @@ inline double norm_ucdf_2d(double x1, double x2, double rho)
       }
       BvnTvpackHighCache& cache = bvn_tvpack_high_cache();
       cache.prepare(rho);
+      // Both exponentials for every node in one vector pass (n = 20); the
+      // asr > -100 screen and the sequential sum are applied afterwards.  A
+      // screened-out node never enters the sum, so its second exponential
+      // (whose argument is bounded by |hk|/2 there) is simply discarded.
+      double node_asr[24], node_e1[24], node_e2[24];
+#pragma omp simd
       for (int ix = 0; ix < cache.n; ++ix) {
         const double xs = cache.xs[static_cast<size_t>(ix)];
         const double rs = cache.rs[static_cast<size_t>(ix)];
-        asr = -0.5 * (hk + bs / xs);
-        if (asr > -100.) {
-          out += cache.weight[static_cast<size_t>(ix)] * std::exp(asr) *
-            (std::exp(-hk*xs/(2.*(1.+rs)*(1.+rs)))/rs - (1. + c*xs*std::fma(d, xs, 1.)));
+        node_asr[ix] = -0.5 * (hk + bs / xs);
+        node_e1[ix] = EMC2_BVN_EXP(node_asr[ix]);
+        node_e2[ix] = EMC2_BVN_EXP(-hk*xs/(2.*(1.+rs)*(1.+rs)));
+      }
+      for (int ix = 0; ix < cache.n; ++ix) {
+        const double xs = cache.xs[static_cast<size_t>(ix)];
+        const double rs = cache.rs[static_cast<size_t>(ix)];
+        if (node_asr[ix] > -100.) {
+          out += cache.weight[static_cast<size_t>(ix)] * node_e1[ix] *
+            (node_e2[ix]/rs - (1. + c*xs*std::fma(d, xs, 1.)));
         }
       }
       out *= minus_inv_twoPI;

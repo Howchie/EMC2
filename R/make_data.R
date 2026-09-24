@@ -1107,15 +1107,6 @@ LogicalRules_rfun <- function(data, pars, model) {
   out
 }
 
-add_Ffunctions <- function(data,design)
-  # Adds columns created by Ffunctions (if not already there)
-{
-  Fdf <- data.frame(lapply(design$Ffunctions,function(f){f(data)}))
-  ok <- !(names(Fdf) %in% names(data))
-  if (!any(ok)) data else
-    data <-  cbind.data.frame(data,Fdf[,ok,drop=FALSE])
-}
-
 #' Generate Subject-Level Parameters
 #'
 #' Simulates subject-level parameters in the format required by ``make_data()``.

@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Regression tests for design(marginalise = "t0"): the shared subject-level t0
 # is integrated out of the MH proposal (fixed-eta Stage 1) and reconstructed
 # into the stored alpha. These guard the two defects found in review:

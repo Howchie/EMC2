@@ -306,16 +306,3 @@ filtered_samples_infnt_factor <- function(sampler, filter){
 }
 
 
-get_all_pars_infnt_factor <- function(samples, idx, info){
-  stop("no IS2 for infinite factor estimation yet")
-}
-
-group_dist_infnt_factor <- function(random_effect = NULL, parameters, sample = FALSE, n_samples = NULL, info){
-  stop("no IS2 for infinite factor estimation yet")
-
-}
-
-prior_dist_infnt_factor <- function(parameters, info){
-  stop("no IS2 for infinite factor estimation yet")
-
-}

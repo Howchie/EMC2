@@ -21,6 +21,7 @@ namespace btawl {
 struct SolveCache;
 }
 struct FrqCache;
+struct FrqFadeCache;
 
 // Finite data-time queries that a PDE-backed likelihood may request after its
 // raw RT pass.  The model adapters convert these absolute times to their
@@ -255,6 +256,7 @@ struct ContextForRaceModels {
     std::shared_ptr<fperace::SolveCache> fpe_cache;
     std::shared_ptr<rlf::SolveCache> rlf_cache;
     std::shared_ptr<FrqCache> frq_cache;
+    std::shared_ptr<FrqFadeCache> frq_fade_cache;
 
     bool has_global_kill() const {
       return is_global_kill && kill_active;

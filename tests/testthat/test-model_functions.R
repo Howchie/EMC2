@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # When working with lM it is useful to design  an "average and difference"
 # contrast matrix, which for binary responses has a simple canonical from:
 ADmat <- matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"d"))

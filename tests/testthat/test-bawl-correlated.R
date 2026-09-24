@@ -372,28 +372,49 @@ test_that("exact pairs bypass GH and generic clocks remain separate", {
   expect_equal(unname(c_generic[["fused_node_evaluations"]]), 0)
 })
 
-test_that("BAwLcorr simulators use a jointly positive drift vector", {
+test_that("BAwLcorr simulators condition on a jointly positive drift vector", {
   skip_on_cran()
-  n <- 100
+  local_test_rng(101, kind = "Mersenne-Twister")
+  # With the leak off (k = 0) a racer finishes exactly when its drift is
+  # positive, so "every trial ends" is the observable form of joint positivity.
+  # With a leak it is not: a positive drift below k * b levels off under the
+  # threshold and never finishes, which is legitimate.  Low mean drifts make an
+  # all-negative draw common (2-5% of trials here), so an unconditioned draw
+  # could not pass.
+  n <- 2000
   lR <- factor(rep(c("correct", "error", "pm"), n),
                levels = c("correct", "error", "pm"))
   pars <- cbind(
-    v = rep(c(1.0, .4, .2), n), sv = 1, b = 1.5, A = .3,
-    t0 = .2, k = .2, lambda_g = 0, lambda_k = 0,
+    v = rep(c(.3, .1, .2), n), sv = 1, b = 1.5, A = .3,
+    t0 = .2, k = 0, lambda_g = 0, lambda_k = 0,
     rho = rep(c(.6, -.6, 0), n)
   )
   ok <- rep(TRUE, nrow(pars))
+  sim_cpp <- function(posdrift)
+    EMC2:::rbawl_corr_cpp(pars, levels(lR), ok, posdrift, 1L, FALSE, FALSE)
+  sim_r <- function(posdrift)
+    EMC2:::rBAwL_corr(lR, pars, ok = ok, posdrift = posdrift,
+                      erlang = 1L, guess = FALSE, global = FALSE)
 
-  set.seed(101)
-  cpp <- EMC2:::rbawl_corr_cpp(pars, levels(lR), ok, TRUE, 1L, FALSE, FALSE)
-  set.seed(102)
-  ref <- EMC2:::rBAwL_corr(lR, pars, ok = ok, posdrift = TRUE,
-                           erlang = 1L, guess = FALSE, global = FALSE)
-
+  cpp <- sim_cpp(TRUE)
+  ref <- sim_r(TRUE)
   expect_length(cpp$R, n)
   expect_equal(nrow(ref), n)
   expect_true(all(is.finite(cpp$rt)))
   expect_true(all(is.finite(ref$rt)))
+
+  # The same parameters without the conditioning do lose trials, so the check
+  # above can fail.
+  expect_gt(mean(!is.finite(sim_cpp(FALSE)$rt)), 0.01)
+  expect_gt(mean(!is.finite(sim_r(FALSE)$rt)), 0.01)
+
+  # And the two simulators draw the same distribution: response proportions
+  # (standard error of a difference ~0.016 at n = 2000) and the RT law.
+  # rbawl_corr_cpp() returns response codes; rBAwL_corr() returns a factor.
+  p_cpp <- prop.table(table(factor(levels(lR)[cpp$R], levels = levels(lR))))
+  p_ref <- prop.table(table(factor(ref$R, levels = levels(lR))))
+  expect_lt(max(abs(p_cpp - p_ref)), 0.065)
+  expect_gt(suppressWarnings(stats::ks.test(cpp$rt, ref$rt)$p.value), 1e-4)
 })
 
 test_that("BAwLcorr requires lM and rejects row-varying rho", {

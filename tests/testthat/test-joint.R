@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Simple joint test
 # Take the first entry of the design list
 # emc stores a design list (with length 1 for non-joint models)

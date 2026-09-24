@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Regression tests for the group_design information-criterion path
 # (group__IC_standard / standard_subj_ll), which drives compare() / IC() /
 # DIC / BPIC. Before the fix this crashed ("invalid 'length' argument")

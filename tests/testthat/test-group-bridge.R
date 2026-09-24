@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Commit 7: bridge sampling already supports group designs (the handling lives in
 # the variant functions, not bridge_sampling.R). These tests (a) pin the
 # vectorized group-likelihood micro-cleanup in bridge_group_and_prior_and_jac_standard

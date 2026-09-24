@@ -216,12 +216,6 @@ summary.emc.group_design <- function(object, ...){
   return(invisible(out))
 }
 
-get_unique_rows <- function(df) {
-  cov <- sapply(df, function(x) length(unique(x)) > 5)
-  if (all(cov)) head(df, 3) else df[!duplicated(df[!cov]), ]
-}
-
-
 #' @rdname sampled_pars
 #' @export
 sampled_pars.emc.group_design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,

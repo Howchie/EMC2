@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Acceptance gate 1 of the architecture-efficiency audit: "Same-build, pure
 # scheduling/storage/cache changes should reproduce particle likelihood vectors
 # and subject streams exactly.  Differential tests must include repeated calls,

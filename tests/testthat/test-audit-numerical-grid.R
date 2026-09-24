@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Acceptance gates 4 and 5 of the architecture-efficiency audit: arithmetic
 # changes must preserve support, floor and mixture semantics, over a grid that
 # includes "RT near t0, zero/small A and leak, zero drift where supported,

@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Simple normal likelihood, the first half of the parameters are the means,
 # the second half the variances. We exp them to ensure positive variances
 custom_ll <- function(pars, dadm, ...){

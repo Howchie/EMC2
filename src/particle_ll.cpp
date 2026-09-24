@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "model_PCOUNTER.h"
 #include "model_FRQ.h"
+#include "model_FRQfade.h"
 #include "wald_functions.h"
 #include "gsl_utils.h"
 #include "race_integrands.h"
@@ -1131,6 +1132,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
       if (adapter.ctx.frq_cache) adapter.ctx.frq_cache->clear();
+      if (adapter.ctx.frq_fade_cache) adapter.ctx.frq_fade_cache->clear();
       btawl_cache_new_particle(&adapter.ctx);
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
@@ -1747,6 +1749,8 @@ double c_log_likelihood_race(
   auto* cache_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
   if (cache_ctx != nullptr && cache_ctx->frq_cache)
     cache_ctx->frq_cache->clear();
+  if (cache_ctx != nullptr && cache_ctx->frq_fade_cache)
+    cache_ctx->frq_fade_cache->clear();
   
   // Here we check for a pC parameter corresponding to probability of contaminant OMISSION.
   // The column index is data-structure-fixed so we cache it in shared state after the

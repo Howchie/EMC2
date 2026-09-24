@@ -1027,19 +1027,39 @@
 }
 
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
-  if (is.null(shared)) {
-    shared <- if (!is.null(msg$shared_file)) {
-      .emc_wpool_shared_read(msg$shared_file)
-    } else {
-      unserialize(msg$shared)
+  # Under the dynamic subject queue one worker serves several requests per
+  # iteration that share one broadcast; decode it and rebuild the group
+  # Cholesky cache once.  The key is the iteration's broadcast file plus its
+  # request id, both unique per iteration.
+  cache_key <- if (is.null(shared) && !is.null(msg$shared_file) &&
+                   !is.null(msg$iter_key)) {
+    paste(msg$shared_file, msg$iter_key)
+  } else NULL
+  cached <- .emc_pool_state$worker_shared
+  group_chol <- NULL
+  if (!is.null(cache_key) && !is.null(cached) &&
+      identical(cached$key, cache_key)) {
+    shared <- cached$shared
+    group_chol <- cached$group_chol
+  } else {
+    if (is.null(shared)) {
+      shared <- if (!is.null(msg$shared_file)) {
+        .emc_wpool_shared_read(msg$shared_file)
+      } else {
+        unserialize(msg$shared)
+      }
     }
-  }
-  group_chol <- shared$group_chol
-  if (is.null(group_chol) && !is.null(shared$group_var)) {
-    group_chol <- build_group_chol_cache(shared$group_var, shared$idx_list,
-                                         shared$marginal_idx,
-                                         include_full = if (is.null(shared$include_full))
-                                           TRUE else shared$include_full)
+    group_chol <- shared$group_chol
+    if (is.null(group_chol) && !is.null(shared$group_var)) {
+      group_chol <- build_group_chol_cache(shared$group_var, shared$idx_list,
+                                           shared$marginal_idx,
+                                           include_full = if (is.null(shared$include_full))
+                                             TRUE else shared$include_full)
+    }
+    if (!is.null(cache_key)) {
+      .emc_pool_state$worker_shared <- list(key = cache_key, shared = shared,
+                                            group_chol = group_chol)
+    }
   }
   subs <- msg$subs
   props <- matrix(0, ctx$n_pars + 1L, length(subs))
@@ -1362,7 +1382,16 @@
                              .EMC_REJECT_CLASSES)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   sendable <- was_alive && !is.null(shared_file)
-  if (sendable) {
+  # Dynamic subject queue: per-subject cost varies ~30% between iterations
+  # with the proposals, so a partition planned from last iteration's times
+  # leaves workers idle while the unluckiest finishes.  With the completion
+  # channel, each worker instead takes the next subject (costliest first) as
+  # it frees up.  Each subject carries its own RNG stream, so the result does
+  # not depend on which worker computes it.
+  dynamic <- sendable && watch && pool$n > 1L &&
+    isTRUE(getOption("emc2.worker_queue", TRUE))
+  queue_delays <- numeric(0)
+  if (sendable && !dynamic) {
     send_deadline <- .emc_wpool_deadline()
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
@@ -1382,8 +1411,7 @@
     proc.time()[["elapsed"]] - send_started
   } else NA_real_
   receive_started <- proc.time()[["elapsed"]]
-  store <- function(w, res, source = "worker") {
-    subs <- part[[w]]
+  store <- function(w, res, source = "worker", subs = part[[w]]) {
     props[, subs] <<- res$props
     times[subs] <<- res$times
     pm_settings[subs] <<- res$pm
@@ -1393,22 +1421,164 @@
       fallback_workers <<- fallback_workers + 1L
       fallback_subjects <<- fallback_subjects + length(subs)
     }
-    if (!profile) return(invisible(NULL))
+    if (!profile || is.na(w)) return(invisible(NULL))
+    # A worker may serve several queue chunks: its CPU and elapsed times add up.
     finish_at[w] <<- proc.time()[["elapsed"]] - iter_started
-    if (!is.null(res$cpu)) worker_cpu[w] <<- res$cpu
-    if (!is.null(res$elapsed)) worker_elapsed[w] <<- res$elapsed
+    if (!is.null(res$cpu)) {
+      worker_cpu[w] <<- if (is.na(worker_cpu[w])) res$cpu else worker_cpu[w] + res$cpu
+    }
+    if (!is.null(res$elapsed)) {
+      worker_elapsed[w] <<- if (is.na(worker_elapsed[w])) res$elapsed
+                            else worker_elapsed[w] + res$elapsed
+    }
     if (identical(source, "worker") && !is.null(res$t_recv) &&
         !is.na(dispatch_wall[w])) {
       queue_delay[w] <<- as.numeric(difftime(res$t_recv, dispatch_wall[w],
                                              units = "secs"))
+      queue_delays <<- c(queue_delays, queue_delay[w])
     }
     invisible(NULL)
   }
   recompute <- function(w) .emc_wpool_compute(msgs[[w]], ctx, shared = shared)
+  subject_msg <- function(subs, w, req) {
+    list(subs = subs, shared_file = shared_file,
+         alpha = alpha[, subs, drop = FALSE],
+         population_mu = population_mu[, subs, drop = FALSE],
+         pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
+         notify = watch, w = w, generation = generation, request = req,
+         iter_key = request)
+  }
+  assigned <- part
+  sent_msgs <- msgs
 
   pending <- sent & vapply(part, length, integer(1)) > 0L
   picked_up <- rep(FALSE, pool$n)
-  if (watch && any(pending)) {
+  if (dynamic) {
+    queue <- .emc_wpool_queue_order(part)
+    assigned <- vector("list", pool$n)
+    sent_msgs <- list()
+    measure_msgs <- .emc_profile_expensive()
+    chunk <- vector("list", pool$n)       # outstanding subjects per worker
+    issued <- integer(pool$n)             # request id of that chunk
+    issued_iter <- integer(0)             # every request id sent this iteration
+    dispatching <- TRUE
+    deadline <- .emc_wpool_deadline()
+    outstanding <- function() which(!vapply(chunk, is.null, logical(1)))
+    count_stale <- function() {
+      .emc_pool_state$stale_records <-
+        (if (is.null(.emc_pool_state$stale_records)) 0L
+         else .emc_pool_state$stale_records) + 1L
+    }
+    send_next <- function(w) {
+      if (!dispatching || !length(queue)) return(FALSE)
+      subs <- queue[1L]
+      req <- .emc_wpool_next_request()
+      msg <- subject_msg(subs, w, req)
+      if (!.emc_wpool_request(pool, w, msg, deadline)) {
+        .emc_wpool_degraded(
+          .emc_wpool_transport_error("send to a worker failed"))
+        pool$alive <<- FALSE
+        dispatching <<- FALSE
+        return(FALSE)
+      }
+      queue <<- queue[-1L]
+      issued[w] <<- req
+      issued_iter <<- c(issued_iter, req)
+      chunk[[w]] <<- subs
+      picked_up[w] <<- FALSE
+      if (profile) {
+        if (is.na(dispatch_at[w])) {
+          dispatch_at[w] <<- proc.time()[["elapsed"]] - iter_started
+        }
+        dispatch_wall[w] <<- Sys.time()
+      }
+      if (measure_msgs) sent_msgs[[length(sent_msgs) + 1L]] <<- msg
+      TRUE
+    }
+    note_start <- function(rec) {
+      w <- rec$w
+      if (!is.na(w) && w >= 1L && w <= pool$n &&
+          identical(rec$request, issued[w])) {
+        picked_up[w] <<- TRUE
+      } else {
+        count_stale()
+      }
+      invisible(NULL)
+    }
+    for (w in seq_len(pool$n)) if (!send_next(w)) break
+    send_elapsed <- if (profile) {
+      proc.time()[["elapsed"]] - send_started
+    } else NA_real_
+    while (length(outstanding())) {
+      rec <- .emc_wpool_await_record(pool, outstanding, deadline,
+                                     on_start = note_start)
+      w <- if (identical(rec$code, "record")) rec$w else NA_integer_
+      # A request id this iteration never issued is a leftover from an earlier
+      # one: skip it.  One it did issue, arriving for a worker that is not
+      # holding that request, means channel and reply alignment is lost.
+      if (identical(rec$code, "record") && !(rec$request %in% issued_iter)) {
+        count_stale()
+        next
+      }
+      if (is.na(w) || w < 1L || w > pool$n || is.null(chunk[[w]]) ||
+          !identical(rec$request, issued[w])) {
+        stuck <- outstanding()
+        if (identical(rec$code, "timeout")) {
+          idle <- stuck[!picked_up[stuck]]
+          .emc_wpool_degraded(sprintf(
+            "worker%s %s produced no reply within %.0f s (subject%s %s)%s",
+            if (length(stuck) > 1L) "s" else "", paste(stuck, collapse = ", "),
+            deadline, if (length(unlist(chunk[stuck])) > 1L) "s" else "",
+            paste(unlist(chunk[stuck]), collapse = ", "),
+            if (length(idle)) {
+              sprintf("; worker%s %s never collected the request",
+                      if (length(idle) > 1L) "s" else "",
+                      paste(idle, collapse = ", "))
+            } else ""))
+          .emc_wpool_terminate_jobs(pool$jobs[stuck], wait = TRUE,
+                                    terminate = TRUE)
+        } else if (identical(rec$code, "dead") || is.na(w)) {
+          .emc_wpool_degraded("worker gave no reply")
+        } else {
+          .emc_wpool_degraded("lost alignment on the worker completion channel")
+        }
+        pool$alive <- FALSE
+        dispatching <- FALSE
+        .emc_wpool_retire(pool)
+        for (k in stuck) {
+          subs <- chunk[[k]]
+          store(k, .emc_wpool_compute(subject_msg(subs, k, issued[k]), ctx,
+                                      shared = shared),
+                source = "master", subs = subs)
+        }
+        chunk[] <- list(NULL)
+        break
+      }
+      subs <- chunk[[w]]
+      res <- .emc_wpool_reply(pool, w, deadline)
+      chunk[w] <- list(NULL)
+      source <- "worker"
+      if (is.null(res) || !is.null(res$failed)) {
+        if (is.null(res)) {
+          .emc_wpool_degraded(.emc_wpool_transport_error("worker gave no reply"))
+          pool$alive <- FALSE
+          dispatching <- FALSE
+        }
+        res <- .emc_wpool_compute(subject_msg(subs, w, issued[w]), ctx,
+                                  shared = shared)
+        source <- "master"
+      }
+      store(w, res, source = source, subs = subs)
+      assigned[[w]] <- c(assigned[[w]], subs)
+      send_next(w)
+    }
+    # Subjects never handed out (the pool degraded mid-iteration) run here.
+    for (s in queue) {
+      store(NA_integer_, .emc_wpool_compute(subject_msg(s, NA_integer_, 0L), ctx,
+                                            shared = shared),
+            source = "master", subs = s)
+    }
+  } else if (watch && any(pending)) {
     deadline <- .emc_wpool_deadline()
     note_start <- function(rec) {
       w <- rec$w
@@ -1503,19 +1673,20 @@
   if (was_alive) .emc_wpool_record_receive(receive_elapsed)
   measure_wire <- .emc_profile_expensive()
   private_bytes <- if (measure_wire) {
-    sum(vapply(msgs, function(msg) {
+    sum(vapply(sent_msgs, function(msg) {
       msg$shared <- NULL
       msg$shared_file <- NULL
       length(serialize(msg, NULL))
     }, integer(1)))
   } else NA_real_
   shared_path_bytes <- if (measure_wire && !is.null(shared_file)) {
-    active <- vapply(part, length, integer(1)) > 0L
-    sum(vapply(msgs[active], function(msg) {
+    active <- if (dynamic) rep(TRUE, length(sent_msgs))
+              else vapply(part, length, integer(1)) > 0L
+    sum(vapply(sent_msgs[active], function(msg) {
       length(serialize(list(shared_file = msg$shared_file), NULL))
     }, integer(1)))
   } else if (measure_wire) 0 else NA_real_
-  worker_load <- vapply(part, function(subs) sum(times[subs]), numeric(1))
+  worker_load <- vapply(assigned, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
        alive = pool$alive, rejects = rejects,
        profile = if (profile) list(
@@ -1531,13 +1702,13 @@
            max(worker_elapsed, na.rm = TRUE)
          },
          worker_elapsed_sum = sum(worker_elapsed, na.rm = TRUE),
-         workers_active = sum(vapply(part, length, integer(1)) > 0L),
+         workers_active = sum(vapply(assigned, length, integer(1)) > 0L),
          dispatch_first = .emc_range_or_na(dispatch_at, min),
          dispatch_last = .emc_range_or_na(dispatch_at, max),
          finish_first = .emc_range_or_na(finish_at, min),
          finish_last = .emc_range_or_na(finish_at, max),
-         queue_delay_max = .emc_range_or_na(queue_delay, max),
-         queue_delay_mean = .emc_range_or_na(queue_delay, mean),
+         queue_delay_max = .emc_range_or_na(queue_delays, max),
+         queue_delay_mean = .emc_range_or_na(queue_delays, mean),
          fallback_workers = fallback_workers,
          fallback_subjects = fallback_subjects,
          degraded = as.integer(was_alive && !isTRUE(pool$alive)),
@@ -1566,7 +1737,22 @@
     out[[w]] <- c(out[[w]], s)
     load[w] <- load[w] + cost[s]
   }
-  lapply(out, function(x) if (is.null(x)) integer(0) else x)
+  out <- lapply(out, function(x) if (is.null(x)) integer(0) else x)
+  # The dynamic subject queue in .emc_wpool_iter() hands subjects out in this
+  # order (costliest first), so the tail of an iteration is the cheapest work.
+  attr(out, "order") <- order(cost, decreasing = TRUE)
+  out
+}
+
+# Costliest-first dispatch order for the subjects in `part`: the partitioner's
+# recorded order when present, restricted to (and completed by) the subjects
+# the partition actually holds.
+.emc_wpool_queue_order <- function(part) {
+  subs <- unlist(part, use.names = FALSE)
+  o <- attr(part, "order")
+  if (is.null(o)) return(subs)
+  o <- o[o %in% subs]
+  c(o, setdiff(subs, o))
 }
 
 .emc_subject_cost <- function(data) {

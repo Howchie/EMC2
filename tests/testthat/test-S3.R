@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 prior <- get_prior(samples_LNR)
 design <- get_design(samples_LNR)
 

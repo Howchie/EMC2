@@ -607,24 +607,6 @@ run_kernel <- function(trend_pars = NULL, kernel, input, funptr = NULL, at_facto
   out_mat
 }
 
-# Helper: Apply forward-fill to covariates when using 'at' filtering
-apply_forward_fill <- function(values, dadm,at) {
-  idx <- dadm[,at] == levels(dadm[,at])[1] # assumes first level occurs first within each subject
-  values[!idx] <- NA
-  # Forward-fill within each subject separately
-  filled <- values
-  subs <- levels(dadm$subjects)
-  for (s in subs) {
-    m <- dadm$subjects == s
-    if (!any(m)) next
-    filled[m] <- na_locf(filled[m], na.rm = FALSE)
-  }
-  if (any(is.na(filled))) {
-    stop("Found NA after forward-fill. This should not happen.")
-  }
-  return(filled)
-}
-
 prep_trend_phase <- function(dadm, trend, pars, phase, return_trialwise_parameters = FALSE,
                              return_trend_pars = FALSE){
   # Apply only trends in the requested phase, sequentially

@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Acceptance gate 2 of the architecture-efficiency audit: "Mapper-only changes
 # must match mapped natural parameters and bounds against the existing
 # independent get_pars_c_batch_wrapper_oo route."

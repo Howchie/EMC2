@@ -127,47 +127,6 @@ add_constants <- function(p,constants)
 
 }
 
-add_recalculated_pars <- function(pmat, model, cnams){
-  modifiers <- unlist(lapply(strsplit(cnams,"_"),function(x){paste0(x[-1], collapse = "_")}))
-  par_names <- colnames(pmat)
-  unq_pars <- unique(par_names)
-  par_table <- table(par_names)
-  counts <- lapply(par_table, function(x) return(1:x))
-  combn <- do.call(expand.grid, counts)
-  colnames(combn) <- names(par_table)
-
-  out <- list()
-  modfs <- list()
-  for(r in 1:nrow(combn)){
-    pmat_in <- matrix(NA, nrow = nrow(pmat), ncol = length(unq_pars))
-    colnames(pmat_in) <- unq_pars
-    cur_modifiers <- setNames(numeric(length(unq_pars)), unq_pars)
-    for(par in unq_pars){
-      pmat_in[,par] <- pmat[,which(colnames(pmat) == par)[combn[r,par]]]
-      cur_modifiers[par] <- modifiers[which(colnames(pmat) == par)[combn[r,par]]]
-    }
-    added <- model()$Ttransform(pmat_in)
-    added <- added[, !(colnames(added) %in% colnames(pmat_in)), drop = F]
-    attr(added, "ok") <- NULL
-    out[[r]] <- added
-    modfs[[r]] <- cur_modifiers
-  }
-  m_out <- matrix(0, nrow = nrow(pmat), ncol = 0)
-  if(ncol(out[[1]]) == 0) return(NULL)
-  for(i in 1:ncol(out[[1]])){
-    cur_par <- lapply(out, function(x) x[,i, drop = F])
-    not_dups <- !duplicated(cur_par)
-    cur_combn <- combn[not_dups,]
-    pars_vary <- colnames(cur_combn)[colMeans(cur_combn) != 1]
-    to_add <- do.call(cbind, cur_par[not_dups])
-    cur_modfs <- modfs[not_dups]
-    fnams <- sapply(cur_modfs, function(x) paste0(unique(unlist(strsplit(x[pars_vary], split = "_"))), collapse = "_"))
-    if(!all(fnams == "")) colnames(to_add) <- paste0(colnames(to_add)[1], "_", fnams)
-    m_out <- cbind(m_out, to_add)
-  }
-  return(m_out)
-}
-
 get_p_types <- function(nams, reverse = FALSE){
   if(reverse){
     out <- unlist(lapply(strsplit(nams,"_"),function(x){x[[-1]]}))

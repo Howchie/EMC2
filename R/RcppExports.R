@@ -268,6 +268,18 @@ frq_h_inv_r <- function(y, delta) {
     .Call(`_EMC2_frq_h_inv_r`, y, delta)
 }
 
+dfrqfade <- function(t, alpha, beta, lambda, kappa, delta, cv_u) {
+    .Call(`_EMC2_dfrqfade`, t, alpha, beta, lambda, kappa, delta, cv_u)
+}
+
+pfrqfade <- function(t, alpha, beta, lambda, kappa, delta, cv_u, lower_tail = TRUE) {
+    .Call(`_EMC2_pfrqfade`, t, alpha, beta, lambda, kappa, delta, cv_u, lower_tail)
+}
+
+frq_fade_summary <- function(alpha, beta, lambda, kappa, delta, cv_u) {
+    .Call(`_EMC2_frq_fade_summary`, alpha, beta, lambda, kappa, delta, cv_u)
+}
+
 pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L, delta = 0.0) {
     .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch, delta)
 }
@@ -526,6 +538,10 @@ rbawdp_cpp <- function(pars, lR_levels, ok, launch, posdrift) {
 
 rfrq_cpp <- function(pars, lR_levels, ok) {
     .Call(`_EMC2_rfrq_cpp`, pars, lR_levels, ok)
+}
+
+rfrqfade_cpp <- function(pars, lR_levels, ok) {
+    .Call(`_EMC2_rfrqfade_cpp`, pars, lR_levels, ok)
 }
 
 rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrift) {

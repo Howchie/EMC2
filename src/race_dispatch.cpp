@@ -8,6 +8,7 @@
 #include "fpe_race.h"
 #include "fpe_models.h"
 #include "model_FRQ.h"
+#include "model_FRQfade.h"
 #include "model_PCOUNTER.h"
 #include <cmath>
 #include <memory>
@@ -223,10 +224,19 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.mean_k_index = emc2col::rdmgbm::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmgbm::omega : -1;
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("FRQ_FADE") != std::string::npos) {
+    out.pdf1_ptr       = &dfrqfade_scalar;
+    out.cdf1_ptr       = &pfrqfade_scalar;
+    out.model_dfun_raw = &dfrqfade_raw;
+    out.model_pfun_raw = &pfrqfade_raw;
+    out.logS_at_t_ptr  = &frqfade_logS_at_t;
+    out.col_spec       = emc2col::frq_fade::spec();
+    out.ctx.t0_index   = emc2col::frq_fade::t0;
+    out.ctx.defective_upper_tail = true;
+    out.ctx.supports_batched_defective_truncation = true;
+    out.ctx.frq_fade_cache = std::make_shared<FrqFadeCache>();
   } else if (type_std.find("FRQ") != std::string::npos) {
-    // Finite reservoir quorum.  "FRQ" is not a substring of any
-    // other c_name and contains none, so its position among these branches is
-    // free; it sits before BAwD only for readability.
+    // FRQ_FADE shares the prefix and is dispatched above.
     out.pdf1_ptr       = &dfrq_scalar;
     out.cdf1_ptr       = &pfrq_scalar;
     out.model_dfun_raw = &dfrq_raw;

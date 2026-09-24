@@ -18,3 +18,4 @@
 ^\.pytest_cache
 ^src/Makevars\.profile$
 ^src/[^/]+\.d$
+^graphify-out$

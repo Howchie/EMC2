@@ -199,13 +199,54 @@ loo_from_ll <- function(ll_mat, cores = 1) {
   })
 }
 
-# Per-subject WAIC: [n_iter x n_trials] log-likelihood matrix -> scalar WAIC
+#' WAIC and PSIS-LOO for a single fitted model
+#'
+#' Compute WAIC or PSIS-LOO for one `emc` fit, either for a single subject or
+#' pooled over all subjects. These are the per-model building blocks behind the
+#' `WAIC` and `LOO` columns of \code{\link{compare}()}; use them when you only
+#' need one model's criterion. Both are on the deviance scale (lower is better).
+#'
+#' Pointwise log-likelihoods are read from the fit if they were stored during
+#' sampling, and recomputed from the posterior otherwise. Suppressed Pareto-k
+#' and p_waic diagnostics can be retrieved with \code{\link{waic_warnings}()}.
+#'
+#' @param emc An emc object.
+#' @param stage Character. The sampling stage to use. Defaults to `"sample"`.
+#' @param filter Integer or numeric vector. Iterations to remove from the start
+#' of `stage`, or a vector of iterations to keep, as in \code{\link{get_pars}()}.
+#' @param subject Subject name or index to compute the criterion for.
+#' @param pointwise Character string, `"trial"` (default) or `"subject"`.
+#' `"trial"` treats each trial as one pointwise unit. `"subject"` gives the
+#' hierarchical leave-one-subject-out criterion: each subject's log-likelihood
+#' is marginalised over the group distribution using `K` importance draws per
+#' posterior iteration. Single-level fits fall back to summed conditional
+#' subject log-likelihoods.
+#' @param K Integer (default 200). Importance draws from the group distribution
+#' per posterior iteration when `pointwise = "subject"`.
+#' @param cores Integer (default 1). Cores for the pointwise log-likelihood
+#' computation and, for LOO, for PSIS.
+#'
+#' @return A single number: the WAIC estimate (`waic_*`) or the LOOIC estimate
+#' (`loo_*`).
+#' @seealso \code{\link{compare}()}, \code{\link{waic_warnings}()}
+#' @examples
+#' \dontrun{
+#' waic_pooled(samples_LNR)
+#' loo_subject(samples_LNR, subject = 1)
+#' loo_pooled(samples_LNR, pointwise = "subject", cores = 4)
+#' }
+#' @name waic_loo
+NULL
+
+#' @rdname waic_loo
+#' @export
 waic_subject <- function(emc, stage = "sample", filter = 0, subject) {
   ll_mat <- .ll_matrix_subject(emc, stage = stage, filter = filter, subject = subject)
   waic_from_ll(ll_mat)
 }
 
-# Pooled WAIC: per-trial LLs for "trial"; marginal subject LLs for "subject".
+#' @rdname waic_loo
+#' @export
 waic_pooled <- function(emc, stage = "sample", filter = 0,
                         pointwise = c("trial", "subject"), K = 200, cores = 1) {
   pointwise <- match.arg(pointwise)
@@ -216,13 +257,15 @@ waic_pooled <- function(emc, stage = "sample", filter = 0,
   waic_from_ll(ll_all)
 }
 
-# Per-subject PSIS-LOO: [n_iter x n_trials] log-likelihood matrix -> scalar LOOIC
+#' @rdname waic_loo
+#' @export
 loo_subject <- function(emc, stage = "sample", filter = 0, subject) {
   ll_mat <- .ll_matrix_subject(emc, stage = stage, filter = filter, subject = subject)
   loo_from_ll(ll_mat)
 }
 
-# Pooled PSIS-LOO: per-trial LLs for "trial"; marginal subject LLs for "subject".
+#' @rdname waic_loo
+#' @export
 loo_pooled <- function(emc, stage = "sample", filter = 0,
                        pointwise = c("trial", "subject"), K = 200, cores = 1) {
   pointwise <- match.arg(pointwise)

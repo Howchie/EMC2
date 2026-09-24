@@ -530,7 +530,10 @@ test_that("a response below t0 floors cleanly", {
 
 test_that("the C++ and R simulators agree distributionally with the CDF", {
   skip_on_cran()
-  n <- 1000
+  local_test_rng(kind = "Mersenne-Twister")
+  # n = 4000 puts the 0.03 CDF and 0.006 omission-rate tolerances at ~3.8
+  # standard errors; at n = 1000 they were ~1.9 and failed for many seeds.
+  n <- 4000
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
   pars <- cbind(alpha = 2, beta = 3, h = 0.9, lambda = 1.35, t0 = 0.1)
   pars <- pars[rep(1, length(lR)), ]

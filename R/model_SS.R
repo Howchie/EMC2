@@ -340,8 +340,6 @@ ptexGaussianS <- function(rt,pars)
 
 #### ExGaussian random ----
 
-rexG <- function(n,mu,sigma,tau) rnorm(n,mean=mu,sd=sigma) + rexp(n,rate=1/tau)
-
 # Truncated (lower) ex-Gaussian sampler matching likelihood's lower bound handling
 rtexG <- function(n, mu, sigma, tau, lb) {
   # Vectorized over parameters; draws from exG truncated at lb
@@ -363,26 +361,6 @@ rtexG <- function(n, mu, sigma, tau, lb) {
   out
 }
 
-
-
-rexGaussian <- function(lR,pars,p_types=c("mu","sigma","tau"),
-                        ok=rep(TRUE,dim(pars)[1]))
-  # lR is an empty latent response factor lR with one level for each accumulator.
-  # pars is a matrix of corresponding parameter values named as in p_types
-  # pars must be sorted so accumulators and parameter for each trial are in
-  # contiguous rows.
-  #
-{
-  if (!all(p_types %in% dimnames(pars)[[2]]))
-    stop("pars must have columns ",paste(p_types,collapse = " "))
-  dt <- matrix(rexG(dim(pars)[1],pars[,"mu"],pars[,"sigma"],pars[,"tau"]),
-               nrow=length(levels(lR)))
-  R <- max.col(-t(dt), ties.method='first')
-  pick <- cbind(R,1:dim(dt)[2])
-  rt <- dt[pick]
-  R <- factor(levels(lR)[R],levels=levels(lR))
-  cbind.data.frame(R=R,rt=rt)
-}
 
 
 #### EXG Stop signal random -----

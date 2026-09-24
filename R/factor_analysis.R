@@ -429,6 +429,7 @@ plot_relations <- function(emc = NULL, stage = "sample",  plot_cred = FALSE,
 #' @param main Character vector. Title of the plot
 #' @param cex Integer. Font size
 #' @return NULL
+#' @export
 
 factor_diagram <- function(emc = NULL, stage = "sample",
                                 loadings = NULL, standardize = TRUE,

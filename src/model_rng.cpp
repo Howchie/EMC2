@@ -8,6 +8,7 @@
 #include "model_rng.h"
 #include "drift_factor.h"
 #include "model_FRQ.h"
+#include "model_FRQfade.h"
 #include "model_BTAwL.h"
 #include "ddm_functions_inline.h"
 #include "time_warp.h"
@@ -1340,6 +1341,60 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       ratio = std::nextafter(1.0, 0.0);
     const double d = frq_registration_inv(ratio, s);
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// FRQfade simulator. It draws the latent quorum percentile, inverts the
+// threshold map when delta is active, then maps that percentile onto the
+// finite integrated-opportunity clock. Crossing the clock horizon is an
+// intrinsic omission.
+// [[Rcpp::export]]
+Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
+                        Rcpp::CharacterVector lR_levels,
+                        Rcpp::LogicalVector ok) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rfrqfade_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rfrqfade_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  for (const char* nm : {"alpha", "beta", "lambda", "kappa", "t0"})
+    if (!ci.count(nm)) Rcpp::stop("rfrqfade_cpp: missing parameter column '%s'.", nm);
+  const int ia = ci.at("alpha"), ib = ci.at("beta"), il = ci.at("lambda"),
+            ik = ci.at("kappa"), it0 = ci.at("t0");
+  // delta and cv_u default to zero here, as in rfrq_cpp and the R reference
+  // simulator: this lookup is by name, so an absent column cannot resolve to a
+  // different parameter (the positional likelihood contract still requires it).
+  const int id = ci.count("delta") ? ci.at("delta") : -1;
+  const int icv = ci.count("cv_u") ? ci.at("cv_u") : -1;
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  FrqFadeMemo memo;
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r] || !R_FINITE(t0col[r])) continue;
+    const FrqFadePars& s = memo.get(pars(r, ia), pars(r, ib), pars(r, il),
+      pars(r, ik), id >= 0 ? pars(r, id) : 0.0,
+      icv >= 0 ? pars(r, icv) : 0.0);
+    if (!s.ok) continue;
+    const double rank = s.hh.active
+      ? frq_h_inv(R::unif_rand(), s.hh)
+      : R::rbeta(s.alpha, s.beta);
+    const double u_rank = s.hh.active
+      ? R::qbeta(rank, s.alpha, s.beta, 1, 0)
+      : rank;
+    const double decision = frqfade_decision_time(u_rank, s);
+    dt[r] = R_FINITE(decision) && decision >= 0.0
+      ? decision : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

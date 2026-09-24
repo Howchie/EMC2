@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Regression test for group_design() subject-order hardening. The design
 # matrices are built via factor-level ordering, but the "data" attribute
 # (consumed by minimal_group_design and summary()) used to be appearance-ordered,

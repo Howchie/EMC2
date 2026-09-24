@@ -124,22 +124,10 @@ rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
               mode = "transient")
 }
 
-rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                             p_types = NULL, posdrift = TRUE, launch = 0L) {
-  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
-              mode = "sustained")
-}
-
 rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                    p_types = NULL, posdrift = TRUE, launch = 0L) {
   .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
               mode = "full")
-}
-
-rBTAwLSeparate <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                           p_types = NULL, posdrift = TRUE, launch = 0L) {
-  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
-              mode = "separate", separate = TRUE)
 }
 
 # `launch` must come from the same .bawd_launch_code() call that produced the
@@ -207,6 +195,15 @@ rBTAwLSeparate <- function(lR, pars, ok = rep(TRUE, length(lR)),
     return(.apply_timed_guess_winner(out, levels(lR)))
   }
   rFRQ(lR, pars, ok = ok)
+}
+
+.rfun_FRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
+  if (.use_cpp_rfun()) {
+    res <- rfrqfade_cpp(pars, levels(lR), ok)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rFRQfade(lR, pars, ok = ok)
 }
 
 .rfun_BAwL_corr <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,

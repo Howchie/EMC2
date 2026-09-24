@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # The per-particle parameter prologue -- refill from the particle row, map the
 # designs, apply the transforms, check the bounds -- has no direct test: it is
 # covered only transitively, through likelihood values.  It is also the code
