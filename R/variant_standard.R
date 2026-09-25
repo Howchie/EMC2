@@ -32,7 +32,9 @@ add_info_standard <- function(sampler, prior = NULL, ...){
 
   sampler$par_group <- list(...)$par_groups
   if(is.null(sampler$par_group)) sampler$par_group <- rep(1, n_pars)
-  sampler$is_blocked <- sampler$par_group %in% which(table(sampler$par_group) > 1)
+  # A parameter is blocked when its group label is shared (labels need not be 1..k).
+  sampler$is_blocked <- duplicated(sampler$par_group) |
+    duplicated(sampler$par_group, fromLast = TRUE)
   sampler$prior <- get_prior_standard(prior, n_pars, sample = F,
                                       group_design = group_design)
   sampler$group_designs <- group_design
@@ -151,8 +153,8 @@ get_prior_standard <- function(prior = NULL, n_pars = NULL, sample = TRUE, N = 1
       }
       if(is.null(par_groups)) par_groups <- rep(1, n_pars)
       constraintMat <- matrix(0, n_pars, n_pars)
-      for(i in 1:length(unique(par_groups))){
-        idx <- par_groups == i
+      for(g in unique(par_groups)){
+        idx <- par_groups == g
         constraintMat[idx, idx] <- Inf
       }
       vars <- constrain_lambda(vars, constraintMat)
@@ -487,7 +489,8 @@ last_sample_standard <- function(store) {
 get_conditionals_standard <- function(s, samples, n_pars, iteration = NULL, idx = NULL){
   iteration <- ifelse(is.null(iteration), samples$iteration, iteration)
   if(is.null(idx)) idx <- 1:n_pars
-  pts2_unwound <- apply(samples$theta_var[idx,idx,],3,unwind)
+  # drop = FALSE: a single-parameter block (n_blocks > 1) must stay 3-d.
+  pts2_unwound <- apply(samples$theta_var[idx,idx,,drop = FALSE],3,unwind)
   all_samples <- rbind(samples$alpha[idx, s,],samples$theta_mu[idx,],pts2_unwound)
   mu_tilde <- rowMeans(all_samples)
   var_tilde <- stats::cov(t(all_samples))

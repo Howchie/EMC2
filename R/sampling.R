@@ -542,7 +542,18 @@ run_stage <- function(pmwgs,
   tune$shared_ll_idx <- shared_ll_idx
 
   pm_settings <- attr(pmwgs$samples, "pm_settings")
-  if(is.null(pm_settings)) pm_settings <- lapply(1:pmwgs$n_subjects, function(x) return(vector("list", length(unique(tune$components)))))
+  n_comp <- length(unique(tune$components))
+  if(is.null(pm_settings)) pm_settings <- lapply(1:pmwgs$n_subjects, function(x) return(vector("list", n_comp)))
+  # n_blocks > 1 re-blocks the parameters after preburn (and may re-cluster
+  # between blocks of iterations), so the per-block settings must follow. New
+  # blocks inherit the subject's adapted settings with fresh acceptance counts.
+  pm_settings <- lapply(pm_settings, function(x) {
+    if (length(x) == n_comp) return(x)
+    template <- x[[1L]]
+    template$proposal_counts <- NULL
+    template$acc_counts <- NULL
+    rep(list(template), n_comp)
+  })
   tune <- check_tune_settings(tune, n_pars, stage, particles)
   pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,  stage = stage, n_pars = n_pars, particles)
 
@@ -1131,7 +1142,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     group_mu[marginal_idx] <- marginalise$mu
     group_var <- .apply_marginal_group_var(group_var, marginal_idx, marginalise)
   }
-  out_lls <- numeric(length(unq_components))
+  # Likelihood at the final state, per shared-likelihood component: blocks
+  # that share one likelihood each end with its value at the state so far.
+  ll_shared <- numeric(0)
   particle_multiplier <- 1
   if(stage == "preburn"){
     Mus <- list(group_mu, subj_mu)
@@ -1337,8 +1350,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       ref_ll <- lw[idx_ll]
     }
 
-    out_lls[i] <- ref_ll
+    ll_shared[as.character(shared_idx)] <- ref_ll
     proposal_out[idx] <- ref
+    # Gibbs over blocks: later blocks condition on this block's new values.
+    subj_mu[idx] <- ref
     if (!is.null(marginalise)) {
       marg_nodes <- as.numeric(marg_grid$nodes[idx_ll, ])
       marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
@@ -1370,7 +1385,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       }
     }
   }
-  return(list(proposal = proposal_out, ll = sum(out_lls), pm_settings = pm_settings))
+  return(list(proposal = proposal_out, ll = sum(ll_shared), pm_settings = pm_settings))
 }
 
 

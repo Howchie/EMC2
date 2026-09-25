@@ -1087,6 +1087,8 @@ make_emc <- function(data,design,model=NULL,
       if(length(par_groups) != length(sampled_pars(design))){
         stop("par_groups length does not match number of sampled parameters, make sure you specified par_groups correctly")
       }
+      # Downstream code treats labels as 1..k; c(2, 2, 5, 5) must mean two blocks.
+      par_groups <- match(par_groups, unique(par_groups))
     }
     if(type %in% c("diagonal", "blocked")) type <- "standard"
     out <- pmwgs(dadm_list, type, par_groups=par_groups,
