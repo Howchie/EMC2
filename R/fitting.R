@@ -316,7 +316,9 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
   split <- c(chain = NA_real_, eff = NA_real_)
   if(stage != "preburn"){
     t0 <- if (prof) proc.time()[["elapsed"]] else NA_real_
-    emc <- create_chain_proposals(emc, do_block = stage != "sample")
+    emc <- create_chain_proposals(
+      emc, do_block = stage != "sample",
+      adapt_group_move = stage %in% c("burn", "adapt"))
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
         components <- sub_blocking(emc, n_blocks)
@@ -655,11 +657,13 @@ sub_blocking <- function(emc, n_blocks){
   }, error = function(e) FALSE))
 }
 
-create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
+create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
+                                   adapt_group_move = NULL){
   n_subjects <- emc[[1]]$n_subjects
   n_chains <- length(emc)
   n_pars <- emc[[1]]$n_pars
   stage <- emc[[1]]$samples$stage[length(emc[[1]]$samples$stage)]
+  if (is.null(adapt_group_move)) adapt_group_move <- stage != "sample"
   if(is.null(samples_idx)){
     idx_subtract <- min(250, emc[[1]]$samples$idx/1.5)
     samples_idx <- round(emc[[1]]$samples$idx - idx_subtract):emc[[1]]$samples$idx
@@ -672,6 +676,19 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
                     stage = c('preburn', 'burn', 'adapt', 'sample'),
                     by_subject = T, merge_chains = T, return_mcmc = F,
                     remove_dup = F, remove_constants = F)
+
+  # Proposal covariance for the joint group-subject move, from the same window
+  # of draws as the subject proposals. Frozen during the sample stage.
+  group_move_var <- NULL
+  group_move_opts <- .emc_group_move_options()
+  group_move_spec <- if (group_move_opts$enabled) {
+    .emc_group_move_spec(emc[[1]], scale = group_move_opts$scale)
+  } else NULL
+  if (isTRUE(adapt_group_move) && !is.null(group_move_spec)) {
+    group_move_var <- tryCatch(
+      .emc_group_move_covariance(emc, group_move_spec, samples_idx),
+      error = function(e) NULL)
+  }
 
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
@@ -741,6 +758,10 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
     attr(emc[[j]], "prop_var") <- new_prop_var
     emc[[j]]$chains_var <- chains_var
     emc[[j]]$chains_mu <- chains_mu
+    if (!is.null(group_move_var)) {
+      emc[[j]] <- .emc_group_move_install(emc[[j]], group_move_var,
+                                          group_move_spec, group_move_opts$K)
+    }
   }
   return(emc)
 }

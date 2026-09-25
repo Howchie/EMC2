@@ -113,12 +113,12 @@ A comprehensive audit of the sampling pipeline following commits `1fd2e30f`,
    ensuring the reference likelihood cleanly reflects the previous block's
    state without relying solely on softmax shift invariance.
 
-## Next Step: Joint Group–Subject Translation Move
+## Follow-up: joint group-subject move
 
-As detailed in `plans/group-translation-move-2026-09-25.md`, weakly informed
-group parameters (e.g. `v.M` in UT0) suffer from slow group-mean mixing due
-to centered-parameterization funnel geometry. An interweaving ASIS joint
-translation move $\mu' = \mu + \delta, \alpha'_s = \alpha_s + \delta$ with
-$\delta \sim N(0, \lambda^2 V)$ will be implemented before `fill_samples()`,
-costing ~1 likelihood evaluation per subject via the worker pool while leaving
-the posterior strictly invariant.
+Weakly informed group parameters mix slowly under the centred Gibbs step.
+`.emc_group_move()` (`R/sampling.R`) now runs after each particle step. It
+jointly translates the group intercepts and rescales the group SDs, carrying
+every subject with them (interweaving), and is invariant for the standard,
+blocked and diagonal-gamma types and for group designs. Its derivation, options
+and proposal-covariance rules are documented in the header comment above
+`.emc_group_move_env`. Its tests are in `tests/testthat/test-particle-invariance.R`.
