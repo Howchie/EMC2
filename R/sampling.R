@@ -1229,7 +1229,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
     ref <- subj_mu[idx]
-    ref_ll <- prev_ll
+    ref_ll <- if (!is.na(ll_shared[as.character(shared_idx)])) ll_shared[as.character(shared_idx)] else prev_ll
     better <- numeric(n_proposals)
     weight_ess <- 0
     for (ks in steps) {
@@ -1276,7 +1276,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                            data, model, marg_spec,
                                            r_cores = r_cores, warm = warm_arg)
         lw <- marginal_ll_from_grid(marg_grid)
-      } else if(tune$components[length(tune$components)] > 1){
+      } else if(length(unq_components) > 1L){
         lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
                              component = shared_idx, r_cores = r_cores, s = s,
                              varying = idx[is_shared])

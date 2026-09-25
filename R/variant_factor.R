@@ -269,12 +269,13 @@ last_sample_factor <- function(store) {
 get_conditionals_factor <- function(s, samples, n_pars, iteration = NULL, idx = NULL){
   iteration <- ifelse(is.null(iteration), samples$iteration, iteration)
   if(is.null(idx)) idx <- 1:n_pars
-  sig_err <- log(samples$epsilon_inv[idx,])
+  p_idx <- if(is.logical(idx)) sum(idx) else length(idx)
+  sig_err <- matrix(log(samples$epsilon_inv[idx,]), nrow = p_idx)
   psi <- log(samples$psi_inv)
   eta <- matrix(samples$eta[s,,], nrow = samples$n_factors)
-  lambda <- apply(samples$lambda_untransf[idx,,,drop = F], 3, unwind_lambda, samples$Lambda_mat[idx,])
-  theta_mu <- samples$theta_mu[idx,]
-  all_samples <- rbind(samples$alpha[idx, s,],theta_mu, eta, sig_err, psi, lambda)#, sig_err, psi, lambda)
+  lambda <- apply(samples$lambda_untransf[idx,,,drop = F], 3, unwind_lambda, samples$Lambda_mat[idx,, drop = FALSE])
+  theta_mu <- matrix(samples$theta_mu[idx,], nrow = p_idx)
+  all_samples <- rbind(matrix(samples$alpha[idx, s,], nrow = p_idx), theta_mu, eta, sig_err, psi, lambda)
   mu_tilde <- rowMeans(all_samples)
   var_tilde <- cov(t(all_samples))
   condmvn <- condMVN(mean = mu_tilde, sigma = var_tilde,
@@ -283,7 +284,7 @@ get_conditionals_factor <- function(s, samples, n_pars, iteration = NULL, idx = 
                                  samples$eta[s,,iteration],
                                  log(samples$epsilon_inv[idx, iteration]),
                                  log(samples$psi_inv[,iteration, drop = F]),
-                                 unwind_lambda(samples$lambda_untransf[idx,, iteration], samples$Lambda_mat[idx,])))
+                                 unwind_lambda(samples$lambda_untransf[idx,, iteration, drop = FALSE], samples$Lambda_mat[idx,, drop = FALSE])))
   return(list(eff_mu = condmvn$condMean, eff_var = condmvn$condVar))
 }
 

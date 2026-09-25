@@ -78,8 +78,8 @@ pWAIC-driven model comparisons from affected fits are unreliable.
 
 ## What to do
 
-- **Refit anything whose conclusions rest on group variances, pWAIC/WAIC/LOO
-  or subject-level spread.** That means any fit run before `1fd2e30f`.
+- Refit anything whose conclusions rest on group variances, pWAIC/WAIC/LOO
+  or subject-level spread. That means any fit run before `1fd2e30f`.
 - ESS per iteration is lower than the old sampler reported. Part of the old
   ESS was an artefact of the same bias (chains were forced to move), so budget
   somewhat longer sample stages.
@@ -87,3 +87,38 @@ pWAIC-driven model comparisons from affected fits are unreliable.
   and a lower random-walk acceptance target/epsilon floor. The synthetic-grid
   gains did not survive full adaptive fits, so validate any future tuning in
   real `fit()` runs.
+
+## Subsequent Audit & Downstream Fixes (2026-09-25)
+
+A comprehensive audit of the sampling pipeline following commits `1fd2e30f`,
+`3447e715`, and `a994a8a7` identified and resolved four related issues:
+
+1. **Component count check in `new_particle()` (`R/sampling.R:1279`):**
+   The check `else if(tune$components[length(tune$components)] > 1)` examined
+   only the trailing element of `tune$components`. For remapped or custom block
+   indices where the last parameter was in component 1 (e.g. `c(1, 2, 1)`),
+   joint models failed to pass `component = shared_idx` to `calc_ll_pooled()`.
+   Replaced with `length(unq_components) > 1L`.
+2. **Dimension preservation for single-parameter blocks in `variant_single.R`:**
+   `get_conditionals_single()` dropped dimensions when a block contained a
+   single parameter (`sum(idx) == 1`), crashing `rowMeans()`. Explicit matrix
+   reconstruction added.
+3. **Dimension preservation in factor variants (`variant_factor.R`, `variant_infnt_factor.R`):**
+   `get_conditionals_factor()` and `get_conditionals_infnt_factor()` had similar
+   potential dimension-dropping on 1-parameter blocks for `samples$alpha`,
+   `samples$theta_mu`, and `samples$epsilon_inv`. Matrix reconstruction added.
+4. **Reference log-likelihood tracking across sequential blocks (`R/sampling.R:1232`):**
+   In `new_particle()`, `ref_ll` was reset to `prev_ll` on every block loop.
+   Now initialized from `ll_shared[as.character(shared_idx)]` when available,
+   ensuring the reference likelihood cleanly reflects the previous block's
+   state without relying solely on softmax shift invariance.
+
+## Next Step: Joint Group–Subject Translation Move
+
+As detailed in `plans/group-translation-move-2026-09-25.md`, weakly informed
+group parameters (e.g. `v.M` in UT0) suffer from slow group-mean mixing due
+to centered-parameterization funnel geometry. An interweaving ASIS joint
+translation move $\mu' = \mu + \delta, \alpha'_s = \alpha_s + \delta$ with
+$\delta \sim N(0, \lambda^2 V)$ will be implemented before `fill_samples()`,
+costing ~1 likelihood evaluation per subject via the worker pool while leaving
+the posterior strictly invariant.

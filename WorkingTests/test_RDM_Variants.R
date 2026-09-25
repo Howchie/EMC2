@@ -40,7 +40,7 @@ designLBA <- design(
 
 p_vec <- sampled_pars(designRDMSWTN_UT,doMap = FALSE)
 p_vec[1:length(p_vec)] <- c(log(1.5), log(2), log(1), log(0.2),log(.4),log(2))
-dat = make_data(p_vec,designRDM, n_trials = 5000)
+dat = make_data(p_vec,designRDMSWTN_UT, n_trials = 5000)
 
 emc <- make_emc(dat, designRDM, type = "single", compress = T)
 emcRDM <- fit(emc,stop_criteria = list(
@@ -55,7 +55,7 @@ emcRDM <- fit(emc,stop_criteria = list(
   ),cores_per_chain=3, cores_for_chains = 3), max_tries=30)
 
 #print(recovery(emcRDM,p_vec,selection="alpha"))
-pred = predict(emcRDMSWTN_UT,n_cores=24)
+pred = predict(emcRDM,n_cores=24)
 plot_cdf(dat,pred)
 
 emc <- make_emc(dat, designRDMSWTN, type = "single", compress = T)

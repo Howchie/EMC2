@@ -58,9 +58,10 @@ get_conditionals_single <- function(s, samples, n_pars, iteration = NULL, idx = 
   iters <- dim(samples$alpha)[3]
   iter_idx <- sample(1:iters, min(iters, 250))
   if(is.null(idx)) idx <- 1:n_pars
-  all_samples <- samples$alpha[idx,s,iter_idx]
+  p_idx <- if(is.logical(idx)) sum(idx) else length(idx)
+  all_samples <- matrix(samples$alpha[idx, s, iter_idx], nrow = p_idx)
   mu_tilde <- rowMeans(all_samples)
-  var_tilde <- var(t(all_samples))
+  var_tilde <- stats::cov(t(all_samples))
   return(list(eff_mu = mu_tilde, eff_var = var_tilde))
 }
 
