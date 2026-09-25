@@ -21,12 +21,24 @@ tune_stub <- function() {
   list(n0 = 10L, p_accept = rep(0.7, 3), alphaStar = 0.234, mix_adapt = 0.1,
        target_ESS = 30, ESS_scale = 0.5, max_particles = 500)
 }
+# `update_pm_settings` takes, per component, how many of its particles
+# outweighed the reference particle, plus the weight ESS. For a single
+# conditional-IS step over weights `w` (reference first, then each
+# component's particles in turn) those are:
+ups <- function(pm, w, particle_numbers, tune, n_pars) {
+  ends <- 1L + cumsum(particle_numbers)
+  starts <- ends - particle_numbers + 1L
+  better <- mapply(function(a, b) if (b >= a) sum(w[a:b] > w[1]) else 0,
+                   starts, ends)
+  EMC2:::update_pm_settings(pm, better, particle_numbers,
+                            sum(w)^2 / sum(w^2), tune, n_pars = n_pars)
+}
 
 test_that("the weight ESS is recorded whether or not the rule fires", {
   w <- c(0.5, runif(40))
-  fired <- EMC2:::update_pm_settings(pm_stub(gd_good = TRUE), 1L, w, rep(10, 4L),
+  fired <- ups(pm_stub(gd_good = TRUE), w, rep(10, 4L),
                                      tune_stub(), n_pars = 5L)
-  idle <- EMC2:::update_pm_settings(pm_stub(gd_good = FALSE), 1L, w, rep(10, 4L),
+  idle <- ups(pm_stub(gd_good = FALSE), w, rep(10, 4L),
                                     tune_stub(), n_pars = 5L)
   expect_false(is.null(fired$weight_ess))
   expect_false(is.null(idle$weight_ess))
@@ -39,15 +51,15 @@ test_that("the weight ESS follows the current cloud, not the first one", {
   # The settings carry over from one iteration to the next, so the value must
   # be replaced on every call -- including calls where the rule does not fire.
   tune <- tune_stub()
-  st <- EMC2:::update_pm_settings(pm_stub(gd_good = FALSE), 1L,
+  st <- ups(pm_stub(gd_good = FALSE),
                                   c(1, rep(1e-12, 40)), rep(10, 4L), tune,
                                   n_pars = 5L)
   expect_lt(st$weight_ess, 1.001)
-  st <- EMC2:::update_pm_settings(st, 1L, rep(1, 41), rep(10, 4L), tune,
+  st <- ups(st, rep(1, 41), rep(10, 4L), tune,
                                   n_pars = 5L)
   expect_equal(st$weight_ess, 41)
   st$gd_good <- TRUE
-  st <- EMC2:::update_pm_settings(st, 1L, rep(1, 21), rep(5, 4L), tune,
+  st <- ups(st, rep(1, 21), rep(5, 4L), tune,
                                   n_pars = 5L)
   expect_equal(st$weight_ess, 21)
 })
@@ -56,14 +68,14 @@ test_that("recording it does not change the adaptation", {
   # The particle count must follow the same rule it always did.
   w <- c(0.5, runif(60))
   tune <- tune_stub()
-  got <- EMC2:::update_pm_settings(pm_stub(), 1L, w, rep(15, 4L), tune,
+  got <- ups(pm_stub(), w, rep(15, 4L), tune,
                                    n_pars = 5L)
   ess <- sum(w)^2 / sum(w^2)
   want <- max(25, min(tune$max_particles,
                       round(100 * (tune$target_ESS / ess)^tune$ESS_scale)))
   expect_identical(got$n_particles, want)
   # And the floor and ceiling still bind.
-  tiny <- EMC2:::update_pm_settings(pm_stub(n_particles = 26), 1L,
+  tiny <- ups(pm_stub(n_particles = 26),
                                     c(1, rep(1e-12, 50)), rep(12, 4L), tune,
                                     n_pars = 5L)
   expect_gte(tiny$n_particles, 25)
@@ -131,7 +143,7 @@ test_that("a tune without search_width still adapts epsilon at every stage", {
     n_mix <- length(pm$mix)
     pm$iter <- unset$n0 + 1
     w <- c(0.5, runif(n_mix * 10))
-    got <- EMC2:::update_pm_settings(pm, 1L, w, rep(10, n_mix), unset,
+    got <- ups(pm, w, rep(10, n_mix), unset,
                                      n_pars = n_pars)
     # One epsilon per non-group proposal, all finite -- the shape
     # `new_particle()` indexes when it scales proposals 2..n_mix.

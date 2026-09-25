@@ -1195,123 +1195,150 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
     # A component centred on the current state makes the reference particle's
     # proposal density depend on itself, and conditional importance sampling is
-    # then not invariant for the posterior. Centre such components on an
-    # auxiliary point z ~ N(current, S_k) instead and target the extended
+    # then not invariant for the posterior. Such components are centred on an
+    # auxiliary point z ~ N(current, S_k) instead, targeting the extended
     # density pi(x) N(z | x, S_k): given z the proposal no longer depends on the
-    # reference particle, and the extra factor enters the weights below.
-    mus_i <- lapply(Mus, function(m) m[idx])
-    aux_k <- if (p_idx > 0) which(state_centred) else integer(0)
-    for (k in aux_k) {
-      mus_i[[k]] <- particle_draws(1L, mus_i[[k]], covar = NULL, R = Rs[[k]])[1L, ]
-    }
+    # reference particle, and the extra factor enters the weights.
+    #
+    # That factor would also penalise every independent-proposal particle far
+    # from z, so the update runs as two conditional-IS steps (a composition of
+    # invariant kernels): the independent components (group, chains, eff) with
+    # plain weights, then the state-centred components around the winner.
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
-    proposals <- vector("list", n_proposals +1)
-    proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
-    for(j in 1:n_proposals){
-      if (p_idx > 0) {
-        proposals[[j + 1]] <- particle_draws(
-          particle_numbers[j], mus_i[[j]], covar = NULL, R = Rs[[j]])
-      } else {
-        proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
-      }
-    }
-    proposals <- do.call(rbind, proposals)
-
-    if(any(!idx)){
-      proposals_full <- matrix(rep(subj_mu, each = nrow(proposals)),
-                                nrow = nrow(proposals),
-                                ncol = length(subj_mu))
-      proposals_full[, idx] <- proposals
-      colnames(proposals_full) <- names(subj_mu)
-      proposals <- proposals_full
-    } else{
-      colnames(proposals) <- names(subj_mu)
-    }
-
+    mix_i <- pm_settings[[i]]$mix
+    # The marginalise path carries grid state for the chosen particle, so it
+    # keeps the single combined step (still invariant, just less efficient).
+    two_step <- p_idx > 0 && is.null(marginalise) && any(state_centred) &&
+      any(!state_centred)
+    steps <- if (two_step) {
+      list(which(!state_centred), which(state_centred))
+    } else list(seq_len(n_proposals))
     shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
-
-    if (!is.null(marginalise)) {
-      warm_state <- pm_settings[[i]]$marg_warm
-      warm_arg <- if (!is.null(warm_state) && warm_state$backoff <= 0L) {
-        c(mode = warm_state$mode, sd = warm_state$sd)
-      } else NULL
-      pred_state <- pm_settings[[i]]$marg_pred
-      use_pred <- is.null(pred_state) || pred_state$backoff <= 0L
-      marg_spec <- marginalise
-      if (!use_pred) marg_spec$predict_mode <- FALSE
-      marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
-                                         data, model, marg_spec,
-                                         r_cores = r_cores, warm = warm_arg)
-      lw <- marginal_ll_from_grid(marg_grid)
-    } else if(tune$components[length(tune$components)] > 1){
-      lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                           component = shared_idx, r_cores = r_cores, s = s,
-                           varying = idx[is_shared])
-    } else{
-      lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                           r_cores = r_cores, s = s, varying = idx[is_shared])
-    }
-    lw_total <- lw + prev_ll - lw[1]
-    lp <- if (p_idx > 0) {
-      fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
-                         rooti = rootis[[1]], log_const = log_consts[[1]])
-    } else rep(0, nrow(proposals))
-    if(length(unq_components) > 1){
-      prior_density <- if (any(!marginal_idx)) {
-        gf <- group_chol$full
-        if (!is.null(gf) && !is.null(group_chol$ref) &&
-            identical(group_chol$ref, group_var) &&
-            identical(gf$keep, !marginal_idx)) {
-          if (isTRUE(gf$ok)) {
-            fast_dmvnorm_rooti(x = proposals[, !marginal_idx, drop = FALSE],
-                               mean = group_mu[!marginal_idx],
-                               rooti = gf$rooti, log_const = gf$log_const)
-          } else {
-            rep(-Inf, nrow(proposals))
-          }
+    ref <- subj_mu[idx]
+    ref_ll <- prev_ll
+    better <- numeric(n_proposals)
+    weight_ess <- 0
+    for (ks in steps) {
+      if (sum(particle_numbers[ks]) == 0) next
+      mus_i <- lapply(Mus, function(m) m[idx])
+      aux_k <- if (p_idx > 0) intersect(ks, which(state_centred)) else integer(0)
+      for (k in aux_k) {
+        mus_i[[k]] <- particle_draws(1L, ref, covar = NULL, R = Rs[[k]])[1L, ]
+      }
+      proposals <- vector("list", length(ks) + 1L)
+      proposals[[1]] <- matrix(ref, nrow = 1L)
+      for (j in seq_along(ks)) {
+        k <- ks[j]
+        if (p_idx > 0) {
+          proposals[[j + 1]] <- particle_draws(
+            particle_numbers[k], mus_i[[k]], covar = NULL, R = Rs[[k]])
         } else {
-          fast_dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
-                       mean = group_mu[!marginal_idx],
-                       sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE])
+          proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[k], ncol = 0L)
         }
+      }
+      proposals <- do.call(rbind, proposals)
+
+      if(any(!idx)){
+        proposals_full <- matrix(rep(subj_mu, each = nrow(proposals)),
+                                  nrow = nrow(proposals),
+                                  ncol = length(subj_mu))
+        proposals_full[, idx] <- proposals
+        colnames(proposals_full) <- names(subj_mu)
+        proposals <- proposals_full
+      } else{
+        colnames(proposals) <- names(subj_mu)
+      }
+
+      if (!is.null(marginalise)) {
+        warm_state <- pm_settings[[i]]$marg_warm
+        warm_arg <- if (!is.null(warm_state) && warm_state$backoff <= 0L) {
+          c(mode = warm_state$mode, sd = warm_state$sd)
+        } else NULL
+        pred_state <- pm_settings[[i]]$marg_pred
+        use_pred <- is.null(pred_state) || pred_state$backoff <= 0L
+        marg_spec <- marginalise
+        if (!use_pred) marg_spec$predict_mode <- FALSE
+        marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
+                                           data, model, marg_spec,
+                                           r_cores = r_cores, warm = warm_arg)
+        lw <- marginal_ll_from_grid(marg_grid)
+      } else if(tune$components[length(tune$components)] > 1){
+        lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+                             component = shared_idx, r_cores = r_cores, s = s,
+                             varying = idx[is_shared])
+      } else{
+        lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+                             r_cores = r_cores, s = s, varying = idx[is_shared])
+      }
+      lw_total <- lw + ref_ll - lw[1]
+      lp <- if (p_idx > 0) {
+        fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
+                           rooti = rootis[[1]], log_const = log_consts[[1]])
       } else rep(0, nrow(proposals))
-    } else{
-      prior_density <- lp
-    }
-    log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = n_proposals)
-    log_mix_comps[, 1] <- log(pm_settings[[i]]$mix[1]) + lp
-    for (k in 2:n_proposals) {
-      if (p_idx > 0) {
-        log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k]) + fast_dmvnorm_rooti(
+      if(length(unq_components) > 1){
+        prior_density <- if (any(!marginal_idx)) {
+          gf <- group_chol$full
+          if (!is.null(gf) && !is.null(group_chol$ref) &&
+              identical(group_chol$ref, group_var) &&
+              identical(gf$keep, !marginal_idx)) {
+            if (isTRUE(gf$ok)) {
+              fast_dmvnorm_rooti(x = proposals[, !marginal_idx, drop = FALSE],
+                                 mean = group_mu[!marginal_idx],
+                                 rooti = gf$rooti, log_const = gf$log_const)
+            } else {
+              rep(-Inf, nrow(proposals))
+            }
+          } else {
+            fast_dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
+                         mean = group_mu[!marginal_idx],
+                         sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE])
+          }
+        } else rep(0, nrow(proposals))
+      } else{
+        prior_density <- lp
+      }
+      log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = length(ks))
+      for (j in seq_along(ks)) {
+        k <- ks[j]
+        log_mix_comps[, j] <- log(mix_i[k]) + if (k == 1L) lp else if (p_idx > 0) {
+          fast_dmvnorm_rooti(
+            x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
+            rooti = rootis[[k]], log_const = log_consts[[k]])
+        } else 0
+      }
+      max_log <- apply(log_mix_comps, 1L, max)
+      lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
+      infnt_idx <- is.infinite(lm) | is.na(lm)
+      if (any(infnt_idx)) {
+        fin_vals <- lm[!infnt_idx]
+        lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
+      }
+      aux_density <- numeric(nrow(proposals))
+      for (k in aux_k) {
+        aux_density <- aux_density + fast_dmvnorm_rooti(
           x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
           rooti = rootis[[k]], log_const = log_consts[[k]])
-      } else {
-        log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k])
       }
-    }
-    max_log <- log_mix_comps[, 1L]
-    for (k in seq_len(n_proposals)[-1L]) {
-      max_log <- pmax(max_log, log_mix_comps[, k])
-    }
-    lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
-    infnt_idx <- is.infinite(lm) | is.na(lm)
-    if (any(infnt_idx)) {
-      fin_vals <- lm[!infnt_idx]
-      lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
-    }
-    aux_density <- numeric(nrow(proposals))
-    for (k in aux_k) {
-      aux_density <- aux_density + fast_dmvnorm_rooti(
-        x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
-        rooti = rootis[[k]], log_const = log_consts[[k]])
-    }
-    l <- lw_total + prior_density + aux_density - lm
-    weights <- exp(l - max(l))
-    idx_ll <- sample(x = sum(particle_numbers) + 1, size = 1, prob = weights)
+      l <- lw_total + prior_density + aux_density - lm
+      weights <- exp(l - max(l))
+      idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
 
-    out_lls[i] <- lw[idx_ll]
-    proposal_out[idx] <- proposals[idx_ll,idx]
+      offset <- 1L
+      for (k in ks) {
+        n_k <- particle_numbers[k]
+        if (n_k > 0) {
+          better[k] <- sum(weights[offset + seq_len(n_k)] > weights[1])
+          offset <- offset + n_k
+        }
+      }
+      weight_ess <- weight_ess + sum(weights)^2 / sum(weights^2)
+      ref <- proposals[idx_ll, idx]
+      ref_ll <- lw[idx_ll]
+    }
+
+    out_lls[i] <- ref_ll
+    proposal_out[idx] <- ref
     if (!is.null(marginalise)) {
       marg_nodes <- as.numeric(marg_grid$nodes[idx_ll, ])
       marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
@@ -1323,7 +1350,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         pred_state, attempted = use_pred && !isTRUE(marg_grid$warm_used == 1),
         used = isTRUE(marg_grid$pred_used == 1))
     }
-    pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
+    pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], better, particle_numbers,
+                                           weight_ess, tune, sum(idx))
     if (!is.null(marginalise)) {
       pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
         c(as.list(warm_next), warm_next_state)
@@ -1346,24 +1374,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 }
 
 
-update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_numbers,
-                               tune, n_pars) {
+# better[j]: component j's particles that outweighed the reference particle of
+# the conditional-IS step they were drawn in; weight_ess: summed over steps.
+update_pm_settings <- function(pm_settings, better, particle_numbers,
+                               weight_ess, tune, n_pars) {
   pm_settings$iter <- pm_settings$iter + 1
   if (pm_settings$iter > tune$n0) {
     pm_settings$proposal_counts <- pm_settings$proposal_counts + particle_numbers
-
-    old_weight <- weights[1]
-
-    offset <- 2
-    for (j in seq_along(particle_numbers)) {
-      n_j <- particle_numbers[j]
-      if (n_j > 0) {
-        draws_j <- weights[offset:(offset + n_j - 1)]
-        better_j <- sum(draws_j > old_weight)
-        pm_settings$acc_counts[j] <- pm_settings$acc_counts[j] + better_j
-        offset <- offset + n_j
-      }
-    }
+    pm_settings$acc_counts <- pm_settings$acc_counts + better
 
     acc_rates <- ifelse(pm_settings$proposal_counts > 0, pm_settings$acc_counts / pm_settings$proposal_counts, 0)
 
@@ -1402,7 +1420,7 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
 
 
     if (length(pm_settings$mix) > 3 && pm_settings$gd_good) {
-      ess <- sum(weights)^2 / sum(weights^2)
+      ess <- weight_ess
       desired_ess <- tune$target_ESS
       scale_factor <- (desired_ess / ess)^tune$ESS_scale
       new_num_particles <- round(pm_settings$n_particles * scale_factor)
@@ -1410,11 +1428,7 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     }
   }
 
-  pm_settings$weight_ess <- if (length(weights)) {
-    sum(weights)^2 / sum(weights^2)
-  } else {
-    NA_real_
-  }
+  pm_settings$weight_ess <- weight_ess
   return(pm_settings)
 }
 
