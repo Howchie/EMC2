@@ -1137,19 +1137,23 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     Mus <- list(group_mu, subj_mu)
     Sigmas <- list(group_var, group_var)
     sig_tags <- c("group", "group")
+    state_centred <- c(FALSE, TRUE)
     particle_multiplier <- 2
   } else if(stage == "burn"){
     Mus <- list(group_mu, subj_mu, subj_mu)
     Sigmas <- list(group_var, group_var, chains_var)
     sig_tags <- c("group", "group", "chains")
+    state_centred <- c(FALSE, TRUE, TRUE)
   } else if(stage == "adapt"){
     Mus <- list(group_mu, subj_mu, chains_mu)
     Sigmas <- list(group_var, chains_var, chains_var)
     sig_tags <- c("group", "chains", "chains")
+    state_centred <- c(FALSE, TRUE, FALSE)
   } else{
     Mus <- list(group_mu, subj_mu, chains_mu, eff_mu)
     Sigmas <- list(group_var, chains_var, chains_var, eff_var)
     sig_tags <- c("group", "chains", "chains", "eff")
+    state_centred <- c(FALSE, TRUE, FALSE, FALSE)
   }
   n_proposals <- length(Mus)
   cache_ok <- function(cache, ref_name, ref, idx) {
@@ -1189,13 +1193,24 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       }
     }
 
+    # A component centred on the current state makes the reference particle's
+    # proposal density depend on itself, and conditional importance sampling is
+    # then not invariant for the posterior. Centre such components on an
+    # auxiliary point z ~ N(current, S_k) instead and target the extended
+    # density pi(x) N(z | x, S_k): given z the proposal no longer depends on the
+    # reference particle, and the extra factor enters the weights below.
+    mus_i <- lapply(Mus, function(m) m[idx])
+    aux_k <- if (p_idx > 0) which(state_centred) else integer(0)
+    for (k in aux_k) {
+      mus_i[[k]] <- particle_draws(1L, mus_i[[k]], covar = NULL, R = Rs[[k]])[1L, ]
+    }
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     proposals <- vector("list", n_proposals +1)
     proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
     for(j in 1:n_proposals){
       if (p_idx > 0) {
         proposals[[j + 1]] <- particle_draws(
-          particle_numbers[j], Mus[[j]][idx], covar = NULL, R = Rs[[j]])
+          particle_numbers[j], mus_i[[j]], covar = NULL, R = Rs[[j]])
       } else {
         proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
       }
@@ -1269,7 +1284,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     for (k in 2:n_proposals) {
       if (p_idx > 0) {
         log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k]) + fast_dmvnorm_rooti(
-          x = proposals[, idx, drop = FALSE], mean = Mus[[k]][idx],
+          x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
           rooti = rootis[[k]], log_const = log_consts[[k]])
       } else {
         log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k])
@@ -1285,7 +1300,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       fin_vals <- lm[!infnt_idx]
       lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
     }
-    l <- lw_total + prior_density - lm
+    aux_density <- numeric(nrow(proposals))
+    for (k in aux_k) {
+      aux_density <- aux_density + fast_dmvnorm_rooti(
+        x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
+        rooti = rootis[[k]], log_const = log_consts[[k]])
+    }
+    l <- lw_total + prior_density + aux_density - lm
     weights <- exp(l - max(l))
     idx_ll <- sample(x = sum(particle_numbers) + 1, size = 1, prob = weights)
 
@@ -1421,7 +1442,11 @@ update_epsilon_continuous <- function(
 }
 
 numbers_from_proportion <- function(mix_proportion, n_particles = 1000) {
-  return(pmax(1, rmultinom(1, n_particles, mix_proportion)))
+  # Plain multinomial allocation: the particles are then iid draws from the
+  # mixture whose density weights them. Forcing a minimum of one particle per
+  # component (the old pmax(1, .)) over-samples low-weight components and
+  # biases the stationary distribution.
+  return(as.vector(rmultinom(1, n_particles, mix_proportion)))
 }
 
 
