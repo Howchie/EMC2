@@ -243,29 +243,31 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   }
 }
 
-.rfun_RDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
-                             posdrift = TRUE, correlated = FALSE,
-                             correlate = "times") {
+# RDMSWTN_TT / RDMSWTN_UT: `clock` names an entry of .rdmswtn_clocks.
+.rfun_RDMSWTN_clock <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                                posdrift = TRUE, correlated = FALSE,
+                                correlate = "times", clock) {
   drift_corr <- correlated && correlate == "drifts"
   if (.use_cpp_rfun()) {
+    code <- .rdmswtn_clocks[[clock]]$code
     res <- if (drift_corr) {
-      rrdmswtn_tt_drift_corr_cpp(pars, levels(lR), ok, posdrift)
+      rrdmswtn_clock_drift_corr_cpp(pars, levels(lR), ok, posdrift, code)
     } else if (correlated) {
-      rrdmswtn_tt_corr_cpp(pars, levels(lR), ok, posdrift)
+      rrdmswtn_clock_corr_cpp(pars, levels(lR), ok, posdrift, code)
     } else {
-      rrdmswtn_tt_cpp(pars, levels(lR), ok, posdrift)
+      rrdmswtn_clock_cpp(pars, levels(lR), ok, posdrift, code)
     }
     return(.rfun_cpp_pack(
       res, levels(lR), length(lR) / length(levels(lR))
     ))
   }
   if (drift_corr) {
-    rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift,
-                drift_override = .draw_correlated_drifts(pars, lR, ok, posdrift))
+    .rRDMSWTN_clock(lR, pars, ok = ok, posdrift = posdrift, clock = clock,
+                    drift_override = .draw_correlated_drifts(pars, lR, ok, posdrift))
   } else if (correlated) {
-    rRDMSWTN_TT_corr(lR, pars, ok = ok, posdrift = posdrift)
+    .rRDMSWTN_clock_corr(lR, pars, ok = ok, posdrift = posdrift, clock = clock)
   } else {
-    rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift)
+    .rRDMSWTN_clock(lR, pars, ok = ok, posdrift = posdrift, clock = clock)
   }
 }
 

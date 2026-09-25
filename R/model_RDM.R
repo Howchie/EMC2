@@ -1191,87 +1191,11 @@ RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
 #' @export
 RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE,
                        correlate = c("times", "drifts")) {
-  correlate <- match.arg(correlate)
-  drift_corr <- correlated && correlate == "drifts"
-  # See .rdmswtn_v_scale(): posdrift = FALSE samples v on the natural scale.
-  .v <- .rdmswtn_v_scale(posdrift)
-  p_types <- c(
-    v = .v$p_type, B = log(1), A = log(0), t0 = log(0),
-    s = log(1), sv = log(0), tau = log(1),
-    pContaminant = qnorm(0), pGuess = qnorm(0)
-  )
-  transform <- c(
-    v = .v$transform, B = "exp", A = "exp", t0 = "exp",
-    s = "exp", sv = "exp", tau = "exp",
-    pContaminant = "pnorm", pGuess = "pnorm"
-  )
-  minmax <- cbind(
-    v = .v$minmax, B = c(0, Inf), A = c(0, Inf),
-    t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
-    tau = c(1e-4, Inf), pContaminant = c(0.001, 0.999),
-    pGuess = c(0.001, 0.999)
-  )
-  exception <- c(A = 0, v = 0, sv = 0, pContaminant = 0, pGuess = 0,t0=0)
-  if (correlated) {
-    p_types <- c(p_types, rho = qnorm(0.5))
-    transform <- c(transform, rho = "pnorm")
-    rho_bound_eps <- 2 * .Machine$double.eps
-    minmax <- cbind(
-      minmax, rho = c(-.99 - rho_bound_eps, .99 + rho_bound_eps)
-    )
-    exception <- c(exception, rho = 0)
-  }
-  transform_spec <- list(func = transform)
-  if (correlated) {
-    transform_spec$lower <- c(rho = -1)
-    transform_spec$upper <- c(rho = 1)
-  }
-  list(
-    type = "RACE",
-    c_name = paste0(
-      if (posdrift) "RDMSWTN_TT" else "RDMSWTN_TT_IO",
-      if (!correlated) "" else if (drift_corr) "_CORRD" else "_CORR"
-    ),
-    correlated = correlated,
-    correlation_type = if (!correlated) NULL else if (drift_corr)
-      "rdmswtn_drift_factor" else "rdmswtn_gaussian_copula",
-    p_types = p_types,
-    p_types_canonical = c("v", "B", "A", "t0", "s", "sv", "tau"),
-    transform = transform_spec,
-    bound = list(minmax = minmax, exception = exception),
-    Ttransform = function(pars, dadm) {
-      if (drift_corr) {
-        pars <- .apply_drift_factor_rho(pars, dadm, sv = pars[, "sv"],
-                                        model = "RDMSWTN_TTcorr")
-      } else if (correlated) {
-        .validate_rdmswtn_corr_rows(
-          pars[, "rho"], dadm = dadm, posdrift = posdrift, sv = pars[, "sv"]
-        )
-      }
-      canonical <- c("v", "B", "A", "t0", "s", "sv", "tau")
-      extra <- pars[, setdiff(colnames(pars), canonical), drop = FALSE]
-      pars <- cbind(pars[, canonical, drop = FALSE], extra)
-      cbind(pars, b = pars[, "B"] + pars[, "A"])
-    },
-    rfun = function(data = NULL, pars) {
-      ok <- attr(pars, "ok")
-      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
-      .rfun_RDMSWTN_TT(
-        data$lR, pars, ok = ok, posdrift = posdrift,
-        correlated = correlated, correlate = correlate
-      )
-    },
-    dfun = function(rt, pars) {
-      dRDMSWTN_TT(rt, pars, posdrift = posdrift)
-    },
-    pfun = function(rt, pars) {
-      pRDMSWTN_TT(rt, pars, posdrift = posdrift)
-    },
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
-      stop("RDMSWTN_TT likelihoods are implemented only in the compiled race path; use fast_path=TRUE.")
-    }
-  )
+  .rdmswtn_clock_model("exhaustion", posdrift = posdrift,
+                       correlated = correlated,
+                       correlate = match.arg(correlate))
 }
+
 
 #' Correlated Time-Changed RDMSWTN Race
 #'
@@ -1304,7 +1228,236 @@ RDMSWTN_TTcorr <- function(posdrift = TRUE,
              correlate = match.arg(correlate))
 }
 
-.rdmswtn_tt_pars <- function(rt, pars) {
+#' Accelerating-clock RDMSWTN race
+#'
+#' `RDMSWTN_UT()` runs each ordinary RDMSWTN accumulator on an accelerating
+#' operational clock, a rising within-trial gain ("urgency"). For decision
+#' time `x = t - t0`, operational time is `q(x) = x + u*x^2/2` with
+#' `clock = "linear"` (gain `1 + u*x`, doubling after `1/u` seconds) or
+#' `q(x) = expm1(u*x)/u` with `clock = "exponential"` (gain `exp(u*x)`).
+#' Both clocks are the identity at `u = 0`, which is exactly [RDMSWTN()].
+#'
+#' The gain multiplies the drift and every infinitesimal noise variance, so
+#' the diffusion standard deviation scales with its square root:
+#' `dX = v*theta(x) dx + s*sqrt(theta(x)) dW`. That is an exact time change,
+#' `F(t) = F_RDMSWTN(q(x))` and `f(t) = f_RDMSWTN(q(x)) * theta(x)`, so the
+#' clock warps the RT axis and leaves choice probabilities unchanged. Long
+#' decisions shorten most and fast ones barely move. This is distinct from
+#' urgency gating, where the decision variable itself is multiplied by a
+#' gain against a fixed criterion. Gating equals a collapsing boundary and
+#' does change choices; neither clock here is a collapsing-bound shape.
+#' A trend on `s` (for example a rate-dependent noise law) composes with the
+#' clock unchanged. Start-point range `A` and drift variability `sv` act on
+#' the ordinary process and compose exactly.
+#'
+#' Positive drifts have no omission mass, and with `posdrift = FALSE` the
+#' defective mass is that of [RDMSWTN()], because the clock is unbounded.
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability. With `correlated = TRUE`,
+#' `rho` follows the same contract as [RDMSWTN()]; [RDMSWTN_UTcorr()] takes
+#' the same `clock` argument.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | exp (identity for `posdrift = FALSE`) | \[0, Inf\] (\[-Inf, Inf\] for IO) | log(1) (1 for IO) | | Mean drift rate. |
+#' | *B* | exp | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to threshold. |
+#' | *A* | exp | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | exp | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | exp | \[0, Inf\] | log(1) | | Within-trial diffusion SD. |
+#' | *sv* | exp | \[0, Inf\] | log(0) | | Between-trial drift SD. |
+#' | *u* | exp | \[0, Inf\] | log(0) | | Clock rate (1/s): gain `1 + u*x` (linear) or `exp(u*x)` (exponential). |
+#'
+#' @section Choosing the clock:
+#' The clock shape is chosen when the model is constructed, through the
+#' `clock` argument, and is fixed for the whole fit:
+#'
+#' * `RDMSWTN_UT()` or `RDMSWTN_UT(clock = "linear")` is the linear clock,
+#'   the default. The gain `1 + u*x` rises by `u` per second of decision
+#'   time and doubles after `1/u` seconds. It shortens slow tails moderately.
+#' * `RDMSWTN_UT(clock = "exponential")` is the exponential clock. The gain
+#'   `exp(u*x)` doubles every `log(2)/u` seconds, so slow tails are cut much
+#'   harder.
+#'
+#' Both shapes use the same parameter `u` (inverse seconds, sampled on the
+#' log scale, default 0), so a design written for one runs unchanged under
+#' the other. The same `u` means different things, though: at `u = 1` the
+#' linear gain after 2 s is 3 while the exponential gain is `exp(2)`, about
+#' 7.4. Estimates of `u` are therefore not comparable across clocks. To
+#' compare the shapes, fit each model separately and compare the fits (for
+#' example by information criteria). The shape cannot vary by condition
+#' within one model; the rate `u` can, through the design.
+#'
+#' The clock is per accumulator row, so the design may let `u` vary by
+#' accumulator. One gain per trial, shared by all accumulators (`u ~ 1`, or
+#' a condition such as `u ~ Load`), is the natural default: only a shared
+#' clock leaves choice probabilities unchanged. With `u` omitted from the
+#' formula it stays at its default of 0, and the model is exactly
+#' [RDMSWTN()].
+#'
+#' @param posdrift Truncate drift below zero when `TRUE`.
+#' @param correlated Include one correlated accumulator pair when `TRUE`.
+#' @param correlate `"times"` for a Gaussian finishing-time copula or
+#'   `"drifts"` for correlated between-trial drift draws.
+#' @param clock Shape of the urgency clock: `"linear"` (default, gain
+#'   `1 + u*x`) or `"exponential"` (gain `exp(u*x)`). Fixed for the fit; see
+#'   the section "Choosing the clock".
+#' @return A model list compatible with [design()].
+#' @examples
+#' # Linear urgency (the default), one gain per trial:
+#' design_lin <- design(
+#'   factors = list(subjects = 1, S = c("left", "right")),
+#'   Rlevels = c("left", "right"),
+#'   matchfun = function(d) d$S == d$lR,
+#'   formula = list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, u ~ 1),
+#'   constants = c(s = log(1)),
+#'   model = RDMSWTN_UT(), report_p_vector = FALSE
+#' )
+#' # The same design under the exponential clock:
+#' design_exp <- design(
+#'   factors = list(subjects = 1, S = c("left", "right")),
+#'   Rlevels = c("left", "right"),
+#'   matchfun = function(d) d$S == d$lR,
+#'   formula = list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, u ~ 1),
+#'   constants = c(s = log(1)),
+#'   model = RDMSWTN_UT(clock = "exponential"), report_p_vector = FALSE
+#' )
+#' @export
+RDMSWTN_UT <- function(posdrift = TRUE, correlated = FALSE,
+                       correlate = c("times", "drifts"),
+                       clock = c("linear", "exponential")) {
+  .rdmswtn_clock_model(match.arg(clock), posdrift = posdrift,
+                       correlated = correlated,
+                       correlate = match.arg(correlate))
+}
+
+
+#' Correlated accelerating-clock RDMSWTN race
+#'
+#' Convenience constructor for `RDMSWTN_UT(correlated = TRUE)`. Choose the
+#' clock shape with `clock`, e.g. `RDMSWTN_UTcorr(clock = "exponential")`.
+#' The parameter table and the section "Choosing the clock" are in
+#' [RDMSWTN_UT()].
+#' @inheritParams RDMSWTN_UT
+#' @return A model list compatible with [design()].
+#' @export
+RDMSWTN_UTcorr <- function(posdrift = TRUE,
+                           correlate = c("times", "drifts"),
+                           clock = c("linear", "exponential")) {
+  RDMSWTN_UT(posdrift = posdrift, correlated = TRUE,
+             correlate = match.arg(correlate), clock = match.arg(clock))
+}
+
+# --- RDMSWTN under an operational clock -------------------------------------
+# RDMSWTN_TT (finite exhaustion clock, parameter tau) and RDMSWTN_UT (linear or
+# exponential urgency clock, parameter u) are exact deterministic time changes
+# of the ordinary RDMSWTN accumulator: F(t) = F_RDMSWTN(q(t - t0)).  One
+# constructor, one set of analytic functions and one pair of simulators serve
+# every clock; the clock mathematics lives in src/time_clock.h, and `code` is
+# its emc2tw::Clock value.  The compiled likelihood wraps the ordinary RDMSWTN
+# kernels (see the RDMSWTN branch of src/race_dispatch.cpp).
+.rdmswtn_clocks <- list(
+  exhaustion = list(code = 3L, par = "tau", model = "RDMSWTN_TT",
+                    c_name = "RDMSWTN_TT", suffix = "",
+                    p_type = log(1), minmax = c(1e-4, Inf), exception = NULL),
+  linear = list(code = 1L, par = "u", model = "RDMSWTN_UT",
+                c_name = "RDMSWTN_UT", suffix = "",
+                p_type = log(0), minmax = c(0, Inf), exception = c(u = 0)),
+  exponential = list(code = 2L, par = "u", model = "RDMSWTN_UT",
+                     c_name = "RDMSWTN_UT", suffix = "_EXP",
+                     p_type = log(0), minmax = c(0, Inf), exception = c(u = 0))
+)
+
+.rdmswtn_clock_model <- function(clock, posdrift, correlated, correlate) {
+  spec <- .rdmswtn_clocks[[clock]]
+  par <- spec$par
+  drift_corr <- correlated && correlate == "drifts"
+  canonical <- c("v", "B", "A", "t0", "s", "sv", par)
+  # See .rdmswtn_v_scale(): posdrift = FALSE samples v on the natural scale.
+  .v <- .rdmswtn_v_scale(posdrift)
+  p_types <- c(
+    v = .v$p_type, B = log(1), A = log(0), t0 = log(0),
+    s = log(1), sv = log(0), stats::setNames(spec$p_type, par),
+    pContaminant = qnorm(0), pGuess = qnorm(0)
+  )
+  transform <- c(
+    v = .v$transform, B = "exp", A = "exp", t0 = "exp",
+    s = "exp", sv = "exp", stats::setNames("exp", par),
+    pContaminant = "pnorm", pGuess = "pnorm"
+  )
+  minmax <- cbind(
+    v = .v$minmax, B = c(0, Inf), A = c(0, Inf),
+    t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
+    spec$minmax, pContaminant = c(0.001, 0.999),
+    pGuess = c(0.001, 0.999)
+  )
+  colnames(minmax)[7] <- par
+  exception <- c(spec$exception, A = 0, v = 0, sv = 0, pContaminant = 0,
+                 pGuess = 0, t0 = 0)
+  if (correlated) {
+    p_types <- c(p_types, rho = qnorm(0.5))
+    transform <- c(transform, rho = "pnorm")
+    rho_bound_eps <- 2 * .Machine$double.eps
+    minmax <- cbind(
+      minmax, rho = c(-.99 - rho_bound_eps, .99 + rho_bound_eps)
+    )
+    exception <- c(exception, rho = 0)
+  }
+  transform_spec <- list(func = transform)
+  if (correlated) {
+    transform_spec$lower <- c(rho = -1)
+    transform_spec$upper <- c(rho = 1)
+  }
+  corr_model <- paste0(spec$model, "corr")
+  out <- list(
+    type = "RACE",
+    c_name = paste0(
+      spec$c_name, if (posdrift) "" else "_IO", spec$suffix,
+      if (!correlated) "" else if (drift_corr) "_CORRD" else "_CORR"
+    ),
+    correlated = correlated,
+    correlation_type = if (!correlated) NULL else if (drift_corr)
+      "rdmswtn_drift_factor" else "rdmswtn_gaussian_copula",
+    p_types = p_types,
+    p_types_canonical = canonical,
+    transform = transform_spec,
+    bound = list(minmax = minmax, exception = exception),
+    Ttransform = function(pars, dadm) {
+      if (drift_corr) {
+        pars <- .apply_drift_factor_rho(pars, dadm, sv = pars[, "sv"],
+                                        model = corr_model)
+      } else if (correlated) {
+        .validate_rdmswtn_corr_rows(
+          pars[, "rho"], dadm = dadm, posdrift = posdrift, sv = pars[, "sv"]
+        )
+      }
+      extra <- pars[, setdiff(colnames(pars), canonical), drop = FALSE]
+      pars <- cbind(pars[, canonical, drop = FALSE], extra)
+      cbind(pars, b = pars[, "B"] + pars[, "A"])
+    },
+    rfun = function(data = NULL, pars) {
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      .rfun_RDMSWTN_clock(
+        data$lR, pars, ok = ok, posdrift = posdrift,
+        correlated = correlated, correlate = correlate, clock = clock
+      )
+    },
+    dfun = function(rt, pars) {
+      dRDMSWTN_clock(rt, pars, clock = clock, posdrift = posdrift)
+    },
+    pfun = function(rt, pars) {
+      pRDMSWTN_clock(rt, pars, clock = clock, posdrift = posdrift)
+    },
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      stop(spec$model, " likelihoods are implemented only in the compiled race path; use fast_path=TRUE.")
+    }
+  )
+  if (spec$model == "RDMSWTN_UT") out$clock <- clock
+  out
+}
+
+.rdmswtn_clock_pars <- function(rt, pars, clock) {
+  spec <- .rdmswtn_clocks[[clock]]
   if (is.null(dim(pars)) || (nrow(pars) == 1L && length(rt) > 1L)) {
     original_names <- names(pars)
     if (is.null(original_names)) original_names <- colnames(pars)
@@ -1318,49 +1471,104 @@ RDMSWTN_TTcorr <- function(posdrift = TRUE,
       all(c("B", "A") %in% colnames(pars))) {
     pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
   }
-  required <- c("v", "b", "A", "t0", "sv", "tau")
-  if (!all(required %in% colnames(pars))) {
-    stop("RDMSWTN_TT requires parameter columns ", paste(required, collapse = ", "), ".")
-  }
+  .check_rdmswtn_clock_cols(pars, spec)
   if (!"s" %in% colnames(pars)) pars <- cbind(pars, s = 1)
   list(rt = rt, pars = pars)
 }
 
-dRDMSWTN_TT <- function(rt, pars, posdrift = TRUE, log = FALSE) {
-  input <- .rdmswtn_tt_pars(rt, pars)
+.check_rdmswtn_clock_cols <- function(pars, spec) {
+  required <- c("v", "b", "A", "t0", "sv", spec$par)
+  if (!all(required %in% colnames(pars))) {
+    stop(spec$model, " requires parameter columns ",
+         paste(required, collapse = ", "), ".")
+  }
+}
+
+dRDMSWTN_clock <- function(rt, pars, clock, posdrift = TRUE, log = FALSE) {
+  input <- .rdmswtn_clock_pars(rt, pars, clock)
   pars <- input$pars
-  dRDMSWTN_TT_cpp(
+  spec <- .rdmswtn_clocks[[clock]]
+  dRDMSWTN_clock_cpp(
     input$rt, pars[, "v"], pars[, "b"], pars[, "A"], pars[, "s"],
-    pars[, "t0"], pars[, "sv"], pars[, "tau"],
+    pars[, "t0"], pars[, "sv"], pars[, spec$par], spec$code,
     log_out = log, posdrift = posdrift
   )
 }
 
-pRDMSWTN_TT <- function(rt, pars, posdrift = TRUE, log.p = FALSE) {
-  input <- .rdmswtn_tt_pars(rt, pars)
+pRDMSWTN_clock <- function(rt, pars, clock, posdrift = TRUE, log.p = FALSE) {
+  input <- .rdmswtn_clock_pars(rt, pars, clock)
   pars <- input$pars
-  pRDMSWTN_TT_cpp(
+  spec <- .rdmswtn_clocks[[clock]]
+  pRDMSWTN_clock_cpp(
     input$rt, pars[, "v"], pars[, "b"], pars[, "A"], pars[, "s"],
-    pars[, "t0"], pars[, "sv"], pars[, "tau"],
+    pars[, "t0"], pars[, "sv"], pars[, spec$par], spec$code,
     log_out = log.p, posdrift = posdrift
   )
 }
 
-.rdmswtn_tt_qinv_R <- function(u, tau) {
-  2 * u / (1 + sqrt(pmax(0, 1 - 2 * u / tau)))
+dRDMSWTN_TT <- function(rt, pars, posdrift = TRUE, log = FALSE)
+  dRDMSWTN_clock(rt, pars, "exhaustion", posdrift = posdrift, log = log)
+
+pRDMSWTN_TT <- function(rt, pars, posdrift = TRUE, log.p = FALSE)
+  pRDMSWTN_clock(rt, pars, "exhaustion", posdrift = posdrift, log.p = log.p)
+
+dRDMSWTN_UT <- function(rt, pars, posdrift = TRUE, log = FALSE,
+                        clock = c("linear", "exponential"))
+  dRDMSWTN_clock(rt, pars, match.arg(clock), posdrift = posdrift, log = log)
+
+pRDMSWTN_UT <- function(rt, pars, posdrift = TRUE, log.p = FALSE,
+                        clock = c("linear", "exponential"))
+  pRDMSWTN_clock(rt, pars, match.arg(clock), posdrift = posdrift, log.p = log.p)
+
+# Resolve a race from per-row finishing times (rows grouped by accumulator
+# within trial); +Inf everywhere in a trial is an omission.
+.resolve_rdmswtn_race <- function(finish, lR) {
+  nr <- length(levels(lR))
+  n_trials <- length(finish) / nr
+  dt <- matrix(finish, nrow = nr)
+  bad <- colSums(is.finite(dt)) == 0L
+  response <- max.col(-t(dt), ties.method = "first")
+  pick <- cbind(response, seq_len(n_trials))
+  out <- data.frame(
+    R = factor(levels(lR)[response], levels = levels(lR)),
+    rt = dt[pick]
+  )
+  out$R[bad] <- NA
+  out$rt[bad] <- Inf
+  .apply_timed_guess_winner(out, levels(lR))
 }
 
-rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
-                        posdrift = TRUE, drift_override = NULL) {
+# R reference for draw_pair_copula_uniforms() in src/model_rng.cpp: one
+# uniform per row, then a correlated bivariate-normal pair for the (at most
+# two) active rows of each trial that share one signed nonzero rho.
+.rdmswtn_pair_copula_uniforms <- function(rho, ok, nr, model) {
+  u <- runif(length(rho))
+  for (tr in seq_len(length(rho) / nr)) {
+    rows <- ((tr - 1L) * nr + 1L):(tr * nr)
+    pair <- rows[ok[rows] & abs(rho[rows]) > 1e-12]
+    if (length(pair) > 2L ||
+        (length(pair) == 2L && abs(rho[pair[1L]] - rho[pair[2L]]) > 1e-12)) {
+      stop(model, " requires at most two active rows with the same signed nonzero rho in each trial.")
+    }
+    if (length(pair) == 2L) {
+      z1 <- rnorm(1)
+      z2 <- rho[pair[1L]] * z1 +
+        sqrt(max(0, 1 - rho[pair[1L]]^2)) * rnorm(1)
+      u[pair] <- pnorm(c(z1, z2))
+    }
+  }
+  u
+}
+
+.rRDMSWTN_clock <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                            posdrift = TRUE, drift_override = NULL, clock) {
+  spec <- .rdmswtn_clocks[[clock]]
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   nr <- length(levels(lR))
   if (nr < 1L || nrow(pars) %% nr != 0L) {
-    stop("RDMSWTN_TT requires rows grouped by accumulator within trial.")
+    stop(spec$model, " requires rows grouped by accumulator within trial.")
   }
-  required <- c("v", "b", "A", "t0", "sv", "tau")
-  if (!all(required %in% colnames(pars))) {
-    stop("RDMSWTN_TT requires parameter columns ", paste(required, collapse = ", "), ".")
-  }
+  .check_rdmswtn_clock_cols(pars, spec)
   if (!"s" %in% colnames(pars)) pars <- cbind(pars, s = 1)
   finish <- rep(Inf, nrow(pars))
   active <- which(ok)
@@ -1371,58 +1579,48 @@ rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
       s = pars[active, "s"], k = 0, posdrift = posdrift,
       drift_override = if (is.null(drift_override)) NULL else drift_override[active]
     )
-    Q <- pars[active, "tau"] / 2
-    respond <- is.finite(operational) & operational <= Q
+    respond <- is.finite(operational)
     if (any(respond)) {
       rows <- active[respond]
       finish[rows] <- pars[rows, "t0"] +
-        .rdmswtn_tt_qinv_R(operational[respond], pars[rows, "tau"])
+        rdmswtn_clock_qinv(operational[respond], pars[rows, spec$par], spec$code)
     }
   }
-  n_trials <- nrow(pars) / nr
-  dt <- matrix(finish, nrow = nr)
-  bad <- colSums(is.finite(dt)) == 0L
-  response <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(response, seq_len(n_trials))
-  out <- data.frame(
-    R = factor(levels(lR)[response], levels = levels(lR)),
-    rt = dt[pick]
-  )
-  out$R[bad] <- NA
-  out$rt[bad] <- Inf
-  .apply_timed_guess_winner(out, levels(lR))
+  .resolve_rdmswtn_race(finish, lR)
 }
 
-.qRDMSWTN_TT_operational <- function(u, Q, pars, posdrift = TRUE) {
-  if (u <= 0) return(0)
-  FQ <- prdmswtn(
-    Q, pars[1L, "v"], pars[1L, "b"], pars[1L, "A"],
-    pars[1L, "s"], 0, pars[1L, "sv"], 0, 0,
-    posdrift = posdrift
+# Operational-time quantile of one accumulator; mirrors
+# rdmswtn_operational_quantile() in src/model_rng.cpp.
+.qRDMSWTN_clock_operational <- function(u, Q, pars, posdrift = TRUE) {
+  ordinary <- pars
+  ordinary[, "t0"] <- 0
+  if (!is.finite(Q)) {
+    ordinary <- cbind(ordinary, lambda_g = 0, lambda_k = 0)
+    return(.qRDMSWTN_row(u, ordinary, posdrift = posdrift))
+  }
+  cdf <- function(x) prdmswtn(
+    x, pars[1L, "v"], pars[1L, "b"], pars[1L, "A"],
+    pars[1L, "s"], 0, pars[1L, "sv"], 0, 0, posdrift = posdrift
   )
+  FQ <- cdf(Q)
+  if (u > FQ) return(Inf)
   if (u >= FQ) return(Q)
-  stats::uniroot(
-    function(x) {
-      prdmswtn(
-        x, pars[1L, "v"], pars[1L, "b"], pars[1L, "A"],
-        pars[1L, "s"], 0, pars[1L, "sv"], 0, 0,
-        posdrift = posdrift
-      ) - u
-    },
-    c(0, Q), tol = 1e-10
-  )$root
+  if (u <= 0) return(0)
+  stats::uniroot(function(x) cdf(x) - u, c(0, Q), tol = 1e-10)$root
 }
 
-rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
-                             posdrift = TRUE) {
+.rRDMSWTN_clock_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                                 posdrift = TRUE, clock) {
+  spec <- .rdmswtn_clocks[[clock]]
+  model <- paste0(spec$model, "corr")
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (!"rho" %in% colnames(pars)) {
-    stop("RDMSWTN_TTcorr requires parameter column 'rho'.")
+    stop(model, " requires parameter column 'rho'.")
   }
   if (!"s" %in% colnames(pars)) pars <- cbind(pars, s = 1)
   nr <- length(levels(lR))
   if (nr < 1L || nrow(pars) %% nr != 0L) {
-    stop("RDMSWTN_TTcorr requires rows grouped by accumulator within trial.")
+    stop(model, " requires rows grouped by accumulator within trial.")
   }
   rho <- pars[, "rho"]
   # posdrift = TRUE here runs the shape checks only; the IO/sv rule is applied
@@ -1430,48 +1628,46 @@ rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
   .validate_rdmswtn_corr_rows(rho, posdrift = TRUE)
   .check_rdmswtn_corr_io_sv(ok & abs(rho) > 1e-12, posdrift, pars[, "sv"])
   if (!any(ok & abs(rho) > 1e-12)) {
-    return(rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift))
+    return(.rRDMSWTN_clock(lR, pars, ok = ok, posdrift = posdrift,
+                           clock = clock))
   }
-  n_trials <- nrow(pars) / nr
-  u <- runif(nrow(pars))
-  for (tr in seq_len(n_trials)) {
-    rows <- ((tr - 1L) * nr + 1L):(tr * nr)
-    pair <- rows[ok[rows] & abs(rho[rows]) > 1e-12]
-    if (length(pair) > 2L ||
-        (length(pair) == 2L && abs(rho[pair[1L]] - rho[pair[2L]]) > 1e-12)) {
-      stop("RDMSWTN_TTcorr requires at most two active rows with one signed nonzero rho.")
-    }
-    if (length(pair) == 2L) {
-      z1 <- rnorm(1)
-      z2 <- rho[pair[1L]] * z1 +
-        sqrt(max(0, 1 - rho[pair[1L]]^2)) * rnorm(1)
-      u[pair] <- pnorm(c(z1, z2))
-    }
-  }
+  copula_u <- .rdmswtn_pair_copula_uniforms(rho, ok, nr, model)
   finish <- rep(Inf, nrow(pars))
   for (r in which(ok)) {
-    Q <- pars[r, "tau"] / 2
-    FQ <- pRDMSWTN_TT(Inf, pars[r, , drop = FALSE], posdrift = posdrift)
-    if (u[r] <= FQ) {
-      operational <- .qRDMSWTN_TT_operational(
-        u[r], Q, pars[r, , drop = FALSE], posdrift = posdrift
-      )
+    p <- pars[r, spec$par]
+    Q <- if (clock == "exhaustion" && is.finite(p)) p / 2 else Inf
+    operational <- .qRDMSWTN_clock_operational(
+      copula_u[r], Q, pars[r, , drop = FALSE], posdrift = posdrift
+    )
+    if (is.finite(operational))
       finish[r] <- pars[r, "t0"] +
-        .rdmswtn_tt_qinv_R(operational, pars[r, "tau"])
-    }
+        rdmswtn_clock_qinv(operational, p, spec$code)
   }
-  dt <- matrix(finish, nrow = nr)
-  bad <- colSums(is.finite(dt)) == 0L
-  response <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(response, seq_len(n_trials))
-  out <- data.frame(
-    R = factor(levels(lR)[response], levels = levels(lR)),
-    rt = dt[pick]
-  )
-  out$R[bad] <- NA
-  out$rt[bad] <- Inf
-  .apply_timed_guess_winner(out, levels(lR))
+  .resolve_rdmswtn_race(finish, lR)
 }
+
+rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                        posdrift = TRUE, drift_override = NULL)
+  .rRDMSWTN_clock(lR, pars, ok = ok, posdrift = posdrift,
+                  drift_override = drift_override, clock = "exhaustion")
+
+rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                             posdrift = TRUE)
+  .rRDMSWTN_clock_corr(lR, pars, ok = ok, posdrift = posdrift,
+                       clock = "exhaustion")
+
+rRDMSWTN_UT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                        posdrift = TRUE, drift_override = NULL,
+                        clock = c("linear", "exponential"))
+  .rRDMSWTN_clock(lR, pars, ok = ok, posdrift = posdrift,
+                  drift_override = drift_override, clock = match.arg(clock))
+
+rRDMSWTN_UT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                             posdrift = TRUE,
+                             clock = c("linear", "exponential"))
+  .rRDMSWTN_clock_corr(lR, pars, ok = ok, posdrift = posdrift,
+                       clock = match.arg(clock))
+
 
 #' RDMSWTN Logical Rules Model
 #'
@@ -1805,38 +2001,11 @@ rRDMSWTN_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
                     erlang_type = "none", posdrift = posdrift))
   }
 
-  n_trials <- nrow(pars) / nr
-  u <- runif(nrow(pars))
-  for (tr in seq_len(n_trials)) {
-    rows <- ((tr - 1L) * nr + 1L):(tr * nr)
-    pair <- rows[ok[rows] & abs(rho[rows]) > 1e-12]
-    if (length(pair) > 2L ||
-        (length(pair) == 2L && abs(rho[pair[1L]] - rho[pair[2L]]) > 1e-12)) {
-      stop("RDMSWTNcorr requires at most two active rows with the same signed nonzero rho in each trial.")
-    }
-    if (length(pair) == 2L) {
-      z1 <- rnorm(1)
-      z2 <- rho[pair[1L]] * z1 +
-        sqrt(max(0, 1 - rho[pair[1L]]^2)) * rnorm(1)
-      u[pair] <- pnorm(c(z1, z2))
-    }
-  }
-
+  u <- .rdmswtn_pair_copula_uniforms(rho, ok, nr, "RDMSWTNcorr")
   finish <- rep(Inf, nrow(pars))
-  active <- which(ok)
-  for (r in active) {
+  for (r in which(ok)) {
     finish[r] <- .qRDMSWTN_row(u[r], pars[r, , drop = FALSE],
                                posdrift = posdrift)
   }
-  dt <- matrix(finish, nrow = nr)
-  bad <- colSums(!is.infinite(dt)) == 0L
-  response <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(response, seq_len(n_trials))
-  out <- data.frame(
-    R = factor(levels(lR)[response], levels = levels(lR)),
-    rt = dt[pick]
-  )
-  out$R[bad] <- NA
-  out$rt[bad] <- Inf
-  .apply_timed_guess_winner(out, levels(lR))
+  .resolve_rdmswtn_race(finish, lR)
 }

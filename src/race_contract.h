@@ -83,21 +83,26 @@ typedef void (*RaceLogSAtTFun)(double t, const double* const* cols,
                                int n_rows_total, int n_lR, int n_par,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out);
-// Operational-time warp (Math/ballistic-time.md).  The warp is installed as a
-// generic outer layer over a ballistic model's five adapter entry points:
-// configure_time_warp_context() moves the model's own pointers into base_*
-// here and replaces the adapter's with the tw_* wrappers in time_warp.h.  The
-// kernels themselves are untouched -- they keep reading tt = rt - t0 and are
-// simply handed s = c_eta(tt) instead of tt.
+// Operational-time warp.  The warp is installed as a generic outer layer over
+// a model's five adapter entry points: configure_time_warp_context() moves the
+// model's own pointers into base_* here and replaces the adapter's with the
+// tw_* wrappers in time_warp.h.  The kernels themselves are untouched -- they
+// keep reading tt = rt - t0 and are simply handed q(tt) instead of tt.  The
+// clock (time_clock.h) is the ballistic power warp on `eta` by default
+// (Math/ballistic-time.md); RDMSWTN_TT and RDMSWTN_UT are the ordinary RDMSWTN
+// kernels under their exhaustion/urgency clocks.
 struct TimeWarpPlan {
-  int eta_index = -1;                       // keep_names position of `eta`; -1 = absent
-  bool supported = false;                   // set true only by ballistic dispatch branches
+  int par_index = -1;                       // keep_names position of the clock parameter; -1 = absent
+  int clock = 0;                            // emc2tw::Clock; 0 = CLOCK_POWER
+  const char* par_name = "eta";             // clock column, resolved by name
+  bool required = false;                    // the clock is the model (TT/UT), not an add-on
+  bool supported = false;                   // set true only by dispatch branches that allow it
   RacePdf1Fun     base_pdf1  = nullptr;
   RaceCdf1Fun     base_cdf1  = nullptr;
   RaceRawFun      base_d_raw = nullptr;
   RaceRawFun      base_p_raw = nullptr;
   RaceLogSAtTFun  base_logS  = nullptr;
-  bool installed() const { return eta_index >= 0 && base_pdf1 != nullptr; }
+  bool installed() const { return par_index >= 0 && base_pdf1 != nullptr; }
 };
 
 struct gsl_race_params_scalar {

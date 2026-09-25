@@ -522,12 +522,24 @@ namespace rdmswtn {
   }
 }
 
-// R/model_RDM.R — RDMSWTN_TT (RDMSWTN under a finite linear exhaustion clock).
+// R/model_RDM.R — RDMSWTN_TT and RDMSWTN_UT: the RDMSWTN columns plus the
+// clock parameter (finite exhaustion clock tau; urgency clock u).  The
+// kernels are RDMSWTN's; the time warp resolves the clock column by name, so
+// these specs only fix the validated prefix (the seventh column is never a
+// timer mean).
 namespace rdmswtn_tt {
   enum : int { v = 0, B, A, t0, s, sv, tau, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"v", "B", "A", "t0", "s", "sv", "tau"};
     return {n, N_REQ, "RDMSWTN_TT"};
+  }
+}
+
+namespace rdmswtn_ut {
+  enum : int { v = 0, B, A, t0, s, sv, u, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "A", "t0", "s", "sv", "u"};
+    return {n, N_REQ, "RDMSWTN_UT"};
   }
 }
 

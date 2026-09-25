@@ -352,16 +352,8 @@ pswtn <- function(t, mu_drift, threshold, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g 
     .Call(`_EMC2_pswtn`, t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift, erlang_omega)
 }
 
-rdmswtn_tt_qinv <- function(u, tau) {
-    .Call(`_EMC2_rdmswtn_tt_qinv`, u, tau)
-}
-
-drdmswtn_tt <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, tau = 1.0, log_out = FALSE, posdrift = TRUE) {
-    .Call(`_EMC2_drdmswtn_tt`, t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift)
-}
-
-prdmswtn_tt <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, tau = 1.0, log_out = FALSE, posdrift = TRUE) {
-    .Call(`_EMC2_prdmswtn_tt`, t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift)
+rdmswtn_clock_qinv <- function(y, p, clock) {
+    .Call(`_EMC2_rdmswtn_clock_qinv`, y, p, clock)
 }
 
 dSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE, erlang_omega = 1.0) {
@@ -388,12 +380,12 @@ prdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 
     .Call(`_EMC2_prdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, guess, posdrift, erlang_omega)
 }
 
-dRDMSWTN_TT_cpp <- function(t, v, b, A, s, t0, sv, tau, log_out = FALSE, posdrift = TRUE) {
-    .Call(`_EMC2_dRDMSWTN_TT_cpp`, t, v, b, A, s, t0, sv, tau, log_out, posdrift)
+dRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_dRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
-pRDMSWTN_TT_cpp <- function(t, v, b, A, s, t0, sv, tau, log_out = FALSE, posdrift = TRUE) {
-    .Call(`_EMC2_pRDMSWTN_TT_cpp`, t, v, b, A, s, t0, sv, tau, log_out, posdrift)
+pRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_pRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
 ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma = 8.0, k_tau = 16.0) {
@@ -556,16 +548,16 @@ rrdmswtn_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rrdmswtn_corr_cpp`, pars, lR_levels, ok, posdrift)
 }
 
-rrdmswtn_tt_cpp <- function(pars, lR_levels, ok, posdrift) {
-    .Call(`_EMC2_rrdmswtn_tt_cpp`, pars, lR_levels, ok, posdrift)
+rrdmswtn_clock_cpp <- function(pars, lR_levels, ok, posdrift, clock) {
+    .Call(`_EMC2_rrdmswtn_clock_cpp`, pars, lR_levels, ok, posdrift, clock)
 }
 
-rrdmswtn_tt_drift_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
-    .Call(`_EMC2_rrdmswtn_tt_drift_corr_cpp`, pars, lR_levels, ok, posdrift)
+rrdmswtn_clock_drift_corr_cpp <- function(pars, lR_levels, ok, posdrift, clock) {
+    .Call(`_EMC2_rrdmswtn_clock_drift_corr_cpp`, pars, lR_levels, ok, posdrift, clock)
 }
 
-rrdmswtn_tt_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
-    .Call(`_EMC2_rrdmswtn_tt_corr_cpp`, pars, lR_levels, ok, posdrift)
+rrdmswtn_clock_corr_cpp <- function(pars, lR_levels, ok, posdrift, clock) {
+    .Call(`_EMC2_rrdmswtn_clock_corr_cpp`, pars, lR_levels, ok, posdrift, clock)
 }
 
 rlnr_corr_cpp <- function(pars, lR_levels, ok) {

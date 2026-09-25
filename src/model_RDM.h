@@ -1375,40 +1375,18 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
 
 
 // --------------------------------------------------------------------------
-// RDMSWTN under the finite linear exhaustion clock
-//
-// x = t - t0, q(x) = x - x^2/(2*tau), q'(x) = 1 - x/tau,
-// 0 < x < tau.  Once x reaches tau the operational-time budget is Q=tau/2,
-// so the CDF freezes and the density is identically zero.
+// RDMSWTN under a deterministic operational clock (time_clock.h): the finite
+// exhaustion clock of RDMSWTN_TT and the urgency clocks of RDMSWTN_UT.
+//   f(t) = f_RDMSWTN(q(x)) q'(x),  F(t) = F_RDMSWTN(q(x)),  x = t - t0.
+// `clock` is an emc2tw::Clock and `p` its parameter (tau or u).  These are the
+// R-facing scalars; the likelihood wraps the ordinary RDMSWTN adapters instead.
 // --------------------------------------------------------------------------
-
-inline double rdmswtn_tt_q(double x, double tau) {
-  // tau = +Inf is the exact identity-clock limit.
-  if (!R_FINITE(tau)) return x;
-  return x * (1.0 - 0.5 * x / tau);
-}
-
-
-double drdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0), double tau RDM_DEFAULT_ARGUMENT(1.0),
-                   bool log_out RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true));
-
-double prdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0), double tau RDM_DEFAULT_ARGUMENT(1.0),
-                   bool log_out RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true));
-
-// log S(t) under the exhaustion clock: the RDMSWTN survivor at operational
-// time q(x), frozen at q = tau/2 once x >= tau.
-inline double prdmswtn_tt_log_surv(double t, double mu_drift, double b, double A,
-                                   double s, double t0, double sv, double tau,
-                                   bool posdrift) {
-  if (!(tau > 0.0) || ISNAN(t) || ISNAN(t0)) return 0.0;
-  const double x = t - t0;
-  if (!(x > 0.0)) return 0.0;
-  const double q = (R_FINITE(tau) && x >= tau) ? 0.5 * tau : rdmswtn_tt_q(x, tau);
-  return prdmswtn_log_surv(q, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0,
-                           20, 1, false, posdrift, 1.0);
-}
+double drdmswtn_clock(double t, double mu_drift, double b, double A, double s,
+                      double t0, double sv, int clock, double p,
+                      bool log_out, bool posdrift);
+double prdmswtn_clock(double t, double mu_drift, double b, double A, double s,
+                      double t0, double sv, int clock, double p,
+                      bool log_out, bool posdrift);
 
 #undef RDM_DEFAULT_ARGUMENT
 

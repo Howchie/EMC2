@@ -24,7 +24,6 @@ double prdmswtn(double t, double mu_drift, double b, double A,
                 int n_gauss_nodes, bool log_out,
                 int kill_shape, bool guess, bool posdrift,
                 double erlang_omega);
-double rdmswtn_tt_qinv(double u, double tau);
 
 namespace {
 
@@ -1623,52 +1622,45 @@ double rdmswtn_quantile_cpp(double u, double v, double b, double A, double s,
 
 }  // namespace
 
-// Gaussian-copula RDMSWTN simulator. rho is a direct natural-scale pair
-// correlation: exactly two active rows may share one signed nonzero value;
-// every other active row is independent.
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
-                             Rcpp::CharacterVector lR_levels,
-                             Rcpp::LogicalVector ok,
-                             bool posdrift) {
-  const int n_acc = lR_levels.size();
-  const int n_rows = pars.nrow();
-  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
-    Rcpp::stop("rrdmswtn_corr_cpp: invalid accumulator/parameter dimensions.");
-  }
-  if (ok.size() != n_rows) {
-    Rcpp::stop("rrdmswtn_corr_cpp: ok has the wrong length.");
-  }
-  const int n_trials = n_rows / n_acc;
-  const auto ci = col_index_map(pars);
-  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
-  const int it0 = ci.at("t0"), isv = ci.at("sv"), irho = ci.at("rho");
-  const int is_ = ci.count("s") ? ci.at("s") : -1;
-  const int ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
+namespace {
 
+// Shared validation for the RDMSWTN finishing-time copulas.  Every active rho
+// must be a finite correlation; under posdrift = FALSE a correlated row must
+// have sv = 0 (see .check_rdmswtn_corr_io_sv() in R/model_RDM.R: the copula
+// couples defective finishing times, and sv > 0 under unrestricted drifts is
+// reserved for the correlated-drift model).  Returns whether any active row
+// is correlated at all.
+bool validate_rdmswtn_copula_rows(const Rcpp::NumericMatrix& pars, int irho,
+                                  int isv, const Rcpp::LogicalVector& ok,
+                                  bool posdrift, const char* caller) {
   bool any_nonzero = false;
-  for (int r = 0; r < n_rows; ++r) {
+  for (int r = 0; r < pars.nrow(); ++r) {
     if (!ok[r]) continue;
     const double rho = pars(r, irho);
     if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
-      Rcpp::stop("rrdmswtn_corr_cpp: rho must be finite and lie in [-1, 1].");
-    }
-    if (pars(r, ilg) != 0.0 || pars(r, ilk) != 0.0) {
-      Rcpp::stop("rrdmswtn_corr_cpp: guess and kill clocks are not supported.");
+      Rcpp::stop("%s: rho must be finite and lie in [-1, 1].", caller);
     }
     if (std::fabs(rho) <= 1e-12) continue;
     any_nonzero = true;
-    // See .check_rdmswtn_corr_io_sv() in R/model_RDM.R: the copula couples
-    // defective finishing times, but sv > 0 under unrestricted drifts is
-    // reserved for a correlated-drift model.
     if (!posdrift && !(pars(r, isv) <= 1e-12)) {
-      Rcpp::stop("rrdmswtn_corr_cpp: posdrift = FALSE requires sv = 0 on the correlated rows.");
+      Rcpp::stop("%s: posdrift = FALSE requires sv = 0 on the correlated rows.",
+                 caller);
     }
   }
-  if (!any_nonzero) {
-    return rrdmswtn_cpp(pars, lR_levels, ok, 1, "none", posdrift);
-  }
+  return any_nonzero;
+}
 
+// Uniforms for a pair Gaussian copula: one independent U(0,1) per active row,
+// then in each trial the (at most two) active rows sharing one signed nonzero
+// rho have theirs replaced by a correlated bivariate-normal pair.  The RNG
+// order -- all row uniforms first, then two normals per correlated trial --
+// is part of the simulators' reproducibility contract.
+std::vector<double> draw_pair_copula_uniforms(const Rcpp::NumericMatrix& pars,
+                                              int irho,
+                                              const Rcpp::LogicalVector& ok,
+                                              int n_acc, const char* caller) {
+  const int n_rows = pars.nrow();
+  const int n_trials = n_rows / n_acc;
   std::vector<double> u(static_cast<size_t>(n_rows), 0.5);
   for (int r = 0; r < n_rows; ++r) {
     if (ok[r]) u[static_cast<size_t>(r)] = R::unif_rand();
@@ -1687,20 +1679,77 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
       ++n_pair;
       if (n_pair == 1) pair_rho = rho;
       else if (std::fabs(rho - pair_rho) > 1e-12) {
-        Rcpp::stop("rrdmswtn_corr_cpp: the two participating rows must have the same signed nonzero rho.");
+        Rcpp::stop("%s: the two participating rows must share one signed nonzero rho.",
+                   caller);
       }
     }
     if (n_pair > 2) {
-      Rcpp::stop("rrdmswtn_corr_cpp: at most two active rows may have nonzero rho in a trial.");
+      Rcpp::stop("%s: at most two active rows may have nonzero rho in a trial.",
+                 caller);
     }
     if (n_pair == 2) {
       const double z1 = R::norm_rand();
       const double z2 = pair_rho * z1 +
         std::sqrt(std::fmax(0.0, 1.0 - pair_rho * pair_rho)) * R::norm_rand();
-      u[static_cast<size_t>(pair[0])] = R::pnorm(z1, 0.0, 1.0, 1, 0);
-      u[static_cast<size_t>(pair[1])] = R::pnorm(z2, 0.0, 1.0, 1, 0);
+      u[static_cast<size_t>(pair[0])] = pnorm_std(z1, true, false);
+      u[static_cast<size_t>(pair[1])] = pnorm_std(z2, true, false);
     }
   }
+  return u;
+}
+
+void check_rng_dims(const Rcpp::NumericMatrix& pars,
+                    const Rcpp::CharacterVector& lR_levels,
+                    const Rcpp::LogicalVector& ok, const char* caller) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("%s: invalid accumulator/parameter dimensions.", caller);
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("%s: ok has the wrong length.", caller);
+  }
+}
+
+Rcpp::List pack_race(const std::vector<double>& dt, int n_acc,
+                     const Rcpp::CharacterVector& lR_levels) {
+  RaceOut res = resolve_race(dt, n_acc, static_cast<int>(dt.size()) / n_acc,
+                             nullptr, nullptr);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+}  // namespace
+
+// Gaussian-copula RDMSWTN simulator. rho is a direct natural-scale pair
+// correlation: exactly two active rows may share one signed nonzero value;
+// every other active row is independent.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
+                             Rcpp::CharacterVector lR_levels,
+                             Rcpp::LogicalVector ok,
+                             bool posdrift) {
+  const char* caller = "rrdmswtn_corr_cpp";
+  check_rng_dims(pars, lR_levels, ok, caller);
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
+  const int it0 = ci.at("t0"), isv = ci.at("sv"), irho = ci.at("rho");
+  const int is_ = ci.count("s") ? ci.at("s") : -1;
+  const int ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
+
+  for (int r = 0; r < n_rows; ++r) {
+    if (ok[r] && (pars(r, ilg) != 0.0 || pars(r, ilk) != 0.0)) {
+      Rcpp::stop("rrdmswtn_corr_cpp: guess and kill clocks are not supported.");
+    }
+  }
+  if (!validate_rdmswtn_copula_rows(pars, irho, isv, ok, posdrift, caller)) {
+    return rrdmswtn_cpp(pars, lR_levels, ok, 1, "none", posdrift);
+  }
+  const std::vector<double> u =
+    draw_pair_copula_uniforms(pars, irho, ok, n_acc, caller);
 
   std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
   for (int r = 0; r < n_rows; ++r) {
@@ -1711,111 +1760,59 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
       s, pars(r, it0), pars(r, isv), posdrift
     );
   }
-  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
-  std::vector<int> isTime;
-  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+  return pack_race(dt, n_acc, lR_levels);
 }
 
-// RDMSWTN under the linear exhaustion clock. Draw the ordinary operational
-// finishing time, omit when it exceeds Q=tau/2, and otherwise invert q.
-// See rrdmswtn_cpp_impl() for the drift_override contract.
-static Rcpp::List rrdmswtn_tt_cpp_impl(Rcpp::NumericMatrix pars,
-                                       Rcpp::CharacterVector lR_levels,
-                                       Rcpp::LogicalVector ok, bool posdrift,
-                                       const std::vector<double>* drift_override) {
-  const int n_acc = lR_levels.size();
-  const int n_rows = pars.nrow();
-  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
-    Rcpp::stop("rrdmswtn_tt_cpp: invalid accumulator/parameter dimensions.");
-  }
-  if (ok.size() != n_rows) {
-    Rcpp::stop("rrdmswtn_tt_cpp: ok has the wrong length.");
-  }
-  const int n_trials = n_rows / n_acc;
-  const auto ci = col_index_map(pars);
-  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
-  const int it0 = ci.at("t0"), isv = ci.at("sv"), itau = ci.at("tau");
-  const int is_ = ci.count("s") ? ci.at("s") : -1;
-
-  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
-  for (int r = 0; r < n_rows; ++r) {
-    if (!ok[r]) continue;
-    const double tau = pars(r, itau);
-    // tau = +Inf is the exact identity-clock limit: the ordinary
-    // operational finish is returned on the physical-time axis.  Reject
-    // NaN and negative/non-positive values, but keep the analytic limit
-    // available to direct simulator callers.
-    if (ISNAN(tau) || !(tau > 0.0)) {
-      Rcpp::stop("rrdmswtn_tt_cpp: tau must be positive (or +Inf).");
-    }
-    const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
-    const double v = pars(r, iv), sv = pars(r, isv);
-    double v_draw = v;
-    if (drift_override != nullptr) {
-      v_draw = (*drift_override)[static_cast<size_t>(r)];
-    } else if (R_FINITE(sv) && sv > 1e-12) {
-      v_draw = rtnorm_lower_r(v, sv, posdrift ? 0.0 : R_NegInf);
-    }
-    double b = std::fmax(0.0, pars(r, ib));
-    double A = std::fmax(0.0, pars(r, iA));
-    const double operational = rwald_acc_r(b - A, v_draw, A, s, posdrift);
-    if (R_FINITE(operational) &&
-        (!R_FINITE(tau) || operational <= 0.5 * tau)) {
-      dt[static_cast<size_t>(r)] =
-        pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
-    }
-  }
-
-  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
-  std::vector<int> isTime;
-  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
-}
-
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
-                           Rcpp::CharacterVector lR_levels,
-                           Rcpp::LogicalVector ok, bool posdrift) {
-  return rrdmswtn_tt_cpp_impl(pars, lR_levels, ok, posdrift, nullptr);
-}
-
-// Correlated drift draws under the exhaustion clock; see
-// rrdmswtn_drift_corr_cpp().
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_tt_drift_corr_cpp(Rcpp::NumericMatrix pars,
-                                      Rcpp::CharacterVector lR_levels,
-                                      Rcpp::LogicalVector ok, bool posdrift) {
-  const int n_acc = lR_levels.size();
-  const int n_rows = pars.nrow();
-  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
-    Rcpp::stop("rrdmswtn_tt_drift_corr_cpp: invalid accumulator/parameter dimensions.");
-  }
-  if (ok.size() != n_rows) {
-    Rcpp::stop("rrdmswtn_tt_drift_corr_cpp: ok has the wrong length.");
-  }
-  const auto ci = col_index_map(pars);
-  std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
-  drift_factor_draw_correlated(pars, ci.at("v"), ci.at("sv"), ci.at("rho"), ok,
-                               n_acc, posdrift, drifts,
-                               "rrdmswtn_tt_drift_corr_cpp");
-  return rrdmswtn_tt_cpp_impl(pars, lR_levels, ok, posdrift, &drifts);
-}
-
+// ---------------------------------------------------------------------------
+// RDMSWTN under an operational clock (RDMSWTN_TT, RDMSWTN_UT; time_clock.h).
+// Every simulator draws the ordinary process's finishing time y in
+// operational time and maps it back through the clock: t = t0 + q^{-1}(y),
+// which is +Inf (an omission) beyond an exhaustion budget.  `clock` is an
+// emc2tw::Clock; the parameter column is tau (exhaustion) or u (urgency).
+// ---------------------------------------------------------------------------
 namespace {
 
-double rdmswtn_operational_quantile_bounded(
-    double u, double FQ, double Q, double v, double b, double A,
-    double s, double sv, bool posdrift = true) {
+const char* rdmswtn_clock_par(int clock) {
+  return clock == emc2tw::CLOCK_EXHAUSTION ? "tau" : "u";
+}
+
+void check_rdmswtn_clock_par(int clock, double p, const char* caller) {
+  if (clock != emc2tw::CLOCK_EXHAUSTION && clock != emc2tw::CLOCK_LINEAR &&
+      clock != emc2tw::CLOCK_EXPONENTIAL) {
+    Rcpp::stop("%s: unknown RDMSWTN clock %d.", caller, clock);
+  }
+  if (emc2tw::clock_is_valid(clock, p)) return;
+  if (clock == emc2tw::CLOCK_EXHAUSTION) {
+    Rcpp::stop("%s: tau must be positive (or +Inf).", caller);
+  }
+  Rcpp::stop("%s: u must be finite and nonnegative.", caller);
+}
+
+// Operational-time quantile of one accumulator at copula uniform u.  Under a
+// finite budget Q, uniforms above F(Q) are the omission atom; otherwise the
+// ordinary (possibly defective) RDMSWTN quantile at t0 = 0.
+double rdmswtn_operational_quantile(double u, double Q, double v, double b,
+                                    double A, double s, double sv,
+                                    bool posdrift, const char* caller) {
+  if (!R_FINITE(Q)) {
+    return rdmswtn_quantile_cpp(u, v, b, A, s, 0.0, sv, posdrift);
+  }
+  auto cdf = [&](double y) {
+    return prdmswtn(y, v, b, A, s, 0.0, sv, 0.0, 0.0, 20, false,
+                    1, false, posdrift, 1.0);
+  };
+  const double FQ = cdf(Q);
+  if (!R_FINITE(FQ)) {
+    Rcpp::stop("%s: non-finite marginal response probability.", caller);
+  }
+  if (u > FQ) return R_PosInf;
   if (u >= FQ) return Q;
   double lo = 0.0, hi = Q;
   for (int iter = 0; iter < 100; ++iter) {
     const double mid = lo + 0.5 * (hi - lo);
-    const double fm = prdmswtn(
-        mid, v, b, A, s, 0.0, sv, 0.0, 0.0, 20, false,
-        1, false, posdrift, 1.0);
+    const double fm = cdf(mid);
     if (!R_FINITE(fm)) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal CDF while inverting.");
+      Rcpp::stop("%s: non-finite marginal CDF while inverting.", caller);
     }
     if (fm < u) lo = mid;
     else hi = mid;
@@ -1824,122 +1821,116 @@ double rdmswtn_operational_quantile_bounded(
   return lo + 0.5 * (hi - lo);
 }
 
-}  // namespace
-
-// Gaussian-copula simulator for the exhausted marginals. Copula uniforms above
-// the finite marginal plateau represent the atom at infinity.
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
-                                Rcpp::CharacterVector lR_levels,
-                                Rcpp::LogicalVector ok,
-                                bool posdrift) {
+// See rrdmswtn_cpp_impl() for the drift_override contract.
+Rcpp::List rrdmswtn_clock_cpp_impl(Rcpp::NumericMatrix pars,
+                                   Rcpp::CharacterVector lR_levels,
+                                   Rcpp::LogicalVector ok, bool posdrift,
+                                   int clock,
+                                   const std::vector<double>* drift_override) {
+  const char* caller = "rrdmswtn_clock_cpp";
+  check_rng_dims(pars, lR_levels, ok, caller);
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
-  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
-    Rcpp::stop("rrdmswtn_tt_corr_cpp: invalid accumulator/parameter dimensions.");
-  }
-  if (ok.size() != n_rows) {
-    Rcpp::stop("rrdmswtn_tt_corr_cpp: ok has the wrong length.");
-  }
-  const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
   const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
-  const int it0 = ci.at("t0"), isv = ci.at("sv"), itau = ci.at("tau");
-  const int irho = ci.at("rho");
+  const int it0 = ci.at("t0"), isv = ci.at("sv");
+  const int ip = ci.at(rdmswtn_clock_par(clock));
   const int is_ = ci.count("s") ? ci.at("s") : -1;
-
-  bool any_nonzero = false;
-  for (int r = 0; r < n_rows; ++r) {
-    if (!ok[r]) continue;
-    const double rho = pars(r, irho);
-    if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: rho must be finite and lie in [-1, 1].");
-    }
-    const double tau = pars(r, itau);
-    if (ISNAN(tau) || !(tau > 0.0)) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: tau must be positive (or +Inf).");
-    }
-    if (std::fabs(rho) <= 1e-12) continue;
-    any_nonzero = true;
-    // sv > 0 with unrestricted drifts is reserved for a correlated-drift
-    // model; see .check_rdmswtn_corr_io_sv() in R/model_RDM.R.
-    if (!posdrift && !(pars(r, isv) <= 1e-12)) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: posdrift = FALSE requires sv = 0 on the correlated rows.");
-    }
-  }
-  if (!any_nonzero) {
-    return rrdmswtn_tt_cpp(pars, lR_levels, ok, posdrift);
-  }
-
-  std::vector<double> u(static_cast<size_t>(n_rows), 0.5);
-  for (int r = 0; r < n_rows; ++r) {
-    if (ok[r]) u[static_cast<size_t>(r)] = R::unif_rand();
-  }
-  for (int tr = 0; tr < n_trials; ++tr) {
-    const int start = tr * n_acc;
-    int pair[2] = {-1, -1};
-    int n_pair = 0;
-    double pair_rho = 0.0;
-    for (int a = 0; a < n_acc; ++a) {
-      const int r = start + a;
-      if (!ok[r]) continue;
-      const double rho = pars(r, irho);
-      if (std::fabs(rho) <= 1e-12) continue;
-      if (n_pair < 2) pair[n_pair] = r;
-      ++n_pair;
-      if (n_pair == 1) pair_rho = rho;
-      else if (std::fabs(rho - pair_rho) > 1e-12) {
-        Rcpp::stop("rrdmswtn_tt_corr_cpp: participating rows must share one signed nonzero rho.");
-      }
-    }
-    if (n_pair > 2) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: at most two active rows may have nonzero rho.");
-    }
-    if (n_pair == 2) {
-      const double z1 = R::norm_rand();
-      const double z2 = pair_rho * z1 +
-        std::sqrt(std::fmax(0.0, 1.0 - pair_rho * pair_rho)) * R::norm_rand();
-      u[static_cast<size_t>(pair[0])] = pnorm_std(z1, true, false);
-      u[static_cast<size_t>(pair[1])] = pnorm_std(z2, true, false);
-    }
-  }
 
   std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
   for (int r = 0; r < n_rows; ++r) {
     if (!ok[r]) continue;
-    const double tau = pars(r, itau);
-    const double ur = u[static_cast<size_t>(r)];
-    if (!R_FINITE(tau)) {
-      // The exhaustion clock becomes the identity at tau = +Inf.  In the
-      // correlated path there is no finite plateau to invert against, so use
-      // the ordinary RDMSWTN marginal quantile directly.
-      const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
-      dt[static_cast<size_t>(r)] = rdmswtn_quantile_cpp(
-        ur, pars(r, iv), pars(r, ib), pars(r, iA), s,
-        pars(r, it0), pars(r, isv), posdrift);
-      continue;
-    }
-    const double Q = 0.5 * tau;  // tau is finite on this branch
+    const double p = pars(r, ip);
+    check_rdmswtn_clock_par(clock, p, caller);
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
-    const double FQ = prdmswtn(
-        Q, pars(r, iv), pars(r, ib), pars(r, iA), s, 0.0, pars(r, isv),
-        0.0, 0.0, 20, false, 1, false, posdrift, 1.0);
-    if (!R_FINITE(FQ)) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal response probability.");
+    const double v = pars(r, iv), sv = pars(r, isv);
+    double v_draw = v;
+    if (drift_override != nullptr) {
+      v_draw = (*drift_override)[static_cast<size_t>(r)];
+    } else if (R_FINITE(sv) && sv > 1e-12) {
+      v_draw = rtnorm_lower_r(v, sv, posdrift ? 0.0 : R_NegInf);
     }
-    if (ur > FQ) continue;
-    const double operational = rdmswtn_operational_quantile_bounded(
-        ur, FQ, Q, pars(r, iv), pars(r, ib), pars(r, iA),
-        s, pars(r, isv), posdrift);
-    dt[static_cast<size_t>(r)] =
-      pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
+    const double b = std::fmax(0.0, pars(r, ib));
+    const double A = std::fmax(0.0, pars(r, iA));
+    const double operational = rwald_acc_r(b - A, v_draw, A, s, posdrift);
+    if (!R_FINITE(operational)) continue;
+    const double x = emc2tw::clock_inv(clock, operational, p);
+    if (R_FINITE(x)) dt[static_cast<size_t>(r)] = pars(r, it0) + x;
   }
-
-  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
-  std::vector<int> isTime;
-  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+  return pack_race(dt, n_acc, lR_levels);
 }
+
+}  // namespace
+
+// Independent accumulators under the operational clock.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_clock_cpp(Rcpp::NumericMatrix pars,
+                              Rcpp::CharacterVector lR_levels,
+                              Rcpp::LogicalVector ok, bool posdrift,
+                              int clock) {
+  return rrdmswtn_clock_cpp_impl(pars, lR_levels, ok, posdrift, clock, nullptr);
+}
+
+// Correlated drift draws under the operational clock; see
+// rrdmswtn_drift_corr_cpp().
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_clock_drift_corr_cpp(Rcpp::NumericMatrix pars,
+                                         Rcpp::CharacterVector lR_levels,
+                                         Rcpp::LogicalVector ok, bool posdrift,
+                                         int clock) {
+  const char* caller = "rrdmswtn_clock_drift_corr_cpp";
+  check_rng_dims(pars, lR_levels, ok, caller);
+  const auto ci = col_index_map(pars);
+  std::vector<double> drifts(static_cast<size_t>(pars.nrow()), R_PosInf);
+  drift_factor_draw_correlated(pars, ci.at("v"), ci.at("sv"), ci.at("rho"), ok,
+                               lR_levels.size(), posdrift, drifts, caller);
+  return rrdmswtn_clock_cpp_impl(pars, lR_levels, ok, posdrift, clock, &drifts);
+}
+
+// Gaussian finishing-time copula under the operational clock.  The copula
+// acts on the marginal finishing-time distributions, which are the clock
+// images of the operational ones, so the pair is drawn in probability space
+// and each margin is inverted in operational time and mapped through q^{-1}.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_clock_corr_cpp(Rcpp::NumericMatrix pars,
+                                   Rcpp::CharacterVector lR_levels,
+                                   Rcpp::LogicalVector ok, bool posdrift,
+                                   int clock) {
+  const char* caller = "rrdmswtn_clock_corr_cpp";
+  check_rng_dims(pars, lR_levels, ok, caller);
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
+  const int it0 = ci.at("t0"), isv = ci.at("sv"), irho = ci.at("rho");
+  const int ip = ci.at(rdmswtn_clock_par(clock));
+  const int is_ = ci.count("s") ? ci.at("s") : -1;
+
+  for (int r = 0; r < n_rows; ++r) {
+    if (ok[r]) check_rdmswtn_clock_par(clock, pars(r, ip), caller);
+  }
+  if (!validate_rdmswtn_copula_rows(pars, irho, isv, ok, posdrift, caller)) {
+    return rrdmswtn_clock_cpp(pars, lR_levels, ok, posdrift, clock);
+  }
+  const std::vector<double> u =
+    draw_pair_copula_uniforms(pars, irho, ok, n_acc, caller);
+
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double p = pars(r, ip);
+    const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
+    const double operational = rdmswtn_operational_quantile(
+      u[static_cast<size_t>(r)], emc2tw::clock_budget(clock, p),
+      pars(r, iv), pars(r, ib), pars(r, iA), s, pars(r, isv), posdrift,
+      caller);
+    if (!R_FINITE(operational)) continue;
+    const double x = emc2tw::clock_inv(clock, operational, p);
+    if (R_FINITE(x)) dt[static_cast<size_t>(r)] = pars(r, it0) + x;
+  }
+  return pack_race(dt, n_acc, lR_levels);
+}
+
 
 // Gaussian-copula simulator for LNR finishing-time marginals.  The marginal
 // inverse is analytic, so this is the same copula construction as the

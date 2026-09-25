@@ -167,7 +167,7 @@ test_that("the exhaustion endpoint creates a frozen defective upper tail", {
 test_that("clock inversion is stable and the large-tau limit is ordinary RDMSWTN", {
   tau <- 3
   u <- c(0, 1e-16, 1e-10, tau / 2 * (1 - 1e-14), tau / 2)
-  x <- vapply(u, EMC2:::rdmswtn_tt_qinv, numeric(1), tau = tau)
+  x <- EMC2:::rdmswtn_clock_qinv(u, tau, 3L)  # 3 = exhaustion clock
   expect_equal(x - x^2 / (2 * tau), u, tolerance = 2e-15)
 
   pars <- RDMSWTN_TT()$Ttransform(cbind(
@@ -212,8 +212,8 @@ test_that("tau = Inf is the identity-clock limit in analytic and compiled paths"
     dimnames = list(NULL, names(row))
   )
   set.seed(611)
-  sim <- EMC2:::rrdmswtn_tt_cpp(
-    sim_pars, c("a", "b"), rep(TRUE, nrow(sim_pars)), TRUE
+  sim <- EMC2:::rrdmswtn_clock_cpp(
+    sim_pars, c("a", "b"), rep(TRUE, nrow(sim_pars)), TRUE, 3L
   )
   expect_true(all(is.finite(sim$rt)))
 
@@ -223,8 +223,8 @@ test_that("tau = Inf is the identity-clock limit in analytic and compiled paths"
     dimnames = list(NULL, names(corr_row))
   )
   set.seed(612)
-  corr <- EMC2:::rrdmswtn_tt_corr_cpp(
-    corr_pars, c("a", "b"), rep(TRUE, nrow(corr_pars)), TRUE
+  corr <- EMC2:::rrdmswtn_clock_corr_cpp(
+    corr_pars, c("a", "b"), rep(TRUE, nrow(corr_pars)), TRUE, 3L
   )
   expect_true(all(is.finite(corr$rt)))
 })
@@ -245,7 +245,7 @@ test_that("compiled and reference simulators reproduce omissions and support", {
   lR <- factor(rep(c("a", "b"), n), levels = c("a", "b"))
 
   set.seed(940)
-  cpp <- EMC2:::rrdmswtn_tt_cpp(pars, levels(lR), rep(TRUE, 2L * n), TRUE)
+  cpp <- EMC2:::rrdmswtn_clock_cpp(pars, levels(lR), rep(TRUE, 2L * n), TRUE, 3L)
   set.seed(941)
   ref <- EMC2:::rRDMSWTN_TT(lR, pars)
   expect_length(cpp$rt, n)
@@ -399,8 +399,8 @@ test_that("correlated simulator couples omission events and respects endpoints",
     dimnames = list(NULL, names(row))
   )
   set.seed(300)
-  sim <- EMC2:::rrdmswtn_tt_corr_cpp(
-    pars, c("a", "b"), rep(TRUE, 2L * n), TRUE
+  sim <- EMC2:::rrdmswtn_clock_corr_cpp(
+    pars, c("a", "b"), rep(TRUE, 2L * n), TRUE, 3L
   )
   expect_length(sim$rt, n)
   expect_true(all(sim$rt[is.finite(sim$rt)] <= 1.2))

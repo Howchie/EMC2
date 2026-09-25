@@ -15,6 +15,7 @@ double pgbm(double t, double mu, double b, double A, double sigma,
             double t0, double lambda_g, double lambda_k, bool log_out,
             int kill_shape, bool guess, double erlang_omega = 1.0);
 #include "model_RDM.h"
+#include "time_clock.h"
 #undef RDM_NO_DEFAULT_ARGUMENTS
 
 
@@ -670,55 +671,49 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
   return log_out ? std::log(cdf) : cdf;
 }
 // --------------------------------------------------------------------------
-// Full RDMSWTN: SWTN + start-point variability.
-// b  = upper threshold; threshold ~ Unif(b-A, b).  With drift variability the
-// no-clock CDF and survivor come from the distance recurrence (rdmswtn_spv.h).
+// RDMSWTN under an operational clock (time_clock.h); see model_RDM.h.
 // --------------------------------------------------------------------------
-// [[Rcpp::export]]
-double rdmswtn_tt_qinv(double u, double tau) {
-  if (!(tau > 0.0) || ISNAN(u) || u < 0.0) return NA_REAL;
-  // Keep the inverse consistent with rdmswtn_tt_q() at tau = +Inf.
-  if (!R_FINITE(tau)) return u;
-  const double Q = 0.5 * tau;
-  if (u > Q) return R_PosInf;
-  if (u == 0.0) return 0.0;
-  const double radicand = std::fmax(0.0, 1.0 - 2.0 * u / tau);
-  return 2.0 * u / (1.0 + std::sqrt(radicand));
-}
-// [[Rcpp::export]]
-double drdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s = 1.0, double t0 = 0.0, double sv = 0.0,
-                   double tau = 1.0, bool log_out = false,
-                   bool posdrift = true) {
-  if (!(tau > 0.0) || ISNAN(t) || ISNAN(t0))
+double drdmswtn_clock(double t, double mu_drift, double b, double A, double s,
+                      double t0, double sv, int clock, double p,
+                      bool log_out, bool posdrift) {
+  if (!emc2tw::clock_is_valid(clock, p) || ISNAN(t) || ISNAN(t0))
     return log_out ? R_NegInf : 0.0;
   const double x = t - t0;
-  if (!(x > 0.0) || (R_FINITE(tau) && x >= tau) || !R_FINITE(t))
-    return log_out ? R_NegInf : 0.0;
-  const double q = rdmswtn_tt_q(x, tau);
+  if (!(x > 0.0) || !R_FINITE(x)) return log_out ? R_NegInf : 0.0;
+  const double log_jac = emc2tw::clock_log_jac(clock, x, p);
+  if (log_jac == R_NegInf) return log_out ? R_NegInf : 0.0;
   const double log_f = drdmswtn(
-      q, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, 20,
-      true, 1, false, posdrift, 1.0);
+      emc2tw::clock_fwd(clock, x, p), mu_drift, b, A, s, 0.0, sv, 0.0, 0.0,
+      20, true, 1, false, posdrift, 1.0);
   if (!R_FINITE(log_f)) return log_out ? R_NegInf : 0.0;
-  const double log_jac = R_FINITE(tau) ? std::log1p(-x / tau) : 0.0;
   const double out = log_f + log_jac;
   return log_out ? out : std::exp(out);
 }
-// [[Rcpp::export]]
-double prdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s = 1.0, double t0 = 0.0, double sv = 0.0,
-                   double tau = 1.0, bool log_out = false,
-                   bool posdrift = true) {
-  if (!(tau > 0.0) || ISNAN(t) || ISNAN(t0))
+
+double prdmswtn_clock(double t, double mu_drift, double b, double A, double s,
+                      double t0, double sv, int clock, double p,
+                      bool log_out, bool posdrift) {
+  if (!emc2tw::clock_is_valid(clock, p) || ISNAN(t) || ISNAN(t0))
     return log_out ? R_NegInf : 0.0;
   const double x = t - t0;
   if (!(x > 0.0)) return log_out ? R_NegInf : 0.0;
-  const double q = (R_FINITE(tau) && x >= tau)
-    ? 0.5 * tau
-    : rdmswtn_tt_q(x, tau);
-  return prdmswtn(
-      q, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, 20,
-      log_out, 1, false, posdrift, 1.0);
+  // x = +Inf maps to the clock's budget: +Inf, or tau/2 under exhaustion.
+  return prdmswtn(emc2tw::clock_fwd(clock, x, p), mu_drift, b, A, s, 0.0,
+                  sv, 0.0, 0.0, 20, log_out, 1, false, posdrift, 1.0);
+}
+
+// Vectorised clock inverse x = q^{-1}(y) (+Inf beyond an exhaustion budget),
+// shared by the R reference simulators; p is recycled.
+// [[Rcpp::export]]
+NumericVector rdmswtn_clock_qinv(NumericVector y, NumericVector p, int clock) {
+  const int n = y.size();
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double pi = p.size() == 1 ? p[0] : p[i];
+    out[i] = (!emc2tw::clock_is_valid(clock, pi) || ISNAN(y[i]) || y[i] < 0.0)
+      ? NA_REAL : emc2tw::clock_inv(clock, y[i], pi);
+  }
+  return out;
 }
 // --------------------------------------------------------------------------
 // Vectorised R-callable exports (match zachdev naming so R code is portable).
@@ -1134,6 +1129,11 @@ double pwald(double t, double mu, double b, double A, double sigma,
 
   return finish(log_cdf_val);
 }
+// --------------------------------------------------------------------------
+// Full RDMSWTN: SWTN + start-point variability.
+// b  = upper threshold; threshold ~ Unif(b-A, b).  With drift variability the
+// no-clock CDF and survivor come from the distance recurrence (rdmswtn_spv.h).
+// --------------------------------------------------------------------------
 // [[Rcpp::export]]
 double drdmswtn(double t, double mu_drift, double b, double A,
                 double s = 1.0, double t0 = 0.0, double sv = 0.0,
@@ -1312,36 +1312,36 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   }
 }
 // [[Rcpp::export]]
-NumericVector dRDMSWTN_TT_cpp(
+NumericVector dRDMSWTN_clock_cpp(
     NumericVector t, NumericVector v, NumericVector b, NumericVector A,
-    NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau,
-    bool log_out = false, bool posdrift = true) {
+    NumericVector s, NumericVector t0, NumericVector sv, NumericVector p,
+    int clock, bool log_out = false, bool posdrift = true) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    out[i] = drdmswtn_tt(
+    out[i] = drdmswtn_clock(
       t[i], pick(v, i), pick(b, i), pick(A, i), pick(s, i),
-      pick(t0, i), pick(sv, i), pick(tau, i), log_out, posdrift);
+      pick(t0, i), pick(sv, i), clock, pick(p, i), log_out, posdrift);
   }
   return out;
 }
 // [[Rcpp::export]]
-NumericVector pRDMSWTN_TT_cpp(
+NumericVector pRDMSWTN_clock_cpp(
     NumericVector t, NumericVector v, NumericVector b, NumericVector A,
-    NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau,
-    bool log_out = false, bool posdrift = true) {
+    NumericVector s, NumericVector t0, NumericVector sv, NumericVector p,
+    int clock, bool log_out = false, bool posdrift = true) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    out[i] = prdmswtn_tt(
+    out[i] = prdmswtn_clock(
       t[i], pick(v, i), pick(b, i), pick(A, i), pick(s, i),
-      pick(t0, i), pick(sv, i), pick(tau, i), log_out, posdrift);
+      pick(t0, i), pick(sv, i), clock, pick(p, i), log_out, posdrift);
   }
   return out;
 }

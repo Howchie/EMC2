@@ -10,6 +10,7 @@
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
 #include "model_PCOUNTER.h"
+#include "time_clock.h"
 #include <cmath>
 #include <memory>
 #include <string>
@@ -161,44 +162,38 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
     else if (type_std.find("_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
-  } else if (type_std.find("RDMSWTN_TT") != std::string::npos) {
-    // The time-changed model must precede generic RDMSWTN substring dispatch.
-    out.pdf1_ptr       = &drdmswtn_tt_scalar;
-    out.cdf1_ptr       = &prdmswtn_tt_scalar;
-    out.model_dfun_raw = &drdmswtn_tt_raw;
-    out.model_pfun_raw = &prdmswtn_tt_raw;
-    out.logS_at_t_ptr  = &rdmswtn_tt_logS_at_t;
-    out.col_spec       = emc2col::rdmswtn_tt::spec();
-    out.ctx.t0_index   = emc2col::rdmswtn_tt::t0;
-    out.ctx.defective_upper_tail = true;
-    // "_CORRD" (correlated drift draws) contains "_CORR", so it must be
-    // tested first; "_CORR" alone is the finishing-time copula.
-    if (type_std.find("_CORRD") != std::string::npos) {
-      out.ctx.corr_drift_active = true;
-      out.ctx.corr_drift_v_col = emc2col::rdmswtn_tt::v;
-      out.ctx.corr_drift_sv_col = emc2col::rdmswtn_tt::sv;
-      out.ctx.corr_drift_generic_only = true;
-    } else {
-      out.ctx.rdmswtn_correlated =
-        (type_std.find("_CORR") != std::string::npos);
-    }
-    if (type_std.find("_IO") != std::string::npos) {
-      out.ctx.use_posdrift = false;
-    }
   } else if (type_std.find("RDMSWTN") != std::string::npos) {
-    // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
+    // Must be checked before "RDM" since "RDMSWTN" contains "RDM".
+    // RDMSWTN_TT (finite exhaustion clock) and RDMSWTN_UT (accelerating
+    // urgency clock) are exact deterministic time changes of this process:
+    // the same kernels, wrapped by configure_time_warp_context() on their
+    // required clock column (time_clock.h).  Their seventh column is the
+    // clock, so they register no timer columns.
     out.pdf1_ptr       = &drdmswtn_scalar;
     out.cdf1_ptr       = &prdmswtn_scalar;
     out.model_dfun_raw = &drdmswtn_raw;
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
-    out.col_spec       = emc2col::rdmswtn::spec();
     out.ctx.t0_index   = emc2col::rdmswtn::t0;
-    out.ctx.mean_g_index = emc2col::rdmswtn::mG;
-    out.ctx.mean_k_index = emc2col::rdmswtn::mK;
-    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmswtn::omega : -1;
     out.ctx.defective_upper_tail = true;
-    // See the RDMSWTN_TT branch: "_CORRD" must be tested before "_CORR".
+    const bool tt = type_std.find("RDMSWTN_TT") != std::string::npos;
+    const bool ut = type_std.find("RDMSWTN_UT") != std::string::npos;
+    if (tt || ut) {
+      out.col_spec = tt ? emc2col::rdmswtn_tt::spec() : emc2col::rdmswtn_ut::spec();
+      out.ctx.tw.supported = true;
+      out.ctx.tw.required  = true;
+      out.ctx.tw.par_name  = tt ? "tau" : "u";
+      out.ctx.tw.clock     = tt ? emc2tw::CLOCK_EXHAUSTION
+        : (type_std.find("_EXP") != std::string::npos ? emc2tw::CLOCK_EXPONENTIAL
+                                                      : emc2tw::CLOCK_LINEAR);
+    } else {
+      out.col_spec = emc2col::rdmswtn::spec();
+      out.ctx.mean_g_index = emc2col::rdmswtn::mG;
+      out.ctx.mean_k_index = emc2col::rdmswtn::mK;
+      out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmswtn::omega : -1;
+    }
+    // "_CORRD" (correlated drift draws) contains "_CORR", so it must be
+    // tested first; "_CORR" alone is the finishing-time copula.
     if (type_std.find("_CORRD") != std::string::npos) {
       out.ctx.corr_drift_active = true;
       out.ctx.corr_drift_v_col = emc2col::rdmswtn::v;

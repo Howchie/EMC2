@@ -1633,55 +1633,16 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// rdmswtn_tt_qinv
-double rdmswtn_tt_qinv(double u, double tau);
-RcppExport SEXP _EMC2_rdmswtn_tt_qinv(SEXP uSEXP, SEXP tauSEXP) {
+// rdmswtn_clock_qinv
+NumericVector rdmswtn_clock_qinv(NumericVector y, NumericVector p, int clock);
+RcppExport SEXP _EMC2_rdmswtn_clock_qinv(SEXP ySEXP, SEXP pSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type u(uSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    rcpp_result_gen = Rcpp::wrap(rdmswtn_tt_qinv(u, tau));
-    return rcpp_result_gen;
-END_RCPP
-}
-// drdmswtn_tt
-double drdmswtn_tt(double t, double mu_drift, double b, double A, double s, double t0, double sv, double tau, bool log_out, bool posdrift);
-RcppExport SEXP _EMC2_drdmswtn_tt(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP tauSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
-    Rcpp::traits::input_parameter< double >::type b(bSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type s(sSEXP);
-    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(drdmswtn_tt(t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift));
-    return rcpp_result_gen;
-END_RCPP
-}
-// prdmswtn_tt
-double prdmswtn_tt(double t, double mu_drift, double b, double A, double s, double t0, double sv, double tau, bool log_out, bool posdrift);
-RcppExport SEXP _EMC2_prdmswtn_tt(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP tauSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
-    Rcpp::traits::input_parameter< double >::type b(bSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type s(sSEXP);
-    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(prdmswtn_tt(t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift));
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(rdmswtn_clock_qinv(y, p, clock));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1826,9 +1787,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dRDMSWTN_TT_cpp
-NumericVector dRDMSWTN_TT_cpp(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau, bool log_out, bool posdrift);
-RcppExport SEXP _EMC2_dRDMSWTN_TT_cpp(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP tauSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
+// dRDMSWTN_clock_cpp
+NumericVector dRDMSWTN_clock_cpp(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector p, int clock, bool log_out, bool posdrift);
+RcppExport SEXP _EMC2_dRDMSWTN_clock_cpp(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP pSEXP, SEXP clockSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1839,16 +1800,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(dRDMSWTN_TT_cpp(t, v, b, A, s, t0, sv, tau, log_out, posdrift));
+    rcpp_result_gen = Rcpp::wrap(dRDMSWTN_clock_cpp(t, v, b, A, s, t0, sv, p, clock, log_out, posdrift));
     return rcpp_result_gen;
 END_RCPP
 }
-// pRDMSWTN_TT_cpp
-NumericVector pRDMSWTN_TT_cpp(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau, bool log_out, bool posdrift);
-RcppExport SEXP _EMC2_pRDMSWTN_TT_cpp(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP tauSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
+// pRDMSWTN_clock_cpp
+NumericVector pRDMSWTN_clock_cpp(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector s, NumericVector t0, NumericVector sv, NumericVector p, int clock, bool log_out, bool posdrift);
+RcppExport SEXP _EMC2_pRDMSWTN_clock_cpp(SEXP tSEXP, SEXP vSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP pSEXP, SEXP clockSEXP, SEXP log_outSEXP, SEXP posdriftSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1859,10 +1821,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(pRDMSWTN_TT_cpp(t, v, b, A, s, t0, sv, tau, log_out, posdrift));
+    rcpp_result_gen = Rcpp::wrap(pRDMSWTN_clock_cpp(t, v, b, A, s, t0, sv, p, clock, log_out, posdrift));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2489,9 +2452,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// rrdmswtn_tt_cpp
-Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
-RcppExport SEXP _EMC2_rrdmswtn_tt_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
+// rrdmswtn_clock_cpp
+Rcpp::List rrdmswtn_clock_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift, int clock);
+RcppExport SEXP _EMC2_rrdmswtn_clock_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2499,13 +2462,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(rrdmswtn_tt_cpp(pars, lR_levels, ok, posdrift));
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrdmswtn_clock_cpp(pars, lR_levels, ok, posdrift, clock));
     return rcpp_result_gen;
 END_RCPP
 }
-// rrdmswtn_tt_drift_corr_cpp
-Rcpp::List rrdmswtn_tt_drift_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
-RcppExport SEXP _EMC2_rrdmswtn_tt_drift_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
+// rrdmswtn_clock_drift_corr_cpp
+Rcpp::List rrdmswtn_clock_drift_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift, int clock);
+RcppExport SEXP _EMC2_rrdmswtn_clock_drift_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2513,13 +2477,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(rrdmswtn_tt_drift_corr_cpp(pars, lR_levels, ok, posdrift));
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrdmswtn_clock_drift_corr_cpp(pars, lR_levels, ok, posdrift, clock));
     return rcpp_result_gen;
 END_RCPP
 }
-// rrdmswtn_tt_corr_cpp
-Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
-RcppExport SEXP _EMC2_rrdmswtn_tt_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
+// rrdmswtn_clock_corr_cpp
+Rcpp::List rrdmswtn_clock_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift, int clock);
+RcppExport SEXP _EMC2_rrdmswtn_clock_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2527,7 +2492,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    rcpp_result_gen = Rcpp::wrap(rrdmswtn_tt_corr_cpp(pars, lR_levels, ok, posdrift));
+    Rcpp::traits::input_parameter< int >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrdmswtn_clock_corr_cpp(pars, lR_levels, ok, posdrift, clock));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3555,17 +3521,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dgbm", (DL_FUNC) &_EMC2_dgbm, 12},
     {"_EMC2_dswtn", (DL_FUNC) &_EMC2_dswtn, 13},
     {"_EMC2_pswtn", (DL_FUNC) &_EMC2_pswtn, 13},
-    {"_EMC2_rdmswtn_tt_qinv", (DL_FUNC) &_EMC2_rdmswtn_tt_qinv, 2},
-    {"_EMC2_drdmswtn_tt", (DL_FUNC) &_EMC2_drdmswtn_tt, 10},
-    {"_EMC2_prdmswtn_tt", (DL_FUNC) &_EMC2_prdmswtn_tt, 10},
+    {"_EMC2_rdmswtn_clock_qinv", (DL_FUNC) &_EMC2_rdmswtn_clock_qinv, 3},
     {"_EMC2_dSWTNspv", (DL_FUNC) &_EMC2_dSWTNspv, 14},
     {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 15},
     {"_EMC2_dGBMspv", (DL_FUNC) &_EMC2_dGBMspv, 11},
     {"_EMC2_pGBMspv", (DL_FUNC) &_EMC2_pGBMspv, 11},
     {"_EMC2_drdmswtn", (DL_FUNC) &_EMC2_drdmswtn, 15},
     {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 15},
-    {"_EMC2_dRDMSWTN_TT_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_TT_cpp, 10},
-    {"_EMC2_pRDMSWTN_TT_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_TT_cpp, 10},
+    {"_EMC2_dRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_clock_cpp, 11},
+    {"_EMC2_pRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_clock_cpp, 11},
     {"_EMC2_ss_exg_stop_success_value", (DL_FUNC) &_EMC2_ss_exg_stop_success_value, 8},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 5},
     {"_EMC2_stopfn_exg", (DL_FUNC) &_EMC2_stopfn_exg, 6},
@@ -3606,9 +3570,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
     {"_EMC2_rrdmswtn_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_drift_corr_cpp, 4},
     {"_EMC2_rrdmswtn_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_corr_cpp, 4},
-    {"_EMC2_rrdmswtn_tt_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_cpp, 4},
-    {"_EMC2_rrdmswtn_tt_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_drift_corr_cpp, 4},
-    {"_EMC2_rrdmswtn_tt_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_corr_cpp, 4},
+    {"_EMC2_rrdmswtn_clock_cpp", (DL_FUNC) &_EMC2_rrdmswtn_clock_cpp, 5},
+    {"_EMC2_rrdmswtn_clock_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_clock_drift_corr_cpp, 5},
+    {"_EMC2_rrdmswtn_clock_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_clock_corr_cpp, 5},
     {"_EMC2_rlnr_corr_cpp", (DL_FUNC) &_EMC2_rlnr_corr_cpp, 3},
     {"_EMC2_fft_convolve_equiv_cpp", (DL_FUNC) &_EMC2_fft_convolve_equiv_cpp, 3},
     {"_EMC2_compute_gamma_diff_hrf", (DL_FUNC) &_EMC2_compute_gamma_diff_hrf, 9},

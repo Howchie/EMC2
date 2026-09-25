@@ -6,8 +6,6 @@ library(EMC2)
 library(dplyr)
 rm(list=ls())
 set.seed(123)
-## Note - the issue when we chatted was setting TC=list(UC=3) globally.
-# It seems like for the current build there's a couple of unique quirks.
 # For "nogo" outcomes, UC needs to be set to 0, so that it then integrates across the entire time range
 # (previously it was trying to integrate from [UC, Inf])
 # The complication there means we should *not* use any UC for the other trials because it won't do anything anyway
@@ -22,7 +20,8 @@ designRDM <- design(
   functions=list(match=function(d) ifelse(d$lM==TRUE,.5,-.5)), # match here is identical to the ADMat lM from the help file, either way of specifying it works
   model=RDM,
   formula=list(v~match:S,A~1,B~lR,t0~1,s~lM),
-  constants = c(s=log(1),A=log(0)) 
+  constants = c(s=log(1),A=log(0)),
+  TC = list(UC=3)
   # I set no start-point variability for RDM because it often doesn't need it, 
   # but if you want it just remove the A=log(0) from constants and it will estimate
   # a value instead
@@ -37,14 +36,12 @@ p_vector["B"] = log(1.4) # base threshold, here applies to the GO accumulator (b
 p_vector["B_lRnogo"] = log(0.85) # *proportional* multiplier for NOGO threshold, i.e. <1 will be a lower threshold because of the log scale
 p_vector["t0"] = log(.2) # shared t0
 p_vector["s_lMTRUE"] = log(.8) # shared *multiplier* on within-trial diffusion variability for whichever accumulator matches the stimulus, here it will have lower variance as it is <1
-# Call make_data to simulate, noting we then correct a couple of things until the bugs are patched
-# That is, we set UC = 0 for nogo outcomes and Inf for go outcomes, and we ensure R=="nogo" for nogo outcomes (not NA as I previosuly indicated)
 dat <- make_data(p_vector,designRDM, n_trials=1000)
 ## Summarise our data to make sure it looks like go/nogo
 tmp = tapply(is.na(dat$rt),dat$S,mean)
-cat("Number of unobserved RTs per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Number of unobserved RTs per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 tmp = tapply(dat$rt,dat$S,function(x){mean(x[is.finite(x)],na.rm=TRUE)})
-cat("Median observed RT per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Median observed RT per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 
 ## This code sets slightly more informative priors
 # pvec for the group mean value
@@ -86,9 +83,9 @@ plot_cdf(dat,synth.data,defective_factor = "R", factors = "S", remove_na = FALSE
 
 ## Summarise our data to make sure it looks like go/nogo
 tmp = tapply(is.na(synth.data$rt),synth.data$S,mean)
-cat("Number of unobserved RTs per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Number of unobserved RTs per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 tmp = tapply(synth.data$rt,synth.data$S,function(x){mean(x[is.finite(x)],na.rm=TRUE)})
-cat("Median observed RT per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Median observed RT per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 
 ## Small example of fitting a mis-specified model and doing the model comparison
 # We will fit a model with no stimulus drift difference (although we know we had one in the generating data)
@@ -153,9 +150,9 @@ p_vector["sv"] = log(.2) # shared drift variability
 dat <- make_data(p_vector,designDDM, n_trials=1000)
 ## Summarise our data to make sure it looks like go/nogo
 tmp = tapply(is.na(dat$rt),dat$S,mean)
-cat("Number of unobserved RTs per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Number of unobserved RTs per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 tmp = tapply(dat$rt,dat$S,function(x){mean(x[is.finite(x)],na.rm=TRUE)})
-cat("Median observed RT per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Median observed RT per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 
 ## This code sets slightly more informative priors
 # pvec for the group mean value
@@ -198,6 +195,6 @@ plot_cdf(dat,synth.data,defective_factor = "R", factors = "S")
 
 ## Summarise our data to make sure it looks like go/nogo
 tmp = tapply(is.na(synth.data$rt),synth.data$S,mean)
-cat("Number of unobserved RTs per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Number of unobserved RTs per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))
 tmp = tapply(synth.data$rt,synth.data$S,function(x){mean(x[is.finite(x)],na.rm=TRUE)})
-cat("Median observed RT per stimulus type:\n",paste(names(tmp),round(tmp,2),sep=":"))
+cat("Median observed RT per stimulus type: \n",paste(names(tmp),round(tmp,2),sep=":"))

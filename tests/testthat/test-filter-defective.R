@@ -95,6 +95,30 @@ test_that("ordinary race normalises with and without the defective atom", {
     })
 })
 
+test_that("operational-clock RDMSWTN races share the atom semantics", {
+  skip_model_validation()
+  # RDMSWTN_UT: unbounded urgency clocks keep the intrinsic IO defect.
+  ut_fill <- function(p) {
+    p[] <- 0; p["v"] <- -.5; p["v_lMTRUE"] <- .45; p["A"] <- log(.3)
+    p["t0"] <- log(.2); p["u"] <- log(.8); p
+  }
+  for (clock in c("linear", "exponential"))
+    expect_atom_semantics(
+      RDMSWTN_UT(posdrift = FALSE, clock = clock),
+      list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, u ~ 1), c(sv = log(0)),
+      ut_fill)
+  # RDMSWTN_TT: the exhaustion plateau is an atom even under posdrift, and
+  # the survivor at Inf is the frozen-clock survivor at t0 + tau/2.
+  expect_atom_semantics(
+    RDMSWTN_TT(), list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, tau ~ 1),
+    NULL,
+    function(p) {
+      p[] <- 0; p["v"] <- log(.8); p["v_lMTRUE"] <- log(1.5)
+      p["A"] <- log(.3); p["t0"] <- log(.2); p["sv"] <- log(.3)
+      p["tau"] <- log(1.2); p
+    })
+})
+
 bawl_corr_fill <- function(p) {
   p[] <- 0
   p["v"] <- -.4; p[grep("^v_", names(p))] <- 1.6
