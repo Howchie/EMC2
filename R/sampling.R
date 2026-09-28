@@ -702,7 +702,8 @@ run_stage <- function(pmwgs,
     ens_q <- pmwgs$ensemble_q
     ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
                                           if (is.null(ens_q)) chains_mu else ens_q$mu,
-                                          if (is.null(ens_q)) chains_var else ens_q$var)
+                                          if (is.null(ens_q)) chains_var else ens_q$var,
+                                          iteration = j)
     pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started

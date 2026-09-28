@@ -86,6 +86,11 @@ if (args[1] == "fit") {
                          constants = c(s = log(1), A = log(0))))
   options(emc2.ensemble = arm %in% c("ensemble", "ensemble_marg"),
           emc2.ensemble_latent_weight = if (arm == "ensemble_marg") "marginal" else "conditional")
+  # Extra internal options for design experiments, e.g.
+  # EMC2_OPTS="emc2.ensemble_rounds=5,emc2.ensemble_pool=16".
+  for (kv in strsplit(strsplit(Sys.getenv("EMC2_OPTS"), ",")[[1]], "=")) {
+    if (length(kv) == 2L) options(stats::setNames(list(type.convert(kv[2], as.is = TRUE)), kv[1]))
+  }
   des <- suppressMessages(design(data = fx$data, model = RDM,
     matchfun = function(d) d$S == d$lR, formula = fx$settings$formula,
     constants = fx$settings$constants))
@@ -103,7 +108,10 @@ if (args[1] == "fit") {
                                      type)
     t0 <- proc.time()[["elapsed"]]
     emc <- run_emc(emc, stage = stage, stop_criteria = crit, cores_for_chains = 3L,
-                   cores_per_chain = 9L, verbose = FALSE)
+                   cores_per_chain = as.integer(Sys.getenv("CORES_PER_CHAIN", "9")),
+                   particle_factor = as.numeric(Sys.getenv("PARTICLE_FACTOR", "50")),
+               emc2_opts = Sys.getenv("EMC2_OPTS"),
+                   verbose = FALSE)
     timing[stage] <- proc.time()[["elapsed"]] - t0
     cat(format(Sys.time(), "%T"), case, arm, seed, stage, round(timing[stage]), "s\n")
   }
@@ -129,6 +137,8 @@ if (args[1] == "fit") {
   alpha_draws <- if (Sys.getenv("SAVE_ALPHA") == "1" || case == "tight")
     lapply(emc, function(ch) ch$samples$alpha[, , idx, drop = FALSE])
   saveRDS(list(case = case, arm = arm, seed = seed, timing = timing,
+               particle_factor = as.numeric(Sys.getenv("PARTICLE_FACTOR", "50")),
+               emc2_opts = Sys.getenv("EMC2_OPTS"),
                iters = iters,
                draws = draws, alpha_ess = alpha_ess, ens = ens, ens_subj = ens_subj,
                alpha_draws = alpha_draws,

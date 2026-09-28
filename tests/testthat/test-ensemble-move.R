@@ -230,3 +230,19 @@ test_that("ensemble pool likelihoods give the same fit serially, split, or queue
     expect_identical(serial[[1]]$ensemble_stats, other[[1]]$ensemble_stats)
   }
 })
+
+test_that("pool draws carry exact Mahalanobis distances for the proposal density", {
+  cfg <- EMC2:::.emc_ensemble_options()
+  set.seed(5)
+  V <- crossprod(matrix(rnorm(16), 4)) + diag(4)
+  q <- EMC2:::.emc_ensemble_q(c(1, -1, 0.5, 2), V, cfg)
+  x <- EMC2:::.emc_ensemble_draw_q(200, q, cfg)
+  expect_equal(EMC2:::.emc_ensemble_log_q_m2(attr(x, "m2"), q, cfg),
+               EMC2:::.emc_ensemble_log_q(x, q, cfg), tolerance = 1e-10)
+  # Diagonal subject priors skip the factorisation and give the same density.
+  pars <- list(tmu = c(0.3, -0.2), tvar = diag(c(0.5, 2)))
+  s <- list(type = "diagonal-gamma")
+  a <- matrix(rnorm(12), 6, 2)
+  lg <- EMC2:::.emc_ensemble_log_g(a, rep(1:3, each = 2), pars, s, 3L, "conditional")
+  expect_equal(lg, mvtnorm::dmvnorm(a, pars$tmu, pars$tvar, log = TRUE), tolerance = 1e-10)
+})

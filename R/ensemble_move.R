@@ -48,6 +48,7 @@
   list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
        pool = max(2L, int_opt("emc2.ensemble_pool", 32L)),
        rounds = int_opt("emc2.ensemble_rounds", 10L),
+       cadence = int_opt("emc2.ensemble_cadence", 1L),
        latent_weight = latent,
        tail_weight = 0.25, tail_df = 4, tail_scale = 4)
 }
@@ -90,7 +91,11 @@
 
 .emc_ensemble_log_q <- function(x, q, cfg) {
   z <- forwardsolve(q$L, t(x) - q$mu)
-  m2 <- colSums(z^2)
+  .emc_ensemble_log_q_m2(colSums(z^2), q, cfg)
+}
+
+# The same density from squared Mahalanobis distances m2.
+.emc_ensemble_log_q_m2 <- function(m2, q, cfg) {
   p <- q$p; nu <- cfg$tail_df; c <- cfg$tail_scale
   a <- log1p(-cfg$tail_weight) - 0.5 * (p * log(2 * pi) + q$logdet + m2)
   b <- log(cfg$tail_weight) + lgamma((nu + p) / 2) - lgamma(nu / 2) -
@@ -106,7 +111,9 @@
   scale <- rep(1, n)
   if (any(tail)) scale[tail] <- sqrt(cfg$tail_scale * cfg$tail_df /
                                        stats::rchisq(sum(tail), cfg$tail_df))
-  t(q$mu + (q$L %*% z) * rep(scale, each = q$p))
+  x <- t(q$mu + (q$L %*% z) * rep(scale, each = q$p))
+  attr(x, "m2") <- scale^2 * colSums(z^2)
+  x
 }
 
 # Subject prior of every subject under one group state h, as a p x n matrix of
@@ -126,6 +133,8 @@
   rep_mu <- function(m) matrix(as.numeric(m), length(m), n)
   if (type == "standard" && is.matrix(pars$subj_mu))
     return(list(mean = pars$subj_mu, var = pars$tvar))    # = get_group_level_standard
+  if (type == "diagonal-gamma")                            # = get_group_level_base
+    return(list(mean = rep_mu(pars$tmu), var = pars$tvar, dvar = diag(pars$tvar)))
   if (type %in% c("standard", "diagonal-gamma")) {
     gl <- lapply(seq_len(n), function(s) get_group_level(pars, s, type))
     return(list(mean = vapply(gl, function(g) as.numeric(g$mu), numeric(length(gl[[1L]]$mu))),
@@ -142,7 +151,7 @@
     eps_var <- 1 / as.numeric(pars$epsilon_inv)
     if (weight == "conditional")
       return(list(mean = mu + K %*% t(x) + lam %*% t(matrix(pars$eta, n, nf)),
-                  var = diag(eps_var, p)))
+                  var = diag(eps_var, p), dvar = eps_var))
     B0_inv <- solve(diag(nf) - matrix(pars$B, nf, nf))
     G <- matrix(pars$G, nf, ncol(x))
     A <- lam %*% B0_inv
@@ -157,12 +166,17 @@
     lam <- matrix(pars$lambda, p)
     eps_var <- 1 / as.numeric(pars$epsilon_inv)
   }
-  list(mean = mu + lam %*% t(matrix(pars$eta, n, ncol(lam))), var = diag(eps_var, p))
+  list(mean = mu + lam %*% t(matrix(pars$eta, n, ncol(lam))), var = diag(eps_var, p),
+       dvar = eps_var)
 }
 
 # Subject prior log densities of every pool member under one group state.
 .emc_ensemble_log_g <- function(pool_stack, subj_of_row, pars, sampler, n, weight) {
   sp <- .emc_ensemble_subject_prior(pars, sampler, n, weight)
+  if (!is.null(sp$dvar)) {                     # diagonal covariance: no factorisation
+    z <- (t(pool_stack) - sp$mean[, subj_of_row, drop = FALSE]) / sqrt(sp$dvar)
+    return(-0.5 * (length(sp$dvar) * log(2 * pi) + sum(log(sp$dvar)) + colSums(z^2)))
+  }
   L <- t(chol(sp$var))
   z <- forwardsolve(L, t(pool_stack) - sp$mean[, subj_of_row, drop = FALSE])
   -0.5 * (nrow(L) * log(2 * pi) + 2 * sum(log(diag(L))) + colSums(z^2))
@@ -186,9 +200,11 @@
 # step and their likelihoods computed in the same worker round trip as the
 # particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
 # when the update does not run this iteration.
-.emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var) {
+.emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var,
+                                     iteration = 0L) {
   cfg <- .emc_ensemble_options()
-  if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler))
+  if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler) ||
+      iteration %% cfg$cadence != 0L)
     return(NULL)
   n <- sampler$n_subjects
   if (length(chains_mu) != n || length(chains_var) != n ||
@@ -198,12 +214,15 @@
   pn <- sampler$par_names
   q <- lapply(seq_len(n), function(s)
     .emc_ensemble_q(as.numeric(chains_mu[[s]]), as.matrix(chains_var[[s]]), cfg))
+  lq <- vector("list", n)
   rows <- lapply(seq_len(n), function(s) {
     fresh <- .emc_ensemble_draw_q(cfg$pool - 1L, q[[s]], cfg)
+    lq[[s]] <<- .emc_ensemble_log_q_m2(attr(fresh, "m2"), q[[s]], cfg)
+    attr(fresh, "m2") <- NULL
     colnames(fresh) <- pn
     fresh
   })
-  list(q = q, rows = rows, ll = NULL)
+  list(q = q, rows = rows, lq = lq, ll = NULL)
 }
 
 # Log-likelihoods of a matrix of candidate states for one subject. A failure
@@ -270,35 +289,38 @@
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
   # Pools: current state at a uniform position among the M - 1 fresh draws.
-  pool <- vector("list", n)
+  # Stacked pools, subject s in rows (s - 1) * M + 1:M, with the current state
+  # at a uniform position k0.
+  pool_stack <- matrix(NA_real_, n * M, n_pars, dimnames = list(NULL, pn))
+  ll_stack <- lq_stack <- numeric(n * M)
+  k0 <- integer(n)
   for (s in seq_len(n)) {
-    k0 <- sample.int(M, 1L)
-    A <- matrix(NA_real_, M, n_pars, dimnames = list(NULL, pn))
-    A[k0, ] <- proposals[seq_len(n_pars), s]
-    A[-k0, ] <- pools$rows[[s]]
-    ll <- numeric(M)
-    ll[k0] <- proposals[n_pars + 1L, s]
-    ll[-k0] <- ll_new[, s]
-    pool[[s]] <- list(A = A, k = k0, lq = .emc_ensemble_log_q(A, pools$q[[s]], cfg),
-                      ll = ll)
+    k0[s] <- sample.int(M, 1L)
+    rows <- (s - 1L) * M + seq_len(M)
+    cur <- rows[k0[s]]
+    pool_stack[cur, ] <- proposals[seq_len(n_pars), s]
+    pool_stack[rows[-k0[s]], ] <- pools$rows[[s]]
+    ll_stack[cur] <- proposals[n_pars + 1L, s]
+    ll_stack[rows[-k0[s]]] <- ll_new[, s]
+    lq_stack[cur] <- .emc_ensemble_log_q(pool_stack[cur, , drop = FALSE], pools$q[[s]], cfg)
+    lq_stack[rows[-k0[s]]] <- pools$lq[[s]]
   }
-  base_w <- unlist(lapply(pool, function(P) P$ll - P$lq))   # h-independent part of log w
-  pool_stack <- do.call(rbind, lapply(pool, `[[`, "A"))
+  base_w <- ll_stack - lq_stack                  # h-independent part of log w
   subj_of_row <- rep(seq_len(n), each = M)
+  offset <- (seq_len(n) - 1L) * M
 
   # Gibbs on pi~(h, k | A): h | k with the package's group step, then k | h.
+  # The scratch store only needs the group state: gibbs_step() takes the
+  # subject states as an argument.
   tmp <- sampler
   store <- .emc_ensemble_store(sampler$samples)
-  selected <- vapply(pool, `[[`, integer(1), "k")
-  sel_alpha <- function() vapply(seq_len(n), function(s) pool[[s]]$A[selected[s], ],
-                                 numeric(n_pars))
-  sel_ll <- function() vapply(seq_len(n), function(s) pool[[s]]$ll[selected[s]], numeric(1))
+  selected <- k0
+  sel_alpha <- function() t(pool_stack[offset + selected, , drop = FALSE])
   wess <- numeric(n)
   for (r in seq_len(cfg$rounds)) {
     alpha_k <- sel_alpha()
-    store <- fill_samples(samples = store, group_level = pars,
-                          proposals = rbind(alpha_k, sel_ll()), j = 1L,
-                          n_pars = n_pars, type = sampler$type)
+    store <- fill_samples(samples = store, group_level = pars, proposals = NULL,
+                          j = 1L, n_pars = n_pars, type = sampler$type)
     tmp$samples <- store
     pars <- gibbs_step(tmp, alpha_k, sampler$type)
     lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
@@ -310,9 +332,9 @@
     }
   }
 
-  moved <- selected != vapply(pool, `[[`, integer(1), "k")
+  moved <- selected != k0
   proposals[seq_len(n_pars), ] <- sel_alpha()
-  proposals[n_pars + 1L, ] <- sel_ll()
+  proposals[n_pars + 1L, ] <- ll_stack[offset + selected]
   pars$alpha <- proposals[seq_len(n_pars), , drop = FALSE]
 
   st <- sampler$ensemble_stats
