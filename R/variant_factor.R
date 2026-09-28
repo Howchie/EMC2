@@ -209,6 +209,15 @@ gibbs_step_factor <- function(sampler, alpha){
   lambda <- matrix(last$lambda, n_pars, n_factors)
   mu <- last$mu
 
+  # The particle step draws alpha from the eta-marginal subject prior and
+  # leaves eta untouched, so eta must be redrawn from its full conditional
+  # before anything conditions on it (partially collapsed Gibbs; van Dyk &
+  # Park 2008). Without this, mu below conditions on scores drawn for the
+  # previous alpha.
+  eta_sig <- solve(psi_inv + t(lambda) %*% sig_err_inv %*% lambda)
+  eta[,] <- t(eta_sig %*% t(lambda) %*% sig_err_inv %*% t(sweep(alpha, 2, mu))) +
+    rmvnorm(n_subjects, sigma = eta_sig)
+
   # Update mu
   mu_sig <- solve(n_subjects * sig_err_inv + prior$theta_mu_invar)
   mu_mu <- mu_sig %*% (sig_err_inv %*% colSums(alpha - eta %*% t(lambda)) +

@@ -989,9 +989,9 @@
   }
   if (identical(msg$kind, "group_move_ll")) {
     subs <- as.integer(msg$subs)
+    evaluator <- if (isTRUE(msg$checked)) .emc_group_move_ll_checked else .emc_group_move_ll_one
     ll <- vapply(seq_along(subs), function(i) {
-      .emc_group_move_ll_one(msg$props[[i]], ctx$data[[subs[i]]], ctx$model,
-                             ctx$marginalise)
+      evaluator(msg$props[[i]], ctx$data[[subs[i]]], ctx$model, ctx$marginalise)
     }, numeric(nrow(msg$props[[1L]])))
     return(list(ll = matrix(ll, ncol = length(subs))))
   }
@@ -1026,7 +1026,7 @@
     subs <- part[[w]]
     if (!length(subs)) next
     msg <- list(kind = "group_move_ll", subs = as.integer(subs),
-                props = props[subs])
+                props = props[subs], checked = isTRUE(ctx$group_move_checked))
     messages[[w]] <- msg
     sent[w] <- .emc_wpool_request(pool, w, msg, deadline)
     if (!sent[w]) {
@@ -1047,7 +1047,17 @@
     }
     if (is.null(res) || !is.null(res$failed) || !is.matrix(res$ll) ||
         !identical(dim(res$ll), c(K, length(subs)))) {
-      res <- .emc_wpool_compute(messages[[w]], ctx)
+      if (isTRUE(ctx$group_move_checked)) {
+        # A worker-side model error is retried on the master. At this point a
+        # failed candidate is a zero-density proposal under the group-move
+        # failure policy, so record it and continue as a rejection.
+        vals <- lapply(seq_along(subs), function(i)
+          .emc_group_move_ll_candidate(messages[[w]]$props[[i]],
+            ctx$data[[subs[i]]], ctx$model, ctx$marginalise))
+        res <- list(ll = do.call(cbind, vals))
+      } else {
+        res <- .emc_wpool_compute(messages[[w]], ctx)
+      }
     }
     out[, subs] <- res$ll
   }

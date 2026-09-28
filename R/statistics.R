@@ -853,19 +853,32 @@ condMVN <- function (mean, sigma, dependent.ind, given.ind, X.given, check.sigma
   if (length(X.given) != length(given.ind))
     stop("lengths of `X.given' and `given.ind' must be same")
   if (check.sigma) {
+    if (any(!is.finite(sigma))) stop("sigma contains nonfinite values")
     if (!isSymmetric(sigma))
       stop("sigma is not a symmetric matrix")
-    eigenvalues <- eigen(sigma, only.values = TRUE)$values
-    if (any(eigenvalues < 1e-08)){
-      sigma <- sigma + abs(diag(rnorm(nrow(sigma), sd = 1e-3)))
+    if (any(diag(sigma) < 0)) stop("sigma has negative marginal variance")
+    scales <- sqrt(diag(sigma))
+    # Work in standardized coordinates so a change of parameter units does not
+    # trigger regularization of an otherwise well-conditioned covariance.
+    scales[scales == 0] <- if (any(scales > 0)) max(scales) else 1
+    standardized <- sigma / outer(scales, scales)
+    eigenvalues <- eigen(standardized, symmetric = TRUE, only.values = TRUE)$values
+    floor <- 1e-8 * max(1, max(abs(eigenvalues)))
+    if (min(eigenvalues) < floor) {
+      # Proposal construction must not consume sampler RNG. Random jitter here
+      # changed both the proposal and the master's RNG according to core count.
+      # A deterministic diagonal shift preserves off-diagonal information and
+      # bounds the standardized condition number for rank-deficient covariance.
+      diag(sigma) <- diag(sigma) + (floor - min(eigenvalues)) * scales^2
     }
   }
-  B <- sigma[dependent.ind, dependent.ind]
+  B <- sigma[dependent.ind, dependent.ind, drop = FALSE]
   C <- sigma[dependent.ind, given.ind, drop = FALSE]
-  D <- sigma[given.ind, given.ind]
+  D <- sigma[given.ind, given.ind, drop = FALSE]
   CDinv <- C %*% chol2inv(chol(D))
   cMu <- c(mean[dependent.ind] + CDinv %*% (X.given - mean[given.ind]))
   cVar <- B - CDinv %*% t(C)
+  cVar <- (cVar + t(cVar)) / 2
   list(condMean = cMu, condVar = cVar)
 }
 

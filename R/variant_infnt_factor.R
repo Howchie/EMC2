@@ -196,6 +196,14 @@ gibbs_step_infnt_factor <- function(sampler, alpha){
   tauh <- cumprod(delta) # global shrinkage coefficients
   Plam <- psi %*% diag(tauh, nrow = max_factors) # precision of loadings rows
 
+  # Redraw eta from its full conditional before mu conditions on it: the
+  # particle step uses the eta-marginal subject prior (partially collapsed
+  # Gibbs; see gibbs_step_factor).
+  Lmsg <- diag(epsilon_inv) %*% lambda
+  S <- ginv(qr.R(qr(chol(diag(1, nrow = max_factors) + t(Lmsg) %*% lambda))))
+  eta <- sweep(alpha_t, 2, mu) %*% Lmsg %*% tcrossprod(S) +
+    matrix(rnorm(n_subjects * max_factors), nrow = n_subjects, ncol = max_factors) %*% t(S)
+
   mu_sig <- 1/(n_subjects * epsilon_inv + prior$theta_mu_invar)
   mu_mu <- mu_sig * (epsilon_inv * colSums(alpha_t - eta %*% t(lambda)) + prior$theta_mu_invar * prior$theta_mu_mean)
 

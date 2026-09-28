@@ -45,7 +45,8 @@ get_stop_criteria <- function(stage, stop_criteria, type){
       stop("max_sample_iter should be >= 10.")
     }
   }
-  if(stage == "adapt" & is.null(stop_criteria$min_unique)) stop_criteria$min_unique <- 600
+  # One default, whether adapt criteria are omitted or given without min_unique.
+  if(stage == "adapt" & is.null(stop_criteria$min_unique)) stop_criteria$min_unique <- 150
   if(stage != "adapt" & !is.null(stop_criteria$min_unique)) stop("min_unique only applicable for adapt stage, try min_es instead.")
   return(stop_criteria)
 }
@@ -314,10 +315,29 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
 add_proposals <- function(emc, stage, n_cores, n_blocks){
   prof <- .emc_profile_enabled()
   split <- c(chain = NA_real_, eff = NA_real_)
+  # Sample-stage proposals follow diminishing adaptation (Roberts & Rosenthal
+  # 2007): built when production starts, then rebuilt from ALL production
+  # draws so far (an expanding window) once the stage holds 100, 200, 400, ...
+  # iterations. Successive proposals then differ by less and less, which keeps
+  # the retained draws valid, while a subject whose warm-up window had not
+  # converged still gets a proposal fitted to its own posterior. The particle
+  # mixture weights and scales stay frozen (see new_particle).
+  sample_window <- NULL
+  if (stage == "sample") {
+    n_sample <- sum(emc[[1]]$samples$stage[seq_len(emc[[1]]$samples$idx)] == "sample")
+    next_at <- emc[[1]]$sample_proposals_next
+    if (!is.null(next_at) && n_sample < next_at) {
+      if (prof) .emc_profile_state$proposal_split <- split
+      return(emc)
+    }
+    if (!is.null(next_at) && n_sample > 0)
+      sample_window <- which(emc[[1]]$samples$stage == "sample" &
+                               seq_along(emc[[1]]$samples$stage) <= emc[[1]]$samples$idx)
+  }
   if(stage != "preburn"){
     t0 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_chain_proposals(
-      emc, do_block = stage != "sample",
+      emc, samples_idx = sample_window, do_block = stage != "sample",
       adapt_group_move = stage %in% c("burn", "adapt"))
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
@@ -335,6 +355,8 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
     t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_eff_proposals(emc, n_cores)
     if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
+    next_at <- if (n_sample == 0) 100L else 2L * n_sample
+    for (j in seq_along(emc)) emc[[j]]$sample_proposals_next <- next_at
   }
   if (prof) .emc_profile_state$proposal_split <- split
   return(emc)
@@ -394,6 +416,27 @@ check_progress <- function (emc, stage, iter, stop_criteria,
                                     samples_merged$samples$idx, n_chains = length(emc))
     adapted <- test_adapted(emc[[1]], test_samples,
                             min_unique, n_cores, verbose)
+    if (!isTRUE(adapted) && trys_done && iter_done) {
+      # Out of tries. Sampling needs the efficient proposals, so only continue
+      # if they can be built at all; the unique-value threshold is a quality
+      # target, not a requirement.
+      reason <- attr(adapted, "reason")
+      if (identical(reason, "min_unique")) {
+        buildable <- test_adapted(emc[[1]], test_samples, 0, n_cores, FALSE)
+        if (isTRUE(buildable)) {
+          warning("Adaptation reached max_tries before every subject had ",
+                  min_unique, " unique values; efficient proposals are built ",
+                  "from fewer draws. Consider more adapt iterations.", call. = FALSE)
+          adapted <- TRUE
+        } else reason <- attr(buildable, "reason")
+      }
+      if (!isTRUE(adapted)) {
+        stop("Adaptation did not complete within max_tries: efficient proposals ",
+             "could not be built (", reason, "). Increase the adapt iterations ",
+             "or max_tries, or check the model for unidentified parameters.",
+             call. = FALSE)
+      }
+    }
 
   }
   else {
@@ -414,6 +457,12 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   }
 
   done <- (es_done & iter_done & gd$gd_done & adapted & flat_done) | (trys_done & iter_done)
+  if (stage == "adapt" && !all(vapply(emc, .emc_group_move_ready, logical(1)))) {
+    if (trys_done && iter_done) {
+      stop("Group move warmup/settling incomplete at max_tries; increase adapt iterations or max_tries")
+    }
+    done <- FALSE
+  }
   if(es_done & gd$gd_done & adapted & flat_done & !iter_done){
     step_size <- min(step_size, abs(iter - total_iters_stage))[1]
   }
@@ -680,11 +729,13 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
   # Proposal covariance for the joint group-subject move, from the same window
   # of draws as the subject proposals. Frozen during the sample stage.
   group_move_var <- NULL
-  group_move_opts <- .emc_group_move_options()
+  group_move_opts <- emc[[1]]$group_move_config
+  if (is.null(group_move_opts)) group_move_opts <- .emc_group_move_options()
   group_move_spec <- if (group_move_opts$enabled) {
     .emc_group_move_spec(emc[[1]], scale = group_move_opts$scale)
   } else NULL
-  if (isTRUE(adapt_group_move) && !is.null(group_move_spec)) {
+  if (isTRUE(adapt_group_move) && !is.null(group_move_spec) &&
+      identical(group_move_opts$method, "legacy")) {
     group_move_var <- tryCatch(
       .emc_group_move_covariance(emc, group_move_spec, samples_idx),
       error = function(e) NULL)
@@ -758,6 +809,17 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     attr(emc[[j]], "prop_var") <- new_prop_var
     emc[[j]]$chains_var <- chains_var
     emc[[j]]$chains_mu <- chains_mu
+    # Pool proposal for the ensemble group update: plain posterior moments over
+    # the whole window, all chains (an independence proposal should cover the
+    # posterior, not the likelihood-weighted subset used above).
+    a_sub <- function(sub) matrix(alpha[, sub, ], nrow = n_pars)
+    emc[[j]]$ensemble_q <- list(
+      mu = lapply(seq_len(n_subjects), function(sub) rowMeans(a_sub(sub))),
+      var = lapply(seq_len(n_subjects), function(sub) {
+        v <- cov(t(a_sub(sub)))
+        if (do_block) v[block_idx] <- 0
+        if (.emc_empirical_covariance_ok(v, subject = sub)) v else chains_var[[sub]]
+      }))
     if (!is.null(group_move_var)) {
       emc[[j]] <- .emc_group_move_install(emc[[j]], group_move_var,
                                           group_move_spec, group_move_opts$K)
@@ -865,18 +927,19 @@ test_adapted <- function(sampler, test_samples, min_unique, n_cores_conditional 
       }
     },error=function(e) e, warning=function(w) w)
     if (any(class(attempt) %in% c("warning", "error", "try-error"))) {
+      reason <- conditionMessage(attempt)
       if(verbose){
-        message("Can't create efficient distribution yet")
-        message("Increasing required unique values and continuing adaptation")
+        message("Efficient proposals could not be built yet (", reason,
+                "); continuing adaptation")
       }
-      return(FALSE)
+      return(structure(FALSE, reason = reason))
     }
     else {
       if(verbose) message("Successfully adapted - stopping adaptation")
       return(TRUE)
     }
   } else{
-    return(FALSE)
+    return(structure(FALSE, reason = "min_unique"))
   }
 }
 
@@ -1273,25 +1336,26 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
 
 #' Strip all entries except samples from EMC list entries
 #' @param emc A list of EMC objects
-#' @return The same list with everything but samples removed from all but first entry
+#' @return The same list with identical immutable fields shared with the first chain
 #' @noRd
 strip_duplicates <- function(emc, incl_props = TRUE) {
+  emc <- restore_duplicates(emc)
+  # Only immutable configuration may be shared. All other fields (including
+  # future dynamic fields) remain chain-local, even if currently identical.
+  shareable <- c("data", "model", "prior", "gd", "XtX", "group_designs",
+                 "par_names", "n_pars", "n_subjects", "type", "nuisance",
+                 "marginalise", "marginalised_idx", "par_group", "is_blocked")
   for (i in seq_along(emc)[-1]) {
-    samples <- emc[[i]]$samples
-    rng <- emc[[i]]$rng
-    prop_var <- attr(emc[[i]], "prop_var")
-    emc[[i]] <- list(samples = samples)
-    emc[[i]]$rng <- rng
-    attr(emc[[i]], "prop_var") <- prop_var
+    shared <- intersect(shareable, names(emc[[i]]))
+    shared <- shared[vapply(shared, function(k) {
+      identical(emc[[i]][[k]], emc[[1]][[k]])
+    }, logical(1))]
+    attr(emc[[i]], "emc_field_order") <- names(emc[[i]])
+    emc[[i]][shared] <- NULL
+    attr(emc[[i]], "emc_shared_fields") <- shared
   }
-  if(incl_props){
-    for (i in 1:length(emc)) {
-      emc[[i]]$eff_mu <- NULL
-      emc[[i]]$eff_var <- NULL
-      emc[[i]]$chains_cov <- NULL
-      emc[[i]]$chains_mu <- NULL
-    }
-  }
+  # incl_props is retained for call compatibility. Proposal caches are dynamic
+  # sampler state: deleting them makes autosave change the next transition.
   return(emc)
 }
 
@@ -1319,18 +1383,38 @@ weighted_moments <- function(chain, ll = NULL) {
 
 
 
-#' Restore all entries to EMC list entries from first entry
+#' Restore shared immutable configuration without replacing chain-local state
 #' @param emc A list of EMC objects with stripped duplicates
-#' @return The same list with all fields restored from first entry except samples
+#' @return The same list with shared fields restored and dynamic state preserved
 #' @noRd
 restore_duplicates <- function(emc) {
   if (length(emc) > 1) {
-    rngs <- lapply(emc, `[[`, "rng")
     for (i in 2:length(emc)) {
-      samples <- emc[[i]]$samples
-      emc[[i]] <- emc[[1]]
-      emc[[i]]$samples <- samples
-      emc[[i]]$rng <- rngs[[i]]
+      shared <- attr(emc[[i]], "emc_shared_fields", exact = TRUE)
+      if (!is.null(shared)) {
+        for (k in shared) emc[[i]][k] <- emc[[1]][k]
+        order <- attr(emc[[i]], "emc_field_order", exact = TRUE)
+        if (!is.null(order)) {
+          attrs <- attributes(emc[[i]])
+          emc[[i]] <- emc[[i]][order]
+          attrs$names <- order
+          attributes(emc[[i]]) <- attrs
+        }
+        attr(emc[[i]], "emc_shared_fields") <- NULL
+        attr(emc[[i]], "emc_field_order") <- NULL
+      } else if (is.null(emc[[i]]$n_pars) &&
+                 all(names(emc[[i]]) %in% c("samples", "rng"))) {
+        # Pre-schema checkpoints discarded other chains' state irreversibly.
+        local <- emc[[i]]
+        emc[[i]] <- emc[[1]]
+        emc[[i]]$samples <- local$samples
+        emc[[i]]$rng <- local$rng
+        attr(emc[[i]], "prop_var") <- attr(local, "prop_var")
+        emc[[i]]["group_move"] <- list(NULL)
+        emc[[i]]$group_move_migration <- "legacy state unavailable; retune for AM"
+        warning("Restoring a legacy checkpoint: later chains' adaptive state was not saved. Exact historical continuation is unavailable; AM requires fresh warmup.",
+                call. = FALSE)
+      }
     }
   }
   return(emc)

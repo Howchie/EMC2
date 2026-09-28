@@ -305,6 +305,20 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
   return(samples)
 }
 
+# Full conditional draw of the factor scores given mean-centred alphas.
+.sem_draw_eta <- function(ytilde, covariates, K, G, B, delta_inv, lambda,
+                          epsilon_inv, n_factors, n_subjects) {
+  B0_inv   <- solve(diag(n_factors) - B)
+  Psi0_inv <- solve(B0_inv %*% solve(delta_inv) %*% t(B0_inv))
+  eta_sig  <- solve(Psi0_inv + t(lambda) %*% epsilon_inv %*% lambda)
+  eta_mean_mat <- eta_sig %*% (
+    t(lambda) %*% epsilon_inv %*% t(ytilde - covariates %*% t(K)) +
+      Psi0_inv %*% B0_inv %*% G %*% t(covariates)
+  )
+  matrix(t(eta_mean_mat) + mvtnorm::rmvnorm(n_subjects, sigma = eta_sig),
+         n_subjects, n_factors)
+}
+
 gibbs_step_SEM <- function(sampler, alpha){
   last          <- last_sample_SEM(sampler$samples)
   sem_settings  <- sampler$sem_settings
@@ -336,6 +350,12 @@ gibbs_step_SEM <- function(sampler, alpha){
   G           <- matrix(last$G,       n_factors, n_cov)
   mu          <- last$mu
 
+  ## ---- redraw eta before mu conditions on it ------------------------------
+  ## The particle step uses the eta-marginal subject prior (partially
+  ## collapsed Gibbs; see gibbs_step_factor).
+  eta <- .sem_draw_eta(sweep(y, 2, mu), covariates, K, G, B, delta_inv,
+                       lambda, epsilon_inv, n_factors, n_subjects)
+
   ## ---- update mu ----------------------------------------------------------
   mu_sig <- solve(n_subjects * epsilon_inv +
                   diag(1 / prior$theta_mu_var, n_pars))
@@ -347,14 +367,8 @@ gibbs_step_SEM <- function(sampler, alpha){
   ytilde <- sweep(y, 2, mu)
 
   ## ---- update eta ---------------------------------------------------------
-  B0_inv   <- solve(diag(n_factors) - B)
-  Psi0_inv <- solve(B0_inv %*% solve(delta_inv) %*% t(B0_inv))
-  eta_sig  <- solve(Psi0_inv + t(lambda) %*% epsilon_inv %*% lambda)
-  eta_mean_mat <- eta_sig %*% (
-    t(lambda) %*% epsilon_inv %*% t(ytilde - covariates %*% t(K)) +
-      Psi0_inv %*% B0_inv %*% G %*% t(covariates)
-  )
-  eta[,] <- t(eta_mean_mat) + mvtnorm::rmvnorm(n_subjects, sigma = eta_sig)
+  eta[,] <- .sem_draw_eta(ytilde, covariates, K, G, B, delta_inv, lambda,
+                          epsilon_inv, n_factors, n_subjects)
 
   ## ---- update epsilon (item precision) ------------------------------------
   epsilon_inv <- diag(rgamma(
@@ -480,6 +494,14 @@ gibbs_step_SEM <- function(sampler, alpha){
               K %*% x_var %*% t(K) +
               solve(epsilon_inv)
 
+  ## ---- subject prior with eta integrated out -------------------------------
+  ## Conditional on each subject's own covariates: the particle step's target.
+  ## (pop_mean / pop_var above additionally average over the covariate
+  ## distribution; they are reported summaries, not a subject's prior.)
+  A_mat    <- lambda %*% B0_inv
+  subj_mu  <- mu + (K + A_mat %*% G) %*% t(covariates)
+  subj_var <- A_mat %*% solve(delta_inv) %*% t(A_mat) + solve(epsilon_inv)
+
   ## ---- return -------------------------------------------------------------
   list(tmu          = mu,
        lambda      = lambda,
@@ -490,7 +512,9 @@ gibbs_step_SEM <- function(sampler, alpha){
        epsilon_inv = diag(epsilon_inv),
        delta_inv   = delta_inv,
        alpha       = t(y),
-       subj_mu         = pop_mean,
+       subj_mu     = subj_mu,
+       subj_var    = subj_var,
+       pop_mean    = pop_mean,
        tvar        = pop_var)
 }
 
@@ -510,8 +534,11 @@ last_sample_SEM <- function(store) {
 }
 
 get_group_level_SEM <- function(parameters, s){
+  # Subject s's prior with the factor scores integrated out, given its own
+  # covariates. Start points carry a single mean and covariance.
   mu <- parameters$subj_mu
-  var <- parameters$tvar
+  if (is.matrix(mu)) mu <- mu[, s]
+  var <- if (!is.null(parameters$subj_var)) parameters$subj_var else parameters$tvar
   return(list(mu = mu, var = var))
 }
 

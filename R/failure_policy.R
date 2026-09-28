@@ -9,9 +9,10 @@
 # was no way to tell a rejected proposal from a broken worker.
 #
 # The particle path catches numerical proposal failures and repeats the
-# subject's previous state.  A group Gibbs draw is different: it is the state
-# transition itself, so a failed draw aborts the chain with its location and
-# numerical diagnostics rather than manufacturing a repeated iteration.
+# subject's previous state. Group-move candidate likelihood failures are also
+# proposal rejections and keep the current joint state. A group Gibbs draw is
+# different: it is the state transition itself, so a failed draw aborts the
+# chain with its location and numerical diagnostics.
 #
 # Repeating a subject state is not a workaround. Under *particle numerical*
 # rejection it is the correct move: a proposal that lands where the model has
@@ -20,7 +21,7 @@
 # The particle catch can also swallow a failed allocation, a dead worker, a
 # missing file and a genuine bug in a model's R code, and answer all of them
 # the same way. C1 added the classification and counters; this file decides
-# what to do with those particle-path failures.
+# what to do with those proposal-path failures.
 #
 # --- the classes ------------------------------------------------------------
 #
@@ -32,8 +33,9 @@
 #   numerical       the model has no density at this particle proposal, or a
 #                   solver could not converge there. Out-of-bounds parameters,
 #                   a non-positive-definite covariance, a non-finite
-#                   likelihood. Expected on the particle path; a group Gibbs
-#                   failure is fatal regardless of this classification.
+#                   likelihood. Expected on particle and group-move proposal
+#                   paths; a group Gibbs failure is fatal regardless of this
+#                   classification.
 #
 #   infrastructure  the computation was never attempted: an allocation failure,
 #                   a closed connection, a worker that died, a missing shared
@@ -53,33 +55,33 @@
 #
 # `options(emc2.failure_policy = ...)`, one of:
 #
-#   "report"  (default)  Particle numerical failures continue as rejections.
-#                        Every non-numerical particle failure is counted and
+#   "report"  (default)  Numerical proposal failures continue as rejections.
+#                        Every non-numerical proposal failure is counted and
 #                        announced; group Gibbs failures always abort with
 #                        context. A stage that saw non-numerical particle
 #                        failures prints a summary when it finishes.
 #
-#   "strict"             Same Gibbs behavior. On the particle path, numerical
-#                        failures still reject and continue; infrastructure,
+#   "strict"             Same Gibbs behavior. Numerical proposal failures
+#                        still reject and continue; infrastructure,
 #                        programming and unknown failures are re-raised.
 #
 #   "silent"             The behaviour before C1: count, say nothing. For a
 #                        long production run whose failure modes are already
 #                        understood, and for reproducing an older result.
 #
-# The default is "report" for particle failures. Group Gibbs errors are not
+# The default is "report" for proposal failures. Group Gibbs errors are not
 # proposal rejections and are therefore fatal under every policy.
 #
 # --- what happens mid-block -------------------------------------------------
 #
-# Under "report" and "silent", particle numerical rejections still complete
-# with a repeated subject state. A failed group Gibbs draw aborts immediately;
+# Under "report" and "silent", numerical proposal failures still complete
+# as rejections. A failed group Gibbs draw aborts immediately;
 # it is never converted into a complete repeated iteration.
 #
-# Under "strict", the error propagates out of `run_stage()`. In a worker, it is
-# caught by the pool and returned as a failed reply; the master then recomputes
-# that share itself, hits the same error, and re-raises it -- so a strict abort
-# happens in the master, where the traceback is useful, and not in a forked
+# Under "strict", nonnumerical proposal errors propagate out of `run_stage()`.
+# In a worker, the error is caught by the pool and returned as a failed reply;
+# the master then recomputes that share and re-raises it, so a strict abort
+# happens in the master, where the traceback is useful, not in a forked
 # process whose output may be lost. `run_emc()` receives the error from
 # `auto_mclapply` for that chain. The last completed block has already been
 # written to the checkpoint file if one was given, so a strict abort loses the
@@ -179,9 +181,9 @@
 
 # A group Gibbs draw is a state transition, not a proposal.  Repeating the
 # previous complete iteration after it fails therefore hides a broken chain
-# rather than preserving a valid rejection.  Keep this separate from the
-# particle rejection policy: numerical particle failures may continue, while a
-# failed group update is always fatal and carries its stage/iteration context.
+# rather than preserving a valid rejection. Keep this separate from proposal
+# rejection policy: numerical proposal failures may continue, while a failed
+# group update is always fatal and carries its stage/iteration context.
 .emc_gibbs_abort <- function(cond, stage = NULL, iteration = NULL,
                              nuisance = FALSE) {
   msg <- tryCatch(conditionMessage(cond), error = function(e) "")

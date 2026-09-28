@@ -1,6 +1,56 @@
 # EMC2 3.4.0
 ## Development
 
+-   **New default (ensemble group update):** every hierarchical fit now
+    updates the group level with an ensemble MCMC step (Neal 2011;
+    Shestopaloff & Neal 2013). Each sweep draws a pool of candidate states per
+    subject from a fixed proposal built from that subject's posterior, then
+    alternates the existing group Gibbs step with reselecting each subject's
+    state from its pool. No likelihood is evaluated after the pool is built.
+    The update is exact for the standard, diagonal-gamma, factor,
+    infinite-factor and SEM hierarchies (checked against conjugate and Stan
+    references) and is skipped for fits with nuisance or marginalised
+    parameters and for single-subject fits. On simulated RDM fits it gave
+    5-28x the effective samples per second on the worst group quantity and
+    about 10x on subject parameters, at 1.25-1.65x the time per production
+    iteration; warm-up is shorter, so total fit time rose 5-46%. On the real
+    forstmann data and the N-back witness it converged where the previous
+    sampler did not.
+-   **Changed (production proposals):** particle-step proposals are rebuilt
+    during the `sample` stage from all production draws so far, once the
+    stage holds 100, 200, 400, ... iterations (diminishing adaptation, Roberts
+    & Rosenthal 2007). A subject whose warm-up window had not converged no
+    longer keeps an off-centre proposal for the whole fit. Particle mixture
+    weights and scales stay fixed during `sample` (they previously kept
+    adapting at a constant rate).
+-   **Fix (factor, infinite-factor and SEM hierarchies):** the subject step
+    integrates the factor scores out, but the group step then conditioned on
+    scores drawn for the previous subject states. Each latent-factor Gibbs
+    step now redraws the scores first (partially collapsed Gibbs; van Dyk &
+    Park 2008).
+-   **Fix (SEM subject prior):** every subject was given the population
+    moments at the average covariate, which biased group SDs and correlations
+    whenever covariates varied (z up to 27 against a Stan reference). The
+    subject prior now conditions on each subject's own covariates.
+-   **Fix (adaptation stopping):** `adapt` no longer loops or stops with a
+    misleading message when conditional proposals cannot be built, and the
+    default `min_unique` is 150 whether or not `stop_criteria` is supplied.
+-   **Experimental (group moves):** the interweaving group move is off by
+    default (`emc2.group_move`), with one proposal per iteration. Regularized
+    adaptive Metropolis and robust adaptive Metropolis remain available for
+    research use.
+
+-   **Fix (failed AM candidates):** group-move candidate likelihood failures
+    are retried on the master after worker errors, recorded through the shared
+    failure policy, and treated as zero-density rejections unless strict mode
+    requests an abort.
+
+-   **Fix (group-move warmup resume):** group-move schema checks no longer
+    compare the prior's auxiliary `design` attribute, whose model closures are
+    reconstructed when custom-kernel pointers are restored between stages.
+    Numeric prior fields and other prior attributes remain checked. Existing
+    version-1 warmup checkpoints with the old signature are normalized when
+    resumed.
 -   **Truncating defective omissions:** `design(TC = list(filter_defective =
     TRUE))` declares that data were filtered to observed responses. A finite
     `UT` then also truncates a defective model's never-finish outcome, so the

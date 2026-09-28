@@ -534,17 +534,23 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
 # auxiliary-centred particle update. With K = 1 the move is a plain Metropolis
 # step.
 #
-# Options (read when the move runs):
-#   emc2.group_move            (TRUE)  enable the move
-#   emc2.group_move_proposals  (4)     candidates per iteration, K
+# Options (snapshotted by the dispatcher on the first move):
+#   emc2.group_move            (FALSE) enable the move (off by default)
+#   emc2.group_move_proposals  (1)     candidates per iteration. AM requires
+#                                      one; legacy accepts K > 1, but K = 1 is
+#                                      cheaper per effective draw.
 #   emc2.group_move_scale      (TRUE)  include the log-scale coordinates
 
 .emc_group_move_env <- new.env(parent = emptyenv())
 
 .emc_group_move_options <- function() {
-  K <- suppressWarnings(as.integer(getOption("emc2.group_move_proposals", 4L)))
-  if (length(K) != 1L || is.na(K) || K < 1L) K <- 4L
-  list(enabled = isTRUE(getOption("emc2.group_move", TRUE)),
+  method <- match.arg(getOption("emc2.group_move_method", "legacy"),
+                      c("legacy", "am", "ram"))
+  default_K <- 1L
+  K <- suppressWarnings(as.integer(getOption("emc2.group_move_proposals", default_K)))
+  if (length(K) != 1L || is.na(K) || K < 1L) K <- default_K
+  list(enabled = isTRUE(getOption("emc2.group_move", FALSE)),
+       method = method,
        K = K,
        scale = isTRUE(getOption("emc2.group_move_scale", TRUE)))
 }
@@ -694,9 +700,9 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
 }
 
 # Centred-conditional (Gibbs-step) covariance of theta at group covariance tvar.
-# It is the scale of what the Gibbs step already does, so it is the fallback
-# proposal before posterior draws exist, and the floor subtracted from the
-# posterior covariance to leave the move's own conditional scale.
+# Used once as an initialization metric by AM. The legacy heuristic also
+# subtracts this baseline from empirical covariance; that subtraction is not a
+# general identity for the interweaving conditional covariance.
 .emc_group_move_gibbs_cov <- function(spec, prior, tvar, gd = NULL,
                                       marginal = NULL) {
   n <- spec$n_subjects
@@ -738,17 +744,11 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
   m
 }
 
-# Proposal covariance of theta from posterior draws, V = Cov(theta) - G:
-# the posterior covariance minus the Gibbs step's centred-conditional
-# covariance. For a Gaussian hierarchy with a flat group prior this is exactly
-# the conditional covariance of the move (the pooled-likelihood scale). By the
-# law of total variance it is small where the Gibbs step already mixes and large
-# where it doesn't. The covariance is pooled within chains, so chain separation
-# early in burn-in doesn't inflate it. Correlations are only trusted once they
-# can be estimated: the estimate stays diagonal until every coordinate has an
-# effective sample size of at least 5 * dim, then shrinks off-diagonals by
-# dim / ESS. Eigenvalues are floored at 10% of G so a direction is never
-# proposed more tightly than a fraction of the Gibbs step.
+# Legacy empirical heuristic, retained for reproducible comparisons. It pools
+# within-chain covariance, subtracts a Gibbs baseline in whitened coordinates,
+# and gates additional off-diagonal structure on ESS. This is not generally the
+# conditional covariance of the interweaving target. The ESS gate need not make
+# the proposal diagonal in original coordinates. AM does not use this path.
 .emc_group_move_covariance <- function(emc, spec, samples_idx) {
   sampler <- emc[[1]]
   draws <- lapply(emc, function(chain) {
@@ -914,10 +914,11 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
   ll
 }
 
-.emc_group_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
+.emc_group_move_legacy <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
                             wpool_part, move_cores = 1L) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
-  opts <- .emc_group_move_options()
+  opts <- sampler$group_move_config
+  if (is.null(opts)) opts <- .emc_group_move_options()
   if (!opts$enabled) return(keep)
   spec <- .emc_group_move_spec(sampler, scale = opts$scale)
   if (is.null(spec) || is.null(proposals) ||
@@ -1198,11 +1199,14 @@ run_stage <- function(pmwgs,
 
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
   gibbs_rejects <- .emc_reject_counts("gibbs")
+  group_move_rejects <- .emc_reject_counts("group_move")
   stage_rejects <- list(
     particle = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                                .EMC_REJECT_CLASSES),
     gibbs = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
-                            .EMC_REJECT_CLASSES))
+                            .EMC_REJECT_CLASSES),
+    group_move = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                                 .EMC_REJECT_CLASSES))
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
@@ -1236,7 +1240,11 @@ run_stage <- function(pmwgs,
                          nuisance = TRUE)
       }
       pars_nuis <- pars_nuis_attempt
-      pars_comb <- merge_group_level(pars$tmu, pars_nuis$tmu, pars$tvar, pars_nuis$tvar, nuisance, pars$subj_mu)
+      # pars_comb only feeds the particle step, so it carries the subject prior
+      # covariance (SEM: subj_var, which excludes covariate spread).
+      pars_comb <- merge_group_level(pars$tmu, pars_nuis$tmu,
+                                     if (is.null(pars$subj_var)) pars$tvar else pars$subj_var,
+                                     pars_nuis$tvar, nuisance, pars$subj_mu)
       pars_comb$alpha <- pmwgs$samples$alpha[,,j-1]
       pmwgs$sampler_nuis$samples <- fill_samples(samples = pmwgs$sampler_nuis$samples,
                                                                         group_level = pars_nuis,
@@ -1345,10 +1353,25 @@ run_stage <- function(pmwgs,
     moved <- .emc_group_move(
       pmwgs, pars, proposals, stage, wpool, wpool_ctx,
       wpool_part, move_cores = pool_budget$subject)
+    group_move_delta <- .emc_reject_delta(group_move_rejects, "group_move")
+    group_move_rejects <- .emc_reject_counts("group_move")
+    stage_rejects$group_move <- stage_rejects$group_move + group_move_delta
     pmwgs <- moved$sampler
     pars <- moved$pars
     proposals <- moved$proposals
     wpool <- moved$wpool
+
+    # Ensemble group update (R/ensemble_move.R): after the subject step, so the
+    # group Gibbs rounds and the final reselection close the sweep.
+    ens_q <- pmwgs$ensemble_q
+    ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
+                              wpool_part,
+                              if (is.null(ens_q)) chains_mu else ens_q$mu,
+                              if (is.null(ens_q)) chains_var else ens_q$var)
+    pmwgs <- ens$sampler
+    pars <- ens$pars
+    proposals <- ens$proposals
+    wpool <- ens$wpool
 
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
@@ -1421,7 +1444,8 @@ run_stage <- function(pmwgs,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded),
         .emc_reject_row_fields(pp$rejects, "particle"),
-        .emc_reject_row_fields(gibbs_delta, "gibbs")))
+        .emc_reject_row_fields(gibbs_delta, "gibbs"),
+        .emc_reject_row_fields(group_move_delta, "group_move")))
     }
   }
   .emc_failure_report_stage(stage_rejects, stage)
@@ -1929,8 +1953,12 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         pred_state, attempted = use_pred && !isTRUE(marg_grid$warm_used == 1),
         used = isTRUE(marg_grid$pred_used == 1))
     }
-    pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], better, particle_numbers,
-                                           weight_ess, tune, sum(idx))
+    # Proposal settings adapt only in the discarded stages. Retained samples
+    # come from one fixed transition kernel.
+    if (stage != "sample") {
+      pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], better, particle_numbers,
+                                             weight_ess, tune, sum(idx))
+    }
     if (!is.null(marginalise)) {
       pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
         c(as.list(warm_next), warm_next_state)
