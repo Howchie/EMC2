@@ -206,32 +206,54 @@
   list(q = q, rows = rows, ll = NULL)
 }
 
-# Likelihoods of the fresh pool members, for any subject the subject step did
-# not already evaluate (serial fallback).
-.emc_ensemble_pool_ll <- function(sampler, pools, wpool, wpool_ctx, wpool_part) {
+# Log-likelihoods of a matrix of candidate states for one subject. A failure
+# is a zero-density candidate: it is counted under the failure policy and
+# returned as -Inf (strict mode stops instead).
+.emc_ensemble_ll_checked <- function(props, data, model, marginalise = NULL) {
+  ll <- tryCatch(as.numeric(calc_ll_manager(props, dadm = data, model = model,
+                                             r_cores = 1L, marginalise = marginalise)),
+    error = function(e) {
+      cls <- .emc_classify_failure(e)
+      stop(errorCondition(paste("Ensemble pool likelihood evaluation failed:",
+        conditionMessage(e)), class = c("emc_ensemble_failure", "emc_failure"),
+        emc_class = cls, emc_source = "ensemble", emc_cause = e))
+    })
+  if (length(ll) != nrow(props) || anyNA(ll) || any(ll == Inf)) {
+    cls <- if (length(ll) != nrow(props)) "programming" else "numerical"
+    stop(errorCondition(
+      "Invalid ensemble pool likelihood: expected finite values or -Inf",
+      class = c("emc_ensemble_failure", "emc_failure"),
+      emc_class = cls, emc_source = "ensemble"))
+  }
+  ll
+}
+
+.emc_ensemble_ll_candidate <- function(props, data, model, marginalise = NULL) {
+  tryCatch(.emc_ensemble_ll_checked(props, data, model, marginalise),
+    error = function(e) {
+      cls <- if (inherits(e, "emc_failure") && !is.null(e$emc_class))
+        e$emc_class else .emc_classify_failure(e)
+      .emc_reject_record(e, "ensemble")
+      if (identical(.emc_failure_action(cls), "abort"))
+        .emc_failure_abort(cls, "ensemble", e)
+      rep(-Inf, nrow(props))
+    })
+}
+
+# Pool log-likelihoods. The subject step normally returns them with its
+# particles; any subject it did not cover is evaluated here.
+.emc_ensemble_pool_ll <- function(sampler, pools) {
   n <- sampler$n_subjects
   M1 <- nrow(pools$rows[[1L]])
   ll <- pools$ll
   if (is.null(ll)) ll <- vector("list", n)
-  todo <- which(vapply(ll, function(x) is.null(x) || length(x) != M1, logical(1)))
-  if (length(todo)) {
-    ctx <- wpool_ctx
-    ctx$group_move_checked <- TRUE
-    pooled <- if (length(todo) == n)
-      .emc_wpool_group_move_ll(wpool, wpool_part, pools$rows, ctx) else NULL
-    if (is.null(pooled)) {
-      for (s in todo) ll[[s]] <- .emc_group_move_ll_candidate(
-        pools$rows[[s]], sampler$data[[s]], sampler$model, sampler$marginalise)
-    } else {
-      llm <- matrix(pooled$ll, nrow = M1)
-      for (s in todo) ll[[s]] <- llm[, s]
-      wpool <- pooled$pool
-    }
-  }
+  for (s in seq_len(n)) if (is.null(ll[[s]]) || length(ll[[s]]) != M1)
+    ll[[s]] <- .emc_ensemble_ll_candidate(pools$rows[[s]], sampler$data[[s]],
+                                          sampler$model, sampler$marginalise)
   ll_new <- matrix(unlist(ll), nrow = M1)
   if (anyNA(ll_new) || any(ll_new == Inf))
     stop("Invalid ensemble pool likelihood")
-  list(ll = ll_new, wpool = wpool)
+  ll_new
 }
 
 .emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
@@ -243,9 +265,7 @@
   n_pars <- sampler$n_pars
   M <- cfg$pool
   pn <- sampler$par_names
-  got <- .emc_ensemble_pool_ll(sampler, pools, wpool, wpool_ctx, wpool_part)
-  ll_new <- got$ll
-  wpool <- got$wpool
+  ll_new <- .emc_ensemble_pool_ll(sampler, pools)
 
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())

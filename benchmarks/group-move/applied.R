@@ -1,6 +1,5 @@
 # Applied ridge test on the N-back witness (rdm7s_mass_noA_t0R_UT0_vs2_mt_d42):
-# no group update ("original"/"baseline") vs a group update ("ensemble" or a
-# group-move method).
+# no group update ("baseline") vs the ensemble group update ("ensemble").
 #
 #   Rscript applied.R <lib> <arm> <seed> <emc0.rds> <outdir>
 #
@@ -14,12 +13,9 @@ emc0 <- args[4]; outdir <- args[5]
 suppressPackageStartupMessages(library(EMC2, lib.loc = lib))
 cat("EMC2 from", find.package("EMC2"), "\n")
 setwd("/data/work/PM/NirvanaHons_Nback")      # custom trend kernels live here
-# Arms: "original"/"baseline" = no group update; "ensemble" = ensemble group
-# update; anything else = that group-move method.
+# Arms: "baseline" = no group update; "ensemble" = ensemble group update.
+stopifnot(arm %in% c("baseline", "ensemble"))
 options(emc2.ensemble = arm == "ensemble")
-if (arm != "ensemble")
-  if (!arm %in% c("original", "baseline")) options(emc2.group_move = TRUE,
-    emc2.group_move_method = arm, emc2.group_move_proposals = 1L)
 emc <- readRDS(emc0)
 set.seed(seed)
 n_sample <- as.integer(Sys.getenv("NBACK_SAMPLE", "1500"))
@@ -44,14 +40,12 @@ arr <- function(f) {
 }
 mu <- arr(function(s) s$theta_mu[, idx])
 logsd <- arr(function(s) { v <- apply(s$theta_var[, , idx], 3, diag); 0.5 * log(v) })
-gm <- tryCatch(group_move_diagnostics(emc), error = function(e) NULL)
 ens <- tryCatch(EMC2:::ensemble_diagnostics(emc), error = function(e) NULL)
 alpha_ess <- sapply(seq_len(dim(emc[[1]]$samples$alpha)[2]), function(sj)
   sapply(seq_len(dim(emc[[1]]$samples$alpha)[1]), function(p) posterior::ess_bulk(
     sapply(emc, function(ch) ch$samples$alpha[p, sj, idx]))))
 saveRDS(list(arm = arm, seed = seed, lib = find.package("EMC2"), timing = timing,
-             iters = chain_n(emc)[1, ], mu = mu, logsd = logsd, gm = gm, ens = ens, alpha_ess = alpha_ess,
-             curv_H = emc[[1]]$group_move$curv_H,
+             iters = chain_n(emc)[1, ], mu = mu, logsd = logsd, ens = ens, alpha_ess = alpha_ess,
              subj_ll = sapply(emc, function(ch) colSums(ch$samples$subj_ll[, idx]))),
         file.path(outdir, sprintf("%s-seed%d.rds", arm, seed)))
 save(emc, file = file.path(outdir, sprintf("emc-%s-seed%d.RData", arm, seed)))

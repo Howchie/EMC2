@@ -337,8 +337,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
   if(stage != "preburn"){
     t0 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_chain_proposals(
-      emc, samples_idx = sample_window, do_block = stage != "sample",
-      adapt_group_move = stage %in% c("burn", "adapt"))
+      emc, samples_idx = sample_window, do_block = stage != "sample")
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
         components <- sub_blocking(emc, n_blocks)
@@ -457,12 +456,6 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   }
 
   done <- (es_done & iter_done & gd$gd_done & adapted & flat_done) | (trys_done & iter_done)
-  if (stage == "adapt" && !all(vapply(emc, .emc_group_move_ready, logical(1)))) {
-    if (trys_done && iter_done) {
-      stop("Group move warmup/settling incomplete at max_tries; increase adapt iterations or max_tries")
-    }
-    done <- FALSE
-  }
   if(es_done & gd$gd_done & adapted & flat_done & !iter_done){
     step_size <- min(step_size, abs(iter - total_iters_stage))[1]
   }
@@ -706,13 +699,11 @@ sub_blocking <- function(emc, n_blocks){
   }, error = function(e) FALSE))
 }
 
-create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
-                                   adapt_group_move = NULL){
+create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE){
   n_subjects <- emc[[1]]$n_subjects
   n_chains <- length(emc)
   n_pars <- emc[[1]]$n_pars
   stage <- emc[[1]]$samples$stage[length(emc[[1]]$samples$stage)]
-  if (is.null(adapt_group_move)) adapt_group_move <- stage != "sample"
   if(is.null(samples_idx)){
     idx_subtract <- min(250, emc[[1]]$samples$idx/1.5)
     samples_idx <- round(emc[[1]]$samples$idx - idx_subtract):emc[[1]]$samples$idx
@@ -725,21 +716,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
                     stage = c('preburn', 'burn', 'adapt', 'sample'),
                     by_subject = T, merge_chains = T, return_mcmc = F,
                     remove_dup = F, remove_constants = F)
-
-  # Proposal covariance for the joint group-subject move, from the same window
-  # of draws as the subject proposals. Frozen during the sample stage.
-  group_move_var <- NULL
-  group_move_opts <- emc[[1]]$group_move_config
-  if (is.null(group_move_opts)) group_move_opts <- .emc_group_move_options()
-  group_move_spec <- if (group_move_opts$enabled) {
-    .emc_group_move_spec(emc[[1]], scale = group_move_opts$scale)
-  } else NULL
-  if (isTRUE(adapt_group_move) && !is.null(group_move_spec) &&
-      identical(group_move_opts$method, "legacy")) {
-    group_move_var <- tryCatch(
-      .emc_group_move_covariance(emc, group_move_spec, samples_idx),
-      error = function(e) NULL)
-  }
 
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
@@ -820,10 +796,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
         if (do_block) v[block_idx] <- 0
         if (.emc_empirical_covariance_ok(v, subject = sub)) v else chains_var[[sub]]
       }))
-    if (!is.null(group_move_var)) {
-      emc[[j]] <- .emc_group_move_install(emc[[j]], group_move_var,
-                                          group_move_spec, group_move_opts$K)
-    }
   }
   return(emc)
 }
@@ -1410,9 +1382,7 @@ restore_duplicates <- function(emc) {
         emc[[i]]$samples <- local$samples
         emc[[i]]$rng <- local$rng
         attr(emc[[i]], "prop_var") <- attr(local, "prop_var")
-        emc[[i]]["group_move"] <- list(NULL)
-        emc[[i]]$group_move_migration <- "legacy state unavailable; retune for AM"
-        warning("Restoring a legacy checkpoint: later chains' adaptive state was not saved. Exact historical continuation is unavailable; AM requires fresh warmup.",
+        warning("Restoring a legacy checkpoint: later chains' adaptive state was not saved, so exact historical continuation is unavailable.",
                 call. = FALSE)
       }
     }

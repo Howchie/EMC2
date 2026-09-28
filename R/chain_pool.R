@@ -987,14 +987,6 @@
                                      model = ctx$model, component = msg$component,
                                      r_cores = 1L, varying = msg$varying)))
   }
-  if (identical(msg$kind, "group_move_ll")) {
-    subs <- as.integer(msg$subs)
-    evaluator <- if (isTRUE(msg$checked)) .emc_group_move_ll_checked else .emc_group_move_ll_one
-    ll <- vapply(seq_along(subs), function(i) {
-      evaluator(msg$props[[i]], ctx$data[[subs[i]]], ctx$model, ctx$marginalise)
-    }, numeric(nrow(msg$props[[1L]])))
-    return(list(ll = matrix(ll, ncol = length(subs))))
-  }
   if (identical(msg$kind, "loo")) {
     loo_warnings <- character()
     value <- withCallingHandlers(
@@ -1006,63 +998,6 @@
     return(list(value = value, warnings = loo_warnings))
   }
   .emc_wpool_compute_particle(msg, ctx, shared)
-}
-
-# Evaluate the group move's K candidates for every subject on the worker pool.
-# Returns a K x n_subjects log-likelihood matrix. Failed or unavailable workers
-# are recomputed on the master, as in the particle path.
-.emc_wpool_group_move_ll <- function(pool, part, props, ctx) {
-  n_subjects <- length(props)
-  if (is.null(pool) || !isTRUE(pool$alive) || pool$n <= 1L || is.null(part)) {
-    return(NULL)
-  }
-  K <- nrow(props[[1L]])
-  out <- matrix(NA_real_, K, n_subjects)
-  deadline <- .emc_wpool_deadline()
-  sent <- logical(pool$n)
-  messages <- vector("list", pool$n)
-
-  for (w in seq_len(pool$n)) {
-    subs <- part[[w]]
-    if (!length(subs)) next
-    msg <- list(kind = "group_move_ll", subs = as.integer(subs),
-                props = props[subs], checked = isTRUE(ctx$group_move_checked))
-    messages[[w]] <- msg
-    sent[w] <- .emc_wpool_request(pool, w, msg, deadline)
-    if (!sent[w]) {
-      .emc_wpool_degraded(.emc_wpool_transport_error(
-        "group move likelihood send to a worker failed"))
-      pool$alive <- FALSE
-    }
-  }
-
-  for (w in seq_len(pool$n)) {
-    subs <- part[[w]]
-    if (!length(subs)) next
-    res <- if (sent[w]) .emc_wpool_reply(pool, w, deadline) else NULL
-    if (is.null(res) && sent[w]) {
-      .emc_wpool_degraded(.emc_wpool_transport_error(
-        "group move likelihood worker gave no reply"))
-      pool$alive <- FALSE
-    }
-    if (is.null(res) || !is.null(res$failed) || !is.matrix(res$ll) ||
-        !identical(dim(res$ll), c(K, length(subs)))) {
-      if (isTRUE(ctx$group_move_checked)) {
-        # A worker-side model error is retried on the master. At this point a
-        # failed candidate is a zero-density proposal under the group-move
-        # failure policy, so record it and continue as a rejection.
-        vals <- lapply(seq_along(subs), function(i)
-          .emc_group_move_ll_candidate(messages[[w]]$props[[i]],
-            ctx$data[[subs[i]]], ctx$model, ctx$marginalise))
-        res <- list(ll = do.call(cbind, vals))
-      } else {
-        res <- .emc_wpool_compute(messages[[w]], ctx)
-      }
-    }
-    out[, subs] <- res$ll
-  }
-  if (anyNA(out)) return(NULL)
-  list(ll = out, pool = pool)
 }
 
 .emc_wpool_run_loo <- function(ll_mat, cores) {
@@ -1157,8 +1092,8 @@
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
     # Ensemble pool members for this subject (no RNG use).
     if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
-      extra_ll[[k]] <- .emc_group_move_ll_candidate(msg$extra[[k]], ctx$data[[s]],
-                                                    ctx$model, ctx$marginalise)
+      extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], ctx$data[[s]],
+                                                  ctx$model, ctx$marginalise)
   }
   w_spent <- proc.time() - w_started
   list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,

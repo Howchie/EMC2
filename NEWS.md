@@ -35,10 +35,11 @@
 -   **Fix (adaptation stopping):** `adapt` no longer loops or stops with a
     misleading message when conditional proposals cannot be built, and the
     default `min_unique` is 150 whether or not `stop_criteria` is supplied.
--   **Experimental (group moves):** the interweaving group move is off by
-    default (`emc2.group_move`), with one proposal per iteration. Regularized
-    adaptive Metropolis and robust adaptive Metropolis remain available for
-    research use.
+-   **Removed (group moves):** the interweaving group move (legacy, regularized
+    adaptive Metropolis and robust adaptive Metropolis variants), its options
+    (`emc2.group_move*`) and `group_move_diagnostics()`. The ensemble update
+    replaces it: at realistic dimension a rigid group translation gained
+    nothing over the Gibbs step.
 
 -   **Fix (failed AM candidates):** group-move candidate likelihood failures
     are retried on the master after worker errors, recorded through the shared
