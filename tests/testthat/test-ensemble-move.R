@@ -34,8 +34,9 @@ ens_chain <- function(type, y, obs_prec, iters, ensemble, seed) {
     if (ensemble) {
       ll <- vapply(seq_len(n), function(k) ens_mock_ll(t(alpha[, k]), s$data[[k]]), 0)
       s$rng$gibbs <- NULL
+      pools <- EMC2:::.emc_ensemble_draw_pools(s, "sample", chains_mu, chains_var)
       mv <- EMC2:::.emc_ensemble_move(s, pars, rbind(alpha, ll), "sample", NULL, NULL,
-                                      NULL, chains_mu, chains_var)
+                                      NULL, pools)
       s <- mv$sampler; pars <- mv$pars
       alpha <- mv$proposals[seq_len(p), , drop = FALSE]
     }
@@ -80,13 +81,15 @@ test_that("ensemble group update leaves the joint posterior invariant", {
 test_that("ensemble update is a no-op when disabled or unsupported", {
   withr::local_options(list(emc2.ensemble = FALSE))
   s <- list(type = "standard", n_subjects = 3L, n_pars = 2L, nuisance = c(FALSE, FALSE))
-  out <- EMC2:::.emc_ensemble_move(s, list(tmu = 1), matrix(0, 3, 3), "sample",
-                                   NULL, NULL, NULL, list(), list())
-  expect_identical(out$pars, list(tmu = 1))
+  cm <- rep(list(c(0, 0)), 3); cv <- rep(list(diag(2)), 3)
+  expect_null(EMC2:::.emc_ensemble_draw_pools(s, "sample", cm, cv))
   withr::local_options(list(emc2.ensemble = TRUE))
+  expect_null(EMC2:::.emc_ensemble_draw_pools(s, "preburn", cm, cv))
+  expect_null(EMC2:::.emc_ensemble_draw_pools(s, "sample", list(), list()))
   s$type <- "single"
+  expect_null(EMC2:::.emc_ensemble_draw_pools(s, "sample", cm, cv))
   out <- EMC2:::.emc_ensemble_move(s, list(tmu = 1), matrix(0, 3, 3), "sample",
-                                   NULL, NULL, NULL, list(), list())
+                                   NULL, NULL, NULL, NULL)
   expect_identical(out$pars, list(tmu = 1))
 })
 
@@ -138,8 +141,9 @@ ens_latent_chain <- function(type, y, obs_prec, iters, arm, seed, x = NULL) {
     } else {
       if (arm != "prod") {
         s$rng$gibbs <- NULL
+        pools <- EMC2:::.emc_ensemble_draw_pools(s, "sample", chains_mu, chains_var)
         mv <- EMC2:::.emc_ensemble_move(s, pars, rbind(alpha, ll_of(alpha)), "sample",
-                                        NULL, NULL, NULL, chains_mu, chains_var)
+                                        NULL, NULL, NULL, pools)
         s <- mv$sampler; pars <- mv$pars
       }
       gl <- lapply(seq_len(n), function(k) EMC2:::get_group_level(pars, k, type))
@@ -195,4 +199,34 @@ test_that("SEM subject prior conditions on the subject's own covariates", {
   sp <- EMC2:::.emc_ensemble_subject_prior(pars, s, 3L, "marginal")
   expect_equal(sp$mean, subj_mu, ignore_attr = TRUE)
   expect_equal(sp$var, subj_var, ignore_attr = TRUE)
+})
+
+test_that("ensemble pool likelihoods give the same fit serially, split, or queued", {
+  skip_on_os("windows")
+  skip_on_cran()
+  # The pool members ride along with the subject step's worker round trip;
+  # no random numbers are used there, so the core count and the dynamic queue
+  # must not change a single draw.
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:5], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_on <- function(cores, queue) {
+    withr::local_options(list(emc2.worker_queue = queue, emc2.ensemble = TRUE,
+                              emc2.ensemble_pool = 8L))
+    RNGkind("L'Ecuyer-CMRG"); set.seed(23)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))
+    emc <- suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 1,
+      cores_per_chain = cores, step_size = 8, max_tries = 1, verbose = FALSE,
+      stop_criteria = list(iter = 8, max_gd = Inf, min_unique = 0, min_es = 0)))
+    suppressMessages(run_emc(emc, stage = "burn", cores_for_chains = 1,
+      cores_per_chain = cores, step_size = 6, max_tries = 1, verbose = FALSE,
+      stop_criteria = list(iter = 12, max_gd = Inf, min_unique = 0, min_es = 0)))
+  }
+  serial <- fit_on(1, FALSE)
+  expect_gt(serial[[1]]$ensemble_stats$sweeps, 0)
+  for (other in list(fit_on(2, FALSE), fit_on(3, TRUE))) {
+    expect_identical(serial[[1]]$samples$alpha, other[[1]]$samples$alpha)
+    expect_identical(serial[[1]]$samples$theta_mu, other[[1]]$samples$theta_mu)
+    expect_identical(serial[[1]]$ensemble_stats, other[[1]]$ensemble_stats)
+  }
 })

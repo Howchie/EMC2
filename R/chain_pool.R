@@ -1131,6 +1131,7 @@
   pm <- vector("list", length(subs))
   seeds <- vector("list", length(subs))
   times <- numeric(length(subs))
+  extra_ll <- if (is.null(msg$extra)) NULL else vector("list", length(subs))
   t_recv <- Sys.time()
   w_started <- proc.time()
   rejects_before <- .emc_reject_counts("particle")
@@ -1154,9 +1155,13 @@
     props[, k] <- c(out$proposal, out$ll)
     pm[[k]] <- out$pm_settings
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
+    # Ensemble pool members for this subject (no RNG use).
+    if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
+      extra_ll[[k]] <- .emc_group_move_ll_candidate(msg$extra[[k]], ctx$data[[s]],
+                                                    ctx$model, ctx$marginalise)
   }
   w_spent <- proc.time() - w_started
-  list(props = props, pm = pm, seeds = seeds, times = times,
+  list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
        elapsed = unname(w_spent[["elapsed"]]),
@@ -1392,12 +1397,13 @@
 
 
 .emc_wpool_iter <- function(pool, ctx, part, pars, group_chol, pm_settings,
-                            prev_ll, seeds) {
+                            prev_ll, seeds, extra = NULL) {
   profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
   iter_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   n_subjects <- length(pm_settings)
   props <- matrix(0, ctx$n_pars + 1L, n_subjects)
   times <- numeric(n_subjects)
+  extra_ll <- if (is.null(extra)) NULL else vector("list", n_subjects)
 
   population_mu <- vapply(seq_len(n_subjects), function(s) {
     as.numeric(get_group_level(pars, s, ctx$type)$mu)
@@ -1435,6 +1441,7 @@
          alpha = alpha[, subs, drop = FALSE],
          population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
+         extra = if (is.null(extra)) NULL else extra[subs],
          notify = watch, w = w, generation = generation, request = request)
   })
   sent <- rep(FALSE, pool$n)
@@ -1481,6 +1488,7 @@
     times[subs] <<- res$times
     pm_settings[subs] <<- res$pm
     seeds[subs] <<- res$seeds
+    if (!is.null(extra) && !is.null(res$extra_ll)) extra_ll[subs] <<- res$extra_ll
     if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
     if (identical(source, "master") && was_alive) {
       fallback_workers <<- fallback_workers + 1L
@@ -1510,6 +1518,7 @@
          alpha = alpha[, subs, drop = FALSE],
          population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
+         extra = if (is.null(extra)) NULL else extra[subs],
          notify = watch, w = w, generation = generation, request = req,
          iter_key = request)
   }
@@ -1753,7 +1762,7 @@
   } else if (measure_wire) 0 else NA_real_
   worker_load <- vapply(assigned, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       alive = pool$alive, rejects = rejects,
+       extra_ll = extra_ll, alive = pool$alive, rejects = rejects,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,

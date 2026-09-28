@@ -1253,6 +1253,13 @@ run_stage <- function(pmwgs,
                                                                         n_pars = n_pars, type = pmwgs$sampler_nuis$type)
       pmwgs$sampler_nuis$samples$idx <- j
     }
+    # Ensemble pool members come from the group-step stream and depend only on
+    # the frozen proposals, so their likelihoods ride along with the subject
+    # step below.
+    ens_q <- pmwgs$ensemble_q
+    ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
+                                          if (is.null(ens_q)) chains_mu else ens_q$mu,
+                                          if (is.null(ens_q)) chains_var else ens_q$var)
     pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started
@@ -1299,7 +1306,9 @@ run_stage <- function(pmwgs,
       }
       it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
                             group_chol_it, pm_settings,
-                            pmwgs$samples$subj_ll[, j - 1], wpool_streams)
+                            pmwgs$samples$subj_ll[, j - 1], wpool_streams,
+                            extra = ens_pools$rows)
+      if (!is.null(ens_pools)) ens_pools$ll <- it$extra_ll
       proposals <- it$props
       pm_settings <- it$pm_settings
       wpool_streams <- it$seeds
@@ -1328,8 +1337,17 @@ run_stage <- function(pmwgs,
         r_cores = core_budget$likelihood, chol_cache = chol_caches[[s]],
         group_chol = group_chol_it)
       out$rng_seed <- get(".Random.seed", envir = globalenv())
+      if (!is.null(ens_pools))
+        out$extra_ll <- .emc_group_move_ll_candidate(ens_pools$rows[[s]], data[[s]],
+                                                     pmwgs$model, pmwgs$marginalise)
       out
     }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
+    if (!is.null(ens_pools)) {
+      ens_pools$ll <- vector("list", pmwgs$n_subjects)
+      for (res in raw_proposals) if (is.list(res) && is.numeric(res$subject) &&
+                                     length(res$subject) == 1L && !is.null(res$extra_ll))
+        ens_pools$ll[[as.integer(res$subject)]] <- res$extra_ll
+    }
     next_streams <- wpool_streams
     for (res in raw_proposals) {
       if (!is.list(res)) next
@@ -1363,11 +1381,8 @@ run_stage <- function(pmwgs,
 
     # Ensemble group update (R/ensemble_move.R): after the subject step, so the
     # group Gibbs rounds and the final reselection close the sweep.
-    ens_q <- pmwgs$ensemble_q
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
-                              wpool_part,
-                              if (is.null(ens_q)) chains_mu else ens_q$mu,
-                              if (is.null(ens_q)) chains_var else ens_q$var)
+                              wpool_part, ens_pools)
     pmwgs <- ens$sampler
     pars <- ens$pars
     proposals <- ens$proposals

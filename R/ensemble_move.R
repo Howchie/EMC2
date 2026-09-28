@@ -124,6 +124,8 @@
 .emc_ensemble_subject_prior <- function(pars, sampler, n, weight) {
   type <- sampler$type
   rep_mu <- function(m) matrix(as.numeric(m), length(m), n)
+  if (type == "standard" && is.matrix(pars$subj_mu))
+    return(list(mean = pars$subj_mu, var = pars$tvar))    # = get_group_level_standard
   if (type %in% c("standard", "diagonal-gamma")) {
     gl <- lapply(seq_len(n), function(s) get_group_level(pars, s, type))
     return(list(mean = vapply(gl, function(g) as.numeric(g$mu), numeric(length(gl[[1L]]$mu))),
@@ -171,58 +173,95 @@
   sample.int(length(w), 1L, prob = w)
 }
 
-.emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
-                               wpool_part, chains_mu, chains_var) {
-  keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
+# One categorical draw per column of log-weights, all columns at once: the
+# Gumbel-max trick, argmax_j (lw_j + G_j) with G_j iid standard Gumbel, is an
+# exact draw with probabilities proportional to exp(lw_j).
+.emc_ensemble_select_all <- function(lw) {
+  g <- -log(-log(stats::runif(length(lw))))
+  max.col(t(lw + g), ties.method = "first")
+}
+
+# Fresh pool members for every subject. They are drawn from the frozen q_s
+# alone, never from the current state, so they can be drawn before the subject
+# step and their likelihoods computed in the same worker round trip as the
+# particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
+# when the update does not run this iteration.
+.emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var) {
   cfg <- .emc_ensemble_options()
   if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler))
-    return(keep)
+    return(NULL)
   n <- sampler$n_subjects
-  n_pars <- sampler$n_pars
   if (length(chains_mu) != n || length(chains_var) != n ||
       any(vapply(chains_mu, is.null, logical(1))) ||
       any(vapply(chains_var, is.null, logical(1))))
-    return(keep)
+    return(NULL)
+  pn <- sampler$par_names
+  q <- lapply(seq_len(n), function(s)
+    .emc_ensemble_q(as.numeric(chains_mu[[s]]), as.matrix(chains_var[[s]]), cfg))
+  rows <- lapply(seq_len(n), function(s) {
+    fresh <- .emc_ensemble_draw_q(cfg$pool - 1L, q[[s]], cfg)
+    colnames(fresh) <- pn
+    fresh
+  })
+  list(q = q, rows = rows, ll = NULL)
+}
+
+# Likelihoods of the fresh pool members, for any subject the subject step did
+# not already evaluate (serial fallback).
+.emc_ensemble_pool_ll <- function(sampler, pools, wpool, wpool_ctx, wpool_part) {
+  n <- sampler$n_subjects
+  M1 <- nrow(pools$rows[[1L]])
+  ll <- pools$ll
+  if (is.null(ll)) ll <- vector("list", n)
+  todo <- which(vapply(ll, function(x) is.null(x) || length(x) != M1, logical(1)))
+  if (length(todo)) {
+    ctx <- wpool_ctx
+    ctx$group_move_checked <- TRUE
+    pooled <- if (length(todo) == n)
+      .emc_wpool_group_move_ll(wpool, wpool_part, pools$rows, ctx) else NULL
+    if (is.null(pooled)) {
+      for (s in todo) ll[[s]] <- .emc_group_move_ll_candidate(
+        pools$rows[[s]], sampler$data[[s]], sampler$model, sampler$marginalise)
+    } else {
+      llm <- matrix(pooled$ll, nrow = M1)
+      for (s in todo) ll[[s]] <- llm[, s]
+      wpool <- pooled$pool
+    }
+  }
+  ll_new <- matrix(unlist(ll), nrow = M1)
+  if (anyNA(ll_new) || any(ll_new == Inf))
+    stop("Invalid ensemble pool likelihood")
+  list(ll = ll_new, wpool = wpool)
+}
+
+.emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
+                               wpool_part, pools) {
+  keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
+  if (is.null(pools)) return(keep)
+  cfg <- .emc_ensemble_options()
+  n <- sampler$n_subjects
+  n_pars <- sampler$n_pars
+  M <- cfg$pool
+  pn <- sampler$par_names
+  got <- .emc_ensemble_pool_ll(sampler, pools, wpool, wpool_ctx, wpool_part)
+  ll_new <- got$ll
+  wpool <- got$wpool
 
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
-  M <- cfg$pool
-  pn <- sampler$par_names
-
-  # Pools: current state at a uniform position, M - 1 fresh draws from q_s.
+  # Pools: current state at a uniform position among the M - 1 fresh draws.
   pool <- vector("list", n)
-  new_rows <- vector("list", n)
   for (s in seq_len(n)) {
-    q <- .emc_ensemble_q(as.numeric(chains_mu[[s]]), as.matrix(chains_var[[s]]), cfg)
-    fresh <- .emc_ensemble_draw_q(M - 1L, q, cfg)
-    colnames(fresh) <- pn
     k0 <- sample.int(M, 1L)
     A <- matrix(NA_real_, M, n_pars, dimnames = list(NULL, pn))
     A[k0, ] <- proposals[seq_len(n_pars), s]
-    A[-k0, ] <- fresh
-    pool[[s]] <- list(A = A, k = k0, lq = .emc_ensemble_log_q(A, q, cfg),
-                      ll = rep(NA_real_, M))
-    pool[[s]]$ll[k0] <- proposals[n_pars + 1L, s]
-    new_rows[[s]] <- fresh
+    A[-k0, ] <- pools$rows[[s]]
+    ll <- numeric(M)
+    ll[k0] <- proposals[n_pars + 1L, s]
+    ll[-k0] <- ll_new[, s]
+    pool[[s]] <- list(A = A, k = k0, lq = .emc_ensemble_log_q(A, pools$q[[s]], cfg),
+                      ll = ll)
   }
-
-  # Likelihoods of the fresh draws: one batch, one worker round trip.
-  ctx <- wpool_ctx
-  ctx$group_move_checked <- TRUE
-  pooled <- .emc_wpool_group_move_ll(wpool, wpool_part, new_rows, ctx)
-  if (is.null(pooled)) {
-    ll_new <- vapply(seq_len(n), function(s)
-      .emc_group_move_ll_candidate(new_rows[[s]], sampler$data[[s]],
-                                   sampler$model, sampler$marginalise),
-      numeric(M - 1L))
-    ll_new <- matrix(ll_new, nrow = M - 1L)
-  } else {
-    ll_new <- matrix(pooled$ll, nrow = M - 1L)
-    wpool <- pooled$pool
-  }
-  if (anyNA(ll_new) || any(ll_new == Inf))
-    stop("Invalid ensemble pool likelihood")
-  for (s in seq_len(n)) pool[[s]]$ll[-pool[[s]]$k] <- ll_new[, s]
   base_w <- unlist(lapply(pool, function(P) P$ll - P$lq))   # h-independent part of log w
   pool_stack <- do.call(rbind, lapply(pool, `[[`, "A"))
   subj_of_row <- rep(seq_len(n), each = M)
@@ -242,15 +281,12 @@
                           n_pars = n_pars, type = sampler$type)
     tmp$samples <- store
     pars <- gibbs_step(tmp, alpha_k, sampler$type)
-    lw_all <- base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler, n,
-                                           cfg$latent_weight)
-    for (s in seq_len(n)) {
-      lw <- lw_all[(s - 1L) * M + seq_len(M)]
-      selected[s] <- .emc_ensemble_select(lw)
-      if (r == cfg$rounds) {
-        w <- exp(lw - max(lw))
-        wess[s] <- sum(w)^2 / sum(w^2)
-      }
+    lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
+                                                  n, cfg$latent_weight), nrow = M)
+    selected <- .emc_ensemble_select_all(lw_all)
+    if (r == cfg$rounds) {
+      w <- exp(sweep(lw_all, 2, apply(lw_all, 2, max)))
+      wess <- colSums(w)^2 / colSums(w^2)
     }
   }
 
