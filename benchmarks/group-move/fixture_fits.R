@@ -110,7 +110,6 @@ if (args[1] == "fit") {
     emc <- run_emc(emc, stage = stage, stop_criteria = crit, cores_for_chains = 3L,
                    cores_per_chain = as.integer(Sys.getenv("CORES_PER_CHAIN", "9")),
                    particle_factor = as.numeric(Sys.getenv("PARTICLE_FACTOR", "50")),
-               emc2_opts = Sys.getenv("EMC2_OPTS"),
                    verbose = FALSE)
     timing[stage] <- proc.time()[["elapsed"]] - t0
     cat(format(Sys.time(), "%T"), case, arm, seed, stage, round(timing[stage]), "s\n")
