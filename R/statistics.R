@@ -571,6 +571,37 @@ rwish <- function(v, S){
   invisible(S_sym)
 }
 
+.emc_regularize_covariance <- function(S, rcond_target = 1e-6) {
+  if (!is.matrix(S) || nrow(S) != ncol(S)) return(S)
+  p <- nrow(S)
+  S_sym <- (S + t(S)) / 2
+  if (any(!is.finite(S_sym)) || all(S_sym == 0)) {
+    out <- diag(p) * 0.5
+    dimnames(out) <- dimnames(S)
+    return(out)
+  }
+  ev <- tryCatch(eigen(S_sym, symmetric = TRUE), error = function(e) NULL)
+  if (is.null(ev)) {
+    out <- diag(p) * 0.5
+    dimnames(out) <- dimnames(S)
+    return(out)
+  }
+  vals <- ev$values
+  max_val <- max(vals)
+  if (!is.finite(max_val) || max_val <= 0) {
+    out <- diag(p) * 0.5
+    dimnames(out) <- dimnames(S)
+    return(out)
+  }
+  floor_val <- max(max_val * rcond_target, 1e-8)
+  vals_reg <- pmax(vals, floor_val)
+  S_reg <- ev$vectors %*% (vals_reg * t(ev$vectors))
+  S_reg <- (S_reg + t(S_reg)) / 2
+  dimnames(S_reg) <- dimnames(S)
+  S_reg
+}
+
+
 riwish <- function(v, S, context = NULL){
   S <- .iwish_condition(S, context = context)
   S_inv <- tryCatch(solve(S), error = function(e) {
@@ -880,6 +911,29 @@ condMVN <- function (mean, sigma, dependent.ind, given.ind, X.given, check.sigma
   cVar <- B - CDinv %*% t(C)
   cVar <- (cVar + t(cVar)) / 2
   list(condMean = cMu, condVar = cVar)
+}
+
+.emc_mean_conditional <- function(s, samples, n_pars, iteration = NULL, idx = NULL) {
+  if (is.null(iteration)) iteration <- samples$iteration
+  if (is.null(idx)) idx <- seq_len(n_pars)
+  p <- if (is.logical(idx)) sum(idx) else length(idx)
+  alpha <- matrix(samples$alpha[idx, s, ], nrow = p)
+  theta_mu <- if (!is.null(samples$conditional_mu)) {
+    matrix(samples$conditional_mu[idx, s, ], nrow = p)
+  } else {
+    matrix(samples$theta_mu[idx, ], nrow = p)
+  }
+  joint <- rbind(alpha, theta_mu)
+  sigma <- stats::cov(t(joint))
+  dependent <- seq_len(p)
+  given <- p + dependent
+  # Shrink the fitted cross-covariance to keep a broad proposal in small samples.
+  sigma[dependent, given] <- 0.95 * sigma[dependent, given]
+  sigma[given, dependent] <- t(sigma[dependent, given])
+  cond <- condMVN(mean = rowMeans(joint), sigma = sigma,
+                  dependent.ind = dependent, given.ind = given,
+                  X.given = theta_mu[, iteration])
+  list(eff_mu = cond$condMean, eff_var = cond$condVar)
 }
 
 

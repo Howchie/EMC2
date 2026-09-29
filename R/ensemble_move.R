@@ -30,7 +30,8 @@
 # direction (Mengersen & Tweedie 1996): a too-narrow q_s makes rare draws in
 # its tail win the reselection and then linger. The window covariance of a
 # slow-mixing subject can be 2x too narrow in SD, hence the 4x. It is rebuilt
-# with the chain proposals in discarded stages and fixed during sampling.
+# with the chain proposals: at every refresh in the discarded stages, and in
+# sampling on the diminishing-adaptation schedule (100, 200, 400, ... draws).
 
 .emc_ensemble_options <- function() {
   int_opt <- function(name, default) {

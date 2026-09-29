@@ -487,17 +487,7 @@ last_sample_standard <- function(store) {
 }
 
 get_conditionals_standard <- function(s, samples, n_pars, iteration = NULL, idx = NULL){
-  iteration <- ifelse(is.null(iteration), samples$iteration, iteration)
-  if(is.null(idx)) idx <- 1:n_pars
-  # drop = FALSE: a single-parameter block (n_blocks > 1) must stay 3-d.
-  pts2_unwound <- apply(samples$theta_var[idx,idx,,drop = FALSE],3,unwind)
-  all_samples <- rbind(samples$alpha[idx, s,],samples$theta_mu[idx,],pts2_unwound)
-  mu_tilde <- rowMeans(all_samples)
-  var_tilde <- stats::cov(t(all_samples))
-  condmvn <- condMVN(mean = mu_tilde, sigma = var_tilde,
-                     dependent.ind = 1:n_pars, given.ind = (n_pars + 1):length(mu_tilde),
-                     X.given = c(samples$theta_mu[idx,iteration], unwind(samples$theta_var[idx,idx,iteration])))
-  return(list(eff_mu = condmvn$condMean, eff_var = condmvn$condVar))
+  .emc_mean_conditional(s, samples, n_pars, iteration, idx)
 }
 
 unwind <- function(var_matrix, ...) {
@@ -513,6 +503,20 @@ filtered_samples_standard <- function(sampler, filter, ...){
     alpha = sampler$samples$alpha[, , filter, drop = F],
     iteration = length(filter)
   )
+  if (!is.null(sampler$gd)) {
+    p <- length(sampler$gd)
+    out$conditional_mu <- array(NA_real_,
+      dim = c(p, sampler$n_subjects, length(filter)))
+    offset <- 0L
+    for (k in seq_len(p)) {
+      width <- ncol(sampler$gd[[k]])
+      rows <- offset + seq_len(width)
+      out$conditional_mu[k, , ] <-
+        sampler$gd[[k]] %*% out$theta_mu[rows, , drop = FALSE]
+      offset <- offset + width
+    }
+  }
+  out
 }
 
 

@@ -544,23 +544,7 @@ get_group_level_SEM <- function(parameters, s){
 
 
 get_conditionals_SEM <- function(s, samples, n_pars, iteration = NULL, idx = NULL){
-  iteration <- ifelse(is.null(iteration), samples$iteration, iteration)
-  if(is.null(idx)) idx <- 1:n_pars
-  epsilon_inv <- log(samples$epsilon_inv[idx,])
-  eta <- matrix(samples$eta[s,,], nrow = samples$n_factors)
-  Lambda_mat <- samples$sem_settings$Lambda_mat
-  lambda <- apply(samples$lambda[idx,,,drop = F], 3, unwind_lambda, Lambda_mat[idx,])
-  theta_mu <- samples$theta_mu[idx,]
-  all_samples <- rbind(samples$alpha[idx, s,],theta_mu, eta, epsilon_inv, lambda)
-  mu_tilde <- rowMeans(all_samples)
-  var_tilde <- cov(t(all_samples))
-  condmvn <- condMVN(mean = mu_tilde, sigma = var_tilde,
-                     dependent.ind = 1:n_pars, given.ind = (n_pars + 1):length(mu_tilde),
-                     X.given = c(samples$theta_mu[idx,iteration],
-                                 samples$eta[s,,iteration],
-                                 log(samples$epsilon_inv[idx, iteration]),
-                                 unwind_lambda(samples$lambda[idx,, iteration], Lambda_mat[idx,])))
-  return(list(eff_mu = condmvn$condMean, eff_var = condmvn$condVar))
+  .emc_mean_conditional(s, samples, n_pars, iteration, idx)
 }
 
 filtered_samples_SEM <- function(sampler, filter){

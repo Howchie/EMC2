@@ -11,7 +11,7 @@ test_that("sample-stage proposals are rebuilt on a doubling schedule from all pr
       calls[[length(calls) + 1L]] <<- list(kind = "chain", window = samples_idx)
       emc
     },
-    create_eff_proposals = function(emc, n_cores) {
+    create_eff_proposals = function(emc, n_cores, ...) {
       calls[[length(calls) + 1L]] <<- list(kind = "eff")
       emc
     },
@@ -46,10 +46,11 @@ test_that("sample-stage proposals are rebuilt on a doubling schedule from all pr
   expect_identical(emc[[1]]$sample_proposals_next, 400L)
   emc <- step(emc, 300)
   expect_length(calls, 0L)
-  # Warm-up stages still rebuild every time.
+  # Warm-up stages still rebuild every time. Adapt tunes the full production
+  # mixture, so it also builds the efficient proposal.
   calls <- list()
   EMC2:::add_proposals(list(make_chain(10, 0)), "adapt", 1, NULL)
-  expect_length(calls, 1L)
+  expect_identical(vapply(calls, `[[`, "", "kind"), c("chain", "eff"))
 })
 
 # End to end: a real fit on a weak-data Gaussian mock whose exact posterior is

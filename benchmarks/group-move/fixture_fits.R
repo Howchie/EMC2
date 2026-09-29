@@ -113,6 +113,12 @@ if (args[1] == "fit") {
                    verbose = FALSE)
     timing[stage] <- proc.time()[["elapsed"]] - t0
     cat(format(Sys.time(), "%T"), case, arm, seed, stage, round(timing[stage]), "s\n")
+    if (nzchar(Sys.getenv("SAVE_EMC"))) {
+      save(emc, file = file.path(root, sprintf("emc-%s-%s-seed%d.RData", case, arm, seed)))
+      pm <- attr(emc[[1]]$samples, "pm_settings")
+      eps <- unlist(lapply(pm, function(s) lapply(s, function(b) b$epsilon)))
+      cat("  epsilon (chain 1):", signif(quantile(eps), 3), "\n")
+    }
   }
   emc <- EMC2:::restore_duplicates(emc)
   iters <- sapply(c("preburn", "burn", "adapt", "sample"), function(st)
@@ -130,6 +136,9 @@ if (args[1] == "fit") {
   alpha_ess <- sapply(seq_len(dim(emc[[1]]$samples$alpha)[2]), function(sj)
     sapply(seq_along(pn), function(p) posterior::ess_bulk(
       sapply(emc, function(ch) ch$samples$alpha[p, sj, idx]))))
+  alpha_rhat <- sapply(seq_len(dim(emc[[1]]$samples$alpha)[2]), function(sj)
+    sapply(seq_along(pn), function(p) posterior::rhat(
+      sapply(emc, function(ch) ch$samples$alpha[p, sj, idx]))))
   ens <- tryCatch(EMC2:::ensemble_diagnostics(emc), error = function(e) NULL)
   ens_subj <- lapply(emc, function(ch) { st <- ch$ensemble_stats
     if (is.null(st$subj_moved)) NULL else cbind(moved = st$subj_moved, wess = st$subj_wess) / st$sweeps })
@@ -139,7 +148,8 @@ if (args[1] == "fit") {
                particle_factor = as.numeric(Sys.getenv("PARTICLE_FACTOR", "50")),
                emc2_opts = Sys.getenv("EMC2_OPTS"),
                iters = iters,
-               draws = draws, alpha_ess = alpha_ess, ens = ens, ens_subj = ens_subj,
+               draws = draws, alpha_ess = alpha_ess, alpha_rhat = alpha_rhat,
+               library = find.package("EMC2"), ens = ens, ens_subj = ens_subj,
                alpha_draws = alpha_draws,
                type = type, par_groups = par_groups,
                truth = list(mu = fx$group_means, cov = fx$intended_covariance)),

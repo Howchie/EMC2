@@ -78,3 +78,21 @@ test_that("long runs of identical sample iterations are detectable", {
   samples$alpha[, , 2] <- samples$alpha[, , 1]
   expect_true(.emc_sample_iteration_equal(samples, 2))
 })
+
+test_that("a proposal-covariance fallback resets only the affected subject", {
+  pm <- lapply(1:3, function(s) list(list(epsilon = c(.2, .3))))
+  pmwgs <- list(samples = list()); attr(pmwgs$samples, "pm_settings") <- pm
+  out <- update_epsilon_scale(pmwgs, prop_var_ratio = c(4, 1, 1),
+                              reset = c(FALSE, TRUE, FALSE))
+  eps <- lapply(attr(out$samples, "pm_settings"), function(x) x[[1]]$epsilon)
+  expect_equal(eps[[1]], c(.4, .6))
+  expect_equal(eps[[2]], c(1, 1))
+  expect_equal(eps[[3]], c(.2, .3))
+})
+
+test_that("epsilon is padded to every proposal component a stage adds", {
+  expect_equal(EMC2:::check_epsilon(0.3, 13, c(.05, .3, .3, .35)),
+               c(0.3, 0.3, 0.3))
+  expect_equal(EMC2:::check_epsilon(c(0.2, 0.4), 13, c(.05, .3, .3, .35)),
+               c(0.2, 0.4, 0.4))
+})

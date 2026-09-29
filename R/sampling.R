@@ -1196,7 +1196,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     Sigmas <- list(group_var, group_var, chains_var)
     sig_tags <- c("group", "group", "chains")
     state_centred <- c(FALSE, TRUE, TRUE)
-  } else if(stage == "adapt"){
+  } else if(stage == "adapt" &&
+            (is.null(eff_mu) || length(pm_settings[[1]]$mix) < 4L)){
     Mus <- list(group_mu, subj_mu, chains_mu)
     Sigmas <- list(group_var, chains_var, chains_var)
     sig_tags <- c("group", "chains", "chains")
@@ -1215,6 +1216,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   }
   for(i in unq_components){
     epsilons <- c(1, pm_settings[[i]]$epsilon)
+    # Independence proposals are not shrunk: a scale below one on a fitted
+    # covariance removes their coverage in high dimension. Only the local
+    # (state-centred) step size is tuned.
+    epsilons <- rep_len(epsilons, n_proposals)
+    epsilons[!state_centred] <- 1
     idx_full <- tune$components == i
     idx <- idx_full & !marginal_idx
     p_idx <- sum(idx)
@@ -1375,6 +1381,21 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       l <- lw_total + prior_density + aux_density - lm
       weights <- exp(l - max(l))
       idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
+      # Diagnostics only: which component supplied the selected particle and
+      # how far it moved the state.
+      comp_of <- c(0L, rep(ks, particle_numbers[ks]))
+      if (is.null(pm_settings[[i]]$sel) ||
+          length(pm_settings[[i]]$sel[[stage]]$n) != n_proposals)
+        pm_settings[[i]]$sel[[stage]] <- list(n = numeric(n_proposals),
+                                              disp = numeric(n_proposals),
+                                              steps = 0)
+      pm_settings[[i]]$sel[[stage]]$steps <- pm_settings[[i]]$sel[[stage]]$steps + 1
+      if (comp_of[idx_ll] > 0L) {
+        kk <- comp_of[idx_ll]
+        pm_settings[[i]]$sel[[stage]]$n[kk] <- pm_settings[[i]]$sel[[stage]]$n[kk] + 1
+        pm_settings[[i]]$sel[[stage]]$disp[kk] <- pm_settings[[i]]$sel[[stage]]$disp[kk] +
+          sqrt(sum((proposals[idx_ll, idx] - ref)^2))
+      }
 
       offset <- 1L
       for (k in ks) {
@@ -1444,11 +1465,13 @@ update_pm_settings <- function(pm_settings, better, particle_numbers,
     acc_rates <- ifelse(pm_settings$proposal_counts > 0, pm_settings$acc_counts / pm_settings$proposal_counts, 0)
 
     clamp_min <- ifelse(length(pm_settings$mix) == 2, .1, ifelse(length(pm_settings$mix) == 3, .4, .6))
+    # One target per non-group component, whatever the stage's mixture holds.
+    target <- rep_len(tune$p_accept, length(acc_rates) - 1L)
 
     new_epsilon <- update_epsilon_continuous(
       epsilon   = pm_settings$epsilon,
       acceptance = acc_rates[-1],
-      target     = tune$p_accept,
+      target     = target,
       iter       = pm_settings$iter,
       d          = n_pars,
       alphaStar  = tune$alphaStar,
@@ -1464,7 +1487,7 @@ update_pm_settings <- function(pm_settings, better, particle_numbers,
       performance <- (acc_rates + eps_val) / pm_settings$mix
       performance <- performance / sum(performance)
 
-      adj_factor <- c(mean(tune$p_accept), tune$p_accept)
+      adj_factor <- c(mean(target), target)
       performance <- performance / adj_factor
 
       performance <- performance / sum(performance)
@@ -1618,7 +1641,7 @@ fill_samples_RE <- function(samples, proposals, j = 1, n_pars, ...){
 set_p_accept <- function(stage, search_width){
   if(stage == "preburn") return(0.02 * (1/search_width))
   if(stage == "burn") return(c(0.02, 0.25)* (1/search_width))
-  if(stage == "adapt") return(c(0.2, 0.25)* (1/search_width))
+  if(stage == "adapt") return(c(0.2, 0.25, 0.25)* (1/search_width))
   if(stage == "sample") return(c(0.3, 0.3, 0.3)* (1/search_width))
 }
 
@@ -1626,7 +1649,7 @@ get_default_mix <- function(stage){
   if (stage == "burn") {
     default_mix <- c(0.15, 0.35, 0.5)
   } else if(stage == "adapt"){
-    default_mix <- c(0.1, 0.4, 0.4)
+    default_mix <- c(0.05, 0.3, 0.3, 0.35)
   } else if(stage == "sample"){
     default_mix <- c(0.05, 0.3, 0.3, 0.35)
   }  else{
@@ -1660,7 +1683,10 @@ check_epsilon <- function(epsilon, n_pars, mix) {
       epsilon <- .7
     }
   } else if(length(epsilon) < (length(mix) -1)){
-    epsilon <- c(epsilon, epsilon[length(epsilon)])
+    # A stage can add more than one component (adapt now tunes the full
+    # production mixture), so pad to the full length.
+    epsilon <- c(epsilon, rep(epsilon[length(epsilon)],
+                              length(mix) - 1 - length(epsilon)))
   }
   return(epsilon)
 }
