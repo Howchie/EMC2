@@ -64,8 +64,11 @@ test_that("run_blocked", {
   expect_snapshot(
     LNR_blocked[[1]]$samples$theta_var[,,idx], variant = Sys.info()[1]
   )
+  # Information criteria only: bridge sampling on a 25-iteration preburn fails
+  # to converge for some seeds, and blocked bridge sampling has its own exact
+  # tests in test-group-bridge.R.
   expect_snapshot(
-    compare(list(blocked = LNR_blocked),
+    compare(list(blocked = LNR_blocked), BayesFactor = FALSE,
             stage = "preburn", cores_for_props = 1),
     variant = Sys.info()[1]
   )

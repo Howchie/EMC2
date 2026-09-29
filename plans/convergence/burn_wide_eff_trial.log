@@ -1,0 +1,9 @@
+Running burn stage
+Laplace refresh: 135/135 covariances
+[burn | try=1 | iters=300 | Mean Rhat=1.127] Duration: 1.5 min - ETA: 19.6 min-21.1 min
+Laplace refresh: 135/135 covariances
+[burn | try=2 | iters=300 | Mean Rhat=1.08] Duration: 1.6 min - ETA: 20.5 min-22.1 min
+Laplace refresh: 135/135 covariances
+[burn | try=3 | iters=400 | Mean Rhat=1.05] Duration: 1.7 min - ETA: 20.7 min-22.4 min
+Laplace refresh: 135/135 covariances
+[burn | try=4 | iters=500 | Mean Rhat=1.033] Duration: 1.7 min - ETA: 18.2 min-19.9 min

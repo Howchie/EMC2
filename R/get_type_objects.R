@@ -144,9 +144,9 @@ get_objects_standard <- function(selection, sample_prior, return_prior, design =
   } else{
     if(!selection %in% acc_selection) stop(paste0("selection must be in : ", paste(acc_selection, collapse = ", ")))
     if(sample_prior){
-      if(!is.null(sampler$par_groups)){
-        dots$par_groups <- sampler$par_groups
-        dots$group_design <- sampler$group_design
+      # The sampler stores the groups as par_group, on each chain.
+      if(!is.null(sampler[[1]]$par_group)){
+        dots$par_groups <- sampler[[1]]$par_group
       }
       if(selection == "alpha" & !is.null(sampler)){
         mu <- get_pars(sampler, selection = "beta", stage = stage, map = FALSE, return_mcmc = FALSE, merge_chains = TRUE, ...)

@@ -176,6 +176,10 @@ get_startpoints_standard <- function(pmwgs, start_mu, start_var){
   if (is.null(start_mu)) start_mu <- rmvnorm(1, mean = pmwgs$prior$theta_mu_mean, sigma = pmwgs$prior$theta_mu_var)[1,]
   # If no starting point for group var just sample some
   if (is.null(start_var)) start_var <- riwish(n_pars * 3, diag(n_pars))
+  # Diagonal and blocked variants: no covariance across groups, from the start.
+  # (A principal block-diagonal part of a positive definite matrix stays so.)
+  par_group <- pmwgs$par_group[!pmwgs$nuisance]
+  if (length(par_group) == n_pars) start_var[outer(par_group, par_group, "!=")] <- 0
   start_a_half <- 1 / rgamma(n = n_pars, shape = 2, rate = 1)
 
   # Calculate subject-specific means using design matrices

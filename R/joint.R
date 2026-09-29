@@ -7,7 +7,11 @@ single_out_joint <- function(joint_samples_list, i){
 }
 
 get_joint_names <- function(emc){
-  unique(gsub("[|].*", "", names(sampled_pars(emc))))
+  # From the sampler's parameter names: sampled_pars(emc) reads the data, and
+  # get_data() of a joint model calls this function (infinite recursion).
+  par_names <- emc[[1]]$par_names
+  if (is.null(par_names)) par_names <- names(sampled_pars(get_design(emc)))
+  unique(gsub("[|].*", "", par_names))
 }
 
 return_single_sampler <- function(joint_samples, i){

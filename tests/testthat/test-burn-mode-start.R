@@ -122,3 +122,151 @@ test_that("proposal covariances can use a wider group prior than the mode", {
                solve(solve(prior$var) / 4 + solve(likelihood_var)),
                tolerance = 1e-4)
 })
+
+test_that("the batched gradient-difference Hessian matches stats::optimHess", {
+  set.seed(11)
+  for (p in c(1L, 3L, 12L)) {
+    A <- crossprod(matrix(rnorm(p * p), p)) / p + diag(p)
+    ll_batch <- function(x) {
+      if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+      -0.5 * rowSums((x %*% A) * x) - rowSums(sin(x)^2) + rowSums(x^3) / 10
+    }
+    x <- rnorm(p) * 0.3
+    reference <- stats::optimHess(x, function(z) -ll_batch(z))
+    # Several likelihood batches, one split inside a pair's four points.
+    for (max_rows in c(4096L, 7L)) {
+      expect_equal(EMC2:::.emc_gradient_difference_hessian(
+        x, ll_batch, max_rows = max_rows), reference,
+        tolerance = 1e-8, ignore_attr = TRUE)
+    }
+  }
+  outside <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+    v <- -rowSums(x^2)
+    v[x[, 1L] > 0.0015] <- -Inf
+    v
+  }
+  expect_null(EMC2:::.emc_gradient_difference_hessian(c(0.001, 0), outside))
+})
+
+test_that("subjects with more than 40 parameters still get a mode covariance", {
+  p <- 45L
+  prior <- list(mu = rep(0, p), var = diag(p))
+  likelihood_var <- diag(seq(0.2, 1, length.out = p))
+  observation <- seq(-1, 1, length.out = p)
+  ll_batch <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+    d <- sweep(x, 2L, observation)
+    -0.5 * rowSums(sweep(d^2, 2L, diag(likelihood_var), "/"))
+  }
+  result <- EMC2:::.emc_optimize_subject(rep(0.5, p), prior, ll_batch)
+  expect_identical(result$reason, "ok")
+  expect_equal(result$covariance,
+               solve(solve(prior$var) + solve(likelihood_var)),
+               tolerance = 1e-4)
+})
+
+test_that("the optimiser never re-evaluates the point it just evaluated", {
+  # optim() calls the gradient at the point it has just evaluated; the smooth
+  # Gaussian also never needs a one-sided difference, so every single-point
+  # likelihood call is a new point.
+  prior <- list(mu = c(-1, 0.5), var = matrix(c(2, 0.3, 0.3, 1), 2))
+  seen <- list()
+  ll_batch <- function(x) {
+    if (is.null(dim(x))) {
+      seen[[length(seen) + 1L]] <<- x
+      x <- matrix(x, nrow = 1L)
+    }
+    -0.5 * rowSums(sweep(x, 2L, c(1.2, -0.7))^2 / 0.5)
+  }
+  result <- EMC2:::.emc_optimize_subject(c(4, 3), prior, ll_batch)
+  expect_identical(result$reason, "ok")
+  repeats <- vapply(seq_along(seen)[-1L], function(i)
+    identical(seen[[i]], seen[[i - 1L]]), logical(1))
+  expect_false(any(repeats))
+})
+
+test_that("joint models take per-model gradients and Hessians", {
+  design_in <- get_design(samples_LNR)[[1]]
+  data_in <- get_data(samples_LNR)
+  joint <- suppressMessages(make_emc(
+    list(data_in, data_in), list(a = design_in, b = design_in),
+    prior_list = prior(list(a = design_in, b = design_in)), n_chains = 1))
+  sampler <- joint[[1]]
+  blocks <- EMC2:::.emc_joint_ll_blocks(sampler, 1L)
+  expect_length(blocks, 2L)
+  p <- sampler$n_pars
+  expect_setequal(unlist(lapply(blocks, `[[`, "idx")), seq_len(p))
+  par_names <- rownames(sampler$samples$alpha)
+  ll_batch <- function(x) EMC2:::.emc_burn_ll_batch(
+    x, sampler$data[[1L]], sampler$model, par_names)
+  # A different point in each model, so a swapped block would show.
+  x <- as.numeric(get_pars(samples_LNR, selection = "alpha", stage = "sample",
+                           return_mcmc = FALSE, merge_chains = TRUE)[, 1L, 1L])
+  x <- c(x, x + c(0.05, -0.05))[seq_len(p)]
+  points <- rbind(x, x + 0.01, x - 0.01)
+  expect_equal(ll_batch(points), Reduce(`+`, lapply(blocks, function(b)
+    b$ll(points[, b$idx, drop = FALSE]))), tolerance = 1e-12)
+  prior_var <- diag(p)
+  full <- EMC2:::.emc_burn_hessian(x, prior_var, diag(p), ll_batch)
+  blocked <- EMC2:::.emc_burn_hessian(x, prior_var, diag(p), ll_batch,
+                                      blocks = blocks)
+  expect_true(is.matrix(blocked))
+  expect_equal(blocked, full, tolerance = 1e-6)
+  expect_null(EMC2:::.emc_joint_ll_blocks(
+    suppressMessages(make_emc(data_in, design_in, n_chains = 1))[[1]], 1L))
+})
+
+test_that("burn ensemble normal retains the wide Laplace metric", {
+  emc <- samples_LNR
+  covariance <- diag(c(0.2, 0.4, 0.6, 0.8))
+  for (j in seq_along(emc)) {
+    emc[[j]]$samples$stage[] <- "burn"
+    emc[[j]]$burn_mode_index <- 1L
+    n_subjects <- dim(emc[[j]]$samples$alpha)[2L]
+    n_pars <- dim(emc[[j]]$samples$alpha)[1L]
+    emc[[j]]$burn_mode_var <- rep(list(covariance), n_subjects)
+    emc[[j]]$burn_mode_mu <- rep(list(rep(0, n_pars)), n_subjects)
+  }
+  out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50,
+                                        stage = "burn")
+  expect_equal(out[[1L]]$chains_var[[1L]], covariance)
+  expect_equal(out[[1L]]$ensemble_q$var[[1L]], 3 * covariance)
+})
+
+test_that("Laplace importance starts are posterior draws with a Pareto diagnostic", {
+  set.seed(21)
+  # Gaussian posterior: the Laplace is exact, so every weight is equal (k low)
+  # and the resampled starts have the posterior's moments.
+  prior <- list(mu = c(0, 0), var = diag(2))
+  likelihood_var <- diag(c(0.5, 0.2))
+  ll_batch <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+    -0.5 * rowSums(sweep(sweep(x, 2L, c(1, -1))^2, 2L, diag(likelihood_var), "/"))
+  }
+  post_var <- solve(diag(2) + solve(likelihood_var))
+  post_mode <- drop(post_var %*% solve(likelihood_var, c(1, -1)))
+  starts <- t(replicate(400, {
+    out <- EMC2:::.emc_laplace_is_start(post_mode, post_var, prior, ll_batch)
+    c(out$start, out$pareto_k)
+  }))
+  expect_true(all(starts[, 3L] < 0.5))
+  expect_equal(colMeans(starts[, 1:2]), post_mode, tolerance = 0.05)
+  expect_equal(cov(starts[, 1:2]), post_var, tolerance = 0.2)
+  # A posterior cut off just above the mode (support boundary): the Gaussian
+  # puts half its mass outside and every start stays inside the support.
+  edge <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+    v <- ll_batch(x)
+    v[x[, 1L] > post_mode[1L] + 0.01] <- -Inf
+    v
+  }
+  out <- replicate(50, unlist(EMC2:::.emc_laplace_is_start(
+    post_mode, post_var, prior, edge)[c("start", "outside")]))
+  expect_true(all(out[1L, ] <= post_mode[1L] + 0.01))
+  expect_equal(mean(out[3L, ]), 0.5 - 0.01 / sqrt(post_var[1L, 1L]) * dnorm(0),
+               tolerance = 0.05)
+  # Nothing inside the support: no start.
+  expect_null(EMC2:::.emc_laplace_is_start(
+    post_mode, post_var, prior, function(x) rep(-Inf, NROW(x))))
+})

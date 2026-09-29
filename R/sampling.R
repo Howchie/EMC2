@@ -553,8 +553,18 @@ run_stage <- function(pmwgs,
     template$acc_counts <- NULL
     rep(list(template), n_comp)
   })
-  tune <- check_tune_settings(tune, n_pars, stage, particles)
-  pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,  stage = stage, n_pars = n_pars, particles)
+  burn_eff_ready <- stage == "burn" && isTRUE(pmwgs$burn_eff_ready)
+  proposal_stage <- if (burn_eff_ready) "adapt" else stage
+  tune <- check_tune_settings(tune, n_pars, proposal_stage, particles)
+  if (burn_eff_ready) {
+    pm_settings <- lapply(pm_settings, function(x) {
+      for (i in seq_along(x))
+        if (is.null(x[[i]]$mix)) x[[i]]$mix <- c(0.1, 0.25, 0.5, 0.15)
+      x
+    })
+  }
+  pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,
+                        stage = proposal_stage, n_pars = n_pars, particles)
 
   eff_mu <- pmwgs$eff_mu
   eff_var <- pmwgs$eff_var
@@ -1191,7 +1201,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     sig_tags <- c("group", "group")
     state_centred <- c(FALSE, TRUE)
     particle_multiplier <- 2
-  } else if(stage == "burn"){
+  } else if(stage == "burn" && length(pm_settings[[1L]]$mix) < 4L){
     Mus <- list(group_mu, subj_mu, subj_mu)
     Sigmas <- list(group_var, group_var, chains_var)
     sig_tags <- c("group", "group", "chains")
@@ -1384,11 +1394,17 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       # Diagnostics only: which component supplied the selected particle and
       # how far it moved the state.
       comp_of <- c(0L, rep(ks, particle_numbers[ks]))
-      if (is.null(pm_settings[[i]]$sel) ||
-          length(pm_settings[[i]]$sel[[stage]]$n) != n_proposals)
+      if (is.null(pm_settings[[i]]$sel[[stage]])) {
         pm_settings[[i]]$sel[[stage]] <- list(n = numeric(n_proposals),
                                               disp = numeric(n_proposals),
                                               steps = 0)
+      } else if (length(pm_settings[[i]]$sel[[stage]]$n) < n_proposals) {
+        extra <- n_proposals - length(pm_settings[[i]]$sel[[stage]]$n)
+        pm_settings[[i]]$sel[[stage]]$n <- c(pm_settings[[i]]$sel[[stage]]$n,
+                                               numeric(extra))
+        pm_settings[[i]]$sel[[stage]]$disp <- c(pm_settings[[i]]$sel[[stage]]$disp,
+                                                  numeric(extra))
+      }
       pm_settings[[i]]$sel[[stage]]$steps <- pm_settings[[i]]$sel[[stage]]$steps + 1
       if (comp_of[idx_ll] > 0L) {
         kk <- comp_of[idx_ll]

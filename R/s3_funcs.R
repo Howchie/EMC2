@@ -196,17 +196,22 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
         design[[j]] <- design[[design[[j]]$fMRI_design[[1]]]]
       }
     }
+    # Simulation needs every parameter, including any held constant across
+    # draws, which get_pars() otherwise drops.
+    keep_all <- list(remove_constants = FALSE, remove_dup = FALSE)
     if (hyper) {
       mu <- do.call(get_pars, c(list(emc, selection = "mu", map = FALSE, return_mcmc = FALSE, merge_chains = TRUE,
-                    length.out = ceiling(n_post/length(emc))), fix_dots(list(...), get_pars)))
+                    length.out = ceiling(n_post/length(emc))),
+                    utils::modifyList(keep_all, fix_dots(list(...), get_pars))))
       Sigma <- do.call(get_pars, c(list(emc, selection = "Sigma", map = FALSE, return_mcmc = FALSE, merge_chains = TRUE,
-                     remove_dup = FALSE, remove_constants = FALSE, length.out = ceiling(n_post/length(emc))), fix_dots(list(...), get_pars)))
+                     length.out = ceiling(n_post/length(emc))),
+                     utils::modifyList(keep_all, fix_dots(list(...), get_pars))))
       pars <- get_alphas(mu, Sigma, subjects)
       pars <- pars[,,1:n_post] # With non-equally divisible n_post you get some remainder
       pars <- lapply(seq_len(dim(pars)[3]), function(i) t(pars[,,i]))
     } else {
       dots$selection <- "alpha"; dots$merge_chains <- TRUE; dots$by_subject <- TRUE
-      samps <- do.call(get_pars, c(list(emc), fix_dots(dots, get_pars)))
+      samps <- do.call(get_pars, c(list(emc), utils::modifyList(keep_all, fix_dots(dots, get_pars))))
       if (stat != "random") {
         p <- do.call(rbind, lapply(samps, function(x) apply(x[[1]], 2, stat)))
       }

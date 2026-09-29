@@ -56,3 +56,7 @@ graphify-out/
 
 # Benchmark outputs (fits, fixtures, emc objects)
 benchmarks/*/results/
+
+# Local fit snapshots and checkpoints under plans/ (large, machine-specific)
+plans/**/*.RData
+plans/**/*.rds

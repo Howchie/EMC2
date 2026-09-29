@@ -369,6 +369,29 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
   if(stage == "adapt"){
     emc <- create_eff_proposals(emc, n_cores, from_burn = TRUE)
   }
+  if (stage == "burn") {
+    for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- FALSE
+    if (chain_n(emc)[1L, "burn"] >= 200L && !any(emc[[1L]]$nuisance)) {
+      emc <- tryCatch(create_eff_proposals(emc, n_cores, from_burn = TRUE),
+                      error = function(e) {
+                        warning("Burn efficient proposal unavailable: ",
+                                conditionMessage(e), call. = FALSE)
+                        emc
+                      })
+      ready <- all(vapply(emc, function(chain) {
+        isTRUE(chain$burn_eff_ready) &&
+          length(chain$eff_mu) == chain$n_subjects &&
+          length(chain$eff_var) == chain$n_subjects &&
+          all(vapply(chain$eff_mu, function(x)
+            length(x) == chain$n_pars && all(is.finite(x)), logical(1))) &&
+          all(vapply(chain$eff_var, function(x)
+            is.matrix(x) && nrow(x) == chain$n_pars &&
+              ncol(x) == chain$n_pars &&
+              .emc_empirical_covariance_ok(x), logical(1)))
+      }, logical(1)))
+      for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- ready
+    }
+  }
   if(stage == "sample"){
     t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_eff_proposals(emc, n_cores)
@@ -696,6 +719,7 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
     })
     emc[[i]]$eff_mu <- eff_mu
     emc[[i]]$eff_var <- eff_var
+    if (from_burn) emc[[i]]$burn_eff_ready <- TRUE
   }
   return(emc)
 }
