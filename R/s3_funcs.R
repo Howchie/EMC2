@@ -1364,11 +1364,12 @@ get_group_design <- function(x){
 #' @rdname sampled_pars
 #' @export
 sampled_pars.emc <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
-                             all_cells_dm = FALSE, data = NULL, use_data = TRUE){
+                             all_cells_dm = FALSE, data = NULL, use_data = TRUE,
+                             include_pooled = FALSE){
   if (isTRUE(use_data) && is.null(data)) data <- get_data(x)
   return(sampled_pars(get_design(x), group_design = group_design, doMap = doMap,
                           add_da = add_da, all_cells_dm = all_cells_dm, data = data,
-                          use_data = use_data))
+                          use_data = use_data, include_pooled = include_pooled))
 }
 
 #' @rdname auto_thin

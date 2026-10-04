@@ -1072,10 +1072,19 @@
   rejects_before <- .emc_reject_counts("particle")
   for (k in seq_along(subs)) {
     s <- subs[k]
+    data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
+    if (isTRUE(msg$rows_only)) {
+      # Pooled-parameter candidates (R/pooled.R): no particle step, no RNG.
+      props[, k] <- c(msg$alpha[, k], msg$prev_ll[k])
+      pm[[k]] <- msg$pm[[k]]
+      seeds[[k]] <- msg$seeds[[k]]
+      extra_ll[[k]] <- .emc_pooled_rows_ll(msg$extra[[k]], data_s, ctx$model)
+      next
+    }
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
     t0 <- sum(proc.time()[c("user.self", "sys.self")])
     out <- safe_new_particle(
-      s = s, data = ctx$data[[s]], pm_settings = msg$pm[[k]],
+      s = s, data = data_s, pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
       prev_ll = msg$prev_ll[k], parameters = NULL, model = ctx$model,
@@ -1092,7 +1101,7 @@
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
     # Ensemble pool members for this subject (no RNG use).
     if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
-      extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], ctx$data[[s]],
+      extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], data_s,
                                                   ctx$model, ctx$marginalise)
   }
   w_spent <- proc.time() - w_started
@@ -1332,7 +1341,8 @@
 
 
 .emc_wpool_iter <- function(pool, ctx, part, pars, group_chol, pm_settings,
-                            prev_ll, seeds, extra = NULL) {
+                            prev_ll, seeds, extra = NULL, pooled = NULL,
+                            rows_only = FALSE) {
   profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
   iter_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   n_subjects <- length(pm_settings)
@@ -1377,6 +1387,7 @@
          population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
          extra = if (is.null(extra)) NULL else extra[subs],
+         pooled = pooled, rows_only = rows_only,
          notify = watch, w = w, generation = generation, request = request)
   })
   sent <- rep(FALSE, pool$n)
@@ -1454,6 +1465,7 @@
          population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
          extra = if (is.null(extra)) NULL else extra[subs],
+         pooled = pooled, rows_only = rows_only,
          notify = watch, w = w, generation = generation, request = req,
          iter_key = request)
   }

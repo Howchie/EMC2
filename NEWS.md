@@ -1,6 +1,65 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Bug fixes (hierarchy Gibbs steps):** factor and SEM loading rows that
+    mix free and fixed entries now regress on the response net of the fixed
+    entries. The default factor constraint (diagonal fixed at 1) has such rows
+    whenever there are two or more factors, so those loadings were biased.
+    SEM K, G and B rows get the same fix, and each B/G row's residual is
+    refreshed from the complete row. Per-column SEM prior variances
+    (`lambda_var`, `K_var`, `B_var`, `G_var`) are now aligned by column in
+    the Gibbs step, prior sampling and bridge sampling. The infinite-factor
+    shrinkage update refreshes its cumulative products after every `delta`
+    draw (wrong from the third factor on).
+-   **SEM:** cyclic structural models (`B_mat`) are rejected; the conjugate
+    B update is exact only for recursive models. Bridge sampling and the
+    group information criteria now score each subject under its
+    covariate-conditional prior, the density the sampler targets. Population
+    summaries (`Sigma`, `mu_implied`) include the K x A G cross terms, and
+    `mu_implied` no longer drops the K contribution. Efficient proposals
+    condition on each subject's covariate-conditional mean on every backend.
+-   **Sampler robustness:** pooled-parameter candidate likelihoods follow the
+    failure policy (classified, counted under a "pooled" source, retried row
+    by row, aborted under `strict`); NA/NaN/+Inf are no longer silently
+    zero density. Laplace diagnostics always report a status, treat infinite
+    or missing Pareto k as poor, and drop stale curvature when a refresh fails.
+    A non-positive-definite group covariance is a rejection, never evaluated
+    through a repaired factor. Covariance regularisation is equivariant to
+    parameter units. Independent chains (`emc2.independent_chains`) also
+    sub-block on their own covariances. Production proposal rebuilds count
+    transitions rather than stored draws, and the schedule is documented as
+    adaptation at increasingly rare times (Chimisov, Latuszynski & Roberts
+    2018), not diminishing adaptation.
+
+-   **Sampler proposal fixes:** the chain proposal is centred on the plain
+    posterior mean of its window (it was a likelihood-weighted mean, which
+    degenerates to about one draw in high dimension), and window covariances
+    shrink their correlations by an autocorrelation-adjusted Schafer-Strimmer
+    rule. The efficient proposal's mean now follows the current group mean.
+    Burn's Laplace proposals use the widened prior from the first block, with
+    a mean that matches their covariance, and the Laplace fit diagnostic is
+    rechecked at every refresh. Particle mixture weights adapt to squared jump
+    per likelihood evaluation, and the particle count to the ESS of the
+    independence step. The ensemble pool's defensive tail scale is
+    1 + 3 / sqrt(p). Failed candidate likelihoods in the particle step count
+    as zero density. With a correlated prior on mu, `type = "diagonal-gamma"`
+    now draws mu jointly.
+
+-   **New (pooled parameters):** `design(pooled = c("t0"))` declares
+    coefficients that every subject shares and that are still sampled: one
+    value per iteration, drawn from the summed likelihood of all subjects
+    under a normal prior taken from the named `pmean`/`psd` entries of
+    `prior()`. They sit between `constants` and hierarchical parameters.
+    `sampled_pars()` leaves them out unless `include_pooled = TRUE`, the
+    group-level samplers and the ensemble update never see them, and
+    `get_pars()` returns them with `mu` and with every subject's `alpha`.
+    Each iteration adds one move that shifts the pooled value, every subject
+    and the group mean together, at about 5-10% extra time per iteration.
+    Not available with `type = "single"`, joint models, custom likelihoods,
+    `group_design`, nuisance samplers or `marginalise`; bridge sampling and
+    Bayes factors are not yet supported. On a simulated 20-subject LBA with a
+    truly shared `t0`, pooling it recovered `t0` but took about twice as long
+    to converge as leaving `t0` hierarchical.
 -   **New default (ensemble group update):** every hierarchical fit now
     updates the group level with an ensemble MCMC step (Neal 2011;
     Shestopaloff & Neal 2013). Each sweep draws a pool of candidate states per

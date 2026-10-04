@@ -94,3 +94,29 @@ test_that("the proposal factors are untouched by the addition", {
                          paste("component", k, "log det"))
   }
 })
+
+test_that("covariance regularisation is equivariant to parameter units", {
+  S <- matrix(1, 2, 2)
+  D <- diag(c(1, 1e6))
+  r1 <- EMC2:::.emc_regularize_covariance(S)
+  r2 <- solve(D) %*% EMC2:::.emc_regularize_covariance(D %*% S %*% D) %*% solve(D)
+  expect_equal(r1, r2, tolerance = 1e-10)
+  expect_gt(cov2cor(r1)[1, 2], 0.99999)
+  expect_true(EMC2:::.emc_empirical_covariance_ok(r1))
+  # Zero variance takes the reference scale, not one borrowed from elsewhere.
+  z <- EMC2:::.emc_regularize_covariance(diag(c(1e6, 0)), ref_scale = 2)
+  expect_equal(z[2, 2], 4)
+  expect_equal(z[1, 1], 1e6)
+  expect_equal(EMC2:::.emc_regularize_covariance(matrix(0.25)), matrix(0.25))
+})
+
+test_that("window shrinkage ignores the lag across a chain boundary", {
+  set.seed(3)
+  # Two white-noise chains with very different means: the joined series has a
+  # large spurious lag-1 autocorrelation only at the boundary.
+  a <- cbind(matrix(rnorm(200), 2), matrix(rnorm(200) + 50, 2))
+  joined <- EMC2:::.emc_shrunk_covariance(a, n_chains = 1L)
+  split <- EMC2:::.emc_shrunk_covariance(a, n_chains = 2L)
+  expect_equal(diag(joined), diag(split))
+  expect_false(isTRUE(all.equal(joined, split)))
+})

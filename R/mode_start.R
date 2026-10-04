@@ -67,16 +67,21 @@
   # diagonal then collapses the covariance along every ridge. Try smaller
   # steps first; shrink only if no step gives a positive definite Hessian.
   if (is.null(step)) {
-    # Gradient-difference Hessian first: it stays positive definite where the
-    # four-point mixed stencil does not.
+    # The gradient-difference Hessian is the four-point stencil (diagonal at
+    # twice the step) at a fixed step of 1e-3, the scale optimHess() uses;
+    # what follows is a ladder of steps scaled to the prior SD.
     ll_hess <- tryCatch(.emc_blockwise_ll_hessian(
       x, ll_batch, blocks,
       function(x, ll_batch, step) .emc_gradient_difference_hessian(x, ll_batch)),
       error = function(e) NULL)
     if (is.matrix(ll_hess) && all(is.finite(ll_hess))) {
-      out <- .emc_hessian_covariance(precision + (ll_hess + t(ll_hess)) / 2,
+      ll_hess <- (ll_hess + t(ll_hess)) / 2
+      out <- .emc_hessian_covariance(precision + ll_hess,
                                      precision, prior_var, allow_shrink = FALSE)
-      if (is.matrix(out)) return(out)
+      if (is.matrix(out)) {
+        attr(out, "ll_hessian") <- ll_hess
+        return(out)
+      }
     }
     sd <- sqrt(diag(prior_var))
     for (m in c(0.003, 0.001, 3e-4, 1e-4)) {
@@ -95,7 +100,8 @@
 
 # Hessian of -ll as the central difference of a central-difference gradient,
 # the construction stats::optimHess() uses without an analytic gradient (both
-# steps eps). optimHess() evaluates 4p^2 points one likelihood call at a time.
+# steps eps). Algebraically this is the four-point mixed stencil of
+# .emc_stencil_ll_hessian() at step eps, with the diagonal at step 2 eps. optimHess() evaluates 4p^2 points one likelihood call at a time.
 # Here they go through ll_batch, and each off-diagonal point is evaluated once:
 # x + a e_i + b e_j (gradient j at outer step i) and x + b e_j + a e_i (gradient
 # i at outer step j) coincide, leaving 2p^2 + 2p points. Returns NULL if any
@@ -144,16 +150,17 @@
   ll_hess <- .emc_blockwise_ll_hessian(x, ll_batch, blocks,
                                        .emc_stencil_ll_hessian, step)
   if (is.null(ll_hess)) return(NULL)
-  .emc_hessian_covariance(precision + ll_hess, precision, prior_var,
-                          allow_shrink)
+  out <- .emc_hessian_covariance(precision + ll_hess, precision, prior_var,
+                                 allow_shrink)
+  if (is.matrix(out)) attr(out, "ll_hessian") <- ll_hess
+  out
 }
 
 # Four-point mixed-difference Hessian of -ll; NULL if any point is nonfinite.
 .emc_stencil_ll_hessian <- function(x, ll_batch, step) {
   p <- length(x)
-  # The prior can be much wider than a wide-design subject posterior. A step
-  # of 1% of its SD can cross a sharp likelihood ridge and create spurious
-  # negative cross-curvature even at a converged optimum.
+  # A step scaled to the prior can cross a sharp likelihood ridge and give
+  # spurious negative cross-curvature at an optimum.
   pairs <- which(upper.tri(matrix(FALSE, p, p)), arr.ind = TRUE)
   n_eval <- 1L + 2L * p + 4L * nrow(pairs)
   proposals <- matrix(rep(x, each = n_eval), nrow = n_eval)
@@ -227,7 +234,8 @@
 }
 
 .emc_optimize_subject <- function(x0, prior, ll_batch, maxit = 2000L,
-                                  proposal_prior_scale = 1, blocks = NULL) {
+                                  proposal_prior_scale = 1, blocks = NULL,
+                                  start_covariance = FALSE) {
   p <- length(x0)
   root <- tryCatch(chol(prior$var), error = function(e) NULL)
   if (is.null(root)) return(list(reason = "prior covariance"))
@@ -311,8 +319,6 @@
     if (any(!is.finite(ll_gradient))) stop("nonfinite likelihood gradient")
     -ll_gradient + drop(precision %*% (x - prior$mu))
   }
-  # BFGS. nlminb, restarted BFGS and Pathfinder were compared on five fixtures
-  # and none improved the starts it gives (benchmarks/mode-start/README.md).
   opt <- tryCatch(stats::optim(x0, objective, gradient, method = "BFGS",
                                control = list(maxit = maxit, reltol = 1e-7)),
                   error = function(e) e)
@@ -325,28 +331,62 @@
   grad <- tryCatch(gradient(x), error = function(e) rep(Inf, p))
   stationary <- all(is.finite(grad)) &&
     max(abs(grad * sqrt(diag(prior$var)))) < 0.1
-  # The mode is found under the actual group prior. The proposal covariance
-  # can use a wider one: directions the likelihood barely informs are then not
-  # tied to the current group variance, which in a centred hierarchy would
-  # otherwise let a shrinking group SD shrink the proposals with it.
+  # The mode is found under the actual group prior. The proposal Gaussian uses
+  # a wider one: directions the likelihood barely informs are then not tied to
+  # the current group variance, which in a centred hierarchy would otherwise
+  # let a shrinking group SD shrink the proposals with it. Its covariance is
+  # (P / s + H)^-1 and its mean is that density's mode, one Newton step from
+  # the mode x under P: the gradient of ll - (x - m)' (P / s) (x - m) / 2 at x
+  # is (1 - 1 / s) P (x - m), exact when ll is quadratic. Mean and covariance
+  # then describe the same density. The same likelihood Hessian gives the
+  # conditional covariance under P itself (start_covariance), for chain starts
+  # and the Laplace diagnostics.
+  s_scale <- proposal_prior_scale
   covariance <- if (converged || stationary) {
-    tryCatch(.emc_burn_hessian(x, prior$var * proposal_prior_scale,
-                               precision / proposal_prior_scale, ll_batch,
+    tryCatch(.emc_burn_hessian(x, prior$var * s_scale,
+                               precision / s_scale, ll_batch,
                                blocks = blocks),
              error = function(e) NULL)
   } else NULL
+  proposal_mode <- x
+  start_cov <- NULL
+  if (is.matrix(covariance)) {
+    ll_hess <- attr(covariance, "ll_hessian")
+    attr(covariance, "ll_hessian") <- NULL
+    if (s_scale != 1) {
+      shift <- drop(covariance %*% ((1 - 1 / s_scale) *
+                                      drop(precision %*% (x - prior$mu))))
+      candidate <- x + shift
+      cand_ll <- if (all(is.finite(candidate)))
+        tryCatch(ll_batch(candidate), error = function(e) NA_real_) else NA_real_
+      if (length(cand_ll) == 1L && is.finite(cand_ll)) proposal_mode <- candidate
+      if (isTRUE(start_covariance) && is.matrix(ll_hess))
+        start_cov <- tryCatch(.emc_hessian_covariance(
+          precision + ll_hess, precision, prior$var, allow_shrink = TRUE),
+          error = function(e) NULL)
+    } else if (isTRUE(start_covariance)) start_cov <- covariance
+  }
   list(alpha = x, ll = ll, covariance = covariance,
+       proposal_mode = proposal_mode,
+       start_covariance = if (is.matrix(start_cov)) start_cov else NULL,
        gain = f0 - best$value, converged = converged,
        stationary = stationary,
        reason = if (!is.null(covariance)) "ok" else
          if (!converged && !stationary) "not stationary" else "Hessian")
 }
 
-.emc_burn_subject_mode <- function(sampler, s, proposal_prior_scale = 1) {
+# The covariance of the conditional posterior under the actual group prior
+# when it was computed, else the proposal covariance.
+.emc_start_cov <- function(r) {
+  if (is.matrix(r$start_covariance)) r$start_covariance else r$covariance
+}
+
+.emc_burn_subject_mode <- function(sampler, s, proposal_prior_scale = 1,
+                                   x0 = NULL, start_covariance = FALSE) {
   store <- sampler$samples
   i <- store$idx
   p <- sampler$n_pars
-  x0 <- as.numeric(store$alpha[, s, i])
+  if (is.null(x0)) x0 <- as.numeric(store$alpha[, s, i])
   prior <- tryCatch(.emc_burn_subject_prior(sampler, s), error = function(e) NULL)
   if (is.null(prior) || length(prior$mu) != p ||
       any(!is.finite(prior$mu)) || any(!is.finite(prior$var))) return(NULL)
@@ -355,7 +395,8 @@
     x, sampler$data[[s]], sampler$model, par_names)
   .emc_optimize_subject(x0, prior, ll_batch,
                         proposal_prior_scale = proposal_prior_scale,
-                        blocks = .emc_joint_ll_blocks(sampler, s))
+                        blocks = .emc_joint_ll_blocks(sampler, s),
+                        start_covariance = start_covariance)
 }
 
 # One block per model of a joint fit, each with that model's likelihood on its
@@ -378,12 +419,12 @@
 # Laplace Gaussian N(mode, covariance), weighted posterior / Gaussian with
 # Pareto-smoothed weights. The Pareto k of those weights says how well the
 # Gaussian matches the posterior (above 0.7 it does not: typically a mode
-# against the support boundary or a skewed ridge). NULL if fewer than two
-# draws have a finite likelihood. k estimates the tail shape of the weights,
-# a property of the Gaussian-posterior pair rather than of n_draws: at 64
-# draws it missed 4 of 15 poor subjects on a p = 71 fixture, from 256 up to
-# 4096 the counts were stable (2026-09-29). No n rescues k > 1 (weights of
-# infinite variance), so n is fixed rather than scaled with p.
+# against the support boundary or a skewed ridge). Always returns a status:
+# "ok", or "support" when fewer than two draws have a finite weight (no start,
+# k NA, outside the share of draws without one). The population k is a
+# property of the Gaussian-posterior pair, but its estimate from n_draws draws
+# is noisy, and the Gaussian assessed is the conditional Laplace fit, not the
+# widened proposal the burn stage executes: k is a proxy for that proposal.
 .emc_laplace_is_start <- function(mode, covariance, prior, ll_batch,
                                   n_draws = 256L) {
   p <- length(mode)
@@ -394,10 +435,11 @@
   u <- forwardsolve(t(chol(prior$var)), t(draws) - prior$mu)
   log_ratio <- ll - 0.5 * colSums(u^2) + 0.5 * colSums(z^2)
   ok <- which(is.finite(log_ratio))
-  if (length(ok) < 2L) return(NULL)
+  if (length(ok) < 2L)
+    return(list(start = NULL, start_ll = NULL, pareto_k = NA_real_,
+                outside = 1 - length(ok) / n_draws, status = "support"))
   if (diff(range(log_ratio[ok])) < 1e-3) {
-    # Weights equal to 0.1%: the tail fit is meaningless (k is Inf for
-    # constant ratios and arbitrary for rounding noise).
+    # Equal weights: the tail fit is meaningless.
     w <- rep(1 / length(ok), length(ok))
     k <- 0
   } else {
@@ -409,7 +451,26 @@
   # Draws outside the likelihood support have weight zero; k only sees the
   # others, so the share outside is reported alongside it.
   list(start = draws[pick, ], start_ll = ll[pick], pareto_k = k,
-       outside = 1 - length(ok) / n_draws)
+       outside = 1 - length(ok) / n_draws, status = "ok")
+}
+
+# The Laplace diagnostic of one fit attempt, total: a failed check is recorded
+# as such rather than leaving an earlier result in place.
+.emc_laplace_check <- function(is_result) {
+  if (is.list(is_result) && !is.null(is_result$status))
+    return(is_result[c("pareto_k", "outside", "status")])
+  list(pareto_k = NA_real_, outside = NA_real_, status = "error")
+}
+
+# Subjects whose Laplace approximation should not be trusted: Pareto k above
+# 0.7 (including Inf), over half the Gaussian mass outside the likelihood
+# support, or no usable diagnostic at all (k NA).
+.emc_laplace_poor <- function(stats) {
+  k <- stats$pareto_k
+  if (is.null(k)) return(logical(0))
+  outside <- stats$outside
+  if (length(outside) != length(k)) outside <- rep(NA_real_, length(k))
+  is.na(k) | k > 0.7 | (!is.na(outside) & outside > 0.5)
 }
 
 # Optimisation probes the likelihood far from the posterior, where it can warn.
@@ -418,52 +479,133 @@
 # and corrupts the stream), and they carry no information here.
 .emc_quiet_fork <- function(expr) suppressWarnings(suppressMessages(expr))
 
+# Laplace log mass of a mode under a conditional posterior, up to a constant:
+# log posterior at the mode plus half the log determinant of its covariance.
+.emc_laplace_log_mass <- function(ll, x, prior, covariance) {
+  u <- forwardsolve(t(chol(prior$var)), x - prior$mu)
+  ll - 0.5 * sum(u^2) + sum(log(diag(chol(covariance))))
+}
+
+# A chain's mode moves to another chain's mode of the same subject when that
+# has more Laplace mass, averaged over all chains' group states, by this many
+# nats. Averaging matters: a chain stuck in a local mode has widened its own
+# group variance around it, so under its own group state the trap still wins.
+.emc_mode_share_gap <- 20
+
+# Proposal covariances (and their means) use the group prior widened by this
+# factor, at the burn mode start and at every refresh alike.
+.emc_laplace_prior_scale <- 4
+
+.emc_usable_mode <- function(r) is.list(r) && !inherits(r, "try-error") &&
+  is.matrix(r$covariance)
+
+# Laplace log mass of mode r averaged over a subject's group states (one prior
+# per chain); -Inf for an unusable mode.
+.emc_shared_mode_mass <- function(r, priors) {
+  if (!.emc_usable_mode(r) || !is.finite(r$ll)) return(-Inf)
+  m <- vapply(priors, function(prior) if (is.null(prior)) NA_real_ else
+    tryCatch(.emc_laplace_log_mass(r$ll, r$alpha, prior, .emc_start_cov(r)),
+             error = function(e) -Inf), numeric(1))
+  if (all(is.na(m))) -Inf else mean(m, na.rm = TRUE)
+}
+
+# For each chain x subject job, the chain whose mode of that subject beats its
+# own by more than .emc_mode_share_gap; NA to keep its own.
+.emc_mode_share_sources <- function(jobs, results, priors) {
+  out <- rep(NA_integer_, nrow(jobs))
+  for (k in seq_len(nrow(jobs))) {
+    if (is.null(priors[[k]])) next
+    same <- which(jobs$subject == jobs$subject[k])
+    subject_priors <- priors[same]
+    own <- .emc_shared_mode_mass(results[[k]], subject_priors)
+    others <- setdiff(same, k)
+    cand <- vapply(others, function(kk)
+      .emc_shared_mode_mass(results[[kk]], subject_priors), numeric(1))
+    if (length(cand) && max(cand) > own + .emc_mode_share_gap)
+      out[k] <- jobs$chain[others[which.max(cand)]]
+  }
+  out
+}
+
 .emc_burn_mode_start <- function(emc, n_cores, verbose = FALSE) {
   if (!isTRUE(getOption("emc2.burn_mode_start", TRUE))) return(emc)
-  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise)) return(emc)
+  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise) ||
+      !is.null(emc[[1L]]$pooled)) return(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
+  cores <- min(nrow(jobs), n_cores)
+  # 1. Every chain's own conditional mode for every subject (no RNG used).
+  results <- .emc_with_preserved_rng(auto_mclapply(
+    seq_len(nrow(jobs)), function(k) {
+      .emc_quiet_fork(.emc_burn_subject_mode(
+        emc[[jobs$chain[k]]], jobs$subject[k],
+        proposal_prior_scale = .emc_laplace_prior_scale,
+        start_covariance = TRUE))
+    }, mc.cores = cores, mc.set.seed = FALSE))
+  # 2. Compare each subject's modes across chains.
+  priors <- lapply(seq_len(nrow(jobs)), function(k) tryCatch(
+    .emc_burn_subject_prior(emc[[jobs$chain[k]]], jobs$subject[k]),
+    error = function(e) NULL))
+  mass <- function(k, r) .emc_shared_mode_mass(
+    r, priors[jobs$subject == jobs$subject[k]])
+  switch_from <- if (.emc_independent_chains()) rep(NA_integer_, nrow(jobs)) else
+    .emc_mode_share_sources(jobs, results, priors)
+  # 3. Re-optimise from the better mode under the chain's own group state; keep
+  # it only if it still wins by the same margin.
+  todo <- which(!is.na(switch_from))
+  n_shared <- 0L
+  if (length(todo)) {
+    redo <- .emc_with_preserved_rng(auto_mclapply(todo, function(k) {
+      src <- results[[which(jobs$chain == switch_from[k] &
+                            jobs$subject == jobs$subject[k])]]
+      .emc_quiet_fork(.emc_burn_subject_mode(
+        emc[[jobs$chain[k]]], jobs$subject[k], x0 = src$alpha,
+        proposal_prior_scale = .emc_laplace_prior_scale,
+        start_covariance = TRUE))
+    }, mc.cores = min(length(todo), n_cores), mc.set.seed = FALSE))
+    for (m in seq_along(todo)) {
+      k <- todo[m]
+      new <- redo[[m]]
+      if (!.emc_usable_mode(new)) next
+      if (mass(k, new) > mass(k, results[[k]]) + .emc_mode_share_gap) {
+        new$shared_from <- switch_from[k]
+        results[[k]] <- new
+        n_shared <- n_shared + 1L
+      }
+    }
+  }
+  # 4. Start draws, each on its chain's subject RNG stream.
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
       j <- jobs$chain[k]
       s <- jobs$subject[k]
       sampler <- emc[[j]]
+      result <- results[[k]]
       assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
-      result <- .emc_quiet_fork(.emc_burn_subject_mode(sampler, s))
-      if (is.list(result) && is.matrix(result$covariance)) {
+      if (.emc_usable_mode(result)) {
         ll_batch <- function(x) .emc_burn_ll_batch(
           x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
-        # Laplace importance resampling: always run for its diagnostic (how well
-        # the Gaussian matches the conditional posterior); its draw is the
-        # start only under emc2.mode_start_is, until burn-in comparisons show
-        # it beats the spread start below.
-        use_is <- isTRUE(getOption("emc2.mode_start_is", FALSE))
+        # Pareto k of the Laplace importance weights; the random stream is
+        # restored afterwards so the chain start does not depend on it.
         seed <- get(".Random.seed", envir = globalenv())
         prior <- .emc_burn_subject_prior(sampler, s)
         is_start <- tryCatch(.emc_laplace_is_start(
-          result$alpha, result$covariance, prior, ll_batch),
+          result$alpha, .emc_start_cov(result), prior, ll_batch),
           error = function(e) NULL)
-        if (!is.null(is_start)) {
-          result$pareto_k <- is_start$pareto_k
-          result$outside <- is_start$outside
-        }
-        # As a diagnostic only, it leaves the chain's random stream untouched.
-        if (!use_is) assign(".Random.seed", seed, envir = globalenv())
-        # A resampled draw is only as good as its weights: none above k = 0.7.
-        start <- if (use_is && !is.null(is_start) && is_start$pareto_k <= 0.7)
-          is_start
-        if (is.null(start)) {
-          # Spread the chains across the local posterior neighbourhood. Reject
-          # proposals outside the likelihood support.
-          root <- chol(3 * result$covariance)
-          for (attempt in seq_len(8L)) {
-            draw <- as.numeric(result$alpha +
-                                 drop(stats::rnorm(length(result$alpha)) %*% root))
-            ll <- tryCatch(ll_batch(draw), error = function(e) NA_real_)
-            if (length(ll) == 1L && is.finite(ll)) {
-              start <- list(start = draw, start_ll = ll)
-              break
-            }
+        result[c("pareto_k", "outside", "laplace_status")] <-
+          unname(.emc_laplace_check(is_start))
+        assign(".Random.seed", seed, envir = globalenv())
+        # Spread the chains across the local posterior neighbourhood. Reject
+        # proposals outside the likelihood support.
+        start <- NULL
+        root <- chol(3 * .emc_start_cov(result))
+        for (attempt in seq_len(8L)) {
+          draw <- as.numeric(result$alpha +
+                               drop(stats::rnorm(length(result$alpha)) %*% root))
+          ll <- tryCatch(ll_batch(draw), error = function(e) NA_real_)
+          if (length(ll) == 1L && is.finite(ll)) {
+            start <- list(start = draw, start_ll = ll)
+            break
           }
         }
         # The mode is the backup start.
@@ -472,7 +614,7 @@
         result$start_ll <- start$start_ll
       }
       list(result = result, seed = get(".Random.seed", envir = globalenv()))
-    }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
+    }, mc.cores = cores, mc.set.seed = FALSE))
   for (j in seq_along(emc)) {
     emc[[j]]$burn_mode_stats <- list(
       gain = rep(NA_real_, emc[[j]]$n_subjects),
@@ -480,7 +622,9 @@
       hessian = rep(FALSE, emc[[j]]$n_subjects),
       reason = rep("optimizer error", emc[[j]]$n_subjects),
       pareto_k = rep(NA_real_, emc[[j]]$n_subjects),
-      outside = rep(NA_real_, emc[[j]]$n_subjects))
+      outside = rep(NA_real_, emc[[j]]$n_subjects),
+      laplace_status = rep("none", emc[[j]]$n_subjects),
+      shared_from = rep(NA_integer_, emc[[j]]$n_subjects))
   }
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
@@ -495,9 +639,12 @@
     if (!is.null(result$converged))
       emc[[j]]$burn_mode_stats$converged[s] <- result$converged
     if (is.null(result$covariance) || !is.matrix(result$covariance)) next
-    if (!is.null(result$pareto_k)) {
+    if (!is.null(result$shared_from))
+      emc[[j]]$burn_mode_stats$shared_from[s] <- result$shared_from
+    if (!is.null(result$laplace_status)) {
       emc[[j]]$burn_mode_stats$pareto_k[s] <- result$pareto_k
       emc[[j]]$burn_mode_stats$outside[s] <- result$outside
+      emc[[j]]$burn_mode_stats$laplace_status[s] <- result$laplace_status
     }
     i <- emc[[j]]$samples$idx
     emc[[j]]$samples$alpha[, s, i] <- result$start
@@ -509,26 +656,30 @@
     if (is.null(emc[[j]]$burn_mode_mu))
       emc[[j]]$burn_mode_mu <- vector("list", emc[[j]]$n_subjects)
     emc[[j]]$burn_mode_var[s] <- list(result$covariance)
-    emc[[j]]$burn_mode_mu[s] <- list(result$alpha)
+    emc[[j]]$burn_mode_mu[s] <- list(result$proposal_mode)
   }
   stats <- lapply(emc, `[[`, "burn_mode_stats")
   n_hessian <- sum(vapply(stats, function(x) sum(x$hessian), integer(1)))
   n_converged <- sum(vapply(stats, function(x) sum(x$converged), integer(1)))
   reasons <- table(unlist(lapply(stats, `[[`, "reason")))
   failures <- reasons[names(reasons) != "ok"]
-  k <- unlist(lapply(stats, `[[`, "pareto_k"))
-  outside <- unlist(lapply(stats, `[[`, "outside"))[is.finite(k)]
-  k <- k[is.finite(k)]
-  if (verbose || n_hessian < nrow(jobs)) {
+  # Poor among subjects that got a Hessian, whether or not the check itself
+  # succeeded.
+  has_h <- unlist(lapply(stats, `[[`, "hessian"))
+  poor <- unlist(lapply(stats, .emc_laplace_poor))[has_h]
+  k <- poor
+  if (verbose || n_hessian < nrow(jobs) || n_shared) {
     message("Burn mode starts: ", n_hessian, "/", nrow(jobs),
             " Hessians; ", n_converged, "/", nrow(jobs), " BFGS converged",
             if (n_hessian < nrow(jobs))
               paste0("; failures: ", paste(names(failures), failures,
                                            collapse = ", ")) else "",
-            if (length(k)) paste0("; Laplace poor (Pareto k > 0.7 or over half",
-                                  " its mass outside the support) for ",
-                                  sum(k > 0.7 | outside > 0.5), "/",
-                                  length(k)) else "")
+            if (length(k)) paste0("; Laplace poor (Pareto k > 0.7, over half",
+                                  " its mass outside the support, or no usable",
+                                  " check) for ", sum(poor), "/",
+                                  length(k)) else "",
+            if (n_shared) paste0("; ", n_shared, " chain modes replaced by",
+                                 " a better one from another chain") else "")
   }
   emc
 }
@@ -539,29 +690,62 @@
 # state is not moved. create_chain_proposals() consumes these once.
 .emc_laplace_refresh <- function(emc, n_cores, verbose = FALSE) {
   if (!isTRUE(getOption("emc2.laplace_refresh", TRUE))) return(emc)
-  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise)) return(emc)
+  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise) ||
+      !is.null(emc[[1L]]$pooled)) return(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
+  # Each refresh also re-checks the Laplace fit (Pareto k at the current group
+  # state), which decides whether burn uses it; the check reads the subject's
+  # stream without advancing it.
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
-      tryCatch(.emc_quiet_fork(
-        .emc_burn_subject_mode(emc[[jobs$chain[k]]], jobs$subject[k],
-                               proposal_prior_scale = 4)),
-        error = function(e) NULL)
+      tryCatch(.emc_quiet_fork({
+        sampler <- emc[[jobs$chain[k]]]
+        s <- jobs$subject[k]
+        r <- .emc_burn_subject_mode(sampler, s,
+                                    proposal_prior_scale = .emc_laplace_prior_scale,
+                                    start_covariance = TRUE)
+        if (.emc_usable_mode(r)) {
+          assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
+          ll_batch <- function(x) .emc_burn_ll_batch(
+            x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
+          is_check <- tryCatch(.emc_laplace_is_start(
+            r$alpha, .emc_start_cov(r), .emc_burn_subject_prior(sampler, s),
+            ll_batch), error = function(e) NULL)
+          r[c("pareto_k", "outside", "laplace_status")] <-
+            unname(.emc_laplace_check(is_check))
+        }
+        r
+      }), error = function(e) NULL)
     }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
   n_ok <- 0L
   for (k in seq_len(nrow(jobs))) {
     result <- results[[k]]
-    if (!is.list(result) || !is.matrix(result$covariance)) next
     j <- jobs$chain[k]
     s <- jobs$subject[k]
+    n_sub <- emc[[j]]$n_subjects
     if (is.null(emc[[j]]$burn_mode_var))
-      emc[[j]]$burn_mode_var <- vector("list", emc[[j]]$n_subjects)
+      emc[[j]]$burn_mode_var <- vector("list", n_sub)
     if (is.null(emc[[j]]$burn_mode_mu))
-      emc[[j]]$burn_mode_mu <- vector("list", emc[[j]]$n_subjects)
-    emc[[j]]$burn_mode_var[s] <- list(result$covariance)
-    emc[[j]]$burn_mode_mu[s] <- list(result$alpha)
-    n_ok <- n_ok + 1L
+      emc[[j]]$burn_mode_mu <- vector("list", n_sub)
+    ms <- emc[[j]]$burn_mode_stats
+    if (length(ms$pareto_k) != n_sub) ms$pareto_k <- rep(NA_real_, n_sub)
+    if (length(ms$outside) != n_sub) ms$outside <- rep(NA_real_, n_sub)
+    if (length(ms$laplace_status) != n_sub)
+      ms$laplace_status <- rep("none", n_sub)
+    usable <- is.list(result) && is.matrix(result$covariance)
+    # A failed refresh drops the earlier curvature and its diagnostic: both
+    # belonged to an older group state.
+    emc[[j]]$burn_mode_var[s] <- list(if (usable) result$covariance)
+    emc[[j]]$burn_mode_mu[s] <- list(if (usable) result$proposal_mode)
+    chk <- if (usable && !is.null(result$laplace_status))
+      result[c("pareto_k", "outside", "laplace_status")] else
+        list(NA_real_, NA_real_, if (usable) "error" else "mode failed")
+    ms$pareto_k[s] <- chk[[1]]
+    ms$outside[s] <- chk[[2]]
+    ms$laplace_status[s] <- chk[[3]]
+    emc[[j]]$burn_mode_stats <- ms
+    if (usable) n_ok <- n_ok + 1L
   }
   if (verbose || n_ok < nrow(jobs))
     message("Laplace refresh: ", n_ok, "/", nrow(jobs), " covariances")

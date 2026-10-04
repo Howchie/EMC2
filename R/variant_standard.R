@@ -797,6 +797,8 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
                        return_mcmc = FALSE, merge_chains = TRUE)
   theta_var <- get_pars(emc, selection = "Sigma", stage = stage, filter = filter,
                         return_mcmc = FALSE, merge_chains = TRUE, remove_constants = F)
+  alpha <- .emc_pooled_drop(alpha, emc)
+  theta_mu <- .emc_pooled_drop(theta_mu, emc)
 
   p <- dim(alpha)[1]           # number of subject-level parameters
   n_subj <- dim(alpha)[2]      # number of subjects

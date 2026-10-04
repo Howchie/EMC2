@@ -241,10 +241,15 @@ gibbs_step_factor <- function(sampler, alpha){
   for (j in 1:n_pars) {
     constraint <- Lambda_mat[j,]  # TRUE for free parameters
     if(any(constraint)){  # Only update if there are free entries in row j
-      etaS <- eta[, constraint]
+      etaS <- eta[, constraint, drop = FALSE]
+      # Fixed loadings (e.g. an anchor of 1) are part of the row's mean, so
+      # the free-coefficient regression uses the response net of them.
+      y_j <- alphatilde[, j]
+      if (any(!constraint))
+        y_j <- y_j - eta[, !constraint, drop = FALSE] %*% lambda[j, !constraint]
       lambda_sig <- solve(sig_err_inv[j,j] * t(etaS) %*% etaS +
                             diag(prior$theta_lambda_invar[j], sum(constraint)))
-      lambda_mu <- (lambda_sig * sig_err_inv[j,j]) %*% (t(etaS) %*% alphatilde[,j])
+      lambda_mu <- (lambda_sig * sig_err_inv[j,j]) %*% (t(etaS) %*% y_j)
       lambda[j, constraint] <- rmvnorm(1, lambda_mu, lambda_sig)
     }
   }

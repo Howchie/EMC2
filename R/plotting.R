@@ -347,6 +347,7 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
     if (use_c) {
       p_matrix <- matrix(p_vector,nrow=1)
       colnames(p_matrix) <- names(p_vector)
+      p_matrix <- .emc_pooled_columns(p_matrix, dadm)$proposals
       model <- attr(dadm, "model")()
       set_stop_method_from_model(model)  # SS models: stop_method -> C++ config
       p_types=names(model$p_types)

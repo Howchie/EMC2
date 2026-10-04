@@ -477,7 +477,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (is.null(sampled_p_names)) {
     sampled_p_names <- if (is.null(dim(parameters))) names(parameters) else colnames(parameters)
   }
-  if (is.null(sampled_p_names)) sampled_p_names <- names(sampled_pars(design))
+  if (is.null(sampled_p_names)) sampled_p_names <- names(sampled_pars(design, include_pooled = TRUE))
   if(is.null(dim(parameters))){
     if(is.null(names(parameters))) names(parameters) <- sampled_p_names
   } else {
@@ -1159,7 +1159,7 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
       stop("n_subj must be a positive integer")
     subnames <- as.character(1:n_subj)
   }
-  sampled_names <- names(sampled_pars(design))
+  sampled_names <- names(sampled_pars(design, include_pooled = TRUE))
   if(length(group_means) != length(sampled_names))
     stop("You must specify as many means as parameters in your design")
   if (is.null(names(group_means))) {
@@ -1211,6 +1211,14 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
         !is.null(colnames(covariances)) && all(sampled_names %in% colnames(covariances))) {
       covariances <- covariances[sampled_names, sampled_names, drop = FALSE]
     }
+  }
+
+  # Pooled parameters take the group mean for every subject.
+  pooled <- intersect(design$pooled, sampled_names)
+  if (length(pooled)) {
+    pool_idx <- match(pooled, sampled_names)
+    covariances[pool_idx, ] <- 0
+    covariances[, pool_idx] <- 0
   }
 
   # Build the same parameter map used by make_data(), so the guard checks
@@ -1281,6 +1289,8 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
     )
     draws <- as.matrix(draws)
     colnames(draws) <- sampled_names
+    if (length(pooled))
+      draws[, pooled] <- rep(group_means[pooled], each = nrow(draws))
     rownames(draws) <- subnames[remaining]
     valid <- if (is.null(bound_checker)) rep(TRUE, nrow(draws)) else
       bound_checker(draws)

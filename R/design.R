@@ -123,6 +123,14 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' to the latent response factor.
 #' @param constants A named vector that sets constants. Any parameter in
 #' `sampled_pars` can be set constant.
+#' @param pooled Character vector of coefficient names (for example `"t0"`)
+#' that are shared by every subject. A pooled parameter
+#' has no subject-level variation: it is sampled once per iteration from the
+#' summed likelihood of all subjects, with a normal prior taken from the
+#' `pmean`/`psd` entries of `prior()`. It sits between a constant (fixed) and a
+#' hierarchical parameter (partial pooling). Not available for `type = "single"`,
+#' joint models, custom likelihoods, `group_design`, nuisance samplers or
+#' `marginalise`.
 #' @param covariates Names of numeric covariates.
 #' @param functions List of functions to create new factors based on those in
 #' the factors argument. These new factors can then be used in `formula`.
@@ -242,7 +250,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    transform = NULL, bound = NULL, TC = NULL,
                    LT=NULL,LC=NULL,UC=NULL,UT=NULL,
                    fixed_accumulator_roles = NULL, marginalise = NULL,
-                   behavioral_functions=NULL,...){
+                   behavioral_functions=NULL, pooled = NULL,...){
 
   TC <- check_missing(TC, data = data)
   if (!is.null(LT)) TC$LT <- LT
@@ -423,6 +431,17 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                  Fbehavioral=behavioral_functions,model=model,
                  TC=TC,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
                  fixed_accumulator_roles = fixed_accumulator_roles)
+  if (!is.null(pooled)) {
+    if (!is.character(pooled) || anyNA(pooled) || any(!nzchar(pooled)))
+      stop("pooled must be a character vector of parameter names")
+    pooled <- unique(pooled)
+    if (any(pooled %in% names(constants)))
+      stop("pooled parameter(s) also set as constants: ",
+           paste(intersect(pooled, names(constants)), collapse = ", "))
+    if (!is.null(custom_p_vector))
+      stop("pooled is not available for custom likelihoods")
+    design$pooled <- pooled
+  }
   class(design) <- "emc.design"
   # Preserve the data context when the design is constructed from data.  This
   # allows sampled_pars(design) and mapped_pars(design) to use observed cells
@@ -438,7 +457,15 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     model_list <- model()
     model <- function(){return(model_list)}
   }
-  p_vector <- sampled_pars(design)
+  p_vector <- sampled_pars(design, include_pooled = TRUE)
+  if (!is.null(design$pooled)) {
+    bad <- setdiff(design$pooled, names(p_vector))
+    if (length(bad))
+      stop("pooled parameter(s) not in sampled_pars(design): ",
+           paste(bad, collapse = ", "))
+    if (!is.null(marginalise))
+      stop("pooled parameters cannot be combined with marginalise")
+  }
   lhs_terms <- unlist(lapply(formula, function(x) as.character(stats::terms(x)[[2]])))
 
   # Check if any terms are not in model parameters
@@ -1350,6 +1377,10 @@ design_model <- function(data,design,model=NULL,
   sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
   attr(dadm,"p_names") <- p_names
   attr(dadm,"sampled_p_names") <- sampled_p_names
+  # Pooled coefficients stay in sampled_p_names (the likelihood reads them as
+  # proposal columns); only the hierarchy leaves them out. See R/pooled.R.
+  pooled <- intersect(design$pooled, sampled_p_names)
+  if (length(pooled)) attr(dadm, "pooled") <- pooled
   if (verbose) check_dm_identifiability(out, design$constants)
  
   # `type` is a length-1 string (e.g. "DDM", "DDMGNG"); `%in%` would fail for "DDMGNG".
@@ -2096,7 +2127,7 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
   # .group_design_subject_pars(), which also accepts expanded coefficient
   # vectors, so retain that special case there.
   if (is.null(names(p_vector)) && is.null(group_design)) {
-    names(p_vector) <- names(sampled_pars(design))
+    names(p_vector) <- names(sampled_pars(design, include_pooled = TRUE))
   }
   mapping_data <- minimal_design(
     design, covariates = Fcovariates, verbose = F, drop_R = F,
@@ -2193,6 +2224,10 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
 #'   When supplied, only observed factor combinations are used.
 #' @param use_data Logical. Whether to restrict the parameter design to
 #'   combinations observed in `data`. Defaults to `TRUE`.
+#' @param include_pooled Logical. Whether to include parameters declared with
+#'   `design(pooled = ...)`. The default `FALSE` gives the parameters that have
+#'   subject-level values (and a hierarchical prior); `TRUE` gives the full
+#'   parameter vector that `make_data()` and `mapped_pars()` take.
 #'
 #'
 #' @return Named vector.
@@ -2206,7 +2241,8 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
 #'
 #' @export
 sampled_pars <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
-                         all_cells_dm = FALSE, data = NULL, use_data = TRUE)
+                         all_cells_dm = FALSE, data = NULL, use_data = TRUE,
+                         include_pooled = FALSE)
 {
   UseMethod("sampled_pars")
 }
@@ -2215,7 +2251,7 @@ sampled_pars <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
 #' @export
 sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
                                     all_cells_dm = FALSE, data = NULL,
-                                    use_data = TRUE){
+                                    use_data = TRUE, include_pooled = FALSE){
   design <- x
   if(is.null(design)) return(NULL)
   if("Flist" %in% names(design)){
@@ -2277,7 +2313,11 @@ sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FA
       all_cells_dm = all_cells_dm,
       drop_unobserved = isTRUE(use_data) && !is.null(observed_data))
     sampled_p_names <- attr(dadm,"sampled_p_names")
+    if (!include_pooled)
+      sampled_p_names <- setdiff(sampled_p_names, attr(dadm, "pooled"))
     if(length(design) != 1){
+      if (length(attr(dadm, "pooled")))
+        stop("pooled parameters are not available for joint models")
       map_list[[cur_name]] <- lapply(attributes(dadm)$designs,function(x){x[,,drop=FALSE]})
       sampled_p_names <- paste(cur_name, sampled_p_names, sep = "|")
     }
@@ -2324,9 +2364,13 @@ unique_rows_by_index <- function(df, columns) {
 #' @return Invisibly returns the design matrices
 #' @export
 summary.emc.design <- function(object, ...){
-  p_vector <- sampled_pars(object, doMap = TRUE)
+  p_vector <- sampled_pars(object, doMap = TRUE, include_pooled = TRUE)
   cat("\n Sampled Parameters: \n")
   print(names(p_vector))
+  if (length(object$pooled)) {
+    cat("\n Pooled (shared by all subjects): \n")
+    print(object$pooled)
+  }
   cat("\n Design Matrices: \n")
   map_out <- sampled_pars(object,add_da = TRUE, doMap = TRUE, data = list(...)$data)
   print_map <-
@@ -2413,7 +2457,7 @@ plot.emc.design <- function(x, p_vector, data = NULL, factors = NULL, plot_facto
 #' @exportS3Method
 sampled_pars.default <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
                                  all_cells_dm = FALSE, data = NULL,
-                                 use_data = TRUE){
+                                 use_data = TRUE, include_pooled = FALSE){
   if(is.null(x)) return(NULL)
   if(!is.null(attr(x, "custom_ll"))){
     pars <- numeric(length(attr(x,"sampled_p_names")))
@@ -2426,6 +2470,7 @@ sampled_pars.default <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE
   }
   out <- sampled_pars.emc.design(x, group_design = group_design, doMap = doMap,
                                  add_da = add_da, all_cells_dm = all_cells_dm,
-                                 data = data, use_data = use_data)
+                                 data = data, use_data = use_data,
+                                 include_pooled = include_pooled)
   return(out)
 }

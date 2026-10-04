@@ -93,6 +93,11 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     LOO <- loo
   }
   pointwise <- match.arg(pointwise)
+  if (isTRUE(BayesFactor) && any(vapply(sList, function(x)
+        is(x, "emc") && !is.null(x[[1]]$pooled), logical(1)))) {
+    message("Bayes factors are not available for fits with pooled parameters; skipping them.")
+    BayesFactor <- FALSE
+  }
   getp <- function(IC) {
     IC <- -(IC - min(IC))/2
     exp(IC)/sum(exp(IC))
@@ -460,6 +465,7 @@ add_pw_ll <- function(emc, cores_for_chains = 1) {
 add_pw_ll_chain <- function(chain) {
   alpha <- chain$samples$alpha
   if (is.null(alpha) || length(dim(alpha)) < 3 || dim(alpha)[3] == 0) return(chain)
+  alpha <- .emc_pooled_append(alpha, chain, seq_len(dim(alpha)[3]), "alpha")
   n_subjects <- dim(alpha)[2]
   n_iter <- dim(alpha)[3]
   data <- chain$data
@@ -571,31 +577,38 @@ rwish <- function(v, S){
   invisible(S_sym)
 }
 
-.emc_regularize_covariance <- function(S, rcond_target = 1e-6) {
+# Positive-definite repair of a covariance estimate, equivariant to the units
+# of each parameter: the eigenvalue floor is applied to the correlation matrix
+# and the scales restored, so rescaling one coordinate rescales the result the
+# same way instead of erasing a ridge. Coordinates with no usable variance take
+# `ref_scale` (default 1, the unit of the unconstrained parameter scale), never
+# a scale borrowed from the largest raw variance.
+.emc_regularize_covariance <- function(S, rcond_target = 1e-6, ref_scale = 1) {
   if (!is.matrix(S) || nrow(S) != ncol(S)) return(S)
   p <- nrow(S)
+  ref_scale <- rep_len(as.numeric(ref_scale), p)
+  fallback <- function() {
+    out <- diag(ref_scale^2, p) * 0.5
+    dimnames(out) <- dimnames(S)
+    out
+  }
   S_sym <- (S + t(S)) / 2
-  if (any(!is.finite(S_sym)) || all(S_sym == 0)) {
-    out <- diag(p) * 0.5
-    dimnames(out) <- dimnames(S)
-    return(out)
-  }
-  ev <- tryCatch(eigen(S_sym, symmetric = TRUE), error = function(e) NULL)
-  if (is.null(ev)) {
-    out <- diag(p) * 0.5
-    dimnames(out) <- dimnames(S)
-    return(out)
-  }
+  if (any(!is.finite(S_sym)) || all(S_sym == 0)) return(fallback())
+  sc <- suppressWarnings(sqrt(diag(S_sym)))
+  bad <- !is.finite(sc) | sc <= 0
+  sc[bad] <- ref_scale[bad]
+  R <- S_sym / outer(sc, sc)
+  R[bad, ] <- 0
+  R[, bad] <- 0
+  diag(R)[bad] <- 1
+  ev <- tryCatch(eigen(R, symmetric = TRUE), error = function(e) NULL)
+  if (is.null(ev)) return(fallback())
   vals <- ev$values
   max_val <- max(vals)
-  if (!is.finite(max_val) || max_val <= 0) {
-    out <- diag(p) * 0.5
-    dimnames(out) <- dimnames(S)
-    return(out)
-  }
-  floor_val <- max(max_val * rcond_target, 1e-8)
-  vals_reg <- pmax(vals, floor_val)
-  S_reg <- ev$vectors %*% (vals_reg * t(ev$vectors))
+  if (!is.finite(max_val) || max_val <= 0) return(fallback())
+  vals_reg <- pmax(vals, max_val * rcond_target)
+  R_reg <- ev$vectors %*% (vals_reg * t(ev$vectors))
+  S_reg <- R_reg * outer(sc, sc)
   S_reg <- (S_reg + t(S_reg)) / 2
   dimnames(S_reg) <- dimnames(S)
   S_reg
@@ -910,7 +923,7 @@ condMVN <- function (mean, sigma, dependent.ind, given.ind, X.given, check.sigma
   cMu <- c(mean[dependent.ind] + CDinv %*% (X.given - mean[given.ind]))
   cVar <- B - CDinv %*% t(C)
   cVar <- (cVar + t(cVar)) / 2
-  list(condMean = cMu, condVar = cVar)
+  list(condMean = cMu, condVar = cVar, CDinv = CDinv)
 }
 
 .emc_mean_conditional <- function(s, samples, n_pars, iteration = NULL, idx = NULL) {
@@ -933,7 +946,8 @@ condMVN <- function (mean, sigma, dependent.ind, given.ind, X.given, check.sigma
   cond <- condMVN(mean = rowMeans(joint), sigma = sigma,
                   dependent.ind = dependent, given.ind = given,
                   X.given = theta_mu[, iteration])
-  list(eff_mu = cond$condMean, eff_var = cond$condVar)
+  list(eff_mu = cond$condMean, eff_var = cond$condVar,
+       B = cond$CDinv, given = as.numeric(theta_mu[, iteration]))
 }
 
 

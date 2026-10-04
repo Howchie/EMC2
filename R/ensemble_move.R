@@ -24,14 +24,21 @@
 #
 # No quantity is adapted inside the move. q_s is a two-component mixture built
 # from the subject's posterior moments over the last warm-up window
-# (sampler$ensemble_q, set with the chain proposals): a normal and a defensive
-# Student-t (Hesterberg 1995) with 4x the covariance. The reselection is an
-# independence-type step, so q_s must not be lighter than the target in any
-# direction (Mengersen & Tweedie 1996): a too-narrow q_s makes rare draws in
-# its tail win the reselection and then linger. The window covariance of a
-# slow-mixing subject can be 2x too narrow in SD, hence the 4x. It is rebuilt
-# with the chain proposals: at every refresh in the discarded stages, and in
-# sampling on the diminishing-adaptation schedule (100, 200, 400, ... draws).
+# (sampler$ensemble_q, set with the chain proposals): a normal N(mu, V) and a
+# defensive Student-t (Hesterberg 1995) with df 4 and SCALE matrix c V,
+# c = 1 + 3 / sqrt(p). The t's covariance is 2 c V, not c V. The reselection
+# is an independence-type step, so q_s lighter than the target in some
+# direction makes rare draws in its tail win the reselection and then linger
+# (Mengersen & Tweedie 1996); the t's polynomial tails guard against a
+# covariance estimate that is too narrow. That is a robustness argument, not
+# a containment proof. The radial spread of the t component does not
+# concentrate: its squared Mahalanobis distance M2 (relative to V) satisfies
+# M2 / p -> 4 c / chi^2_4 as p grows, with mean 2 c and infinite variance.
+# Shrinking c with p is therefore a heuristic for how much of the pool the
+# tail spends far from the bulk, chosen empirically; at p = 1, c = 4. q_s is
+# rebuilt with the chain proposals: at every refresh in the discarded stages,
+# and in sampling on the increasingly-rare schedule of add_proposals() (after
+# 100, 200, 400, ... production transitions).
 
 .emc_ensemble_options <- function() {
   int_opt <- function(name, default) {
@@ -51,7 +58,7 @@
        rounds = int_opt("emc2.ensemble_rounds", 10L),
        cadence = int_opt("emc2.ensemble_cadence", 1L),
        latent_weight = latent,
-       tail_weight = 0.25, tail_df = 4, tail_scale = 4)
+       tail_weight = 0.25, tail_df = 4, tail_excess = 3)
 }
 
 # Supported hierarchies: those whose group Gibbs step and subject prior are
@@ -71,7 +78,9 @@
 .emc_ensemble_store <- function(samples) {
   n_iter <- length(samples$stage)
   idx <- samples$idx
-  out <- lapply(samples, function(x) {
+  out <- samples
+  hist <- setdiff(names(samples), .EMC_STATIC_SAMPLE_FIELDS)
+  out[hist] <- lapply(samples[hist], function(x) {
     d <- dim(x)
     if (is.null(d) || d[length(d)] != n_iter) return(x)
     if (length(d) == 2L) x[, idx, drop = FALSE] else
@@ -83,11 +92,13 @@
 }
 
 # Pool proposal q_s from one Cholesky factor per subject:
-# (1 - w) N(mu, V) + w t_df(mu, c V), with Mahalanobis distances reused for
-# both components.
+# (1 - w) N(mu, V) + w t_df(mu, c V), c = 1 + tail_excess / sqrt(p), with
+# Mahalanobis distances reused for both components.
 .emc_ensemble_q <- function(mu, var, cfg) {
   L <- t(chol(var))
-  list(mu = mu, L = L, logdet = 2 * sum(log(diag(L))), p = length(mu))
+  p <- length(mu)
+  list(mu = mu, L = L, logdet = 2 * sum(log(diag(L))), p = p,
+       c = 1 + cfg$tail_excess / sqrt(p))
 }
 
 .emc_ensemble_log_q <- function(x, q, cfg) {
@@ -97,7 +108,7 @@
 
 # The same density from squared Mahalanobis distances m2.
 .emc_ensemble_log_q_m2 <- function(m2, q, cfg) {
-  p <- q$p; nu <- cfg$tail_df; c <- cfg$tail_scale
+  p <- q$p; nu <- cfg$tail_df; c <- q$c
   a <- log1p(-cfg$tail_weight) - 0.5 * (p * log(2 * pi) + q$logdet + m2)
   b <- log(cfg$tail_weight) + lgamma((nu + p) / 2) - lgamma(nu / 2) -
     0.5 * (p * log(nu * pi) + q$logdet + p * log(c)) -
@@ -110,7 +121,7 @@
   z <- matrix(stats::rnorm(n * q$p), q$p, n)
   tail <- stats::runif(n) < cfg$tail_weight
   scale <- rep(1, n)
-  if (any(tail)) scale[tail] <- sqrt(cfg$tail_scale * cfg$tail_df /
+  if (any(tail)) scale[tail] <- sqrt(q$c * cfg$tail_df /
                                        stats::rchisq(sum(tail), cfg$tail_df))
   x <- t(q$mu + (q$L %*% z) * rep(scale, each = q$p))
   attr(x, "m2") <- scale^2 * colSums(z^2)

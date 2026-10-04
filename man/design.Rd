@@ -29,6 +29,7 @@ design(
   fixed_accumulator_roles = NULL,
   marginalise = NULL,
   behavioral_functions = NULL,
+  pooled = NULL,
   ...
 )
 }
@@ -134,6 +135,15 @@ trial-by-trial posterior prediction when used by a trend. The default \code{NULL
 conservatively treats every function as behavioral for backward
 compatibility. Supply \code{character(0)} when all functions used by trends are
 static design functions, such as an accumulator code derived from \code{lR}.}
+
+\item{pooled}{Character vector of coefficient names (for example \code{"t0"})
+that are shared by every subject. A pooled parameter
+has no subject-level variation: it is sampled once per iteration from the
+summed likelihood of all subjects, with a normal prior taken from the
+\code{pmean}/\code{psd} entries of \code{prior()}. It sits between a constant (fixed) and a
+hierarchical parameter (partial pooling). Not available for \code{type = "single"},
+joint models, custom likelihoods, \code{group_design}, nuisance samplers or
+\code{marginalise}.}
 
 \item{...}{Additional, optional arguments}
 }

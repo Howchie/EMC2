@@ -87,6 +87,7 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
     if(!is.matrix(input$theta_mu_var) & is.matrix(orig$theta_mu_var)) input$theta_mu_var <- diag(input$theta_mu_var)
   }
   prior <- get_objects(design = design, type = type, prior = input, ...)$prior
+  attr(prior, "pooled") <- .pooled_prior(design, type, update, args)
   if("Ffactors" %in% names(design)){
     design <- list(design)
   }
@@ -99,6 +100,39 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
   attr(prior, "group_design") <- group_design
   class(prior) <- "emc.prior"
   return(prior)
+}
+
+# Normal prior on the sampled scale for design(pooled = ...) parameters:
+# mean 0 and variance 1 unless named entries of pmean/psd (or of the prior
+# being updated) say otherwise. NULL when the design has none.
+.pooled_prior <- function(design, type, update, args) {
+  des_list <- if ("Ffactors" %in% names(design)) list(design) else design
+  if (!any(vapply(des_list, function(d) length(d$pooled) > 0L, logical(1))))
+    return(NULL)
+  pooled <- setdiff(names(sampled_pars(design, include_pooled = TRUE)),
+                    names(sampled_pars(design)))
+  if (!length(pooled)) return(NULL)
+  if (identical(type, "single"))
+    stop("pooled parameters need a hierarchical type; with type = 'single' ",
+         "every parameter is already shared")
+  out <- list(mean = stats::setNames(rep(0, length(pooled)), pooled),
+              var = stats::setNames(rep(1, length(pooled)), pooled))
+  take <- function(to, from) {
+    if (is.null(from) || is.null(names(from))) return(to)
+    nm <- intersect(names(to), names(from))
+    to[nm] <- from[nm]
+    to
+  }
+  old <- attr(update, "pooled")
+  if (!is.null(old)) {
+    out$mean <- take(out$mean, old$mean)
+    out$var <- take(out$var, old$var)
+  }
+  out$mean <- take(out$mean, args$theta_mu_mean)
+  out$var <- take(out$var, args$theta_mu_var)
+  if (any(!is.finite(out$mean)) || any(!is.finite(out$var)) || any(out$var <= 0))
+    stop("pooled parameter priors need finite means and positive variances")
+  out
 }
 
 check_var_prior <- function(inp){
@@ -662,8 +696,9 @@ mapped_pars.emc.prior <- function(x, p_vector = NULL, model = NULL, digits=3,rem
 #' @rdname sampled_pars
 #' @export
 sampled_pars.emc.prior <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
-                                   all_cells_dm = FALSE, data=NULL, use_data = TRUE){
+                                   all_cells_dm = FALSE, data=NULL, use_data = TRUE,
+                                   include_pooled = FALSE){
   return(sampled_pars(get_design(x), group_design = group_design, doMap = doMap,
                           add_da = add_da, all_cells_dm = all_cells_dm, data = data,
-                          use_data = use_data))
+                          use_data = use_data, include_pooled = include_pooled))
 }

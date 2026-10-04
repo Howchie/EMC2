@@ -168,3 +168,11 @@ test_that("compressed designs give bit-identical likelihoods to expanded ones", 
   expect_identical(ll_compressed, ll_expanded)
   expect_true(all(is.finite(ll_expanded)))
 })
+
+test_that("repaired proposal factors are flagged so the prior never uses them", {
+  ok <- EMC2:::.chol_factor(diag(2), 2L)
+  expect_false(ok$repaired)
+  bad <- EMC2:::.chol_factor(matrix(c(1, 2, 2, 1), 2), 2L)
+  expect_true(bad$repaired)
+  expect_true(all(is.finite(bad$rooti)))
+})

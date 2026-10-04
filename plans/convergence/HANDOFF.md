@@ -90,7 +90,18 @@ since they need `CleanData.RData` and the custom `.cpp` kernels.
   - Evidence: `repro_burn_wide_eff_from_200.R`, from the 200-iteration checkpoint
     `burn_pool_200.RData`, with the 3x ensemble widening. Burn exited at mean R-hat 1.033
     after 4 tries; without the change it hit max tries at 1.117.
-  - That is one seed on one model. More seeds and fixtures are still to come.
+  - Confirmed on five simulated fixtures and two seeds (`benchmarks/mode-start/README.md`,
+    "Burn-stage proposals"). The `emc2.burn_eff` switch is removed.
+- **Local step size:** the floor on the local random-walk step was a fixed 0.6, which froze
+  every chain at p ~ 70, and the controller targeted half the random-walk scale. The step now
+  adapts to the share at 2.38 / sqrt(d) with a per-iteration controller, each state-centred
+  proposal in its own importance step (`plans/sampler_bugs.md`, item 9); subjects whose Laplace
+  fit is poor (Pareto k > 0.7) take the covariance of their own burn draws. At p ~ 70 this took
+  stuck subjects from 10-20 of 20 to none, and it beats a fixed 2.38 / sqrt(d) step there.
+- **Cross-chain mode sharing** at the burn mode start: a chain stuck in a local mode takes
+  another chain's mode when its Laplace mass, averaged over all chains' group states, is
+  better by more than 20 nats.
+- **Importance-resampled mode starts:** no consistent gain; the option is removed.
 - **3x widening of the burn `ensemble_q`:** tried narrower, reverted, still 3x.
 - **Pathfinder and the other mode optimisers** (BFGS, nlminb, L-BFGS-B, Pathfinder):
   evaluated and removed. BFGS stays; see `benchmarks/mode-start/README.md`.
@@ -101,3 +112,4 @@ since they need `CleanData.RData` and the custom `.cpp` kernels.
   - `predict()` with a free parameter constant across draws is fixed.
   - Also fixed: an infinite recursion in `get_data()` / `sampled_pars()` on joint models.
 - Data files here (`*.RData`) are local only and git-ignored.
+- `make_data(parameters, design, data = d)`: when `nrow(parameters)` equals the number of subjects, the row names are overwritten with `unique(d$subjects)` in order of appearance (`R/make_data.R:485-493`) instead of matching rows by name. A matrix with correctly named rows in any other order, e.g. factor-level order, is silently assigned to the wrong subjects.

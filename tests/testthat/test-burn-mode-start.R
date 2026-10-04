@@ -121,6 +121,18 @@ test_that("proposal covariances can use a wider group prior than the mode", {
   expect_equal(wide$covariance,
                solve(solve(prior$var) / 4 + solve(likelihood_var)),
                tolerance = 1e-4)
+  # Its mean is the mode of the same widened density (exact for a Gaussian
+  # likelihood), and the conditional covariance is kept for starts.
+  P4 <- solve(prior$var) / 4; Pl <- solve(likelihood_var)
+  expect_equal(wide$proposal_mode,
+               drop(solve(P4 + Pl, P4 %*% prior$mu + Pl %*% c(1, 1))),
+               tolerance = 1e-4)
+  with_start <- EMC2:::.emc_optimize_subject(c(0.5, 0.5), prior, ll_batch,
+                                             proposal_prior_scale = 4,
+                                             start_covariance = TRUE)
+  expect_equal(with_start$start_covariance,
+               solve(solve(prior$var) + solve(likelihood_var)), tolerance = 1e-4)
+  expect_equal(base$proposal_mode, base$alpha)
 })
 
 test_that("the batched gradient-difference Hessian matches stats::optimHess", {
@@ -266,7 +278,72 @@ test_that("Laplace importance starts are posterior draws with a Pareto diagnosti
   expect_true(all(out[1L, ] <= post_mode[1L] + 0.01))
   expect_equal(mean(out[3L, ]), 0.5 - 0.01 / sqrt(post_var[1L, 1L]) * dnorm(0),
                tolerance = 0.05)
-  # Nothing inside the support: no start.
-  expect_null(EMC2:::.emc_laplace_is_start(
-    post_mode, post_var, prior, function(x) rep(-Inf, NROW(x))))
+  # Nothing inside the support: no start, and a support-failure status.
+  none <- EMC2:::.emc_laplace_is_start(
+    post_mode, post_var, prior, function(x) rep(-Inf, NROW(x)))
+  expect_null(none$start)
+  expect_identical(none$status, "support")
+})
+
+test_that("a chain leaves a local mode only for a far better one", {
+  jobs <- expand.grid(chain = 1:3, subject = 1L)
+  mode <- function(a) list(alpha = a, ll = -10, covariance = matrix(1))
+  # Chain 3 widened its group variance around its own mode, which wins under
+  # its own group state but not averaged over all three.
+  priors_at <- function(trap) list(list(mu = 0, var = matrix(1)),
+                                   list(mu = 0, var = matrix(1)),
+                                   list(mu = trap, var = matrix(25)))
+  sources <- function(trap) EMC2:::.emc_mode_share_sources(
+    jobs, list(mode(0), mode(0), mode(trap)), priors_at(trap))
+  expect_equal(sources(-9), c(NA, NA, 1L))
+  expect_equal(sources(-3), rep(NA_integer_, 3L))
+  # A chain without a usable mode takes one; one without a prior is skipped.
+  expect_equal(EMC2:::.emc_mode_share_sources(
+    jobs, list(mode(0), NULL, mode(0)), priors_at(0)), c(NA, 1L, NA))
+  expect_equal(EMC2:::.emc_mode_share_sources(
+    jobs, list(mode(0), NULL, mode(0)),
+    replace(priors_at(0), 2L, list(NULL))), rep(NA_integer_, 3L))
+})
+
+test_that("Laplace gate treats infinite, missing and outside-support checks as poor", {
+  st <- list(pareto_k = c(0.2, Inf, NA, 0.2, 0.9),
+             outside = c(0, 0, 0.9, 0.9, NA))
+  expect_identical(EMC2:::.emc_laplace_poor(st), c(FALSE, TRUE, TRUE, TRUE, TRUE))
+  expect_identical(EMC2:::.emc_laplace_poor(list()), logical(0))
+  # A diagnostic with no finite weights still reports, as a support failure.
+  set.seed(1)
+  prior <- list(mu = c(0, 0), var = diag(2))
+  out <- EMC2:::.emc_laplace_is_start(c(0, 0), diag(2), prior,
+                                      function(x) rep(-Inf, nrow(x)), n_draws = 32L)
+  expect_identical(out$status, "support")
+  expect_true(is.na(out$pareto_k))
+  expect_equal(out$outside, 1)
+  expect_true(EMC2:::.emc_laplace_poor(out))
+  # An errored check is recorded as unknown, never as the previous result.
+  chk <- EMC2:::.emc_laplace_check(NULL)
+  expect_identical(chk$status, "error")
+  expect_true(EMC2:::.emc_laplace_poor(chk))
+})
+
+test_that("a poor Laplace fit swaps the ensemble pool mean and covariance together", {
+  emc <- samples_LNR
+  covariance <- diag(c(0.2, 0.4, 0.6, 0.8))
+  for (j in seq_along(emc)) {
+    emc[[j]]$samples$stage[] <- "burn"
+    emc[[j]]$burn_mode_index <- 1L
+    n_subjects <- dim(emc[[j]]$samples$alpha)[2L]
+    n_pars <- dim(emc[[j]]$samples$alpha)[1L]
+    emc[[j]]$burn_mode_var <- rep(list(covariance), n_subjects)
+    emc[[j]]$burn_mode_mu <- rep(list(rep(-5, n_pars)), n_subjects)
+    emc[[j]]$burn_mode_stats <- list(pareto_k = c(Inf, rep(0.1, n_subjects - 1L)),
+                                     outside = rep(0, n_subjects))
+  }
+  out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50, stage = "burn")
+  q <- out[[1L]]$ensemble_q
+  # Subject 1 (k = Inf): window moments for both.
+  expect_false(isTRUE(all.equal(q$var[[1L]], 3 * covariance)))
+  expect_true(all(abs(q$mu[[1L]] + 5) > 1))
+  # Subject 2 (good fit): the Laplace pair.
+  expect_equal(q$var[[2L]], 3 * covariance)
+  expect_equal(q$mu[[2L]], rep(-5, n_pars))
 })

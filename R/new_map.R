@@ -152,7 +152,7 @@ do_map <- function(draws, map, by_subject, design,
   for(i in 1:length(design)){
     cur_des <- design[[i]]
     # See which design we have to get out
-    cur_idx <- par_idx + seq_len(length(sampled_pars(cur_des)))
+    cur_idx <- par_idx + seq_len(length(sampled_pars(cur_des, include_pooled = TRUE)))
     par_idx <- max(cur_idx)
     cur_draws <- draws[cur_idx,,,drop = F]
     if(grepl("MRI", cur_des$model()$type)){

@@ -154,6 +154,9 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   attr(dadm_list, "components") <- components
   attr(dadm_list, "shared_ll_idx") <- shared_ll_idx
   subjects <- sort(as.numeric(unique(dadm$subjects)))
+  if (!is.null(attr(prior, "pooled")) &&
+      (length(nuisance) || length(nuisance_non_hyper)))
+    stop("pooled parameters cannot be combined with nuisance samplers")
   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
   if(!is.null(nuisance_non_hyper) & !is.numeric(nuisance_non_hyper)) nuisance_non_hyper <- which(pars %in% nuisance_non_hyper)
 
@@ -204,6 +207,14 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   )
   class(sampler) <- "pmwgs"
   sampler <- add_info(sampler, prior, type, ...)
+  pooled_prior <- attr(prior, "pooled")
+  if (!is.null(pooled_prior)) {
+    sampler$pooled <- .emc_pooled_state(pooled_prior)
+    .emc_pooled_unsupported(sampler)
+    sampler$samples$pooled <- matrix(NA_real_, length(pooled_prior$mean),
+                                     length(sampler$samples$stage),
+                                     dimnames = list(names(pooled_prior$mean), NULL))
+  }
   return(sampler)
 }
 
@@ -312,6 +323,15 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
     pmwgs$sampler_nuis$samples <- emc_clone_sample_store(pmwgs$sampler_nuis$samples)
   }
   type <- pmwgs$type
+  pooled_start <- NULL
+  if (!is.null(pmwgs$pooled) && !is.null(start_mu) && !is.null(names(start_mu))) {
+    pn <- .emc_pooled_names(pmwgs)
+    pooled_start <- start_mu[intersect(pn, names(start_mu))]
+    keep <- !names(start_mu) %in% pn
+    if (!is.null(start_var) && is.matrix(start_var) && nrow(start_var) == length(start_mu))
+      start_var <- start_var[keep, keep, drop = FALSE]
+    start_mu <- start_mu[keep]
+  }
   startpoints <-startpoints_comb <- get_startpoints(pmwgs, start_mu, start_var, type)
   if(any(pmwgs$nuisance)){
     type_nuis <- pmwgs$sampler_nuis$type
@@ -346,11 +366,20 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                   mc.cores = core_budget$subject, mc.set.seed = FALSE))
   proposals <- lapply(raw_proposals, `[[`, "out")
   pmwgs$rng$subjects <- lapply(raw_proposals, `[[`, "seed")
+  pooled_draws <- if (is.null(pmwgs$pooled)) NULL else
+    vapply(proposals, function(x) as.numeric(x$pooled), numeric(length(pmwgs$pooled$value)))
+  proposals <- lapply(proposals, `[`, c("proposal", "ll"))
   proposals <- array(unlist(proposals), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
+  if (!is.null(pmwgs$pooled)) {
+    pin <- .emc_pooled_init(pmwgs, proposals, pooled_draws, pooled_start)
+    pmwgs <- pin$sampler
+    proposals <- pin$proposals
+  }
 
 
   pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = startpoints, proposals = proposals,
                                              j = 1, n_pars = pmwgs$n_pars, type = type)
+  if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, 1] <- pmwgs$pooled$value
   pmwgs$init <- TRUE
   return(pmwgs)
 }
@@ -429,17 +458,32 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
                                           as.numeric(grid$log_terms[idx, ]), marginalise)
     return(list(proposal = proposal, ll = lw[idx]))
   }
-  lw <- calc_ll_manager(proposals, dadm = data_s, model = pmwgs$model, r_cores = r_cores)
+  # Pooled coefficients are drawn per particle from their prior here; init()
+  # pools the selected draws into one start value.
+  pooled_draws <- NULL
+  if (!is.null(pmwgs$pooled)) {
+    st <- pmwgs$pooled
+    pooled_draws <- matrix(stats::rnorm(n_particles * length(st$value),
+                                        st$prior_mean, sqrt(st$prior_var)),
+                           nrow = n_particles, byrow = TRUE,
+                           dimnames = list(NULL, names(st$value)))
+  }
+  lw <- calc_ll_manager(cbind(proposals, pooled_draws), dadm = data_s,
+                        model = pmwgs$model, r_cores = r_cores)
   weight <- exp(lw - max(lw))
   idx <- sample(x = n_particles, size = 1, prob = weight)
-  return(list(proposal = proposals[idx,], ll = lw[idx]))
+  return(list(proposal = proposals[idx,], ll = lw[idx],
+              pooled = if (is.null(pooled_draws)) NULL else pooled_draws[idx, ]))
 }
 
 
 check_tune_settings <- function(tune, n_pars, stage, particles){
-  tune$alphaStar <- ifelse(stage == "sample", 2, 3)
   if (is.null(tune$search_width)) tune$search_width <- 1
   tune$p_accept <- set_p_accept(stage, tune$search_width)
+  # Preburn searches with larger steps; later stages target the random-walk
+  # scale (update_local_steps).
+  tune$step_target <- if (stage == "preburn") tune$p_accept[1L] else
+    step_target(tune$search_width)
   if(is.null(tune$components)) tune$components <- rep(1, n_pars)
   if(is.null(tune$shared_ll_idx)) tune$shared_ll_idx <- tune$components
   if(is.null(tune$target_ESS)) tune$target_ESS <- 2.5*sqrt(n_pars)
@@ -456,6 +500,11 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
     pm_settings[[i]]$epsilon <- check_epsilon(pm_settings[[i]]$epsilon, n_pars, pm_settings[[i]]$mix)
     pm_settings[[i]]$proposal_counts <- check_prop_performance(pm_settings[[i]]$proposal_counts, stage)
     pm_settings[[i]]$acc_counts <- check_prop_performance(pm_settings[[i]]$acc_counts, stage)
+    # Squared jumps are fractional, so they are not rounded like the counts;
+    # a new mixture layout starts them afresh.
+    if (stage == "adapt" ||
+        length(pm_settings[[i]]$jump_counts) != length(pm_settings[[i]]$mix))
+      pm_settings[[i]]$jump_counts <- numeric(length(pm_settings[[i]]$mix))
     if(is.null(pm_settings[[i]]$n_particles)) pm_settings[[i]]$n_particles <- particles
     if(is.null(pm_settings[[i]]$iter)) pm_settings[[i]]$iter <- 1
     if(is.null(pm_settings[[i]]$gd_good)) pm_settings[[i]]$gd_good <- FALSE
@@ -529,6 +578,7 @@ run_stage <- function(pmwgs,
     stop("Parameter bookkeeping error: pmwgs$par_names does not match covariance dimension")
   }
   if (is.null(tune)) tune <- list()
+  pmwgs <- .emc_pooled_sync(pmwgs)
   components <- attr(pmwgs$data, "components")
   shared_ll_idx <- attr(pmwgs$data, "shared_ll_idx")
   if (is.null(components)) components <- rep.int(1L, n_pars)
@@ -551,6 +601,7 @@ run_stage <- function(pmwgs,
     template <- x[[1L]]
     template$proposal_counts <- NULL
     template$acc_counts <- NULL
+    template$jump_counts <- NULL
     rep(list(template), n_comp)
   })
   burn_eff_ready <- stage == "burn" && isTRUE(pmwgs$burn_eff_ready)
@@ -653,13 +704,16 @@ run_stage <- function(pmwgs,
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
   gibbs_rejects <- .emc_reject_counts("gibbs")
   ensemble_rejects <- .emc_reject_counts("ensemble")
+  pooled_rejects <- .emc_reject_counts("pooled")
   stage_rejects <- list(
     particle = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                                .EMC_REJECT_CLASSES),
     gibbs = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                             .EMC_REJECT_CLASSES),
     ensemble = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
-                                 .EMC_REJECT_CLASSES))
+                                 .EMC_REJECT_CLASSES),
+    pooled = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                             .EMC_REJECT_CLASSES))
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
@@ -761,7 +815,8 @@ run_stage <- function(pmwgs,
       it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
                             group_chol_it, pm_settings,
                             pmwgs$samples$subj_ll[, j - 1], wpool_streams,
-                            extra = ens_pools$rows)
+                            extra = ens_pools$rows,
+                            pooled = pmwgs$pooled$value)
       if (!is.null(ens_pools)) ens_pools$ll <- it$extra_ll
       proposals <- it$props
       pm_settings <- it$pm_settings
@@ -834,9 +889,27 @@ run_stage <- function(pmwgs,
     proposals <- ens$proposals
     wpool <- ens$wpool
 
+    # Pooled coefficients given the final subject states (R/pooled.R).
+    pooled_delta <- NULL
+    if (!is.null(pmwgs$pooled)) {
+      pmv <- .emc_pooled_move(pmwgs, proposals, stage, pars, group_chol_it,
+                              pm_settings, wpool_streams, wpool, wpool_ctx,
+                              wpool_part, n_cores = n_cores)
+      pmwgs <- pmv$sampler
+      proposals <- pmv$proposals
+      pars <- pmv$pars
+      if (!is.null(wpool) && !is.null(pmv$alive)) wpool$alive <- pmv$alive
+      data <- pmwgs$data
+      wpool_ctx$data <- data
+      pooled_delta <- .emc_reject_delta(pooled_rejects, "pooled")
+      pooled_rejects <- .emc_reject_counts("pooled")
+      stage_rejects$pooled <- stage_rejects$pooled + pooled_delta
+    }
+
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
+    if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, j] <- pmwgs$pooled$value
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
     } else NA_real_
@@ -906,7 +979,8 @@ run_stage <- function(pmwgs,
         degraded = pp$degraded),
         .emc_reject_row_fields(pp$rejects, "particle"),
         .emc_reject_row_fields(gibbs_delta, "gibbs"),
-        .emc_reject_row_fields(ensemble_delta, "ensemble")))
+        .emc_reject_row_fields(ensemble_delta, "ensemble"),
+        .emc_reject_row_fields(pooled_delta, "pooled")))
     }
   }
   .emc_failure_report_stage(stage_rejects, stage)
@@ -1034,6 +1108,27 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   attempt
 }
 
+# A batch likelihood that fails is retried one particle at a time, and a
+# particle that still fails gets zero density (-Inf), as in the ensemble pool.
+# Keeping the old state on every failure would stay put with a probability
+# that depends on the state, which is not invariant; a zero-density candidate
+# is. The reference particle is the current state, so if it fails the error is
+# not a property of the candidates and is raised (the caller keeps the state).
+.emc_particle_ll_rowwise <- function(err, proposals, data, model, component) {
+  cls <- if (inherits(err, "emc_failure") && !is.null(err$emc_class))
+    err$emc_class else .emc_classify_failure(err)
+  if (identical(.emc_failure_action(cls), "abort")) stop(err)
+  ll <- vapply(seq_len(nrow(proposals)), function(r) {
+    v <- tryCatch(as.numeric(calc_ll_manager(
+      proposals[r, , drop = FALSE], dadm = data, model = model,
+      component = component, r_cores = 1L)), error = function(e) NA_real_)
+    if (length(v) != 1L || is.na(v) || v == Inf) -Inf else v
+  }, numeric(1))
+  if (!is.finite(ll[1L])) stop(err)
+  .emc_reject_record(err, "particle")
+  ll
+}
+
 reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   list(proposal = subj_mu, ll = prev_ll, pm_settings = pm_settings)
 }
@@ -1086,9 +1181,15 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
 
 
 
+# Cholesky factor for a proposal component. A matrix that does not factor is
+# repaired (jitter, then its diagonal) and flagged: the repaired factor is a
+# valid proposal as long as drawing and the density use it alike, but it is
+# not the target's group prior, so the particle step never evaluates the prior
+# with a repaired factor.
 .chol_factor <- function(Sigma, p) {
   if (p <= 0) return(NULL)
   base_R <- tryCatch(chol(Sigma), error = function(e) NULL)
+  repaired <- is.null(base_R)
   if (is.null(base_R)) {
     base_R <- tryCatch(chol(Sigma + diag(1e-6, p)), error = function(e) NULL)
   }
@@ -1101,7 +1202,8 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
     base_R <- diag(sqrt(cov_diag), p)
   }
   rooti <- backsolve(base_R, diag(p))
-  list(R = base_R, rooti = rooti, sum_log_diag = sum(log(diag(rooti))), p = p)
+  list(R = base_R, rooti = rooti, sum_log_diag = sum(log(diag(rooti))), p = p,
+       repaired = repaired)
 }
 
 .marginal_par_idx <- function(par_names, marginalise) {
@@ -1158,6 +1260,26 @@ build_group_chol_cache <- function(group_var, idx_list, marginal_idx = NULL,
        }))
 }
 
+# Mean of the efficient proposal at the current group state. The proposal is
+# the conditional of alpha_s given the group mean, fitted to earlier draws:
+# its covariance is fixed and its mean is linear in the conditioning value, so
+# attr(eff_mu, "B") and attr(eff_mu, "given") let it follow the group mean
+# every iteration. It depends on the group state and not on alpha_s, so the
+# conditional-IS step stays invariant. Without the attributes the stored mean
+# is used as is.
+.emc_eff_mean <- function(eff_mu, given_now) {
+  B <- attr(eff_mu, "B")
+  given <- attr(eff_mu, "given")
+  if (is.null(eff_mu) || is.null(B) || is.null(given)) return(eff_mu)
+  if (length(given_now) != length(given) || nrow(B) != length(eff_mu))
+    return(eff_mu)
+  delta <- given_now - given
+  delta[!is.finite(delta)] <- 0
+  out <- as.numeric(eff_mu) + drop(B %*% delta)
+  if (any(!is.finite(out))) return(as.numeric(eff_mu))
+  out
+}
+
 new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           eff_var = NULL, chains_mu = NULL,
                           chains_var = NULL, prev_ll,
@@ -1174,6 +1296,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   } else {
     get_group_level(parameters, s, type)
   }
+  # The efficient proposal conditions on the subject's prior mean (for SEM,
+  # given its covariates: filtered_samples_SEM's conditional_mu), the same
+  # value on the serial and the direct worker paths.
+  eff_mu <- .emc_eff_mean(eff_mu, as.numeric(group_pars$mu))
   unq_components <- unique(tune$components)
   proposal_out <- numeric(length(group_pars$mu))
   group_mu <- group_pars$mu
@@ -1269,24 +1395,34 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # reference particle, and the extra factor enters the weights.
     #
     # That factor would also penalise every independent-proposal particle far
-    # from z, so the update runs as two conditional-IS steps (a composition of
-    # invariant kernels): the independent components (group, chains, eff) with
-    # plain weights, then the state-centred components around the winner.
+    # from z, so the update runs as a composition of conditional-IS steps (each
+    # invariant): the independent components (group, chains, eff) with plain
+    # weights, then each state-centred component on its own around the winner.
+    # Two state-centred components in one step would multiply their auxiliary
+    # densities, so the tighter one would pin every particle to the current
+    # state and each step size would set the other's acceptance.
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     mix_i <- pm_settings[[i]]$mix
     # The marginalise path carries grid state for the chosen particle, so it
     # keeps the single combined step (still invariant, just less efficient).
-    two_step <- p_idx > 0 && is.null(marginalise) && any(state_centred) &&
-      any(!state_centred)
-    steps <- if (two_step) {
-      list(which(!state_centred), which(state_centred))
+    split_steps <- p_idx > 0 && is.null(marginalise) && any(state_centred)
+    steps <- if (split_steps) {
+      c(if (any(!state_centred)) list(which(!state_centred)),
+        as.list(which(state_centred)))
     } else list(seq_len(n_proposals))
     shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
     ref <- subj_mu[idx]
     ref_ll <- if (!is.na(ll_shared[as.character(shared_idx)])) ll_shared[as.character(shared_idx)] else prev_ll
     better <- numeric(n_proposals)
+    jump <- numeric(n_proposals)
     weight_ess <- 0
+    # Squared jumps for the mixture weights are measured in one metric for
+    # every component: the chains covariance where there is one, else the
+    # group covariance.
+    jump_rooti <- if (p_idx > 0) {
+      if (!is.null(bases[["chains"]])) bases[["chains"]]$rooti else bases[[sig_tags[1L]]]$rooti
+    } else NULL
     for (ks in steps) {
       if (sum(particle_numbers[ks]) == 0) next
       mus_i <- lapply(Mus, function(m) m[idx])
@@ -1331,13 +1467,16 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                            data, model, marg_spec,
                                            r_cores = r_cores, warm = warm_arg)
         lw <- marginal_ll_from_grid(marg_grid)
-      } else if(length(unq_components) > 1L){
-        lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                             component = shared_idx, r_cores = r_cores, s = s,
-                             varying = idx[is_shared])
-      } else{
-        lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
-                             r_cores = r_cores, s = s, varying = idx[is_shared])
+      } else {
+        comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
+        lw <- tryCatch(
+          calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+                         component = comp_arg, r_cores = r_cores, s = s,
+                         varying = idx[is_shared]),
+          error = identity)
+        if (inherits(lw, "error"))
+          lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
+                                         data, model, comp_arg)
       }
       lw_total <- lw + ref_ll - lw[1]
       lp <- if (p_idx > 0) {
@@ -1364,6 +1503,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
           }
         } else rep(0, nrow(proposals))
       } else{
+        # The group component's factor doubles as the target prior. If it had
+        # to be repaired the group covariance is not positive definite and the
+        # prior is undefined there: reject rather than evaluate a substitute.
+        if (p_idx > 0 && isTRUE(bases[[sig_tags[1L]]]$repaired))
+          stop(errorCondition(
+            "group covariance is not positive definite; subject prior undefined",
+            class = c("emc_group_prior_failure", "emc_failure"),
+            emc_class = "numerical", emc_source = "particle"))
         prior_density <- lp
       }
       log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = length(ks))
@@ -1411,6 +1558,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         pm_settings[[i]]$sel[[stage]]$n[kk] <- pm_settings[[i]]$sel[[stage]]$n[kk] + 1
         pm_settings[[i]]$sel[[stage]]$disp[kk] <- pm_settings[[i]]$sel[[stage]]$disp[kk] +
           sqrt(sum((proposals[idx_ll, idx] - ref)^2))
+        if (!is.null(jump_rooti))
+          jump[kk] <- jump[kk] +
+            sum((matrix(proposals[idx_ll, idx] - ref, nrow = 1L) %*% jump_rooti)^2)
       }
 
       offset <- 1L
@@ -1421,7 +1571,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
           offset <- offset + n_k
         }
       }
-      weight_ess <- weight_ess + sum(weights)^2 / sum(weights^2)
+      # The particle count follows the weight ESS of the step holding the
+      # group proposal (the independence step). A local step's weights say
+      # nothing about how well the fitted proposals cover the posterior.
+      if (1L %in% ks) weight_ess <- sum(weights)^2 / sum(weights^2)
       ref <- proposals[idx_ll, idx]
       ref_ll <- lw[idx_ll]
     }
@@ -1444,10 +1597,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # Proposal settings adapt only in the discarded stages. Retained samples
     # come from one fixed transition kernel.
     if (stage != "sample") {
-      pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], better, particle_numbers,
-                                             weight_ess, tune, sum(idx))
+      pm_settings[[i]] <- update_pm_settings(
+        pm_settings[[i]], better, particle_numbers, weight_ess, tune, sum(idx),
+        layout = ifelse(state_centred, sig_tags, "")[-1L], jump = jump)
     }
-    if (!is.null(marginalise)) {
+    # The warm start centres the marginalisation grid, so it is part of the
+    # likelihood approximation: frozen in the sample stage like the other
+    # proposal settings, so the approximate target does not follow the chain.
+    if (!is.null(marginalise) && stage != "sample") {
       pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
         c(as.list(warm_next), warm_next_state)
       }
@@ -1470,53 +1627,49 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
 
 # better[j]: component j's particles that outweighed the reference particle of
-# the conditional-IS step they were drawn in; weight_ess: summed over steps.
+# the conditional-IS step they were drawn in; jump[j]: summed squared jump
+# (in the chains metric) of the moves component j supplied; weight_ess: of the
+# independence step.
+# layout: per non-group component, the covariance a state-centred component
+# steps on ("group", "chains") or "" for an independence component.
+#
+# Mixture weights. Every particle costs one likelihood evaluation, so a
+# component is worth its expected squared jump per particle:
+# jump_counts / proposal_counts. The weights move towards those values in
+# proportion. This is one currency for every component, whether its moves come
+# from an independence step or a local one, and it does not feed on itself: a
+# larger weight gives a component more particles but lowers what each of them
+# contributes, because they compete for the same selection.
 update_pm_settings <- function(pm_settings, better, particle_numbers,
-                               weight_ess, tune, n_pars) {
+                               weight_ess, tune, n_pars, layout = NULL,
+                               jump = NULL) {
   pm_settings$iter <- pm_settings$iter + 1
   if (pm_settings$iter > tune$n0) {
     pm_settings$proposal_counts <- pm_settings$proposal_counts + particle_numbers
     pm_settings$acc_counts <- pm_settings$acc_counts + better
-
-    acc_rates <- ifelse(pm_settings$proposal_counts > 0, pm_settings$acc_counts / pm_settings$proposal_counts, 0)
-
-    clamp_min <- ifelse(length(pm_settings$mix) == 2, .1, ifelse(length(pm_settings$mix) == 3, .4, .6))
-    # One target per non-group component, whatever the stage's mixture holds.
-    target <- rep_len(tune$p_accept, length(acc_rates) - 1L)
-
-    new_epsilon <- update_epsilon_continuous(
-      epsilon   = pm_settings$epsilon,
-      acceptance = acc_rates[-1],
-      target     = target,
-      iter       = pm_settings$iter,
-      d          = n_pars,
-      alphaStar  = tune$alphaStar,
-      damp       = 100,
-      clamp      = c(clamp_min, 5)
-    )
-    pm_settings$epsilon <- new_epsilon
-
-
-    if(length(pm_settings$mix) > 2){
-      eps_val <- 1e-12
-
-      performance <- (acc_rates + eps_val) / pm_settings$mix
-      performance <- performance / sum(performance)
-
-      adj_factor <- c(mean(target), target)
-      performance <- performance / adj_factor
-
-      performance <- performance / sum(performance)
-
-      new_mix <- (1 - tune$mix_adapt) * pm_settings$mix + tune$mix_adapt * performance
-
-      new_mix <- pmax(new_mix, 0.02)
-      new_mix <- new_mix / sum(new_mix)
-      pm_settings$mix <- new_mix
+    if (!is.null(jump)) {
+      jc <- pm_settings$jump_counts
+      if (length(jc) != length(jump)) jc <- numeric(length(jump))
+      pm_settings$jump_counts <- jc + jump
     }
 
+    pm_settings <- update_local_steps(pm_settings, better[-1L],
+                                      particle_numbers[-1L], tune, n_pars,
+                                      layout)
 
-    if (length(pm_settings$mix) > 3 && pm_settings$gd_good) {
+    jc <- pm_settings$jump_counts
+    if (length(pm_settings$mix) > 2 && length(jc) == length(pm_settings$mix)) {
+      per_particle <- ifelse(pm_settings$proposal_counts > 0,
+                             jc / pm_settings$proposal_counts, 0)
+      if (sum(per_particle) > 0) {
+        performance <- per_particle / sum(per_particle)
+        new_mix <- (1 - tune$mix_adapt) * pm_settings$mix + tune$mix_adapt * performance
+        new_mix <- pmax(new_mix, 0.02)
+        pm_settings$mix <- new_mix / sum(new_mix)
+      }
+    }
+
+    if (length(pm_settings$mix) > 3 && pm_settings$gd_good && weight_ess > 0) {
       ess <- weight_ess
       desired_ess <- tune$target_ESS
       scale_factor <- (desired_ess / ess)^tune$ESS_scale
@@ -1529,7 +1682,52 @@ update_pm_settings <- function(pm_settings, better, particle_numbers,
   return(pm_settings)
 }
 
+# Step size of each state-centred component. The controller steers the share
+# of the component's particles that outweigh the reference particle in this
+# iteration to tune$step_target. For a Gaussian conditional with a matched
+# covariance that share is about Phi(-epsilon * sqrt(d / 2)), so the default
+# target Phi(-2.38 / sqrt(2)) puts epsilon at the random-walk scale
+# 2.38 / sqrt(d). The share is taken per iteration: a running mean since the
+# block started lags the step it responds to and overshoots. A component whose
+# covariance changed (a new layout) restarts at the random-walk scale.
+update_local_steps <- function(pm_settings, better, particle_numbers, tune,
+                               n_pars, layout = NULL) {
+  n_comp <- length(particle_numbers)
+  eps <- rep_len(pm_settings$epsilon, max(n_comp, length(pm_settings$epsilon)))
+  rw_scale <- 2.38 / sqrt(n_pars)
+  if (is.null(layout)) {
+    local <- rep(TRUE, n_comp)
+    fresh <- rep(FALSE, n_comp)
+  } else {
+    local <- nzchar(layout)
+    old <- pm_settings$step_layout
+    if (length(old) != n_comp) old <- rep(NA_character_, n_comp)
+    fresh <- local & (is.na(old) | old != layout)
+    pm_settings$step_layout <- layout
+  }
+  target <- tune$step_target
+  if (is.null(target)) target <- step_target(1)
+  upd <- which(local & !fresh & particle_numbers > 0)
+  if (length(upd)) {
+    eps[upd] <- update_epsilon_continuous(
+      epsilon    = eps[upd],
+      acceptance = better[upd] / particle_numbers[upd],
+      target     = target,
+      iter       = pm_settings$iter,
+      d          = n_pars,
+      alphaStar  = -stats::qnorm(target / 2),
+      damp       = 100,
+      # A step below a quarter of the random-walk scale moves the chain
+      # at under 1/16 of the optimal squared jump distance.
+      clamp      = c(rw_scale / 4, 5)
+    )
+  }
+  eps[which(fresh)] <- rw_scale
+  pm_settings$epsilon <- eps
+  pm_settings
+}
 
+step_target <- function(search_width) stats::pnorm(-2.38 / sqrt(2)) / search_width
 
 update_epsilon_continuous <- function(
     epsilon,
@@ -1539,7 +1737,7 @@ update_epsilon_continuous <- function(
     d,
     alphaStar,
     damp = 100,
-    clamp = c(0.6, 4)
+    clamp
 ) {
   log_eps <- log(epsilon)
   c_term <- (1 - 1/d)*sqrt(2*pi)*exp(alphaStar^2/2)/(2*alphaStar) + 1/(d*target*(1-target))
@@ -1654,6 +1852,10 @@ fill_samples_RE <- function(samples, proposals, j = 1, n_pars, ...){
 }
 
 
+# Preburn's local step target (its first entry): the share of local particles
+# that should beat the reference while searching. Later stages target the
+# random-walk scale (step_target); mixture weights have no target
+# (update_pm_settings).
 set_p_accept <- function(stage, search_width){
   if(stage == "preburn") return(0.02 * (1/search_width))
   if(stage == "burn") return(c(0.02, 0.25)* (1/search_width))
@@ -1784,6 +1986,9 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)
+    pc <- .emc_pooled_columns(proposals, dadm, varying)
+    proposals <- pc$proposals
+    varying <- pc$varying
     if(is.null(model$c_name)){
       if (!is.null(marginalise)) {
         stop("marginalise requires a registered race-model likelihood")
@@ -1873,6 +2078,7 @@ calc_ll_pw <- function(proposals, dadm, model, r_cores = 1){
   if(!is.null(c_name) && c_name %in% unsupported)
     stop("WAIC is not supported for model type '", c_name, "'")
 
+  proposals <- .emc_pooled_columns(proposals, dadm)$proposals
   if (!is.null(c_name) && exists("calc_ll_oo_pw", mode = "function", inherits = TRUE)) {
     p_types <- names(model$p_types)
     designs <- .oo_expanded_designs(dadm)

@@ -108,7 +108,7 @@ make_pmat <- function(p_vector,design)
   out <- matrix(rep(p_vector,each=length(ss)),nrow=length(ss),
          dimnames=list(ss,names(p_vector)))
   if(is.null(colnames(out))){
-    colnames(out) <- names(sampled_pars(design))
+    colnames(out) <- names(sampled_pars(design, include_pooled = TRUE))
   }
   return(out)
 }

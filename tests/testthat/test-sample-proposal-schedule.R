@@ -1,6 +1,6 @@
-# Sample-stage proposals follow diminishing adaptation: built when production
-# starts, then rebuilt from all production draws so far once the stage holds
-# 100, 200, 400, ... iterations (add_proposals()).
+# Sample-stage proposals are adapted increasingly rarely: built when production
+# starts, then rebuilt from all stored production draws once the stage has run
+# 100, 200, 400, ... transitions (add_proposals()).
 
 local_rng_guard()
 
@@ -20,11 +20,15 @@ test_that("sample-stage proposals are rebuilt on a doubling schedule from all pr
     st <- c(rep("adapt", n_adapt), rep("sample", n_sample))
     list(samples = list(stage = st, idx = length(st)))
   }
-  step <- function(emc, n_sample) {
+  # run_emc() advances sample_transitions by the transitions it ran; thinning
+  # stores fewer draws than that.
+  step <- function(emc, n_sample, n_stored = n_sample) {
     for (j in seq_along(emc)) {
       nxt <- emc[[j]]$sample_proposals_next
-      emc[[j]]$samples <- make_chain(50, n_sample)$samples
+      emc[[j]]$samples <- make_chain(50, n_stored)$samples
       emc[[j]]$sample_proposals_next <- nxt
+      if (!is.null(emc[[j]]$sample_transitions))
+        emc[[j]]$sample_transitions <- n_sample
     }
     calls <<- list()
     EMC2:::add_proposals(emc, "sample", 1, NULL)
@@ -46,6 +50,13 @@ test_that("sample-stage proposals are rebuilt on a doubling schedule from all pr
   expect_identical(emc[[1]]$sample_proposals_next, 400L)
   emc <- step(emc, 300)
   expect_length(calls, 0L)
+  # Rebuild times follow transitions, not stored draws: thinned 4x, the stage
+  # holds 100 draws after 400 transitions and still rebuilds on time.
+  emc <- step(emc, 399, n_stored = 99)
+  expect_length(calls, 0L)
+  emc <- step(emc, 400, n_stored = 100)
+  expect_identical(calls[[1]]$window, 51:150)
+  expect_identical(emc[[1]]$sample_proposals_next, 800L)
   # Warm-up stages still rebuild every time. Adapt tunes the full production
   # mixture, so it also builds the efficient proposal.
   calls <- list()

@@ -1880,7 +1880,7 @@ apply_kernel <- function(kernel_pars, emc, subject=1, input_pars=NULL, trend_n=1
   }
 
   if(mode %in% c('Rcpp', 'Rcpp_oo')) {
-    p_vector <- sampled_pars(emc)
+    p_vector <- sampled_pars(emc, include_pooled = TRUE)
     if(!is.null(kernel_pars)) {
       p_vector[names(p_vector) %in% names(kernel_pars)] <- kernel_pars
     }

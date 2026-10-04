@@ -105,9 +105,20 @@ gibbs_step_diag_gamma <- function(sampler, alpha){
   n_pars <- sum(!sampler$nuisance)
   alpha <- as.matrix(alpha)
   #Mu
-  var_mu = 1.0 / (sampler$n_subjects * last$tvinv + diag(prior$theta_mu_invar))
-  mean_mu = var_mu * ((rowSums(alpha) * last$tvinv + prior$theta_mu_mean * diag(prior$theta_mu_invar)))
-  tmu <- rnorm(n_pars, mean_mu, sd = sqrt(var_mu))
+  P0 <- prior$theta_mu_invar
+  if (!is.matrix(P0)) P0 <- diag(as.numeric(P0), n_pars)
+  # (ginv() can leave rounding-level off-diagonals on a diagonal prior.)
+  if (all(abs(P0[row(P0) != col(P0)]) <= 1e-12 * max(abs(diag(P0))))) {
+    var_mu = 1.0 / (sampler$n_subjects * last$tvinv + diag(P0))
+    mean_mu = var_mu * ((rowSums(alpha) * last$tvinv + prior$theta_mu_mean * diag(P0)))
+    tmu <- rnorm(n_pars, mean_mu, sd = sqrt(var_mu))
+  } else {
+    # A correlated prior on mu couples the coordinates, so draw them jointly.
+    prec <- P0 + diag(sampler$n_subjects * last$tvinv, n_pars)
+    b <- rowSums(alpha) * last$tvinv + drop(P0 %*% prior$theta_mu_mean)
+    R_post <- chol(prec)
+    tmu <- backsolve(R_post, forwardsolve(t(R_post), b) + rnorm(n_pars))
+  }
   names(tmu) <- sampler$par_names[!sampler$nuisance]
 
 

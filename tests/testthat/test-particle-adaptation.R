@@ -18,7 +18,7 @@ pm_stub <- function(n_mix = 4L, gd_good = TRUE, n_particles = 100) {
        n_particles = n_particles, gd_good = gd_good)
 }
 tune_stub <- function() {
-  list(n0 = 10L, p_accept = rep(0.7, 3), alphaStar = 0.234, mix_adapt = 0.1,
+  list(n0 = 10L, p_accept = rep(0.7, 3), mix_adapt = 0.1,
        target_ESS = 30, ESS_scale = 0.5, max_particles = 500)
 }
 # `update_pm_settings` takes, per component, how many of its particles
@@ -151,4 +151,103 @@ test_that("a tune without search_width still adapts epsilon at every stage", {
     expect_true(length(got$epsilon) > 0L && all(is.finite(got$epsilon)),
                 info = stage)
   }
+})
+
+test_that("the local step settles at the random-walk scale without overshoot", {
+  # Share of particles that beat the reference for a Gaussian conditional with a
+  # matched covariance; the controller should settle at 2.38 / sqrt(d).
+  settle <- function(n_pars, eps0) {
+    tune <- EMC2:::check_tune_settings(list(), n_pars, "adapt", 100)
+    tune$n0 <- 0L
+    pm <- pm_stub(); pm$iter <- 0L; pm$epsilon <- rep(eps0, 3L)
+    path <- numeric(600)
+    for (i in seq_along(path)) {
+      share <- pnorm(-pm$epsilon[1L] * sqrt(n_pars / 2))
+      pm <- EMC2:::update_pm_settings(
+        pm, c(0, round(1e4 * share), 0, 0), c(0, 1e4, 1e4, 1e4), 1, tune,
+        n_pars = n_pars, layout = c("chains", "", ""))
+      path[i] <- pm$epsilon[1L] * sqrt(n_pars)
+    }
+    path
+  }
+  for (n_pars in c(14L, 71L)) {
+    # The first call records the layout and starts at the random-walk scale.
+    from_small <- settle(n_pars, 0.05)
+    expect_equal(from_small[1L], 2.38)
+    expect_lt(abs(from_small[600L] - 2.38), 0.05)
+    expect_lt(max(from_small), 2.38 * 1.05)
+  }
+})
+
+test_that("a local step restarts when its covariance changes, and has a floor", {
+  tune <- EMC2:::check_tune_settings(list(), 24L, "burn", 100)
+  tune$n0 <- 0L
+  pm <- pm_stub(n_mix = 3L); pm$iter <- 0L
+  never <- function(pm, layout, n = 1L) {
+    for (i in seq_len(n)) pm <- EMC2:::update_pm_settings(
+      pm, rep(0, 3L), rep(10, 3L), 1, tune, n_pars = 24L, layout = layout)
+    pm
+  }
+  # The first call starts both random walks at the random-walk scale.
+  pm <- never(pm, c("group", "chains"))
+  expect_equal(pm$epsilon, rep(2.38 / sqrt(24), 2L))
+  # No particle ever beats the reference: the step shrinks, but not below
+  # a quarter of that scale.
+  shrunk <- never(pm, c("group", "chains"), 50L)
+  expect_true(all(shrunk$epsilon < pm$epsilon))
+  pm$epsilon <- rep(1e-3, 2L)
+  pm <- never(pm, c("group", "chains"))
+  expect_equal(pm$epsilon, rep(2.38 / sqrt(24) / 4, 2L))
+  # The efficient-proposal mixture reuses slot 1 for the chains random walk.
+  pm$mix <- rep(0.25, 4L); pm$proposal_counts <- pm$acc_counts <- rep(0, 4L)
+  pm <- EMC2:::update_pm_settings(pm, rep(0, 4L), rep(10, 4L), 1, tune,
+                                  n_pars = 24L, layout = c("chains", "", ""))
+  expect_equal(pm$epsilon[1L], 2.38 / sqrt(24))
+  # Independence components keep their (unused) multiplier.
+  expect_equal(pm$epsilon[2L], 2.38 / sqrt(24) / 4)
+})
+
+test_that("mixture weights follow squared jump per particle, without targets", {
+  tune <- EMC2:::check_tune_settings(list(), 10L, "adapt", 100)
+  tune$n0 <- 0L
+  pm <- pm_stub(gd_good = FALSE); pm$iter <- 0L
+  pm$proposal_counts <- pm$acc_counts <- rep(0, 4L)
+  pm$jump_counts <- numeric(4L)
+  # Same particle counts; component 3 delivers three times the jump of 4, and
+  # the others none. The weights converge to those shares (with the floor).
+  for (i in 1:2000) pm <- EMC2:::update_pm_settings(
+    pm, rep(0, 4L), rep(10, 4L), 1, tune, n_pars = 10L,
+    layout = c("chains", "", ""), jump = c(0, 0, 3, 1))
+  expect_equal(pm$mix, c(0.02, 0.02, 0.72, 0.24) / 1, tolerance = 0.02)
+  # Without jumps nothing moves.
+  pm2 <- pm_stub(gd_good = FALSE); pm2$jump_counts <- numeric(4L)
+  pm2 <- EMC2:::update_pm_settings(pm2, rep(0, 4L), rep(10, 4L), 1, tune,
+                                   n_pars = 10L, jump = numeric(4L))
+  expect_equal(pm2$mix, pm_stub()$mix)
+})
+
+test_that("the efficient proposal mean follows the current group mean", {
+  m <- c(1, 2)
+  attr(m, "B") <- matrix(c(0.5, 0, 0, 0.25), 2)
+  attr(m, "given") <- c(0, 0)
+  expect_equal(EMC2:::.emc_eff_mean(m, c(2, 4)), c(2, 3))
+  expect_equal(EMC2:::.emc_eff_mean(m, c(0, 0)), c(1, 2))
+  expect_equal(EMC2:::.emc_eff_mean(c(1, 2), c(2, 4)), c(1, 2))
+})
+
+test_that("window covariances shrink noisy correlations and keep variances", {
+  set.seed(4)
+  p <- 30L
+  iid <- matrix(rnorm(p * 60), p)
+  S <- stats::cov(t(iid))
+  shr <- EMC2:::.emc_shrunk_covariance(iid)
+  expect_equal(diag(shr), diag(S))
+  ev <- function(M) range(eigen(stats::cov2cor(M), only.values = TRUE)$values)
+  # True correlation is the identity: shrinkage pulls the spectrum in.
+  expect_lt(diff(ev(shr)), diff(ev(S)))
+  # Strong real correlation, many draws: almost untouched.
+  L <- t(chol(0.9 + diag(0.1, 3)))
+  big <- L %*% matrix(rnorm(3 * 5000), 3)
+  expect_equal(EMC2:::.emc_shrunk_covariance(big), stats::cov(t(big)),
+               tolerance = 0.01)
 })

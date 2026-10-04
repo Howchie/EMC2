@@ -202,6 +202,10 @@ run_emc <- function(emc, stage, stop_criteria,
         cur_thin <- progress$step_size/chain_n(sub_emc)[1,stage]
       }
       emc <- concat_emc(emc, sub_emc, progress$step_size, stage)
+      if (stage == "sample")
+        for (j in seq_along(emc))
+          emc[[j]]$sample_transitions <-
+            as.integer(emc[[j]]$sample_transitions + round(stage_iter))
     } else{
       emc <- sub_emc
     }
@@ -331,21 +335,41 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
 add_proposals <- function(emc, stage, n_cores, n_blocks){
   prof <- .emc_profile_enabled()
   split <- c(chain = NA_real_, eff = NA_real_)
-  # Sample-stage proposals follow diminishing adaptation (Roberts & Rosenthal
-  # 2007): built when production starts, then rebuilt from ALL production
-  # draws so far (an expanding window) once the stage holds 100, 200, 400, ...
-  # iterations. The expanding window reduces the size of later changes, while
-  # a subject whose warm-up window had not converged can get a new proposal.
-  # Particle mixture weights and scales stay frozen (see new_particle).
+  # Sample-stage proposals are adapted increasingly rarely ("AIR" MCMC;
+  # Chimisov, Latuszynski & Roberts 2018): built when production starts, then
+  # rebuilt after 100, 200, 400, ... production transitions. Between rebuilds
+  # the kernel is a fixed posterior-invariant conditional-IS / ensemble kernel,
+  # and the gaps between rebuilds grow without bound. That, not the size of
+  # each change, is what the AIR results (L2 convergence, WLLN, SLLN, CLT) need,
+  # together with a simultaneous drift condition on the family of kernels the
+  # adaptation can select. So this is NOT diminishing adaptation in the Roberts
+  # & Rosenthal (2007) sense: a rebuild may change the kernel by a
+  # non-vanishing amount (the efficient proposals are refitted to a random
+  # subset of at most 750 draws, and reblocking is discrete), and that is
+  # allowed. The drift condition is assumed, not checked: it holds when the
+  # fitted proposal means and covariances stay in a bounded, non-degenerate
+  # set, which the covariance validation and regularisation are there to keep.
+  # The schedule counts transitions (sample_transitions), not stored draws, so
+  # thinning or trimming the stored history does not move the rebuild times.
+  # The chain and ensemble proposals use ALL stored production draws; the
+  # efficient proposals use at most 750 of them (extract_samples), drawn with a
+  # bias toward recent iterations. Particle mixture weights and scales stay
+  # frozen (see new_particle).
   sample_window <- NULL
   if (stage == "sample") {
-    n_sample <- sum(emc[[1]]$samples$stage[seq_len(emc[[1]]$samples$idx)] == "sample")
+    n_stored <- sum(emc[[1]]$samples$stage[seq_len(emc[[1]]$samples$idx)] == "sample")
+    # Checkpoints from before the counter existed resume from the stored count.
+    n_sample <- emc[[1]]$sample_transitions
+    if (is.null(n_sample)) {
+      n_sample <- as.integer(n_stored)
+      for (j in seq_along(emc)) emc[[j]]$sample_transitions <- n_sample
+    }
     next_at <- emc[[1]]$sample_proposals_next
     if (!is.null(next_at) && n_sample < next_at) {
       if (prof) .emc_profile_state$proposal_split <- split
       return(emc)
     }
-    if (!is.null(next_at) && n_sample > 0)
+    if (!is.null(next_at) && n_stored > 0)
       sample_window <- which(emc[[1]]$samples$stage == "sample" &
                                seq_along(emc[[1]]$samples$stage) <= emc[[1]]$samples$idx)
   }
@@ -356,9 +380,16 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
       stage = stage)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
-        components <- sub_blocking(emc, n_blocks)
-        for(i in 1:length(emc)){
-          attr(emc[[i]]$data, "components") <- components
+        # Independent chains block on their own covariances only.
+        if (.emc_independent_chains() && length(emc) > 1L) {
+          for(i in seq_along(emc)){
+            attr(emc[[i]]$data, "components") <- sub_blocking(emc[i], n_blocks)
+          }
+        } else {
+          components <- sub_blocking(emc, n_blocks)
+          for(i in 1:length(emc)){
+            attr(emc[[i]]$data, "components") <- components
+          }
         }
       }
     }
@@ -378,7 +409,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
                                 conditionMessage(e), call. = FALSE)
                         emc
                       })
-      ready <- all(vapply(emc, function(chain) {
+      chain_ready <- function(chain) {
         isTRUE(chain$burn_eff_ready) &&
           length(chain$eff_mu) == chain$n_subjects &&
           length(chain$eff_var) == chain$n_subjects &&
@@ -388,15 +419,21 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
             is.matrix(x) && nrow(x) == chain$n_pars &&
               ncol(x) == chain$n_pars &&
               .emc_empirical_covariance_ok(x), logical(1)))
-      }, logical(1)))
-      for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- ready
+      }
+      ready <- all(vapply(emc, chain_ready, logical(1)))
+      # Independent chains each switch when their own proposals are ready.
+      if (.emc_independent_chains()) {
+        for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- chain_ready(emc[[j]])
+      } else {
+        for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- ready
+      }
     }
   }
   if(stage == "sample"){
     t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_eff_proposals(emc, n_cores)
     if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
-    next_at <- if (n_sample == 0) 100L else 2L * n_sample
+    next_at <- if (n_sample == 0) 100L else 2L * as.integer(n_sample)
     for (j in seq_along(emc)) emc[[j]]$sample_proposals_next <- next_at
   }
   if (prof) .emc_profile_state$proposal_split <- split
@@ -641,7 +678,20 @@ set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
 }
 
 
+# Chains share nothing between them: each builds its proposals from its own
+# draws, and the burn mode start does not move a chain onto another chain's
+# mode. Chains are then independent replicates, which R-hat assumes. Off by
+# default while it is compared with pooled proposals.
+.emc_independent_chains <- function() {
+  isTRUE(getOption("emc2.independent_chains", FALSE))
+}
+
 create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
+  if (.emc_independent_chains() && length(emc) > 1L) {
+    for (i in seq_along(emc))
+      emc[[i]] <- create_eff_proposals(list(emc[[i]]), n_cores, from_burn)[[1L]]
+    return(emc)
+  }
   samples_merged <- merge_chains(emc)
   if (from_burn && !any(emc[[1]]$nuisance)) {
     # Adapt tunes the production kernel, so it needs an efficient proposal
@@ -663,6 +713,24 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
     n_subjects <- emc[[1]]$n_subjects
     eff_mu <- matrix(0, nrow = n_pars, ncol = n_subjects)
     eff_var <- array(0, dim = c(n_pars, n_pars, n_subjects))
+    # Regression of each conditional mean on the group mean it conditions on,
+    # and the value used; new_particle() moves the mean with the group state.
+    eff_B <- array(0, dim = c(n_pars, n_pars, n_subjects))
+    eff_given <- matrix(NA_real_, nrow = n_pars, ncol = n_subjects)
+    has_B <- TRUE
+    place <- function(conds, rows) {
+      for (sub in seq_len(n_subjects)) {
+        cd <- conds[[sub]]
+        eff_mu[rows, sub] <<- cd$eff_mu
+        eff_var[rows, rows, sub] <<- cd$eff_var
+        if (is.null(cd$B) || is.null(cd$given)) {
+          has_B <<- FALSE
+        } else {
+          eff_B[rows, rows, sub] <<- cd$B
+          eff_given[rows, sub] <<- cd$given
+        }
+      }
+    }
     for(comp in unique(components)){
       idx <- comp == components
       nuis_idx <- nuisance[idx]
@@ -678,12 +746,8 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
                                            n_pars = sum(idx[nuisance]), iteration =  iteration, idx = idx[nuisance],
                                            type = type,
                                            mc.cores = n_cores)
-        conditionals <- array(unlist(conditionals), dim = c(sum(idx[!nuisance]), sum(idx[!nuisance]) + 1, n_subjects))
-        conditionals_nuis <- array(unlist(conditionals_nuis), dim = c(sum(idx[nuisance]), sum(idx[nuisance]) + 1, n_subjects))
-        eff_mu[idx & !nuisance,] <- conditionals[,1,]
-        eff_var[idx & !nuisance, idx & !nuisance,] <- conditionals[,2:(sum(idx[!nuisance])+1),]
-        eff_mu[idx & nuisance,] <- conditionals_nuis[,1,]
-        eff_var[idx & nuisance,idx & nuisance,] <- conditionals_nuis[,2:(sum(idx[nuisance])+1),]
+        place(conditionals, which(idx & !nuisance))
+        place(conditionals_nuis, which(idx & nuisance))
       } else{
         # From warm-up draws the conditional can still be singular. Catch that
         # inside each forked job: a condition raised in a child reaches the
@@ -706,14 +770,19 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
           }
           return(emc)
         }
-        conditionals <- array(unlist(conditionals), dim = c(sum(idx[!nuisance]), sum(idx[!nuisance]) + 1, n_subjects))
-        eff_mu[idx & !nuisance,] <- conditionals[,1,]
-        eff_var[idx & !nuisance,idx & !nuisance,] <- conditionals[,2:(sum(idx[!nuisance])+1),]
+        place(conditionals, which(idx & !nuisance))
       }
 
     }
 
-    eff_mu <- split(eff_mu, col(eff_mu))
+    eff_mu <- lapply(seq_len(n_subjects), function(sub) {
+      m <- eff_mu[, sub]
+      if (has_B && all(is.finite(eff_B[, , sub]))) {
+        attr(m, "B") <- matrix(eff_B[, , sub], n_pars, n_pars)
+        attr(m, "given") <- eff_given[, sub]
+      }
+      m
+    })
     eff_var <- lapply(apply(eff_var, 3, identity, simplify = F), function(v) {
       if (!.emc_empirical_covariance_ok(v)) .emc_regularize_covariance(v) else v
     })
@@ -772,6 +841,52 @@ sub_blocking <- function(emc, n_blocks){
   }, error = function(e) FALSE))
 }
 
+# Covariance of MCMC draws (p x n) with the correlations shrunk towards zero
+# (Schafer & Strimmer 2005, target D: variances are kept). A window covariance
+# in p dimensions from n_eff effectively independent draws spreads its
+# eigenvalues by about (1 +- sqrt(p / n_eff))^2, which an independence
+# proposal pays for in its weights. The shrinkage intensity is the estimated
+# sampling variance of the correlations over their squared size; that variance
+# is computed as for independent draws and inflated by n / n_eff, with n_eff
+# from the median over parameters of each one's lag-1 autocorrelation. That
+# is a heuristic: an AR(1) coordinate ESS is not the ESS of the products
+# x_i x_j, and the median can hide one slowly mixing direction. `n_chains`
+# equal-length chains concatenated in `draws` are handled separately: lag-1
+# pairs never span a chain boundary and each chain is centred on its own mean.
+.emc_shrunk_covariance <- function(draws, n_chains = 1L) {
+  S <- stats::cov(t(draws))
+  p <- nrow(draws)
+  n <- ncol(draws)
+  sds <- sqrt(diag(S))
+  if (p < 2L || n < 4L || any(!is.finite(sds)) || any(sds <= 0)) return(S)
+  X <- scale(t(draws))
+  R <- crossprod(X) / (n - 1)
+  if (is.null(n_chains)) n_chains <- 1L
+  seg <- if (n_chains > 1L && n %% n_chains == 0L) rep(seq_len(n_chains), each = n / n_chains) else
+    rep(1L, n)
+  same <- seg[-1L] == seg[-n]
+  # Within-chain lag-1 autocorrelation about each chain's own mean, so a
+  # difference between chain means does not read as autocorrelation.
+  rho <- vapply(seq_len(p), function(k) {
+    xc <- X[, k] - stats::ave(X[, k], seg)
+    den <- sum(xc^2)
+    r <- if (den > 0) sum(xc[-1L][same] * xc[-n][same]) / den else NA_real_
+    if (is.finite(r)) r else 0
+  }, numeric(1))
+  ratio <- pmin(1, pmax(1 / n, (1 - rho) / (1 + rho)))
+  n_eff <- max(2, n * stats::median(ratio))
+  w_bar <- crossprod(X) / n
+  var_r <- n / (n - 1)^3 * (crossprod(X^2) - n * w_bar^2) * (n / n_eff)
+  off <- row(R) != col(R)
+  denom <- sum(R[off]^2)
+  lambda <- if (denom > 0) min(1, max(0, sum(var_r[off]) / denom)) else 0
+  R_shrunk <- (1 - lambda) * R
+  diag(R_shrunk) <- 1
+  out <- R_shrunk * outer(sds, sds)
+  dimnames(out) <- dimnames(S)
+  out
+}
+
 .emc_chain_proposal_window <- function(emc, samples_idx = NULL, stage) {
   if (is.null(samples_idx)) {
     idx <- emc[[1L]]$samples$idx
@@ -806,31 +921,51 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
   stage <- match.arg(stage, c("burn", "adapt", "sample"))
   samples_idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
   filter_idx <- .emc_proposal_filter_indices(emc, samples_idx)
-  LL <- get_pars(emc, filter = filter_idx, selection = "LL",
-                 stage = c('preburn', 'burn', 'adapt', 'sample'),
-                 merge_chains = T, return_mcmc = F, remove_constants = F,
-                 remove_dup = F)
   alpha <- get_pars(emc, filter = filter_idx, selection = "alpha",
                     stage = c('preburn', 'burn', 'adapt', 'sample'),
                     by_subject = T, merge_chains = T, return_mcmc = F,
                     remove_dup = F, remove_constants = F)
+  if (!is.null(emc[[1]]$pooled))
+    alpha <- alpha[emc[[1]]$par_names, , , drop = FALSE]
+  # merge_chains stacks the chains' windows one after another.
+  attr(alpha, "n_chains") <- n_chains
 
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
+  # Posterior moments of each subject over the window, all chains: the plain
+  # mean (the draws are already posterior draws) and a shrunk covariance.
+  win_moments <- function(a) list(
+    mu = lapply(seq_len(n_subjects), function(sub)
+      rowMeans(matrix(a[, sub, ], nrow = n_pars))),
+    cov = lapply(seq_len(n_subjects), function(sub)
+      .emc_shrunk_covariance(matrix(a[, sub, ], nrow = n_pars),
+                             n_chains = attr(a, "n_chains"))))
+  independent <- .emc_independent_chains() && n_chains > 1L
+  if (!independent) {
+    wm <- win_moments(alpha)
+    win_mu <- wm$mu; win_cov <- wm$cov
+  }
   for(j in 1:n_chains){
-    rnd_index <- sample(1:ncol(LL), round(ncol(LL)/2))
+    if (independent) {
+      own <- emc[[j]]$samples$alpha[, , samples_idx, drop = FALSE]
+      wm <- win_moments(own)
+      win_mu <- wm$mu; win_cov <- wm$cov
+      block_idx <- block_variance_idx(attr(emc[[j]]$data, "components"))
+    }
     old_chains_var <- emc[[j]]$chains_var
     old_chains_mu <- emc[[j]]$chains_mu
     old_ensemble_q <- emc[[j]]$ensemble_q
     burn_mode_var <- emc[[j]]$burn_mode_var
     burn_mode_mu <- emc[[j]]$burn_mode_mu
+    # Subjects whose Laplace approximation is poor (a ridge or a support
+    # boundary) take the covariance of their draws once there is a usable one.
+    mode_stats <- emc[[j]]$burn_mode_stats
+    laplace_poor <- .emc_laplace_poor(mode_stats)
     chains_var <- vector("list", n_subjects)
     chains_mu <- vector("list", n_subjects)
     for(sub in 1:n_subjects){
-      subject_draws <- matrix(alpha[,sub,rnd_index], nrow = n_pars)
-      moments <- weighted_moments(subject_draws, LL[sub, rnd_index])
-      emp_covs <- moments$w_cov
-      chains_mu[[sub]] <- moments$w_mu
+      emp_covs <- win_cov[[sub]]
+      chains_mu[[sub]] <- win_mu[[sub]]
       if(do_block) emp_covs[block_idx] <- 0
       informative <- is.matrix(emp_covs) &&
         nrow(emp_covs) == n_pars && ncol(emp_covs) == n_pars &&
@@ -860,9 +995,10 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       }
       if(length(chains_mu[[sub]]) != n_pars ||
          any(!is.finite(chains_mu[[sub]])))
-        chains_mu[[sub]] <- rowMeans(subject_draws)
+        chains_mu[[sub]] <- win_mu[[sub]]
       if (length(burn_mode_var) >= sub &&
-          is.matrix(burn_mode_var[[sub]])) {
+          is.matrix(burn_mode_var[[sub]]) &&
+          !(stage == "burn" && isTRUE(laplace_poor[sub]) && raw_ok)) {
         mode_cov <- burn_mode_var[[sub]]
         if (do_block) mode_cov[block_idx] <- 0
         if (.emc_empirical_covariance_ok(mode_cov, subject = sub)) {
@@ -914,48 +1050,48 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     emc[[j]]$chains_var <- chains_var
     emc[[j]]$chains_mu <- chains_mu
     emc[[j]]$burn_mode_var <- NULL
-    # Pool proposal for the ensemble group update: plain posterior moments over
-    # the whole window, all chains (an independence proposal should cover the
-    # posterior, not the likelihood-weighted subset used above).
-    a_sub <- function(sub) matrix(alpha[, sub, ], nrow = n_pars)
-    emc[[j]]$ensemble_q <- list(
-      mu = lapply(seq_len(n_subjects), function(sub) {
-        if (stage == "burn" && length(burn_mode_mu) >= sub &&
-            length(burn_mode_mu[[sub]]) == n_pars)
-          return(burn_mode_mu[[sub]])
-        m <- rowMeans(a_sub(sub))
-        if(all(is.finite(m))) return(m)
-        if(length(old_ensemble_q$mu) >= sub &&
-           length(old_ensemble_q$mu[[sub]]) == n_pars &&
-           all(is.finite(old_ensemble_q$mu[[sub]])))
-          return(old_ensemble_q$mu[[sub]])
-        chains_mu[[sub]]
-      }),
-      var = lapply(seq_len(n_subjects), function(sub) {
-        if (stage == "burn" && length(burn_mode_var) >= sub &&
-            is.matrix(burn_mode_var[[sub]]))
-          return(3 * burn_mode_var[[sub]])
-        v <- cov(t(a_sub(sub)))
-        if (do_block) v[block_idx] <- 0
-        informative <- is.matrix(v) && nrow(v) == n_pars &&
-          ncol(v) == n_pars &&
-          all(is.finite(v)) && any(diag(v) > 0)
-        raw_ok <- informative && .emc_empirical_covariance_ok(v, subject = sub)
-        old_ok <- length(old_ensemble_q$var) >= sub &&
-          is.matrix(old_ensemble_q$var[[sub]]) &&
-          nrow(old_ensemble_q$var[[sub]]) == n_pars &&
-          ncol(old_ensemble_q$var[[sub]]) == n_pars &&
-          .emc_empirical_covariance_ok(old_ensemble_q$var[[sub]], subject = sub)
-        if (stage == "sample" && !raw_ok && old_ok)
-          return(old_ensemble_q$var[[sub]])
-        if (informative && !raw_ok) {
-          v <- .emc_regularize_covariance(v)
-        }
-        if (informative && .emc_empirical_covariance_ok(v, subject = sub)) return(v)
-        if (old_ok)
-          return(old_ensemble_q$var[[sub]])
-        chains_var[[sub]]
-      }))
+    # Pool proposal for the ensemble group update: the same window moments
+    # (in burn, the Laplace proposal mode and a widened Laplace covariance).
+    # The mean and covariance come from the same source, so a poor Laplace fit
+    # is replaced by the window moments as a pair.
+    ens_q <- lapply(seq_len(n_subjects), function(sub) {
+      v <- win_cov[[sub]]
+      if (do_block) v[block_idx] <- 0
+      informative <- is.matrix(v) && nrow(v) == n_pars &&
+        ncol(v) == n_pars &&
+        all(is.finite(v)) && any(diag(v) > 0)
+      raw_ok <- informative && .emc_empirical_covariance_ok(v, subject = sub)
+      if (stage == "burn" && length(burn_mode_var) >= sub &&
+          is.matrix(burn_mode_var[[sub]]) &&
+          length(burn_mode_mu) >= sub &&
+          length(burn_mode_mu[[sub]]) == n_pars &&
+          !(isTRUE(laplace_poor[sub]) && raw_ok))
+        return(list(mu = as.numeric(burn_mode_mu[[sub]]),
+                    var = 3 * burn_mode_var[[sub]]))
+      m <- win_mu[[sub]]
+      old_mu_ok <- length(old_ensemble_q$mu) >= sub &&
+        length(old_ensemble_q$mu[[sub]]) == n_pars &&
+        all(is.finite(old_ensemble_q$mu[[sub]]))
+      old_ok <- old_mu_ok && length(old_ensemble_q$var) >= sub &&
+        is.matrix(old_ensemble_q$var[[sub]]) &&
+        nrow(old_ensemble_q$var[[sub]]) == n_pars &&
+        ncol(old_ensemble_q$var[[sub]]) == n_pars &&
+        .emc_empirical_covariance_ok(old_ensemble_q$var[[sub]], subject = sub)
+      old_q <- if (old_ok) list(mu = old_ensemble_q$mu[[sub]],
+                                var = old_ensemble_q$var[[sub]])
+      if (!all(is.finite(m))) {
+        if (old_ok) return(old_q)
+        return(list(mu = chains_mu[[sub]], var = chains_var[[sub]]))
+      }
+      if (stage == "sample" && !raw_ok && old_ok) return(old_q)
+      if (informative && !raw_ok) v <- .emc_regularize_covariance(v)
+      if (informative && .emc_empirical_covariance_ok(v, subject = sub))
+        return(list(mu = m, var = v))
+      if (old_ok) return(old_q)
+      list(mu = m, var = chains_var[[sub]])
+    })
+    emc[[j]]$ensemble_q <- list(mu = lapply(ens_q, `[[`, "mu"),
+                                var = lapply(ens_q, `[[`, "var"))
     emc[[j]]$burn_mode_mu <- NULL
   }
 
@@ -973,6 +1109,7 @@ reset_pm_settings <- function(emc, stage){
         for(i in 1:length(x)){
           x[[i]]$proposal_counts <- rep(0, length(x[[i]]$proposal_counts))
           x[[i]]$acc_counts <- rep(0, length(x[[i]]$proposal_counts))
+          x[[i]]$jump_counts <- NULL
           # Every burn block is a fresh adaptation window.  Leaving the
           # iteration counter above tune$n0 after the first failed block makes
           # the next block adapt from a single observation immediately.
@@ -1500,30 +1637,6 @@ strip_duplicates <- function(emc, incl_props = TRUE) {
   # sampler state: deleting them makes autosave change the next transition.
   return(emc)
 }
-
-get_posterior_weights <- function(ll){
-  max_ll <- max(ll)
-  weights <- exp(ll - max_ll)
-  weights <- weights / sum(weights)
-  return(weights)
-}
-
-weighted_moments <- function(chain, ll = NULL) {
-  n <- ncol(chain)
-  d <- nrow(chain)
-
-  if (is.null(ll)) {
-    weights <- rep(1 / n, n)
-  } else {
-    weights <- get_posterior_weights(ll)
-  }
-
-  weighted_mean <- as.vector(drop(chain %*% weights))
-  cov_matrix <- cov(t(chain))
-  return(list(w_cov = cov_matrix, w_mu = weighted_mean))
-}
-
-
 
 #' Restore shared immutable configuration without replacing chain-local state
 #' @param emc A list of EMC objects with stripped duplicates

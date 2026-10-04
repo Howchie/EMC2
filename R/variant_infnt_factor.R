@@ -253,6 +253,8 @@ gibbs_step_infnt_factor <- function(sampler, alpha){
         ad <- prior$ad2 + 0.5 * n_pars * (max_factors - h + 1)
         bd <- prior$bd2 + 0.5 * (1 / delta[h]) * sum(tauh[h:max_factors] * colSums(as.matrix(mat[, h:max_factors])))
         delta[h] <- rgamma(1, shape = ad, rate = bd)
+        # Later rates depend on the cumulative products through delta[h].
+        tauh <- cumprod(delta)
       }
     }
   } else if(max_factors > 1){

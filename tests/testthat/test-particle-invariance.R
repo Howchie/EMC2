@@ -16,7 +16,7 @@ test_that("particle allocation is plain multinomial (no forced minimum)", {
   expect_true(all(colSums(counts) == 5))
 })
 
-test_that("burn runs the independent and local proposals as two IS steps", {
+test_that("burn runs the independent proposals and each local one as its own IS step", {
   calls <- 0L
   local_mocked_bindings(
     calc_ll_pooled = function(proposals, ...) {
@@ -36,7 +36,8 @@ test_that("burn runs the independent and local proposals as two IS steps", {
     1L, NULL, settings, chains_var = diag(p), prev_ll = 0,
     parameters = NULL, stage = "burn", type = "standard", tune = tune,
     current_alpha = alpha, population_mu = alpha, population_var = diag(p))
-  expect_equal(calls, 2L)
+  # Group proposal, then the group-covariance and chains-covariance random walks.
+  expect_equal(calls, 3L)
   expect_true(all(is.finite(result$proposal)))
 })
 
@@ -129,6 +130,7 @@ test_that("new_particle leaves a conjugate Gaussian posterior invariant", {
   # kernel missed the mean here by z = -18 (sample) and z = -22 (adapt).
   for (cfg in list(list("sample", c(.2, .4, .2, .2), c(1, 1, 1)),
                    list("adapt", c(.3, .4, .3), c(1, 1)),
+                   list("burn", c(.2, .4, .4), c(.5, 1)),
                    list("adapt", c(.2, .4, .2, .2), c(.3, .3, .3)),
                    list("sample", c(.3, .02, .3, .38), c(1, 1, 1)))) {
     x <- run(cfg[[1]], cfg[[2]], cfg[[3]])

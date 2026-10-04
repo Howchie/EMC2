@@ -16,7 +16,8 @@ sampled_pars(
   add_da = FALSE,
   all_cells_dm = FALSE,
   data = NULL,
-  use_data = TRUE
+  use_data = TRUE,
+  include_pooled = FALSE
 )
 
 \method{sampled_pars}{emc.design}(
@@ -26,7 +27,8 @@ sampled_pars(
   add_da = FALSE,
   all_cells_dm = FALSE,
   data = NULL,
-  use_data = TRUE
+  use_data = TRUE,
+  include_pooled = FALSE
 )
 
 \method{sampled_pars}{emc.group_design}(
@@ -36,7 +38,8 @@ sampled_pars(
   add_da = FALSE,
   all_cells_dm = FALSE,
   data = NULL,
-  use_data = TRUE
+  use_data = TRUE,
+  include_pooled = FALSE
 )
 
 \method{sampled_pars}{emc.prior}(
@@ -46,7 +49,8 @@ sampled_pars(
   add_da = FALSE,
   all_cells_dm = FALSE,
   data = NULL,
-  use_data = TRUE
+  use_data = TRUE,
+  include_pooled = FALSE
 )
 
 \method{sampled_pars}{emc}(
@@ -56,7 +60,8 @@ sampled_pars(
   add_da = FALSE,
   all_cells_dm = FALSE,
   data = NULL,
-  use_data = TRUE
+  use_data = TRUE,
+  include_pooled = FALSE
 )
 }
 \arguments{
@@ -77,6 +82,11 @@ When supplied, only observed factor combinations are used.}
 
 \item{use_data}{Logical. Whether to restrict the parameter design to
 combinations observed in \code{data}. Defaults to \code{TRUE}.}
+
+\item{include_pooled}{Logical. Whether to include parameters declared with
+\code{design(pooled = ...)}. The default \code{FALSE} gives the parameters that have
+subject-level values (and a hierarchical prior); \code{TRUE} gives the full
+parameter vector that \code{make_data()} and \code{mapped_pars()} take.}
 }
 \value{
 Named vector.

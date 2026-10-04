@@ -197,6 +197,9 @@ implied_mean <- function(sampler, idx){
   } else {
     # If no group designs, mu and beta are the same
     mu <- beta
+    if (!is.null(sampler$samples$pooled))
+      mu <- .emc_pooled_append(sampler$samples$theta_mu[, idx, drop = FALSE],
+                               sampler, idx, "mu")
   }
   return(mu)
 }
@@ -476,13 +479,15 @@ get_objects_SEM <- function(selection, sample_prior, return_prior, design = NULL
 
 get_base <- function(sampler, idx, selection){
   if(selection == "alpha"){
-    return(lapply(sampler, FUN = function(x) return(x$samples$alpha[,,idx, drop = F])))
+    return(lapply(sampler, FUN = function(x)
+      .emc_pooled_append(x$samples$alpha[,,idx, drop = F], x, idx, "alpha")))
   } else if(selection == "LL"){
     return(lapply(sampler, FUN = function(x) return(x$samples$subj_ll[,idx, drop = F])))
   } else if(selection == "pw_ll"){
     return(lapply(sampler, FUN = function(x) return(x$samples$pw_ll[,idx, drop = F])))
   } else if(selection == "mu"){
-    return(lapply(sampler, FUN = function(x) return(x$samples$theta_mu[,idx, drop = F])))
+    return(lapply(sampler, FUN = function(x)
+      .emc_pooled_append(x$samples$theta_mu[,idx, drop = F], x, idx, "mu")))
   } else if(selection == "beta"){
     return(lapply(sampler, FUN = function(x) {
       if (!is.null(x$samples$theta_beta)) {
