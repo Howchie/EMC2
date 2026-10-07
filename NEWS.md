@@ -18,10 +18,10 @@
     instead of a regression fitted to earlier draws, which lagged behind the
     chain. `options(emc2.laplace_conditional = FALSE)` restores the regression.
 
--   **Shear group update (experimental):** `options(emc2.group_move = "shear")`
-    follows the ensemble group update with joint moves of the group level and
-    every subject, in which each subject keeps its standardised position in
-    its own conditional posterior (a well-informed subject barely moves). The
+-   **Shear group update (default):** the ensemble group update is now
+    followed by joint moves of the group level and every subject, in which
+    each subject keeps its standardised position in its own conditional
+    posterior (a well-informed subject barely moves). The
     ensemble draws the group given the subjects; the shear moves them
     together; alternating the two is interweaving (Yu & Meng 2011). Mean steps
     follow the directions in which the ensemble's group mean is predicted to
@@ -36,6 +36,7 @@
     step and redrawn after it, so a weakly informed group sd is no longer
     held in place by it. Standard (no group designs) and diagonal-gamma
     hierarchies; others keep the ensemble update.
+    `options(emc2.group_move = "ensemble")` keeps the ensemble update alone.
 
 -   **Bug fix:** with `options(emc2.independent_chains = TRUE)`, the efficient
     proposal built at the end of burn failed on the one-chain window.
