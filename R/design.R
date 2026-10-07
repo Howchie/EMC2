@@ -1340,8 +1340,12 @@ design_model <- function(data,design,model=NULL,
       }
     }
   }
-  if (!is.null(rt_resolution) & !is.null(da$rt))
-    da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
+  if (!is.null(rt_resolution) & !is.null(da$rt)) {
+    bnd <- function(nm, default) if (nm %in% names(da)) da[[nm]] else default
+    da$rt <- .rt_bin_midpoint(da$rt, rt_resolution,
+                              lower = pmax(bnd("LT", 0), bnd("LC", 0)),
+                              upper = pmin(bnd("UT", Inf), bnd("UC", Inf)))
+  }
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
@@ -1400,6 +1404,9 @@ design_model <- function(data,design,model=NULL,
   attr(dadm,"constants") <- design$constants
   attr(dadm,"ok_trials") <- is.finite(data$rt)
   attr(dadm,"s_data") <- data$subjects
+  # Bin width of the floored rts; the likelihood integrates over each bin.
+  if (!is.null(rt_resolution) && !is.null(dadm$rt))
+    attr(dadm, "rt_resolution") <- rt_resolution
   # design(TC = list(filter_defective = TRUE)): a finite UT also truncates the
   # never-finish atom (ContextForRaceModels::filter_defective in C++).  Like the
   # guess window it is fixed per dadm and survives dm_list()'s row subsetting.

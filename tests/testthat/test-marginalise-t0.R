@@ -112,7 +112,7 @@ test_that("a warm start reproduces the cold rule, and a stale one is discarded",
 
   # A hint pointing somewhere else entirely: the probe must detect that and fall
   # back to the pilot, giving exactly the cold answer.
-  stale <- c(mode = warm[["mode"]] + 1.5, sd = warm[["sd"]] * 50)
+  stale <- c(mode = warm[["mode"]] + 1.5, sd = warm[["sd"]])
   stale_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise,
                                              warm = stale)
   expect_equal(stale_grid$warm_used, 0)

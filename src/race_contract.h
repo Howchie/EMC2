@@ -167,6 +167,9 @@ struct ContextForRaceModels {
     bool is_global_kill = false;
     bool is_local_kill = false;
     bool is_local_kill_guess = false;
+    // A local guess clock runs from time zero, so the race has density before
+    // t0; the floored-rt bin rule (FlooredRtBins) assumes it has none.
+    bool has_pre_t0_mass() const { return is_local_guess || is_local_kill_guess; }
 
     // Per-particle switch: disable kill bookkeeping when lambda is zero
     bool kill_active = true;

@@ -1264,6 +1264,9 @@ loadRData <- function(fileName){
 #' @param n_chains An integer. Specifies the number of mcmc chains to be run (has to be more than 1 to compute `rhat`).
 #' @param compress A Boolean, if `TRUE` (i.e., the default), the data is compressed to speed up likelihood calculations.
 #' @param rt_resolution A double. Used for compression, response times will be binned based on this resolution.
+#'   Each response time then stands for its bin: race models average the
+#'   density over the part of the bin above `t0`, other models evaluate it at
+#'   the bin midpoint. `NULL` uses the response times as recorded.
 #' @param use_data Boolean. If `TRUE` (the default), parameters for factor
 #'   combinations that are not present in `data` are omitted from the model.
 #'   If `FALSE`, the complete factorial design is retained for backwards

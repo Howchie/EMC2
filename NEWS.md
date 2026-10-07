@@ -1,6 +1,16 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Likelihood of binned response times:** with `rt_resolution` each
+    response time now stands for its bin instead of the bin's lower edge.
+    Race models average the density over the part of the bin above `t0` with
+    one evaluation per trial (at the bin midpoint in `sqrt(t - t0)`, weighted by
+    the feasible fraction of the bin), so `t0` can enter the earliest bin
+    without the likelihood dropping to its floor; other models evaluate the
+    density at the bin midpoint. This removes the first-order bias of
+    evaluating at the lower edge. The bin width is stored on the data, and
+    `score_held_out()` checks against it.
+
 -   **R-hat stopping rules per selection:** `mean_gd` and `max_gd` now apply
     to each element of `selection` separately, so the default burn rule needs
     a mean R-hat below 1.1 for the subject parameters and, separately, for the

@@ -111,10 +111,10 @@
   dadm
 }
 
-# rt_resolution is consumed by make_emc() and never stored, so a caller can
-# silently score at a different binning than they fitted at, which evaluates the
-# held-out densities at differently rounded rts.  Compare against the training
-# data instead of guessing.
+# rt_resolution is an argument of make_emc(), so a caller can silently score at
+# a different binning than they fitted at, which evaluates the held-out
+# densities over different bins.  The training dadm records its bin width;
+# fits whose data carry no record are checked against the grid of their rts.
 .check_held_out_rt_resolution <- function(emc, rt_resolution) {
   model <- emc[[1]]$model
   # design_model() forces rt_resolution to NULL for grid-solve likelihoods
@@ -126,6 +126,14 @@
                use.names = FALSE)
   rt <- rt[is.finite(rt) & rt > 0]
   if (length(rt) == 0) return(invisible(NULL))
+  stored <- attr(train[[1]], "rt_resolution")
+  if (!is.null(stored)) {
+    if (is.null(rt_resolution) || !isTRUE(all.equal(rt_resolution, stored)))
+      warning("Scoring with rt_resolution = ", format(rt_resolution),
+              ", but the fit used rt_resolution = ", format(stored),
+              ". Pass the same value used for the fit.", call. = FALSE)
+    return(invisible(NULL))
+  }
   on_grid <- function(res) {
     if (is.null(res)) return(NA)
     q <- rt / res

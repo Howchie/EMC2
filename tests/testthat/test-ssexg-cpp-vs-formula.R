@@ -158,7 +158,7 @@ test_that("SSEXG C++ LL matches formula: go trial with observed response", {
 
   RT <- 0.60   # S="left" so lR="left" is the match (mu=0.50)
   dat  <- .make_trial_dat("left", "left", RT, Inf)
-  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
+  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE, rt_resolution = NULL)
 
   p <- .p_fixed
   # log(1-gf) + log f_match(rt) + log S_mismatch(rt)
@@ -179,7 +179,7 @@ test_that("SSEXG C++ LL matches formula: stop trial, go wins", {
 
   RT <- 0.65; SSD <- 0.20
   dat  <- .make_trial_dat("left", "left", RT, SSD)
-  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
+  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE, rt_resolution = NULL)
 
   p <- .p_fixed
   go_lprob <- log(.dtexg_r(RT, p$mu_m,  p$sig, p$tau, p$lb)) +
@@ -198,7 +198,7 @@ test_that("SSEXG C++ LL matches formula: NR go trial (go failure)", {
   p_vector  <- .make_p_vector(design_ss)
 
   dat  <- .make_trial_dat("left", NA, NA, Inf)
-  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
+  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE, rt_resolution = NULL)
 
   expected <- log(.p_fixed$gf)
   expect_equal(.cpp_ll_single(p_vector, dadm), expected, tolerance = 1e-5)
@@ -217,7 +217,7 @@ test_that("SSEXG C++ LL matches formula: NR stop trial (stop wins)", {
 
   SSD <- 0.20
   dat  <- .make_trial_dat("left", NA, NA, SSD)
-  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
+  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE, rt_resolution = NULL)
 
   p <- .p_fixed
   pstop    <- .pstop_r(SSD,
@@ -243,7 +243,7 @@ test_that("SSEXG C++ LL matches formula: NR stop trial with SSD=0.35", {
 
   SSD <- 0.35
   dat  <- .make_trial_dat("left", NA, NA, SSD)
-  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
+  dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE, rt_resolution = NULL)
 
   p <- .p_fixed
   pstop    <- .pstop_r(SSD,

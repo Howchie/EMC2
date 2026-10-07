@@ -32,7 +32,10 @@ make_emc(
 
 \item{compress}{A Boolean, if \code{TRUE} (i.e., the default), the data is compressed to speed up likelihood calculations.}
 
-\item{rt_resolution}{A double. Used for compression, response times will be binned based on this resolution.}
+\item{rt_resolution}{A double. Used for compression, response times will be binned based on this resolution.
+Each response time then stands for its bin: race models average the
+density over the part of the bin above \code{t0}, other models evaluate it at
+the bin midpoint. \code{NULL} uses the response times as recorded.}
 
 \item{use_data}{Boolean. If \code{TRUE} (the default), parameters for factor
 combinations that are not present in \code{data} are omitted from the model.

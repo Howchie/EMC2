@@ -126,7 +126,7 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
     LT = 0.25,
     UT = 1.5
   )
-  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1)
+  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1, rt_resolution = NULL)
   model_obj <- emc[[1]]$model()
   dadm <- emc[[1]]$data[[1]]
 
@@ -214,7 +214,7 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
     LT = 0.2,
     UT = 2.0
   )
-  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1)
+  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1, rt_resolution = NULL)
   model_obj <- emc[[1]]$model()
   dadm <- emc[[1]]$data[[1]]
 
@@ -344,7 +344,7 @@ test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
   names(vals) <- names(p_vec)
   p_vec[names(vals)] <- vals
 
-  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1)
+  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1, rt_resolution = NULL)
   dadm <- emc[[1]]$data[[1]]
   model_obj <- emc[[1]]$model()
   designs <- EMC2:::.oo_expanded_designs(dadm)

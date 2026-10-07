@@ -50,6 +50,24 @@ na_locf <- function(x, na.rm = FALSE) {
   x
 }
 
+# Response times binned to rt_resolution for the likelihood.  An observed rt
+# stands for its bin [floor, floor + h), clipped to the truncation and
+# censoring bounds; the midpoint of that interval is stored, so every
+# likelihood evaluates inside the bin rather than at its lower edge.  The race
+# likelihood recovers the bin from attr(dadm, "rt_resolution") and averages
+# the density over it (floored_rt_bin_rule in src/particle_ll.cpp).
+.rt_bin_midpoint <- function(x, rt_resolution, lower = 0, upper = Inf) {
+  x <- .floor_to_rt_resolution(x, rt_resolution)
+  finite <- is.finite(x)
+  if (!any(finite)) return(x)
+  lower <- rep_len(lower, length(x))[finite]
+  upper <- rep_len(upper, length(x))[finite]
+  lo <- pmax(x[finite], lower)
+  hi <- pmin(x[finite] + rt_resolution, upper)
+  x[finite] <- ifelse(hi > lo, (lo + hi) / 2, x[finite] + rt_resolution / 2)
+  x
+}
+
 # Whether a model tolerates having its response times binned.
 #
 # Binning rt (rt_resolution) is a lossy compression: the likelihood then

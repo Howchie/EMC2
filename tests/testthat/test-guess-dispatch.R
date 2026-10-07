@@ -14,7 +14,8 @@ guess_dispatch_context <- function(model, formula, par_values, rt = 0.1) {
     rt = rt
   )
 
-  emc <- make_emc(dat, design_obj, type = "single", compress = FALSE, n_chains = 1)
+  emc <- make_emc(dat, design_obj, type = "single", compress = FALSE, n_chains = 1,
+                  rt_resolution = NULL)
   model_obj <- emc[[1]]$model()
   dadm <- emc[[1]]$data[[1]]
 

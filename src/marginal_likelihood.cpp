@@ -267,13 +267,18 @@ static MarginalGrid calc_ll_oo_marginal_core(
         break;
       }
   }
-  // --- upper clip: feasibility ceiling log(min finite rt - eps). ---
+  // --- upper clip: feasibility ceiling log(min finite rt - eps); for binned
+  // rts (attr "rt_resolution") the top of the earliest bin. ---
   double log_ms = R_PosInf;
   {
     NumericVector rt = data["rt"];
     double mn = R_PosInf;
     for (int k = 0; k < rt.size(); ++k)
       if (R_FINITE(rt[k]) && rt[k] < mn) mn = rt[k];
+    if (R_FINITE(mn) && data.hasAttribute("rt_resolution")) {
+      const double h = Rcpp::as<double>(data.attr("rt_resolution"));
+      if (R_FINITE(h) && h > 0.0) mn = h * std::floor(mn / h) + h;
+    }
     if (R_FINITE(mn)) {
       double top = mn - eps;
       if (top < std::numeric_limits<double>::min()) top = std::numeric_limits<double>::min();

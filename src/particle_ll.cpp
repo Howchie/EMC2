@@ -208,7 +208,6 @@ static bool race_data_all_finite_untruncated(const Rcpp::DataFrame& data,
   return true;
 }
 
-
 double c_log_likelihood_race(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
@@ -652,6 +651,7 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
   race_shared.other_unique_idx.assign(oa.begin(), oa.end());
   race_shared.active_nogo_trial_mask.assign(ng.begin(), ng.end());
 
+
   // Pre-read censoring/truncation bounds once
   race_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
   race_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
@@ -697,6 +697,11 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
       race_shared.n_resp[static_cast<size_t>(j)] = count_resp_accumulators(
           lR_code_vec.begin(), start, n_lR_curr, time_code, nogo_code);
     }
+  }
+  {
+    Rcpp::NumericVector rt = data["rt"];
+    race_shared.rt_bins.init(data, rt.begin(), race_shared.idx_win.data(), n_trials, n_lR,
+                             has_RACE_col ? RACE_nacc.begin() : nullptr);
   }
   race_shared.valid = true;
   return race_shared;
@@ -1020,6 +1025,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     std::vector<int> isok_int_fp;
     NumericVector rts_fp_hold;
     const double* rt_ptr = nullptr;
+    const double* rt_data_ptr = nullptr;
+    FlooredRtBins rt_bins;
     const int* expand_ptr = expand.begin();
     const int n_exp = expand.length();
 
@@ -1071,7 +1078,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
       }
       rts_fp_hold = data["rt"];
-      rt_ptr = rts_fp_hold.begin();
+      rt_data_ptr = rts_fp_hold.begin();
+      rt_ptr = rt_data_ptr;
 
       // Resolve keep_names[j] -> base column pointer once; kernels index the
       // leading columns positionally, so a missing required column is fatal.
@@ -1093,6 +1101,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       fast_guess = resolve_guess_kernel(data);
       fast_guess.pg_col = fast_pg_col;
+      const int t0_col = adapter.ctx.t0_index;
+      if (t0_col >= 0 && t0_col < n_kn && race_cols[t0_col] != nullptr &&
+          !adapter.ctx.has_pre_t0_mass()) {
+        rt_bins.init(data, rt_data_ptr, winner_int_buf.data(), n_trials, n_lR,
+                     has_RACE_col_fp ? RACE_fp.begin() : nullptr);
+        if (rt_bins.active()) rt_ptr = rt_bins.rt_eff.data();
+      }
     }
 
     // --- Build shared state for the mixed (non-raw-fast) path ---
@@ -1139,6 +1154,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
 
         const double* const* pars_cols = race_cols.data();
+        if (rt_bins.active())
+          rt_bins.apply(rt_data_ptr, pars_cols[adapter.ctx.t0_index], isok_int_fp.data(), n_lR);
         adapter.ctx.mode_hint = 0;
         adapter.ctx.kill_active = adapter.ctx.is_local_guess ||
                                   adapter.ctx.is_global_kill ||
@@ -1246,6 +1263,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               s = log_sum_exp(s, s_T - std::log(n_resp_fp[j]));
             }
           }
+          if (rt_bins.active()) s += rt_bins.log_frac[j];
           s = s < min_ll ? min_ll : s;
           // Contaminant mixture.  This path is reached only when every trial has
           // a finite rt and a known R (see .cache_ll_data_attrs), so no trial is
@@ -2281,6 +2299,34 @@ double c_log_likelihood_race(
   const std::vector<int>& other_unique_trial_indices = *other_unique_view;
   const std::vector<int>& active_nogo_trial_mask = *nogo_mask_view;
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
+  // Floored-rt bin rule (FlooredRtBins): kernels read rt_eval, trial sums add
+  // rt_bin_log_frac.
+  const double* rt_eval = rts_dadm.begin();
+  const double* rt_bin_log_frac = nullptr;
+  FlooredRtBins local_bins;
+  {
+    const int t0_col = ctx ? ctx->t0_index : -1;
+    if (t0_col >= 0 && t0_col < n_par && !ctx->has_pre_t0_mass()) {
+      FlooredRtBins* bins = &local_bins;
+      if (use_shared) {
+        bins = &shared->rt_bins;
+      } else {
+        // Winner rows of finite trials; non-finite trials keep their rt.
+        std::vector<int> win_finite(static_cast<size_t>(n_trials), 0);
+        for (int i = 0; i < n_trials; ++i)
+          win_finite[i] = (winner[i] && R_FINITE(rts_dadm[i]) &&
+                           (!has_RACE_col || RACE_mask[i])) ? 1 : 0;
+        local_bins.init(dadm, rts_dadm.begin(), win_finite.data(), n_trials, n_lR,
+                        has_RACE_col ? RACE.begin() : nullptr);
+      }
+      if (bins->active()) {
+        bins->apply(rts_dadm.begin(), cols_view[t0_col], isok.begin(), n_lR);
+        rt_eval = bins->rt_eff.data();
+        rt_bin_log_frac = bins->log_frac.data();
+      }
+    }
+  }
+
   std::vector<int> winner_row_by_trial;
   std::vector<double> global_log_sk_by_trial;
   if (ctx && ctx->is_global_kill && ctx->kill_active) {
@@ -2297,7 +2343,7 @@ double c_log_likelihood_race(
       }
       winner_row_by_trial[static_cast<size_t>(j)] = idx_w;
       if (idx_w >= 0) {
-        const double tt = rts_dadm[idx_w];
+        const double tt = rt_eval[idx_w];
         global_log_sk_by_trial[static_cast<size_t>(j)] =
           (tt > 0.0)
             ? erlang_log_surv(
@@ -2355,7 +2401,7 @@ double c_log_likelihood_race(
       isok_ptr     = isok_int_all_local.data();
     }
 
-    const double* rt_ptr = rts_dadm.begin();
+    const double* rt_ptr = rt_eval;
     const double* const* pars_cm = cols_view;
     const bool dense_floor_raw_log_lik_prev = dense_ctx.floor_raw_log_lik;
     if (has_time) dense_ctx.floor_raw_log_lik = false;
@@ -2646,6 +2692,7 @@ double c_log_likelihood_race(
           } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
             current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
           }
+          if (rt_bin_log_frac) current_trial_ll_sum += rt_bin_log_frac[unique_trial_idx];
           if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
             ll_unique[unique_trial_idx] = min_ll;
           } else if (hit_min_ll) {
@@ -2679,6 +2726,7 @@ double c_log_likelihood_race(
       } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
         current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
       }
+      if (rt_bin_log_frac) current_trial_ll_sum += rt_bin_log_frac[unique_trial_idx];
       ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
     }
 

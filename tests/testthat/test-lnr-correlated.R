@@ -27,7 +27,7 @@ test_that("LNRcorr likelihood agrees with the bivariate normal conditional form"
     R = factor(c("a", "b"), levels = c("a", "b")),
     rt = c(0.4, 0.5)
   )
-  emc <- make_emc(dat, des, type = "single", compress = FALSE)
+  emc <- make_emc(dat, des, type = "single", compress = FALSE, rt_resolution = NULL)
   dadm <- emc[[1]]$data[[1]]
   model <- emc[[1]]$model()
   p <- sampled_pars(des, doMap = FALSE)
