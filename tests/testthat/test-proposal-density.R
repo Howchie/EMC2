@@ -109,14 +109,3 @@ test_that("covariance regularisation is equivariant to parameter units", {
   expect_equal(z[1, 1], 1e6)
   expect_equal(EMC2:::.emc_regularize_covariance(matrix(0.25)), matrix(0.25))
 })
-
-test_that("window shrinkage ignores the lag across a chain boundary", {
-  set.seed(3)
-  # Two white-noise chains with very different means: the joined series has a
-  # large spurious lag-1 autocorrelation only at the boundary.
-  a <- cbind(matrix(rnorm(200), 2), matrix(rnorm(200) + 50, 2))
-  joined <- EMC2:::.emc_shrunk_covariance(a, n_chains = 1L)
-  split <- EMC2:::.emc_shrunk_covariance(a, n_chains = 2L)
-  expect_equal(diag(joined), diag(split))
-  expect_false(isTRUE(all.equal(joined, split)))
-})

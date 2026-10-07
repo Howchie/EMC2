@@ -1,0 +1,379 @@
+ok_check <- list(pareto_k = 0, outside = 0, laplace_status = "ok")
+
+test_that("the shear plan is the centred Gibbs step's lag-1 operator", {
+  set.seed(11)
+  p <- 3; n <- 6
+  V <- crossprod(matrix(rnorm(p * p), p)) / p + diag(0.2, p)
+  fits <- lapply(seq_len(n), function(s) {
+    A <- matrix(rnorm(p * p), p)
+    list(prec = crossprod(A) * s / 3 + diag(0.1, p), lin = rnorm(p), check = ok_check)
+  })
+  P0 <- diag(0.5, p)
+  plan <- EMC2:::.emc_shear_plan(fits, list(theta_mu_invar = P0), V)
+  Vi <- solve(V)
+  Qi <- lapply(fits, function(f) solve(f$prec + Vi))
+  A <- solve(n * Vi + P0) %*% Vi %*% Reduce(`+`, Qi) %*% Vi
+  expect_equal(sort(plan$lam), sort(Re(eigen(A)$values)), tolerance = 1e-10)
+  # Each column moves mu by one collapsed posterior sd of its direction.
+  Pc <- n * Vi + P0
+  expect_equal(diag(t(plan$dirs) %*% Pc %*% plan$dirs), 1 / (1 - plan$lam), tolerance = 1e-8)
+  expect_equal(plan$w, Reduce(`+`, lapply(Qi, function(q) diag(q %*% Vi))) / n, tolerance = 1e-12)
+  # With a flat mean prior the expected numbers of mean and scale steps agree.
+  flat <- EMC2:::.emc_shear_plan(fits, list(theta_mu_invar = diag(0, p)), V)
+  expect_equal(sum(flat$lam), sum(flat$w), tolerance = 1e-10)
+  # No information from the data: every direction mixes as slowly as it can.
+  none <- EMC2:::.emc_shear_plan(rep(list(NULL), n), list(theta_mu_invar = diag(0, p)), V)
+  expect_true(all(none$lam > 1 - 1e-5))
+  expect_equal(none$w, rep(1, p), tolerance = 1e-12)
+})
+
+test_that("the plan's lambda is the lag-1 autocorrelation of centred Gibbs", {
+  # a_s | mu ~ N(Q^-1 (lin_s + V^-1 mu), Q^-1), mu | a ~ N(mean(a), V / n):
+  # the Gaussian hierarchy the plan assumes, with V fixed.
+  set.seed(3)
+  p <- 2; n <- 8; N <- 40000
+  V <- matrix(c(1, 0.6, 0.6, 0.8), p)
+  H <- matrix(c(0.5, 0.2, 0.2, 0.3), p)
+  fits <- lapply(seq_len(n), function(s) list(prec = H, lin = rnorm(p), check = ok_check))
+  plan <- EMC2:::.emc_shear_plan(fits, list(theta_mu_invar = diag(0, p)), V)
+  Vi <- solve(V); Qi <- solve(H + Vi); Lq <- t(chol(Qi)); Lv <- t(chol(V / n))
+  lin <- sapply(fits, `[[`, "lin")
+  mu <- numeric(p); draws <- matrix(0, N, p)
+  for (t in seq_len(N)) {
+    a <- Qi %*% (lin + drop(Vi %*% mu)) + Lq %*% matrix(rnorm(p * n), p)
+    mu <- rowMeans(a) + drop(Lv %*% rnorm(p))
+    draws[t, ] <- mu
+  }
+  z <- drop(draws %*% solve(t(plan$dirs)))
+  for (i in seq_len(p))
+    expect_equal(stats::acf(z[, i], lag.max = 1, plot = FALSE)$acf[2], plan$lam[i], tolerance = 0.02)
+})
+
+# A small hierarchy with an inverse-Wishart block (parameters 1-2), an
+# unblocked parameter (3), subjects with and without a likelihood fit.
+shear_fixture <- function(type) {
+  set.seed(7)
+  p <- 3; n <- 4
+  fits <- lapply(seq_len(n - 1), function(s) {
+    A <- matrix(rnorm(p * p), p); H <- crossprod(A) + diag(0.3, p)
+    list(prec = H, lin = rnorm(p), check = ok_check)
+  })
+  fits[n] <- list(NULL)
+  sampler <- list(type = type, nuisance = rep(FALSE, p), n_pars = p, n_subjects = n,
+                  is_blocked = c(TRUE, TRUE, FALSE), par_group = c(1, 1, 2),
+                  prior = list(theta_mu_mean = rep(0, p), theta_mu_invar = diag(0.5, p),
+                               v = 2, A = c(0.3, 1, 2), shape = rep(2, p), rate = rep(0.3, p)),
+                  lik_laplace = fits)
+  V <- if (type == "standard") {
+    matrix(c(0.8, 0.3, 0, 0.3, 0.6, 0, 0, 0, 0.5), p)
+  } else diag(c(0.8, 0.6, 0.5))
+  list(sampler = sampler, ctx = EMC2:::.emc_shear_context(sampler), mu = rnorm(p),
+       V = V, alpha = matrix(rnorm(p * n), p),
+       u = c(0.3, -0.2, 0.1, 0.25, -0.15, 0.2))
+}
+
+test_that("only checked, usable likelihood fits shape the move", {
+  f <- shear_fixture("standard")
+  expect_identical(vapply(f$ctx$fits, is.null, logical(1)), c(FALSE, FALSE, FALSE, TRUE))
+  expect_false(f$ctx$delayed)
+  s <- f$sampler
+  s$lik_laplace[[1]]$check <- NULL
+  s$lik_laplace[[2]]$check <- list(pareto_k = Inf, outside = 0, laplace_status = "ok")
+  s$lik_laplace[[3]]$lin[1] <- NA_real_
+  expect_true(all(vapply(EMC2:::.emc_shear_context(s)$fits, is.null, logical(1))))
+  s <- f$sampler
+  s$lik_laplace[[4]] <- s$lik_laplace[[1]]
+  expect_true(EMC2:::.emc_shear_context(s)$delayed)
+})
+
+test_that("the shear map is inverted by the opposite step and has the stated Jacobian", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu); n <- ncol(f$alpha)
+    fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+    state <- function(mu, V) EMC2:::.emc_shear_state(mu, V, fits, prior, spec)
+    cur <- state(f$mu, f$V)
+    fwd <- EMC2:::.emc_shear_propose(cur, f$u, f$alpha, fits, prior, spec)
+    back <- EMC2:::.emc_shear_propose(fwd$state, -f$u, fwd$alpha, fits, prior, spec)
+    expect_equal(back$alpha, f$alpha, tolerance = 1e-10)
+    expect_equal(back$state$V, f$V, tolerance = 1e-12)
+    expect_equal(back$state$mu, f$mu, tolerance = 1e-12)
+    expect_equal(back$log_jac, -fwd$log_jac, tolerance = 1e-10)
+
+    # Numerical Jacobian over the free coordinates: mu, the free entries of V
+    # (upper triangle within blocks), and the subjects.
+    free <- which(upper.tri(f$V, diag = TRUE) & f$V != 0, arr.ind = TRUE)
+    pack <- function(mu, V, alpha) c(mu, V[free], alpha)
+    unpack <- function(x) {
+      V <- matrix(0, p, p); V[free] <- x[p + seq_len(nrow(free))]
+      V[free[, 2:1, drop = FALSE]] <- x[p + seq_len(nrow(free))]
+      list(mu = x[seq_len(p)], V = V,
+           alpha = matrix(x[-seq_len(p + nrow(free))], p))
+    }
+    map <- function(x) {
+      s <- unpack(x)
+      out <- EMC2:::.emc_shear_propose(state(s$mu, s$V), f$u, s$alpha, fits, prior, spec)
+      pack(out$state$mu, out$state$V, out$alpha)
+    }
+    x0 <- pack(f$mu, f$V, f$alpha)
+    h <- 1e-6
+    J <- vapply(seq_along(x0), function(i) {
+      e <- replace(numeric(length(x0)), i, h)
+      (map(x0 + e) - map(x0 - e)) / (2 * h)
+    }, numeric(length(x0)))
+    expect_equal(as.numeric(determinant(J)$modulus), fwd$log_jac, tolerance = 1e-6)
+  }
+})
+
+test_that("the shear covariance prior integrates a_half out of the Gibbs step's prior", {
+  f <- shear_fixture("standard")
+  v <- f$sampler$prior$v; A <- f$sampler$prior$A
+  # Inverse-Wishart(v + d - 1, 2 v diag(1 / a)) on the block and a
+  # gamma(v / 2, v / a) prior on the unblocked precision, a_k ~ IG(1/2, 1/A_k^2),
+  # with each a_k integrated numerically.
+  ig <- function(la, k) 0.5 * log(1 / A[k]^2) - 0.5 * log(pi) - 1.5 * la - exp(-la) / A[k]^2 + la
+  joint <- function(V) {
+    b <- 1:2; d <- 2; df <- v + d - 1; Vb <- V[b, b]; Vbi <- diag(solve(Vb))
+    blk <- sum(vapply(b, function(k) log(integrate(function(la)
+      exp(df / 2 * log(2 * v / exp(la)) - v * Vbi[k] / exp(la) + ig(la, k)), -30, 30,
+      subdivisions = 2000L, rel.tol = 1e-10)$value), 0))
+    tau <- 1 / V[3, 3]
+    unb <- log(integrate(function(la) exp(dgamma(tau, v / 2, v / exp(la), log = TRUE) + ig(la, 3)),
+                         -30, 30, subdivisions = 2000L, rel.tol = 1e-10)$value) + 2 * log(tau)
+    -(df + d + 1) / 2 * log(det(Vb)) + blk + unb
+  }
+  V2 <- f$V * outer(c(1.3, 0.8, 1.1), c(1.3, 0.8, 1.1)); V2[1, 2] <- V2[2, 1] <- 0.1
+  V3 <- f$V * outer(c(0.2, 3, 0.05), c(0.2, 3, 0.05))
+  lp <- function(V) EMC2:::.emc_shear_log_prior_v(V, f$ctx$spec)
+  expect_equal(lp(V2) - lp(f$V), joint(V2) - joint(f$V), tolerance = 1e-8)
+  expect_equal(lp(V3) - lp(f$V), joint(V3) - joint(f$V), tolerance = 1e-8)
+  g <- shear_fixture("diagonal-gamma")
+  indep_g <- function(V) sum(dgamma(1 / diag(V), 2, 0.3, log = TRUE) + 2 * log(1 / diag(V)))
+  lpg <- function(V) EMC2:::.emc_shear_log_prior_v(V, g$ctx$spec)
+  expect_equal(lpg(diag(c(1, 2, 0.4))) - lpg(g$V), indep_g(diag(c(1, 2, 0.4))) - indep_g(g$V))
+})
+
+test_that("a_half is redrawn from the Gibbs step's conditional", {
+  f <- shear_fixture("standard")
+  set.seed(9)
+  draws <- replicate(20000, EMC2:::.emc_shear_draw_a_half(f$V, f$ctx$spec))
+  v <- f$sampler$prior$v; A <- f$sampler$prior$A
+  prec <- c(diag(solve(f$V[1:2, 1:2])), 1 / f$V[3, 3])
+  # 1 / a ~ gamma((v + d) / 2, v prec + 1 / A^2), d = 2, 2, 1.
+  expect_equal(rowMeans(1 / draws), c(4, 4, 3) / 2 / (v * prec + 1 / A^2), tolerance = 0.02)
+})
+
+test_that("the shear move leaves the joint posterior invariant with the group variance free", {
+  # y_s | a_s ~ N(a_s, S), a_s | mu, V ~ N(mu, V), mu ~ N(0, 2 I), and a
+  # gamma(2, 0.3) prior on each group precision; S, V and the priors are
+  # diagonal, so the posterior factorises over coordinates. Exact draws:
+  # (mu_k, log sd_k) from a fine grid of their marginal posterior, then a_s.
+  # The data are weak relative to the group spread, the funnel regime.
+  p <- 2; n <- 5
+  S <- c(2, 1.5); m0 <- 0; P0 <- 0.5; shape <- 2; rate <- 0.3
+  set.seed(21)
+  y <- matrix(rnorm(p * n, 0.5, 1.5), p)
+  N <- 4000
+  grid_draws <- function(k) {
+    mu_g <- seq(-6, 6, length.out = 301); ls_g <- seq(-5, 2.5, length.out = 301)
+    lp <- outer(mu_g, ls_g, Vectorize(function(m, l) {
+      tau <- exp(-2 * l)
+      dnorm(m, m0, sqrt(1 / P0), log = TRUE) +
+        sum(dnorm(y[k, ], m, sqrt(S[k] + exp(2 * l)), log = TRUE)) +
+        dgamma(tau, shape, rate, log = TRUE) + log(2 * tau)
+    }))
+    w <- exp(lp - max(lp))
+    cell <- sample(length(w), N, TRUE, prob = w)
+    hm <- diff(mu_g[1:2]); hl <- diff(ls_g[1:2])
+    cbind(mu = mu_g[row(w)[cell]] + runif(N, -hm / 2, hm / 2),
+          lsd = ls_g[col(w)[cell]] + runif(N, -hl / 2, hl / 2))
+  }
+  g <- lapply(seq_len(p), grid_draws)
+  mu <- sapply(g, function(x) x[, "mu"]); lsd <- sapply(g, function(x) x[, "lsd"])
+  a <- array(NA_real_, c(N, p, n))
+  for (k in seq_len(p)) {
+    v <- exp(2 * lsd[, k])
+    post_var <- 1 / (1 / S[k] + 1 / v)
+    for (s in seq_len(n))
+      a[, k, s] <- rnorm(N, post_var * (y[k, s] / S[k] + mu[, k] / v), sqrt(post_var))
+  }
+  before <- cbind(mu, lsd, matrix(a, N))
+
+  Si <- diag(1 / S)
+  local_mocked_bindings(
+    calc_ll_manager = function(proposals, dadm, ...) {
+      dd <- sweep(proposals, 2, dadm)
+      -0.5 * rowSums((dd %*% Si) * dd)
+    },
+    .package = "EMC2")
+  withr::local_options(list(emc2.group_move = "shear"))
+  pn <- c("x1", "x2")
+  fits <- list(exact = lapply(seq_len(n), function(s)
+                 list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
+               wrong = lapply(seq_len(n), function(s)
+                 list(prec = 4 * Si, lin = drop(4 * Si %*% (y[, s] + 0.5)), check = ok_check)))
+  prior <- list(theta_mu_mean = rep(m0, p), theta_mu_invar = diag(P0, p),
+                shape = rep(shape, p), rate = rep(rate, p))
+  # Steps taken with the plan's own probabilities, and every step forced.
+  for (forced in c(FALSE, TRUE)) for (lik in fits) {
+    plan <- EMC2:::.emc_shear_plan(lik, prior, diag(exp(2 * colMeans(lsd))))
+    if (forced) plan$lam[] <- plan$w[] <- 1
+    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
+                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
+                    model = NULL, prior = prior, lik_laplace = lik, rng = list(),
+                    shear = list(plan = plan))
+    set.seed(5)
+    after <- t(vapply(seq_len(N), function(i) {
+      V <- diag(exp(2 * lsd[i, ]))
+      al <- matrix(a[i, , ], p, dimnames = list(pn, NULL))
+      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / S), 0)
+      out <- EMC2:::.emc_shear_move(sampler, list(tmu = setNames(mu[i, ], pn), tvar = V,
+                                                  tvinv = solve(V)),
+                                    rbind(al, ll), "sample")
+      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
+    }, numeric(2 * p + p * n)))
+    expect_gt(mean(after[, p + 1] != before[, p + 1]), 0.1)
+    se <- apply(before, 2, sd) / sqrt(N)
+    expect_true(all(abs(colMeans(after) - colMeans(before)) / se < 4.5))
+    v_ratio <- apply(after, 2, var) / apply(before, 2, var)
+    expect_true(all(abs(v_ratio - 1) < 4.5 * sqrt(2 / N)))
+  }
+})
+
+test_that("worker evaluation preserves the complete shear transition and RNG", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  withr::local_options(list(emc2.group_move = "shear", emc2.worker_backend = "fork"))
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) {
+    -0.5 * rowSums(sweep(proposals, 2, dadm)^2)
+  }, .package = "EMC2")
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    s <- f$sampler
+    s$par_names <- paste0("x", seq_len(s$n_pars))
+    s$data <- lapply(seq_len(s$n_subjects), function(j) rep(j / 3, s$n_pars))
+    plan <- EMC2:::.emc_shear_plan(f$ctx$fits, s$prior, f$V)
+    plan$lam[] <- plan$w[] <- 1
+    s$shear <- list(plan = plan)
+    pars <- list(tmu = setNames(f$mu, s$par_names), tvar = f$V,
+                 tvinv = solve(f$V), a_half = c(0.7, 1.2, 0.9))
+    ll <- vapply(seq_len(s$n_subjects), function(j)
+      -0.5 * sum((f$alpha[, j] - s$data[[j]])^2), 0)
+    props <- rbind(f$alpha, ll)
+    pool <- EMC2:::.emc_wpool_start(2L, s)
+    skip_if(is.null(pool), "could not start a pool here")
+    tryCatch({
+      for (stage in c("burn", "sample")) {
+        set.seed(1729)
+        serial <- EMC2:::.emc_shear_move(s, pars, props, stage)
+        seed_serial <- .Random.seed
+        set.seed(1729)
+        parallel <- EMC2:::.emc_shear_move(s, pars, props, stage, pool,
+                                           list(c(4L, 2L, 1L, 3L), integer()))
+        expect_identical(.Random.seed, seed_serial)
+        expect_identical(parallel[c("sampler", "pars", "proposals")],
+                         serial[c("sampler", "pars", "proposals")])
+        expect_true(parallel$wpool$alive)
+        expect_gt(serial$sampler$shear$rounds, 0L)
+      }
+    }, finally = EMC2:::.emc_wpool_stop(pool))
+  }
+})
+
+test_that("missing worker replies recompute candidates before the MH decision", {
+  withr::local_options(list(emc2.failure_policy = "silent"))
+  ctx <- list(data = list(0, 1, 2), model = NULL)
+  rows <- lapply(c(2, 3, 4), function(x) matrix(x, 1))
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...)
+    -(proposals[, 1] - dadm)^2, .package = "EMC2")
+  pool <- list(alive = TRUE, n = 2L)
+  local_mocked_bindings(
+    .emc_wpool_request = function(...) TRUE,
+    .emc_wpool_reply = function(pool, w, ...) {
+      if (w == 1L) NULL else list(ll = -4, failures = list())
+    },
+    .emc_wpool_degraded = function(...) NULL,
+    .package = "EMC2")
+  set.seed(19); seed <- .Random.seed
+  out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L))
+  expect_identical(out$ll, rep(-4, 3))
+  expect_false(out$pool$alive)
+  expect_identical(.Random.seed, seed)
+})
+
+test_that("subject likelihood failures are recorded on the master", {
+  EMC2:::.emc_reject_reset("ensemble")
+  # The warning is once per process; another test may have raised it.
+  assign("announced", character(), envir = EMC2:::.emc_profile_state)
+  withr::local_options(list(emc2.failure_policy = "silent"))
+  local_mocked_bindings(calc_ll_manager = function(...) NaN, .package = "EMC2")
+  ctx <- list(data = list(NULL, NULL), model = NULL)
+  out <- EMC2:::.emc_wpool_subject_ll(NULL, list(matrix(0, 1), matrix(1, 1)), ctx)
+  expect_identical(out$ll, c(-Inf, -Inf))
+  expect_equal(EMC2:::.emc_reject_counts("ensemble")[["numerical"]], 2L)
+  withr::local_options(list(emc2.failure_policy = "strict"))
+  local_mocked_bindings(calc_ll_manager = function(...) stop("broken evaluator"),
+                        .package = "EMC2")
+  expect_warning(expect_error(EMC2:::.emc_wpool_subject_ll(NULL, list(matrix(0, 1)),
+                                          list(data = list(NULL), model = NULL)),
+               "stopped on"), "ensemble update failed")
+})
+
+test_that("subject likelihood partitions cannot omit or duplicate subjects", {
+  ctx <- list(data = list(NULL, NULL), model = NULL)
+  rows <- list(matrix(0, 1), matrix(0, 1))
+  pool <- list(alive = TRUE, n = 2L)
+  for (part in list(list(1L, integer()), list(1L, 1L), list(1:2)))
+    expect_error(EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, part),
+                 "cover each subject exactly once")
+})
+
+test_that("subject likelihood workers preserve results across model families", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  for (model in c("RDM", "LBA", "DDM")) {
+    fx <- audit_fixture(model, n_trials = 100L, n_particles = 3L)
+    ctx <- list(data = rep(list(fx$dadm), 3), model = fx$model)
+    rows <- lapply(seq_len(3), function(j) fx$prop[j, , drop = FALSE])
+    serial <- EMC2:::.emc_wpool_subject_ll(NULL, rows, ctx)$ll
+    expect_true(all(is.finite(serial)))
+    pool <- EMC2:::.emc_wpool_start(2L, ctx)
+    skip_if(is.null(pool), "could not start a pool here")
+    tryCatch({
+      for (k in seq_len(3)) {
+        set.seed(21); seed <- .Random.seed
+        out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L))
+        expect_identical(out$ll, serial)
+        expect_identical(.Random.seed, seed)
+        expect_true(out$pool$alive)
+      }
+    }, finally = EMC2:::.emc_wpool_stop(pool))
+  }
+})
+
+test_that("a complete shear fit is identical serially, statically, and queued", {
+  skip_on_os("windows")
+  skip_on_cran()
+  withr::local_options(list(emc2.group_move = "shear", emc2.independent_chains = TRUE))
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_on <- function(cores, queue) {
+    withr::local_options(list(emc2.worker_queue = queue))
+    RNGkind("L'Ecuyer-CMRG"); set.seed(23)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))
+    for (stage in c("preburn", "burn"))
+      emc <- suppressMessages(run_emc(emc, stage = stage, cores_for_chains = 1,
+        cores_per_chain = cores, step_size = 6, max_tries = 1, verbose = FALSE,
+        stop_criteria = list(iter = 12, max_gd = Inf, min_unique = 0, min_es = 0)))
+    emc[[1]]
+  }
+  serial <- fit_on(1, FALSE)
+  expect_gt(sum(serial$shear$scale_accepted), 0)
+  for (parallel in list(fit_on(2, FALSE), fit_on(3, TRUE))) {
+    expect_identical(parallel$samples$alpha, serial$samples$alpha)
+    expect_identical(parallel$samples$theta_mu, serial$samples$theta_mu)
+    expect_identical(parallel$samples$theta_var, serial$samples$theta_var)
+    expect_identical(parallel$shear, serial$shear)
+  }
+})

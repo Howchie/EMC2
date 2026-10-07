@@ -529,8 +529,9 @@ rwish <- function(v, S){
   if (nrow(S) != ncol(S)) {
     stop(message = "S not square in rwish().\n")
   }
-  if (v < nrow(S)) {
-    stop(message = "v is less than the dimension of S in rwish().\n")
+  if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= nrow(S) - 1) {
+    stop("Wishart degrees of freedom must exceed the dimension of S minus one.",
+         call. = FALSE)
   }
   p <- nrow(S)
   CC <- chol(S)

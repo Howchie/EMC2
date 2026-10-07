@@ -235,19 +235,19 @@ test_that("the efficient proposal mean follows the current group mean", {
   expect_equal(EMC2:::.emc_eff_mean(c(1, 2), c(2, 4)), c(1, 2))
 })
 
-test_that("window covariances shrink noisy correlations and keep variances", {
-  set.seed(4)
-  p <- 30L
-  iid <- matrix(rnorm(p * 60), p)
-  S <- stats::cov(t(iid))
-  shr <- EMC2:::.emc_shrunk_covariance(iid)
-  expect_equal(diag(shr), diag(S))
-  ev <- function(M) range(eigen(stats::cov2cor(M), only.values = TRUE)$values)
-  # True correlation is the identity: shrinkage pulls the spectrum in.
-  expect_lt(diff(ev(shr)), diff(ev(S)))
-  # Strong real correlation, many draws: almost untouched.
-  L <- t(chol(0.9 + diag(0.1, 3)))
-  big <- L %*% matrix(rnorm(3 * 5000), 3)
-  expect_equal(EMC2:::.emc_shrunk_covariance(big), stats::cov(t(big)),
-               tolerance = 0.01)
+test_that("window covariances keep the posterior correlations", {
+  # The chain proposal is an unscaled independence proposal: its covariance
+  # must be the window's own, correlations included. Independent chains use
+  # their own window; otherwise the window pools every chain.
+  emc <- samples_LNR
+  for (j in seq_along(emc)) emc[[j]]$samples$stage[] <- "adapt"
+  own <- lapply(emc, function(ch) ch$samples$alpha[, 1, 1:50])
+  for (independent in c(TRUE, FALSE)) {
+    withr::local_options(list(emc2.independent_chains = independent))
+    out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50, stage = "adapt",
+                                          do_block = FALSE)
+    a <- if (independent) own[[1]] else do.call(cbind, own)
+    expect_equal(out[[1]]$chains_var[[1]], stats::cov(t(a)), ignore_attr = TRUE)
+    expect_equal(out[[1]]$ensemble_q$var[[1]], stats::cov(t(a)), ignore_attr = TRUE)
+  }
 })

@@ -220,3 +220,12 @@ test_that("safe_new_particle raises under strict, and only for the right class",
   expect_identical(got$proposal, c(1, 2))
   expect_identical(got$ll, -7)
 })
+
+test_that("typed failures retain their classification through worker transport", {
+  for (cls in c("numerical", "programming", "infrastructure", "unknown")) {
+    cond <- errorCondition("a failure with no diagnostic keywords",
+                           class = "emc_failure", emc_class = cls)
+    transported <- unserialize(serialize(cond, NULL))
+    expect_identical(EMC2:::.emc_classify_failure(transported), cls)
+  }
+})

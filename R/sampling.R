@@ -617,7 +617,7 @@ run_stage <- function(pmwgs,
   pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,
                         stage = proposal_stage, n_pars = n_pars, particles)
 
-  eff_mu <- pmwgs$eff_mu
+  eff_mu <- .emc_attach_lik(pmwgs$eff_mu, pmwgs$lik_laplace)
   eff_var <- pmwgs$eff_var
   chains_var <- pmwgs$chains_var
   chains_mu <- pmwgs$chains_mu
@@ -881,6 +881,16 @@ run_stage <- function(pmwgs,
     # group Gibbs rounds and the final reselection close the sweep.
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
                               wpool_part, ens_pools)
+    # Then the shear (R/shear_move.R) when enabled: the non-centred move of
+    # the same group state.
+    if (.emc_shear_active(ens$sampler)) {
+      sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
+                            ens$wpool, wpool_part)
+      ens$sampler <- sh$sampler
+      ens$pars <- sh$pars
+      ens$proposals <- sh$proposals
+      ens$wpool <- sh$wpool
+    }
     ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
     ensemble_rejects <- .emc_reject_counts("ensemble")
     stage_rejects$ensemble <- stage_rejects$ensemble + ensemble_delta
@@ -907,6 +917,12 @@ run_stage <- function(pmwgs,
     }
 
     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
+    if (is.null(ens_pools) && pmwgs$type %in% c("factor", "infnt_factor", "SEM") &&
+        !any(pmwgs$nuisance) && !any(as.logical(pmwgs$marginalised_idx), na.rm = TRUE)) {
+      assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
+      pars <- .emc_ensemble_refresh_scores(pars, pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE])
+      pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
+    }
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
     if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, j] <- pmwgs$pooled$value
@@ -1005,7 +1021,8 @@ run_stage <- function(pmwgs,
   if(!length(names_history)) return(FALSE)
   same_slice <- function(obj) {
     d <- dim(obj)
-    idx_prev <- rep(list(TRUE), length(d))
+    # seq_len, not TRUE: TRUE cannot index a dimension of extent zero.
+    idx_prev <- lapply(d, seq_len)
     idx_now <- idx_prev
     idx_prev[[length(d)]] <- j - 1L
     idx_now[[length(d)]] <- j
@@ -1032,7 +1049,7 @@ run_stage <- function(pmwgs,
   nms <- setdiff(nms, "stage")
   lapply(samples[nms], function(obj) {
     d <- dim(obj)
-    idx <- rep(list(TRUE), length(d))
+    idx <- lapply(d, seq_len)
     idx[[length(d)]] <- n_iter
     unname(do.call(`[`, c(list(obj), idx, list(drop = FALSE))))
   })
@@ -1069,6 +1086,44 @@ reject_sample_iteration <- function(samples, j) {
   }
   samples$idx <- j
   samples
+}
+
+# The subject's likelihood approximation (.emc_lik_canonical) rides on its
+# efficient-proposal mean, so it reaches new_particle() on every path.
+.emc_attach_lik <- function(eff_mu, lik) {
+  if (is.null(eff_mu)) return(eff_mu)
+  for (s in seq_along(eff_mu)) attr(eff_mu[[s]], "lik") <- NULL
+  if (is.null(lik) || !isTRUE(getOption("emc2.laplace_conditional", TRUE))) return(eff_mu)
+  for (s in seq_along(eff_mu)) {
+    if (!is.null(eff_mu[[s]]) && length(lik) >= s && is.list(lik[[s]]) &&
+        !is.null(lik[[s]]$check) && !isTRUE(.emc_laplace_poor(lik[[s]]$check)))
+      attr(eff_mu[[s]], "lik") <- lik[[s]]
+  }
+  eff_mu
+}
+
+# Efficient proposal from the likelihood approximation and the current group
+# prior N(mu, V): the Gaussian product, precision prec + V^-1 and mean
+# (prec + V^-1)^-1 (lin + V^-1 mu). It is the conditional of alpha_s at this
+# group state, and depends on the group state only, so the conditional-IS
+# step stays invariant. NULL when there is no approximation or it is unusable.
+.emc_laplace_conditional <- function(eff_mu, group_pars) {
+  lik <- attr(eff_mu, "lik")
+  if (is.null(lik)) return(NULL)
+  mu <- as.numeric(group_pars$mu)
+  V <- as.matrix(group_pars$var)
+  p <- length(mu)
+  if (!is.matrix(lik$prec) || nrow(lik$prec) != p || length(lik$lin) != p ||
+      !identical(dim(V), c(p, p))) return(NULL)
+  Vi <- tryCatch(chol2inv(chol(V)), error = function(e) NULL)
+  if (is.null(Vi)) return(NULL)
+  Q <- lik$prec + Vi
+  R <- tryCatch(chol((Q + t(Q)) / 2), error = function(e) NULL)
+  if (is.null(R)) return(NULL)
+  Sig <- chol2inv(R)
+  m <- drop(Sig %*% (lik$lin + Vi %*% mu))
+  if (!all(is.finite(m)) || !all(is.finite(Sig))) return(NULL)
+  list(mu = m, var = (Sig + t(Sig)) / 2)
 }
 
 safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
@@ -1299,7 +1354,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   # The efficient proposal conditions on the subject's prior mean (for SEM,
   # given its covariates: filtered_samples_SEM's conditional_mu), the same
   # value on the serial and the direct worker paths.
-  eff_mu <- .emc_eff_mean(eff_mu, as.numeric(group_pars$mu))
+  lap <- .emc_laplace_conditional(eff_mu, group_pars)
+  if (!is.null(lap)) {
+    eff_mu <- lap$mu
+    eff_var <- lap$var
+  } else eff_mu <- .emc_eff_mean(eff_mu, as.numeric(group_pars$mu))
   unq_components <- unique(tune$components)
   proposal_out <- numeric(length(group_pars$mu))
   group_mu <- group_pars$mu

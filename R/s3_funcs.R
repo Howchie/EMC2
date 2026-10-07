@@ -538,16 +538,7 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
       truncate_gd = FALSE
     )
 
-    gd_values <- final_progress$gd
-    gd_final <- ""
-    if (length(gd_values) > 0L) {
-      if (!is.null(stop_criteria[["sample"]]$mean_gd)) {
-        gd_final <- paste0(gd_final, sprintf(" | Mean Rhat=%.3f", mean(gd_values)))
-      }
-      if (!is.null(stop_criteria[["sample"]]$max_gd)) {
-        gd_final <- paste0(gd_final, sprintf(" | Max Rhat=%.3f", max(gd_values)))
-      }
-    }
+    gd_final <- .emc_gd_message(final_progress$gd_stats)
 
     ess_message <- ""
     if (length(final_progress$curr_min_es) > 0L) {
@@ -581,9 +572,13 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #'
 #' ``selection`` (character vector): For which parameters the ``stop_criteria`` should hold
 #'
-#' ``mean_gd`` (numeric): The mean Gelman-Rubin diagnostic across all parameters in the selection
+#' ``mean_gd`` (numeric): The mean Gelman-Rubin diagnostic, required of each element of the
+#' selection separately (e.g. the mean over all subject parameters, and separately the mean over
+#' the group means). A vector named by selection sets a different threshold per element and
+#' leaves unnamed elements without this rule, e.g. ``mean_gd = c(alpha = 1.1), max_gd = c(mu = 1.1)``.
 #'
-#' ``max_gd`` (numeric): The max Gelman-Rubin diagnostic across all parameters in the selection
+#' ``max_gd`` (numeric): The max Gelman-Rubin diagnostic, required of each element of the
+#' selection separately; can be named by selection as for ``mean_gd``.
 #'
 #' ``min_unique`` (integer): The minimum number of unique samples in the MCMC chains across all parameters in the selection
 #'

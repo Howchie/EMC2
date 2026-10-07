@@ -218,3 +218,51 @@ test_that("SEM rejects cyclic structural models and accepts DAGs", {
   perm <- c(3, 1, 2)
   expect_true(EMC2:::.sem_check_acyclic(three[perm, perm]))
 })
+
+test_that("SEM covariance priors keep the specified degrees of freedom", {
+  ss <- list(Lambda_mat = diag(4), B_mat = matrix(0, 4, 4),
+             factor_groups = c(1, 1, 1, 1))
+  degrees <- numeric()
+  local_mocked_bindings(riwish = function(v, S, ...) {
+    degrees <<- c(degrees, v)
+    diag(nrow(S))
+  }, .package = "EMC2")
+  out <- EMC2:::get_prior_SEM(list(a_d = 3.5), n_pars = 4,
+                            sem_settings = ss, selection = "factor_residuals", N = 2)
+  expect_equal(degrees, c(3.5, 3.5))
+  expect_equal(dim(out$delta_inv), c(4, 4, 2))
+})
+
+test_that("SEM covariance priors validate every factor block", {
+  ss <- list(Lambda_mat = diag(7), B_mat = matrix(0, 7, 7),
+             factor_groups = rep(1, 7))
+  build <- function(prior = NULL, settings = ss)
+    EMC2:::get_prior_SEM(prior, n_pars = 7, sample = FALSE, sem_settings = settings)
+  expect_equal(build()$a_d, 9)
+  expect_equal(build(list(a_d = 6.5))$a_d, 6.5)
+  for (bad in list(6, 0, -1, NA_real_, Inf, c(8, 9)))
+    expect_error(build(list(a_d = bad)), "a_d")
+  for (bad in list(0, -1, NA_real_, Inf, c(1, 2)))
+    expect_error(build(list(b_d = bad)), "b_d")
+  ss$factor_groups <- c(1, 2, 1, 2, 1, 2, 1)
+  expect_equal(build(settings = ss)$a_d, 6)
+  ss$factor_groups <- seq_len(7)
+  expect_equal(build(settings = ss)$a_d, 5)
+  ss$factor_groups <- 1:6
+  expect_error(build(settings = ss), "factor_groups")
+})
+
+test_that("Wishart draws support all proper real degrees of freedom", {
+  withr::local_seed(17)
+  p <- 4L
+  v <- 3.5
+  n <- 6000L
+  draws <- replicate(n, EMC2:::rwish(v, diag(p)))
+  means <- apply(draws, 1:2, mean)
+  mcse <- matrix(sqrt(v / n), p, p)
+  diag(mcse) <- sqrt(2 * v / n)
+  expect_true(all(abs(means - v * diag(p)) < 6 * mcse))
+  expect_true(all(is.finite(draws)))
+  for (bad in list(p - 1, 0, NA_real_, Inf, c(4, 5)))
+    expect_error(EMC2:::rwish(bad, diag(p)), "degrees of freedom")
+})

@@ -47,10 +47,8 @@
   }
   # Latent-factor hierarchies: weight pool members by the subject prior
   # conditional on the factor scores ("conditional") or with the scores
-  # integrated out ("marginal"). Both are exact; "conditional" is the default
-  # because it gave equal group-level efficiency and a better worst subject on
-  # the factor and infinite-factor benchmarks (2026-09-27). Internal switch,
-  # not a user setting.
+  # integrated out ("marginal"). Conditional weights retain the joint
+  # dependence between subject parameters and factor scores.
   latent <- getOption("emc2.ensemble_latent_weight", "conditional")
   if (!identical(latent, "marginal")) latent <- "conditional"
   list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
@@ -135,10 +133,8 @@
 #   conditional: a_s | h ~ N(mu + K x_s + Lambda eta_s, Sigma_err), which is
 #     the density the group Gibbs step conditions on;
 #   marginal: eta_s integrated out, a_s | h ~ N(mu + (K + Lambda B0^-1 G) x_s,
-#     Lambda B0^-1 Delta^-1 B0^-T Lambda' + Sigma_err). This leaves eta stale
-#     after reselection, which is valid because every latent-factor Gibbs step
-#     redraws eta from its full conditional before anything conditions on it
-#     (partially collapsed Gibbs, van Dyk & Park 2008).
+#     Lambda B0^-1 Delta^-1 B0^-T Lambda' + Sigma_err). Factor scores are
+#     redrawn conditional on the selected subjects before saving the joint state.
 # Factor and infinite-factor models have no covariates (K = G = 0, B = 0).
 .emc_ensemble_subject_prior <- function(pars, sampler, n, weight) {
   type <- sampler$type
@@ -180,6 +176,35 @@
   }
   list(mean = mu + lam %*% t(matrix(pars$eta, n, ncol(lam))), var = diag(eps_var, p),
        dvar = eps_var)
+}
+
+# Restore the joint subject-score distribution after an eta-marginal update.
+.emc_ensemble_refresh_scores <- function(pars, sampler, alpha) {
+  type <- sampler$type
+  if (!type %in% c("factor", "infnt_factor", "SEM")) return(pars)
+  p <- sampler$n_pars
+  n <- sampler$n_subjects
+  loadings <- matrix(if (type == "factor") pars$lambda_untransf else pars$lambda, p)
+  nf <- ncol(loadings)
+  if (nf == 0L) return(pars)
+  residual <- sweep(t(alpha), 2, as.numeric(pars$tmu))
+  if (type == "SEM") {
+    x <- sampler$sem_settings$covariates
+    if (is.null(x)) x <- matrix(0, n, 0)
+    x <- as.matrix(x)
+    scores <- .sem_draw_eta(residual, x, matrix(pars$K, p, ncol(x)),
+                           matrix(pars$G, nf, ncol(x)), matrix(pars$B, nf, nf),
+                           matrix(pars$delta_inv, nf, nf), matrix(pars$lambda, p, nf),
+                           diag(as.numeric(pars$epsilon_inv), p), nf, n)
+  } else {
+    error_precision <- if (type == "factor") pars$sig_err_inv else pars$epsilon_inv
+    score_precision <- if (type == "factor") pars$psi_inv else rep(1, nf)
+    weighted <- sweep(loadings, 1, error_precision, "*")
+    covariance <- solve(diag(as.numeric(score_precision), nf) + crossprod(loadings, weighted))
+    scores <- residual %*% weighted %*% covariance + rmvnorm(n, sigma = covariance)
+  }
+  pars$eta[,] <- scores
+  pars
 }
 
 # Subject prior log densities of every pool member under one group state.
@@ -348,6 +373,8 @@
   proposals[seq_len(n_pars), ] <- sel_alpha()
   proposals[n_pars + 1L, ] <- ll_stack[offset + selected]
   pars$alpha <- proposals[seq_len(n_pars), , drop = FALSE]
+  if (cfg$latent_weight == "marginal")
+    pars <- .emc_ensemble_refresh_scores(pars, sampler, pars$alpha)
 
   st <- sampler$ensemble_stats
   if (is.null(st) || is.null(st$subj_moved))

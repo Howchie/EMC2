@@ -347,3 +347,25 @@ test_that("a poor Laplace fit swaps the ensemble pool mean and covariance togeth
   expect_equal(q$var[[2L]], 3 * covariance)
   expect_equal(q$mu[[2L]], rep(-5, n_pars))
 })
+
+test_that("poor Laplace covariances use the window in every sampling stage", {
+  covariance <- diag(c(0.2, 0.4, 0.6, 0.8))
+  for (stage in c("burn", "adapt", "sample")) {
+    emc <- samples_LNR
+    for (j in seq_along(emc)) {
+      emc[[j]]$samples$stage[] <- stage
+      n_subjects <- dim(emc[[j]]$samples$alpha)[2L]
+      emc[[j]]$burn_mode_var <- rep(list(covariance), n_subjects)
+      emc[[j]]$burn_mode_mu <- rep(list(rep(-5, 4)), n_subjects)
+      emc[[j]]$burn_mode_stats <- list(pareto_k = c(Inf, rep(0.1, n_subjects - 1L)),
+                                      outside = rep(0, n_subjects))
+    }
+    reference <- emc
+    for (j in seq_along(reference)) reference[[j]]$burn_mode_var <- NULL
+    out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50, stage = stage)
+    expected <- EMC2:::create_chain_proposals(reference, samples_idx = 1:50, stage = stage)
+    expect_equal(out[[1]]$chains_var[[1]], expected[[1]]$chains_var[[1]])
+    expect_equal(out[[1]]$chains_mu[[1]], expected[[1]]$chains_mu[[1]])
+    expect_equal(out[[1]]$chains_var[[2]], covariance)
+  }
+})

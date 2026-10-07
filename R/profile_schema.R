@@ -428,6 +428,8 @@
 # the classifier needs another pattern before any policy could act on it.
 .emc_classify_failure <- function(cond) {
   if (is.null(cond)) return("unknown")
+  if (inherits(cond, "emc_failure") && length(cond$emc_class) == 1L &&
+      cond$emc_class %in% .EMC_REJECT_CLASSES) return(cond$emc_class)
   msg <- tryCatch(conditionMessage(cond), error = function(e) "")
   if (!length(msg)) msg <- ""
   msg <- tolower(paste(msg, collapse = " "))

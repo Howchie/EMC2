@@ -350,9 +350,13 @@
   } else NULL
   proposal_mode <- x
   start_cov <- NULL
+  lik <- NULL
   if (is.matrix(covariance)) {
     ll_hess <- attr(covariance, "ll_hessian")
     attr(covariance, "ll_hessian") <- NULL
+    if (is.matrix(ll_hess))
+      lik <- tryCatch(.emc_lik_canonical(ll_hess, x, precision, prior$mu),
+                      error = function(e) NULL)
     if (s_scale != 1) {
       shift <- drop(covariance %*% ((1 - 1 / s_scale) *
                                       drop(precision %*% (x - prior$mu))))
@@ -369,10 +373,24 @@
   list(alpha = x, ll = ll, covariance = covariance,
        proposal_mode = proposal_mode,
        start_covariance = if (is.matrix(start_cov)) start_cov else NULL,
-       gain = f0 - best$value, converged = converged,
+       lik = lik, gain = f0 - best$value, converged = converged,
        stationary = stationary,
        reason = if (!is.null(covariance)) "ok" else
          if (!converged && !stationary) "not stationary" else "Hessian")
+}
+
+# Gaussian approximation of the subject likelihood alone, in canonical form
+# exp(lin' a - a' prec a / 2): prec is the likelihood Hessian at the
+# conditional mode x (projected to positive semi-definite), and lin follows
+# from the mode condition, where the likelihood gradient equals
+# precision (x - mu). It does not involve the group prior, so new_particle()
+# combines it with whatever group state is current.
+.emc_lik_canonical <- function(ll_hess, x, precision, mu) {
+  e <- eigen((ll_hess + t(ll_hess)) / 2, symmetric = TRUE)
+  prec <- e$vectors %*% (pmax(e$values, 0) * t(e$vectors))
+  lin <- drop(prec %*% x + precision %*% (x - mu))
+  if (!all(is.finite(prec)) || !all(is.finite(lin))) return(NULL)
+  list(prec = prec, lin = lin)
 }
 
 # The covariance of the conditional posterior under the actual group prior
@@ -585,16 +603,13 @@
       if (.emc_usable_mode(result)) {
         ll_batch <- function(x) .emc_burn_ll_batch(
           x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
-        # Pareto k of the Laplace importance weights; the random stream is
-        # restored afterwards so the chain start does not depend on it.
-        seed <- get(".Random.seed", envir = globalenv())
+        # Diagnostic probes consume the subject stream before the start draw.
         prior <- .emc_burn_subject_prior(sampler, s)
         is_start <- tryCatch(.emc_laplace_is_start(
           result$alpha, .emc_start_cov(result), prior, ll_batch),
           error = function(e) NULL)
         result[c("pareto_k", "outside", "laplace_status")] <-
           unname(.emc_laplace_check(is_start))
-        assign(".Random.seed", seed, envir = globalenv())
         # Spread the chains across the local posterior neighbourhood. Reject
         # proposals outside the likelihood support.
         start <- NULL
@@ -657,6 +672,7 @@
       emc[[j]]$burn_mode_mu <- vector("list", emc[[j]]$n_subjects)
     emc[[j]]$burn_mode_var[s] <- list(result$covariance)
     emc[[j]]$burn_mode_mu[s] <- list(result$proposal_mode)
+    emc[[j]] <- .emc_store_lik(emc[[j]], s, result$lik)
   }
   stats <- lapply(emc, `[[`, "burn_mode_stats")
   n_hessian <- sum(vapply(stats, function(x) sum(x$hessian), integer(1)))
@@ -684,6 +700,56 @@
   emc
 }
 
+.emc_store_lik <- function(chain, s, lik) {
+  if (is.null(lik)) return(chain)
+  if (is.null(chain$lik_laplace))
+    chain$lik_laplace <- vector("list", chain$n_subjects)
+  chain$lik_laplace[s] <- list(lik)
+  chain
+}
+
+# Check the Gaussian proposal from each likelihood fit and the current subject
+# prior. The check belongs to that fit, including any change to its location.
+.emc_check_likelihood_fits <- function(emc, n_cores) {
+  has_fits <- vapply(emc, function(chain)
+    any(vapply(chain$lik_laplace, is.list, logical(1))), logical(1))
+  if (!any(has_fits)) return(emc)
+  emc <- .emc_prepare_chain_rng(emc)
+  jobs <- expand.grid(chain = seq_along(emc), subject = seq_len(emc[[1]]$n_subjects))
+  present <- vapply(seq_len(nrow(jobs)), function(k) {
+    lik <- emc[[jobs$chain[k]]]$lik_laplace
+    length(lik) >= jobs$subject[k] && is.list(lik[[jobs$subject[k]]])
+  }, logical(1))
+  jobs <- jobs[present, , drop = FALSE]
+  if (!nrow(jobs)) return(emc)
+  results <- .emc_with_preserved_rng(auto_mclapply(seq_len(nrow(jobs)), function(k) {
+    chain <- emc[[jobs$chain[k]]]
+    s <- jobs$subject[k]
+    fit <- chain$lik_laplace[[s]]
+    .emc_quiet_fork(.emc_with_preserved_rng({
+      check <- tryCatch({
+        assign(".Random.seed", chain$rng$subjects[[s]], envir = globalenv())
+        prior <- .emc_burn_subject_prior(chain, s)
+        gaussian <- .emc_laplace_conditional(structure(numeric(chain$n_pars), lik = fit), prior)
+        if (is.null(gaussian)) stop("unusable likelihood approximation")
+        ll <- function(x) .emc_burn_ll_batch(x, chain$data[[s]], chain$model, chain$par_names)
+        .emc_laplace_is_start(gaussian$mu, gaussian$var, prior, ll)
+      }, error = function(e) NULL)
+      list(check = .emc_laplace_check(check),
+           seed = get(".Random.seed", envir = globalenv()))
+    }))
+  }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
+  for (k in seq_len(nrow(jobs))) {
+    result <- results[[k]]
+    check <- if (is.list(result)) result$check else NULL
+    if (!is.list(check)) check <- .emc_laplace_check(NULL)
+    emc[[jobs$chain[k]]]$lik_laplace[[jobs$subject[k]]]$check <- check
+    if (is.list(result) && !is.null(result$seed))
+      emc[[jobs$chain[k]]]$rng$subjects[[jobs$subject[k]]] <- result$seed
+  }
+  emc
+}
+
 # Laplace proposal metric for the discarded stages: at each proposal refresh,
 # find every chain's conditional mode for each subject under that chain's
 # current group state and store the Laplace covariance (and mode). The chain
@@ -692,38 +758,45 @@
   if (!isTRUE(getOption("emc2.laplace_refresh", TRUE))) return(emc)
   if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise) ||
       !is.null(emc[[1L]]$pooled)) return(emc)
+  emc <- .emc_prepare_chain_rng(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
-  # Each refresh also re-checks the Laplace fit (Pareto k at the current group
-  # state), which decides whether burn uses it; the check reads the subject's
-  # stream without advancing it.
+  # Each refresh checks the Laplace fit under the current group state.
+  # Probe draws advance the subject stream before subsequent transitions.
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
-      tryCatch(.emc_quiet_fork({
+      .emc_quiet_fork({
         sampler <- emc[[jobs$chain[k]]]
         s <- jobs$subject[k]
-        r <- .emc_burn_subject_mode(sampler, s,
-                                    proposal_prior_scale = .emc_laplace_prior_scale,
-                                    start_covariance = TRUE)
-        if (.emc_usable_mode(r)) {
-          assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
-          ll_batch <- function(x) .emc_burn_ll_batch(
-            x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
-          is_check <- tryCatch(.emc_laplace_is_start(
-            r$alpha, .emc_start_cov(r), .emc_burn_subject_prior(sampler, s),
-            ll_batch), error = function(e) NULL)
-          r[c("pareto_k", "outside", "laplace_status")] <-
-            unname(.emc_laplace_check(is_check))
-        }
-        r
-      }), error = function(e) NULL)
+        assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
+        r <- tryCatch({
+          r <- .emc_burn_subject_mode(sampler, s,
+                                      proposal_prior_scale = .emc_laplace_prior_scale,
+                                      start_covariance = TRUE)
+          if (.emc_usable_mode(r)) {
+            ll_batch <- function(x) .emc_burn_ll_batch(
+              x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
+            is_check <- tryCatch(.emc_laplace_is_start(
+              r$alpha, .emc_start_cov(r), .emc_burn_subject_prior(sampler, s),
+              ll_batch), error = function(e) NULL)
+            r[c("pareto_k", "outside", "laplace_status")] <-
+              unname(.emc_laplace_check(is_check))
+          }
+          r
+        }, error = function(e) NULL)
+        list(result = r, seed = get(".Random.seed", envir = globalenv()))
+      })
     }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
   n_ok <- 0L
   for (k in seq_len(nrow(jobs))) {
-    result <- results[[k]]
+    job_result <- results[[k]]
+    result <- if (is.list(job_result)) job_result$result else NULL
     j <- jobs$chain[k]
     s <- jobs$subject[k]
+    if (is.list(job_result) && !is.null(job_result$seed))
+      emc[[j]]$rng$subjects[[s]] <- job_result$seed
     n_sub <- emc[[j]]$n_subjects
+    usable <- is.list(result) && is.matrix(result$covariance)
     if (is.null(emc[[j]]$burn_mode_var))
       emc[[j]]$burn_mode_var <- vector("list", n_sub)
     if (is.null(emc[[j]]$burn_mode_mu))
@@ -733,11 +806,13 @@
     if (length(ms$outside) != n_sub) ms$outside <- rep(NA_real_, n_sub)
     if (length(ms$laplace_status) != n_sub)
       ms$laplace_status <- rep("none", n_sub)
-    usable <- is.list(result) && is.matrix(result$covariance)
     # A failed refresh drops the earlier curvature and its diagnostic: both
     # belonged to an older group state.
     emc[[j]]$burn_mode_var[s] <- list(if (usable) result$covariance)
     emc[[j]]$burn_mode_mu[s] <- list(if (usable) result$proposal_mode)
+    # The likelihood approximation does not depend on the group state, so a
+    # failed refresh keeps the earlier one.
+    if (usable) emc[[j]] <- .emc_store_lik(emc[[j]], s, result$lik)
     chk <- if (usable && !is.null(result$laplace_status))
       result[c("pareto_k", "outside", "laplace_status")] else
         list(NA_real_, NA_real_, if (usable) "error" else "mode failed")

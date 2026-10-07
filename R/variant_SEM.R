@@ -119,6 +119,17 @@ get_prior_SEM <- function(prior = NULL, n_pars = NULL, sample = TRUE, N = 1e5, s
   n_factors <- if(!is.null(Lambda_mat)) ncol(Lambda_mat) else if(!is.null(B_mat)) ncol(B_mat) else 0
   n_cov <- if(!is.null(covariates)) ncol(covariates) else if(!is.null(K_mat)) ncol(K_mat) else 0
 
+  if (is.null(factor_groups_prior)) {
+    factor_groups_prior <- if (!is.null(design) && !is.null(attr(design, "factor_groups")))
+      attr(design, "factor_groups") else seq_len(n_factors)
+  }
+  if (length(factor_groups_prior) != n_factors || anyNA(factor_groups_prior))
+    stop("SEM factor_groups must assign every factor to a block.", call. = FALSE)
+  unique_factor_groups_prior <- unique(factor_groups_prior)
+  block_sizes <- vapply(unique_factor_groups_prior, function(group)
+    sum(factor_groups_prior == group), integer(1))
+  covariance_size <- max(c(0L, block_sizes[block_sizes > 1L]))
+
   if(is.null(prior)){
     prior <- list()
   }
@@ -144,11 +155,18 @@ get_prior_SEM <- function(prior = NULL, n_pars = NULL, sample = TRUE, N = 1e5, s
     prior$G_var <- rep(.5, n_cov)
   }
   if(is.null(prior$a_d)){
-    prior$a_d <- 5
+    prior$a_d <- max(5, covariance_size + 2)
   }
   if(is.null(prior$b_d)){
     prior$b_d <- .3
   }
+  if (!is.numeric(prior$a_d) || length(prior$a_d) != 1L ||
+      !is.finite(prior$a_d) || prior$a_d <= max(0, covariance_size - 1))
+    stop("SEM prior a_d must be positive and exceed each covariance block's dimension minus one.",
+         call. = FALSE)
+  if (!is.numeric(prior$b_d) || length(prior$b_d) != 1L ||
+      !is.finite(prior$b_d) || prior$b_d <= 0)
+    stop("SEM prior b_d must be a finite positive scalar.", call. = FALSE)
   if(is.null(prior$a_e)){
     prior$a_e <- rep(5, n_pars)
   }
@@ -159,16 +177,6 @@ get_prior_SEM <- function(prior = NULL, n_pars = NULL, sample = TRUE, N = 1e5, s
   out <- prior
   if(sample){
     isFree_B <- B_mat == Inf
-    if (is.null(factor_groups_prior)) {
-        if (!is.null(design) && !is.null(attr(design, "factor_groups"))) {
-          factor_groups_prior <- attr(design, "factor_groups")
-        } else if (n_factors > 0) {
-          factor_groups_prior <- 1:n_factors
-        } else {
-          factor_groups_prior <- integer(0)
-        }
-    }
-    unique_factor_groups_prior <- unique(factor_groups_prior)
 
     if(is.null(colnames(Lambda_mat))){
       factor_names <- paste0("F", 1:n_factors)
@@ -250,8 +258,7 @@ get_prior_SEM <- function(prior = NULL, n_pars = NULL, sample = TRUE, N = 1e5, s
           d_block <- length(group_idx)
           if (d_block > 1) {
             S_iw_prior <- diag(prior$b_d, d_block)
-            df_iw_prior <- max(prior$a_d, d_block + 2)
-            sampled_cov_block_prior <- riwish(df_iw_prior, S_iw_prior)
+            sampled_cov_block_prior <- riwish(prior$a_d, S_iw_prior)
             delta_inv[group_idx, group_idx, i] <- solve(sampled_cov_block_prior)
           } else if (d_block == 1) {
             delta_inv[group_idx, group_idx, i] <- rgamma(1, shape = prior$a_d, rate = prior$b_d)

@@ -1,6 +1,45 @@
 # EMC2 3.4.0
 ## Development
 
+-   **R-hat stopping rules per selection:** `mean_gd` and `max_gd` now apply
+    to each element of `selection` separately, so the default burn rule needs
+    a mean R-hat below 1.1 for the subject parameters and, separately, for the
+    group means. Previously the R-hats were pooled, so the far more numerous
+    subject parameters could pass burn with badly mixed group means. A vector
+    named by selection sets thresholds per element and leaves unnamed elements
+    without that rule, e.g. `mean_gd = c(alpha = 1.1), max_gd = c(mu = 1.2)`.
+    Progress messages report each rule.
+
+-   **Laplace-conditional efficient proposal:** each chain keeps a Gaussian
+    approximation of every subject's likelihood (the Hessian at its burn or
+    refresh mode, which the Laplace fits already computed and discarded). Every
+    iteration it is combined with the current group mean and covariance, so the
+    efficient proposal is the subject's conditional at the current group state
+    instead of a regression fitted to earlier draws, which lagged behind the
+    chain. `options(emc2.laplace_conditional = FALSE)` restores the regression.
+
+-   **Shear group update (experimental):** `options(emc2.group_move = "shear")`
+    follows the ensemble group update with joint moves of the group level and
+    every subject, in which each subject keeps its standardised position in
+    its own conditional posterior (a well-informed subject barely moves). The
+    ensemble draws the group given the subjects; the shear moves them
+    together; alternating the two is interweaving (Yu & Meng 2011). Mean steps
+    follow the directions in which the ensemble's group mean is predicted to
+    mix slowly, and scale steps rescale one parameter's group sd with the
+    subjects' deviations (the hierarchical funnel). Each step is taken with
+    the probability that the ensemble alone mixes slowly in it, so a
+    well-informed hierarchy gets few steps; each direction and scale adapts
+    its own step size, and every step is accepted on the posterior ratio
+    times the map's exact Jacobian, screened first on the subjects' Gaussian
+    likelihood approximations (delayed acceptance). Under the standard
+    hierarchy the Huang-Wand auxiliary `a_half` is integrated out of each
+    step and redrawn after it, so a weakly informed group sd is no longer
+    held in place by it. Standard (no group designs) and diagonal-gamma
+    hierarchies; others keep the ensemble update.
+
+-   **Bug fix:** with `options(emc2.independent_chains = TRUE)`, the efficient
+    proposal built at the end of burn failed on the one-chain window.
+
 -   **Bug fixes (hierarchy Gibbs steps):** factor and SEM loading rows that
     mix free and fixed entries now regress on the response net of the fixed
     entries. The default factor constraint (diagonal fixed at 1) has such rows
@@ -25,7 +64,10 @@
     or missing Pareto k as poor, and drop stale curvature when a refresh fails.
     A non-positive-definite group covariance is a rejection, never evaluated
     through a repaired factor. Covariance regularisation is equivariant to
-    parameter units. Independent chains (`emc2.independent_chains`) also
+    parameter units. Window covariances are no longer shrunk towards a
+    diagonal (Schafer-Strimmer): the shrinkage removed most correlations at
+    p of about 70, so every production rebuild of the chain proposal cut
+    subject move rates by more than half and never recovered. Independent chains (`emc2.independent_chains`) also
     sub-block on their own covariances. Production proposal rebuilds count
     transitions rather than stored draws, and the schedule is documented as
     adaptation at increasingly rare times (Chimisov, Latuszynski & Roberts
@@ -33,9 +75,8 @@
 
 -   **Sampler proposal fixes:** the chain proposal is centred on the plain
     posterior mean of its window (it was a likelihood-weighted mean, which
-    degenerates to about one draw in high dimension), and window covariances
-    shrink their correlations by an autocorrelation-adjusted Schafer-Strimmer
-    rule. The efficient proposal's mean now follows the current group mean.
+    degenerates to about one draw in high dimension), with the plain window
+    covariance. The efficient proposal's mean now follows the current group mean.
     Burn's Laplace proposals use the widened prior from the first block, with
     a mean that matches their covariance, and the Laplace fit diagnostic is
     rechecked at every refresh. Particle mixture weights adapt to squared jump

@@ -28,6 +28,7 @@ get_stop_criteria <- function(stage, stop_criteria, type){
   }
   if(!is.null(stop_criteria$max_gd) || !is.null(stop_criteria$mean_gd)){
     if(is.null(stop_criteria$selection)) stop_criteria$selection <- c('alpha', 'mu')
+    .emc_check_gd_criteria(stop_criteria$selection, stop_criteria$mean_gd, stop_criteria$max_gd)
     if(is.null(stop_criteria$omit_mpsrf)) stop_criteria$omit_mpsrf <- TRUE
   }
   if(stage == "sample"){
@@ -49,6 +50,38 @@ get_stop_criteria <- function(stage, stop_criteria, type){
   if(stage == "adapt" & is.null(stop_criteria$min_unique)) stop_criteria$min_unique <- 150
   if(stage != "adapt" & !is.null(stop_criteria$min_unique)) stop("min_unique only applicable for adapt stage, try min_es instead.")
   return(stop_criteria)
+}
+
+.EMC_PRODUCTION_OPTION_DEFAULTS <- list(
+  emc2.group_move = "ensemble", emc2.independent_chains = TRUE,
+  emc2.ensemble = TRUE, emc2.ensemble_pool = 32L, emc2.ensemble_rounds = 10L,
+  emc2.ensemble_cadence = 1L, emc2.ensemble_latent_weight = "conditional",
+  emc2.laplace_conditional = TRUE,
+  emc2.sample_rebuilds = "doubling",
+  emc2.pooled_candidates = 8L, emc2.iwish_rcond_tol = 1e-12)
+
+# Production transition options travel with the checkpoint so a resumed run
+# uses the same kernel. Worker allocation and diagnostics remain session-local.
+.emc_record_production_options <- function(emc) {
+  recorded <- lapply(emc, `[[`, "production_options")
+  have <- !vapply(recorded, is.null, logical(1))
+  if (any(have)) {
+    settings <- recorded[[which(have)[1L]]]
+    if (!all(have) || !all(vapply(recorded, identical, logical(1), y = settings)))
+      stop("Chains have different recorded production options; resume each fit separately.",
+           call. = FALSE)
+  } else {
+    has_production <- vapply(emc, function(chain)
+      isTRUE(chain$sample_transitions > 0) || any(chain$samples$stage == "sample"), logical(1))
+    if (any(has_production))
+      warning("The production transition options were not recorded; continuation uses current session settings.",
+              call. = FALSE)
+    settings <- Map(function(name, default) getOption(name, default),
+                    names(.EMC_PRODUCTION_OPTION_DEFAULTS), .EMC_PRODUCTION_OPTION_DEFAULTS)
+    names(settings) <- names(.EMC_PRODUCTION_OPTION_DEFAULTS)
+    for (j in seq_along(emc)) emc[[j]]$production_options <- settings
+  }
+  list(emc = emc, options = settings)
 }
 
 #' Fine-Tuned Model Estimation
@@ -110,7 +143,13 @@ run_emc <- function(emc, stage, stop_criteria,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
-  emc <- restore_duplicates(emc)
+  emc <- restore_duplicates(emc, warn = TRUE)
+  if (stage == "sample") {
+    recorded <- .emc_record_production_options(emc)
+    emc <- recorded$emc
+    previous_options <- options(recorded$options)
+    on.exit(options(previous_options), add = TRUE)
+  }
   emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
@@ -253,16 +292,7 @@ run_emc <- function(emc, stage, stop_criteria,
       block_save = save_elapsed)
     elapsed <- Sys.time() - t0
     if (verbose) {
-      gd_values <- progress$gd
-      gd_message <- ""
-      if (length(gd_values) > 0L) {
-        if (!is.null(stop_criteria$mean_gd)) {
-          gd_message <- paste0(gd_message, " | Mean Rhat=", round(mean(gd_values), 3))
-        }
-        if (!is.null(stop_criteria$max_gd)) {
-          gd_message <- paste0(gd_message, " | Max Rhat=", round(max(gd_values), 3))
-        }
-      }
+      gd_message <- .emc_gd_message(progress$gd_stats)
       ess_message <- ""
       if (stage == "sample" && length(progress$curr_min_es) > 0L) {
         ess_message <- paste0(" | min ESS=", round(progress$curr_min_es))
@@ -332,29 +362,32 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   got[[which]]
 }
 
+# Whether add_proposals() rebuilds the production proposals in this block.
+.emc_sample_rebuild_due <- function(emc) {
+  next_at <- emc[[1L]]$sample_proposals_next
+  n_sample <- emc[[1L]]$sample_transitions
+  !is.null(next_at) && !is.null(n_sample) && n_sample >= next_at
+}
+
+# Transition count of the next production rebuild after one at n_sample. By
+# default the stage is refreshed once it holds 100, 200, 400, ... transitions,
+# so adaptation becomes increasingly rare. numeric(0) freezes the proposals;
+# an explicit vector of transition counts gives a finite schedule.
+.emc_next_sample_rebuild <- function(n_sample) {
+  at <- getOption("emc2.sample_rebuilds", "doubling")
+  if (identical(at, "doubling"))
+    return(if (n_sample < 100) 100L else 2L * as.integer(n_sample))
+  if (!is.numeric(at) || any(!is.finite(at)) || any(at < 1) || any(at != floor(at)))
+    stop("emc2.sample_rebuilds must contain finite positive integer transition counts.", call. = FALSE)
+  later <- sort(as.numeric(at))[as.numeric(at) > n_sample]
+  if (length(later)) as.integer(later[1L]) else Inf
+}
+
 add_proposals <- function(emc, stage, n_cores, n_blocks){
   prof <- .emc_profile_enabled()
   split <- c(chain = NA_real_, eff = NA_real_)
-  # Sample-stage proposals are adapted increasingly rarely ("AIR" MCMC;
-  # Chimisov, Latuszynski & Roberts 2018): built when production starts, then
-  # rebuilt after 100, 200, 400, ... production transitions. Between rebuilds
-  # the kernel is a fixed posterior-invariant conditional-IS / ensemble kernel,
-  # and the gaps between rebuilds grow without bound. That, not the size of
-  # each change, is what the AIR results (L2 convergence, WLLN, SLLN, CLT) need,
-  # together with a simultaneous drift condition on the family of kernels the
-  # adaptation can select. So this is NOT diminishing adaptation in the Roberts
-  # & Rosenthal (2007) sense: a rebuild may change the kernel by a
-  # non-vanishing amount (the efficient proposals are refitted to a random
-  # subset of at most 750 draws, and reblocking is discrete), and that is
-  # allowed. The drift condition is assumed, not checked: it holds when the
-  # fitted proposal means and covariances stay in a bounded, non-degenerate
-  # set, which the covariance validation and regularisation are there to keep.
-  # The schedule counts transitions (sample_transitions), not stored draws, so
-  # thinning or trimming the stored history does not move the rebuild times.
-  # The chain and ensemble proposals use ALL stored production draws; the
-  # efficient proposals use at most 750 of them (extract_samples), drawn with a
-  # bias toward recent iterations. Particle mixture weights and scales stay
-  # frozen (see new_particle).
+  # Production proposal refreshes follow the transition counter, independent
+  # of thinning and trimming. Mixture weights and scales remain fixed.
   sample_window <- NULL
   if (stage == "sample") {
     n_stored <- sum(emc[[1]]$samples$stage[seq_len(emc[[1]]$samples$idx)] == "sample")
@@ -378,6 +411,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
     emc <- create_chain_proposals(
       emc, samples_idx = sample_window, do_block = stage != "sample",
       stage = stage)
+    emc <- .emc_check_likelihood_fits(emc, n_cores)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
         # Independent chains block on their own covariances only.
@@ -433,7 +467,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
     t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_eff_proposals(emc, n_cores)
     if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
-    next_at <- if (n_sample == 0) 100L else 2L * as.integer(n_sample)
+    next_at <- .emc_next_sample_rebuild(n_sample)
     for (j in seq_along(emc)) emc[[j]]$sample_proposals_next <- next_at
   }
   if (prof) .emc_profile_state$proposal_split <- split
@@ -553,6 +587,7 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     try       = trys,
     gd        = list(
       values    = gd$gd,
+      stats     = gd$gd_stats,
       selection = selection,
       version   = rhat_version
     ),
@@ -567,84 +602,114 @@ check_progress <- function (emc, stage, iter, stop_criteria,
 
   return(list(emc = out_emc, done = done, step_size = step_size,
               trys = trys, n_blocks = gd$n_blocks, gd = gd$gd,
+              gd_stats = gd$gd_stats,
               total_iters_stage = total_iters_stage,
               curr_min_es = if (min_es > 0 && total_iters_stage != 0) curr_min_es else NULL,
               flat_max = if (!is.null(flat_out)) flat_out$max_flat else NULL))
+}
+
+# R-hat rules per selection. A scalar mean_gd or max_gd applies to every
+# selection on its own; a named vector applies only to the selections it names,
+# so e.g. mean_gd = c(alpha = 1.1), max_gd = c(mu = 1.1) mixes statistics.
+.emc_gd_rules <- function(selection, mean_gd = NULL, max_gd = NULL) {
+  pick <- function(x, s) {
+    if (is.null(x)) return(NULL)
+    if (is.null(names(x))) return(x[[1L]])
+    if (s %in% names(x)) x[[s]] else NULL
+  }
+  rules <- lapply(selection, function(s) {
+    out <- list()
+    if (!is.null(m <- pick(mean_gd, s))) out$mean <- m
+    if (!is.null(m <- pick(max_gd, s))) out$max <- m
+    out
+  })
+  names(rules) <- selection
+  rules[lengths(rules) > 0L]
+}
+
+.emc_check_gd_criteria <- function(selection, mean_gd, max_gd) {
+  for (nm in c("mean_gd", "max_gd")) {
+    x <- get(nm)
+    if (is.null(x)) next
+    if (!is.numeric(x) || anyNA(x)) stop(nm, " must be numeric.")
+    if (is.null(names(x))) {
+      if (length(x) != 1L) stop(nm, " must be a single number or a vector named by selection.")
+    } else if (!all(names(x) %in% selection)) {
+      stop(nm, " names ", paste(setdiff(names(x), selection), collapse = ", "),
+           " are not in selection (", paste(selection, collapse = ", "), ").")
+    }
+  }
+  invisible(TRUE)
+}
+
+# One row per rule: the statistic of that selection's R-hats against its threshold.
+.emc_gd_stats <- function(gds, rules) {
+  do.call(rbind, lapply(names(rules), function(s) {
+    g <- gds[[s]]
+    do.call(rbind, lapply(names(rules[[s]]), function(stat) {
+      value <- if (!length(g) || !all(is.finite(g))) Inf else
+        if (stat == "mean") mean(g) else max(g)
+      data.frame(selection = s, statistic = stat, value = value,
+                 threshold = rules[[s]][[stat]], stringsAsFactors = FALSE)
+    }))
+  }))
+}
+
+.emc_gd_message <- function(stats) {
+  if (is.null(stats) || !nrow(stats)) return("")
+  paste0(" | ", paste(sprintf("%s %s Rhat=%.3f", stats$selection, stats$statistic,
+                               stats$value), collapse = ", "))
 }
 
 check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
                      selection, iter, n_blocks = 1, rhat_version = "old",
                      truncate = TRUE)
 {
-  get_gds <- function(emc, omit_mpsrf, selection, stage, rhat_version) {
-    gd_out <- c()
-    alpha <- NULL
-    for(select in selection){
+  get_gds <- function(emc, selection) {
+    gds <- lapply(selection, function(select) {
       gd <- unlist(gd_summary.emc(emc, selection = select, stage = stage,
                                   omit_mpsrf = omit_mpsrf, stat = NULL,
                                   version = rhat_version))
-      gd_out <- c(gd_out, c(gd))
-      if(select == "alpha"){
-        alpha <- gd
-      }
-    }
-    gd_out[is.na(gd_out)] <- Inf
-    return(list(gd = gd_out, alpha = alpha))
+      gd[is.na(gd)] <- Inf
+      gd
+    })
+    names(gds) <- selection
+    gds
   }
   if(is.null(max_gd) & is.null(mean_gd)) return(list(gd_done = TRUE, emc = emc, gd = NULL))
   if(!emc[[1]]$init | !stage %in% emc[[1]]$samples$stage)
     return(list(gd_done = FALSE, emc = emc, gd = NULL))
   if(is.null(omit_mpsrf)) omit_mpsrf <- TRUE
-  gd <- get_gds(emc, omit_mpsrf, selection, stage, rhat_version)
-  alpha_gd <- gd$alpha
-  gd <- gd$gd
-  if(!is.null(max_gd)){
-    ok_max_gd <- ifelse(all(is.finite(gd)), all(gd < max_gd), FALSE)
-  } else{
-    ok_max_gd <- TRUE
-  }
-  if(!is.null(mean_gd)){
-    ok_mean_gd <- ifelse(all(is.finite(gd)), mean(gd) < mean_gd, FALSE)
-  } else{
-    ok_mean_gd <- TRUE
-  }
-
-  ok_gd <- ok_mean_gd & ok_max_gd
+  rules <- .emc_gd_rules(selection, mean_gd, max_gd)
+  if (!length(rules)) return(list(gd_done = TRUE, emc = emc, gd = NULL))
+  # Selections without a rule are not computed.
+  gds <- get_gds(emc, names(rules))
+  stats <- .emc_gd_stats(gds, rules)
+  # How far the worst rule is from passing; used to choose between the full
+  # and the truncated stage.
+  excess <- function(st) max(st$value / st$threshold)
+  ok_gd <- all(stats$value < stats$threshold)
   if (!ok_gd && truncate) {
     n_remove <- round(chain_n(emc)[,stage][1]/3)
     samplers_short <- subset.emc(emc, filter=n_remove,stage=stage, keep_stages = TRUE)
-    if (is(samplers_short,"try-error")){
-      gd_short <- Inf
-    } else{
-      gd_short <- get_gds(samplers_short, omit_mpsrf, selection, stage, rhat_version)
-      alpha_gd_short <- gd_short$alpha
-      gd_short <- gd_short$gd
+    if (!is(samplers_short, "try-error")) {
+      gds_short <- get_gds(samplers_short, names(rules))
+      stats_short <- .emc_gd_stats(gds_short, rules)
+      if (isTRUE(excess(stats_short) < excess(stats))) {
+        gds <- gds_short
+        stats <- stats_short
+        emc <- samplers_short
+      }
     }
-    if (is.null(max_gd) & (mean(gd_short) < mean(gd)) | (!is.null(max_gd) & (max(gd_short) < max(gd)))) {
-      gd <- gd_short
-      alpha_gd <- alpha_gd_short
-      emc <- samplers_short
-    }
-    if(!is.null(max_gd)){
-      ok_max_gd <- ifelse(all(is.finite(gd)), all(gd < max_gd), FALSE)
-    } else{
-      ok_max_gd <- TRUE
-    }
-    if(!is.null(mean_gd)){
-      ok_mean_gd <- ifelse(all(is.finite(gd)), mean(gd) < mean_gd, FALSE)
-    } else{
-      ok_mean_gd <- TRUE
-    }
-    ok_gd <- ok_mean_gd & ok_max_gd
+    ok_gd <- all(stats$value < stats$threshold)
   }
-  if(verbose) {
-    type <- "Rhat"
-    if (!is.null(mean_gd)) message("Mean ",type," = ",round(mean(gd),3)) else
-      if (!is.null(max_gd)) message("Max ",type," = ",round(max(gd),3))
+  if(verbose) message(sub("^ \\| ", "", .emc_gd_message(stats)))
+  if (!is.null(rules$alpha)) {
+    emc <- set_tune_ess(emc, gds$alpha, rules$alpha$mean, rules$alpha$max)
   }
-  emc <- set_tune_ess(emc, alpha_gd, mean_gd, max_gd)
   class(emc) <- "emc"
-  return(list(gd = gd, gd_done = ok_gd, emc = emc))
+  return(list(gd = unlist(gds, use.names = FALSE), gd_stats = stats,
+              gd_done = ok_gd, emc = emc))
 }
 
 set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
@@ -680,10 +745,9 @@ set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
 
 # Chains share nothing between them: each builds its proposals from its own
 # draws, and the burn mode start does not move a chain onto another chain's
-# mode. Chains are then independent replicates, which R-hat assumes. Off by
-# default while it is compared with pooled proposals.
+# mode. Chains are then independent replicates, which R-hat assumes.
 .emc_independent_chains <- function() {
-  isTRUE(getOption("emc2.independent_chains", FALSE))
+  isTRUE(getOption("emc2.independent_chains", TRUE))
 }
 
 create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
@@ -699,7 +763,11 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
     st <- samples_merged$samples$stage
     pool <- which(st %in% c("burn", "adapt") &
                     seq_along(st) <= samples_merged$samples$idx)
-    per_chain <- split(pool, cut(pool, breaks = length(emc), labels = FALSE))
+    # One chain (independent chains build their own) is a single block; cut()
+    # rejects a single interval.
+    per_chain <- if (length(emc) > 1L) {
+      split(pool, cut(pool, breaks = length(emc), labels = FALSE))
+    } else list(pool)
     keep <- sort(unlist(lapply(per_chain, function(x) tail(x, 250L))))
     test_samples <- filtered_samples(samples_merged, keep, type = samples_merged$type)
   } else
@@ -841,52 +909,6 @@ sub_blocking <- function(emc, n_blocks){
   }, error = function(e) FALSE))
 }
 
-# Covariance of MCMC draws (p x n) with the correlations shrunk towards zero
-# (Schafer & Strimmer 2005, target D: variances are kept). A window covariance
-# in p dimensions from n_eff effectively independent draws spreads its
-# eigenvalues by about (1 +- sqrt(p / n_eff))^2, which an independence
-# proposal pays for in its weights. The shrinkage intensity is the estimated
-# sampling variance of the correlations over their squared size; that variance
-# is computed as for independent draws and inflated by n / n_eff, with n_eff
-# from the median over parameters of each one's lag-1 autocorrelation. That
-# is a heuristic: an AR(1) coordinate ESS is not the ESS of the products
-# x_i x_j, and the median can hide one slowly mixing direction. `n_chains`
-# equal-length chains concatenated in `draws` are handled separately: lag-1
-# pairs never span a chain boundary and each chain is centred on its own mean.
-.emc_shrunk_covariance <- function(draws, n_chains = 1L) {
-  S <- stats::cov(t(draws))
-  p <- nrow(draws)
-  n <- ncol(draws)
-  sds <- sqrt(diag(S))
-  if (p < 2L || n < 4L || any(!is.finite(sds)) || any(sds <= 0)) return(S)
-  X <- scale(t(draws))
-  R <- crossprod(X) / (n - 1)
-  if (is.null(n_chains)) n_chains <- 1L
-  seg <- if (n_chains > 1L && n %% n_chains == 0L) rep(seq_len(n_chains), each = n / n_chains) else
-    rep(1L, n)
-  same <- seg[-1L] == seg[-n]
-  # Within-chain lag-1 autocorrelation about each chain's own mean, so a
-  # difference between chain means does not read as autocorrelation.
-  rho <- vapply(seq_len(p), function(k) {
-    xc <- X[, k] - stats::ave(X[, k], seg)
-    den <- sum(xc^2)
-    r <- if (den > 0) sum(xc[-1L][same] * xc[-n][same]) / den else NA_real_
-    if (is.finite(r)) r else 0
-  }, numeric(1))
-  ratio <- pmin(1, pmax(1 / n, (1 - rho) / (1 + rho)))
-  n_eff <- max(2, n * stats::median(ratio))
-  w_bar <- crossprod(X) / n
-  var_r <- n / (n - 1)^3 * (crossprod(X^2) - n * w_bar^2) * (n / n_eff)
-  off <- row(R) != col(R)
-  denom <- sum(R[off]^2)
-  lambda <- if (denom > 0) min(1, max(0, sum(var_r[off]) / denom)) else 0
-  R_shrunk <- (1 - lambda) * R
-  diag(R_shrunk) <- 1
-  out <- R_shrunk * outer(sds, sds)
-  dimnames(out) <- dimnames(S)
-  out
-}
-
 .emc_chain_proposal_window <- function(emc, samples_idx = NULL, stage) {
   if (is.null(samples_idx)) {
     idx <- emc[[1L]]$samples$idx
@@ -927,19 +949,18 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
                     remove_dup = F, remove_constants = F)
   if (!is.null(emc[[1]]$pooled))
     alpha <- alpha[emc[[1]]$par_names, , , drop = FALSE]
-  # merge_chains stacks the chains' windows one after another.
-  attr(alpha, "n_chains") <- n_chains
 
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
   # Posterior moments of each subject over the window, all chains: the plain
-  # mean (the draws are already posterior draws) and a shrunk covariance.
+  # mean and covariance. The covariance feeds an unscaled independence
+  # proposal, whose efficiency depends on the correlations, so they are not
+  # shrunk; a window that is not positive definite is regularised below.
   win_moments <- function(a) list(
     mu = lapply(seq_len(n_subjects), function(sub)
       rowMeans(matrix(a[, sub, ], nrow = n_pars))),
     cov = lapply(seq_len(n_subjects), function(sub)
-      .emc_shrunk_covariance(matrix(a[, sub, ], nrow = n_pars),
-                             n_chains = attr(a, "n_chains"))))
+      stats::cov(t(matrix(a[, sub, ], nrow = n_pars)))))
   independent <- .emc_independent_chains() && n_chains > 1L
   if (!independent) {
     wm <- win_moments(alpha)
@@ -952,6 +973,9 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       win_mu <- wm$mu; win_cov <- wm$cov
       block_idx <- block_variance_idx(attr(emc[[j]]$data, "components"))
     }
+    # Shear directions and step probabilities, from this chain's window.
+    emc[[j]] <- .emc_shear_set_plan(
+      emc[[j]], emc[[j]]$samples$theta_var[, , samples_idx, drop = FALSE])
     old_chains_var <- emc[[j]]$chains_var
     old_chains_mu <- emc[[j]]$chains_mu
     old_ensemble_q <- emc[[j]]$ensemble_q
@@ -998,7 +1022,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
         chains_mu[[sub]] <- win_mu[[sub]]
       if (length(burn_mode_var) >= sub &&
           is.matrix(burn_mode_var[[sub]]) &&
-          !(stage == "burn" && isTRUE(laplace_poor[sub]) && raw_ok)) {
+          !(isTRUE(laplace_poor[sub]) && raw_ok)) {
         mode_cov <- burn_mode_var[[sub]]
         if (do_block) mode_cov[block_idx] <- 0
         if (.emc_empirical_covariance_ok(mode_cov, subject = sub)) {
@@ -1613,7 +1637,12 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
   return(list_out)
 }
 
-#' Strip all entries except samples from EMC list entries
+.EMC_SHARED_CHAIN_FIELDS <- c("data", "model", "prior", "gd", "XtX", "group_designs",
+                             "par_names", "subjects", "n_pars", "n_subjects", "type",
+                             "nuisance", "marginalise", "marginalised_idx",
+                             "par_group", "is_blocked")
+
+#' Share identical immutable configuration across chains
 #' @param emc A list of EMC objects
 #' @return The same list with identical immutable fields shared with the first chain
 #' @noRd
@@ -1621,11 +1650,8 @@ strip_duplicates <- function(emc, incl_props = TRUE) {
   emc <- restore_duplicates(emc)
   # Only immutable configuration may be shared. All other fields (including
   # future dynamic fields) remain chain-local, even if currently identical.
-  shareable <- c("data", "model", "prior", "gd", "XtX", "group_designs",
-                 "par_names", "n_pars", "n_subjects", "type", "nuisance",
-                 "marginalise", "marginalised_idx", "par_group", "is_blocked")
   for (i in seq_along(emc)[-1]) {
-    shared <- intersect(shareable, names(emc[[i]]))
+    shared <- intersect(.EMC_SHARED_CHAIN_FIELDS, names(emc[[i]]))
     shared <- shared[vapply(shared, function(k) {
       identical(emc[[i]][[k]], emc[[1]][[k]])
     }, logical(1))]
@@ -1640,9 +1666,11 @@ strip_duplicates <- function(emc, incl_props = TRUE) {
 
 #' Restore shared immutable configuration without replacing chain-local state
 #' @param emc A list of EMC objects with stripped duplicates
+#' @param warn Whether to warn that an object without chain-local adaptive
+#'   state cannot continue exactly (only relevant when sampling resumes)
 #' @return The same list with shared fields restored and dynamic state preserved
 #' @noRd
-restore_duplicates <- function(emc) {
+restore_duplicates <- function(emc, warn = FALSE) {
   if (length(emc) > 1) {
     for (i in 2:length(emc)) {
       shared <- attr(emc[[i]], "emc_shared_fields", exact = TRUE)
@@ -1657,16 +1685,16 @@ restore_duplicates <- function(emc) {
         }
         attr(emc[[i]], "emc_shared_fields") <- NULL
         attr(emc[[i]], "emc_field_order") <- NULL
-      } else if (is.null(emc[[i]]$n_pars) &&
-                 all(names(emc[[i]]) %in% c("samples", "rng"))) {
-        # Pre-schema checkpoints discarded other chains' state irreversibly.
-        local <- emc[[i]]
-        emc[[i]] <- emc[[1]]
-        emc[[i]]$samples <- local$samples
-        emc[[i]]$rng <- local$rng
-        attr(emc[[i]], "prop_var") <- attr(local, "prop_var")
-        warning("Restoring a legacy checkpoint: later chains' adaptive state was not saved, so exact historical continuation is unavailable.",
-                call. = FALSE)
+      } else if (is.null(emc[[i]]$n_pars) && !is.null(emc[[i]]$samples)) {
+        missing <- setdiff(.EMC_SHARED_CHAIN_FIELDS, names(emc[[i]]))
+        for (k in missing) emc[[i]][k] <- emc[[1]][k]
+        idx <- emc[[i]]$samples$idx
+        if (is.null(emc[[i]]$init))
+          emc[[i]]$init <- !is.null(idx) && idx >= 1L &&
+            all(is.finite(emc[[i]]$samples$alpha[, , idx, drop = FALSE]))
+        if (warn)
+          warning("This object lacks chain-local adaptive state; exact continuation is unavailable.",
+                  call. = FALSE)
       }
     }
   }

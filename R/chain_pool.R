@@ -982,6 +982,20 @@
 }
 
 .emc_wpool_compute <- function(msg, ctx, shared = NULL) {
+  if (identical(msg$kind, "subject_ll")) {
+    return(.emc_with_preserved_rng({
+      failures <- list()
+      ll <- vapply(seq_along(msg$subs), function(k) {
+        tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]], ctx$data[[msg$subs[k]]],
+                                         ctx$model, ctx$marginalise),
+          error = function(e) {
+            failures[[length(failures) + 1L]] <<- e
+            -Inf
+          })
+      }, numeric(1))
+      list(ll = ll, failures = failures)
+    }))
+  }
   if (identical(msg$kind, "ll")) {
     return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
                                      model = ctx$model, component = msg$component,
@@ -998,6 +1012,58 @@
     return(list(value = value, warnings = loo_warnings))
   }
   .emc_wpool_compute_particle(msg, ctx, shared)
+}
+
+# Evaluate one candidate for each subject on the chain's existing workers.
+# Replies keep subject order; missing replies are recomputed on the master
+# before the MH decision, so transport failure cannot change acceptance.
+.emc_wpool_subject_ll <- function(pool, rows, ctx, part = NULL) {
+  n <- length(rows)
+  if (is.null(pool) || !isTRUE(pool$alive)) {
+    part <- list(seq_len(n))
+  } else if (is.null(part)) {
+    part <- .emc_lpt_partition(.emc_subject_cost(ctx$data), pool$n)
+  }
+  if (sum(lengths(part)) != n || !setequal(unlist(part), seq_len(n)) ||
+      (isTRUE(pool$alive) && length(part) != pool$n))
+    stop("Subject likelihood partition must cover each subject exactly once")
+  msgs <- lapply(part, function(subs)
+    list(kind = "subject_ll", subs = subs, rows = rows[subs], notify = FALSE))
+  sent <- logical(length(part))
+  if (isTRUE(pool$alive)) {
+    for (w in seq_along(part)) {
+      if (!length(part[[w]])) next
+      sent[w] <- .emc_wpool_request(pool, w, msgs[[w]])
+      if (!sent[w]) {
+        .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))
+        pool$alive <- FALSE
+        break
+      }
+    }
+  }
+  ll <- numeric(n)
+  replies <- vector("list", length(part))
+  deadline <- .emc_wpool_deadline()
+  for (w in which(sent)) {
+    res <- .emc_wpool_reply(pool, w, deadline)
+    if (is.null(res) || !is.null(res$failed) ||
+        length(res$ll) != length(part[[w]]) || anyNA(res$ll) || any(res$ll == Inf)) {
+      .emc_wpool_degraded("subject likelihood worker gave no valid reply")
+      pool$alive <- FALSE
+    } else replies[[w]] <- res
+  }
+  for (w in seq_along(part)) {
+    if (!length(part[[w]])) next
+    res <- replies[[w]]
+    if (is.null(res)) res <- .emc_wpool_compute(msgs[[w]], ctx)
+    for (e in res$failures) {
+      cls <- .emc_reject_record(e, "ensemble")
+      if (identical(.emc_failure_action(cls), "abort"))
+        .emc_failure_abort(cls, "ensemble", e)
+    }
+    ll[part[[w]]] <- res$ll
+  }
+  list(ll = ll, pool = pool)
 }
 
 .emc_wpool_run_loo <- function(ll_mat, cores) {

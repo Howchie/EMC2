@@ -13,9 +13,11 @@ emc0 <- args[4]; outdir <- args[5]
 suppressPackageStartupMessages(library(EMC2, lib.loc = lib))
 cat("EMC2 from", find.package("EMC2"), "\n")
 setwd("/data/work/PM/NirvanaHons_Nback")      # custom trend kernels live here
-# Arms: "baseline" = no group update; "ensemble" = ensemble group update.
-stopifnot(arm %in% c("baseline", "ensemble"))
-options(emc2.ensemble = arm == "ensemble")
+# Arms: "baseline" = no group update; "ensemble" = ensemble group update;
+# "shear" = the ensemble update followed by the shear.
+stopifnot(arm %in% c("baseline", "ensemble", "shear"))
+options(emc2.ensemble = arm != "baseline",
+        emc2.group_move = if (arm == "shear") "shear" else "ensemble")
 emc <- readRDS(emc0)
 set.seed(seed)
 n_sample <- as.integer(Sys.getenv("NBACK_SAMPLE", "1500"))

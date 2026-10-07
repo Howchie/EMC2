@@ -83,9 +83,13 @@ The potential stop criteria to be set are:
 
 \code{selection} (character vector): For which parameters the \code{stop_criteria} should hold
 
-\code{mean_gd} (numeric): The mean Gelman-Rubin diagnostic across all parameters in the selection
+\code{mean_gd} (numeric): The mean Gelman-Rubin diagnostic, required of each element of the
+selection separately (e.g. the mean over all subject parameters, and separately the mean over
+the group means). A vector named by selection sets a different threshold per element and
+leaves unnamed elements without this rule, e.g. \verb{mean_gd = c(alpha = 1.1), max_gd = c(mu = 1.1)}.
 
-\code{max_gd} (numeric): The max Gelman-Rubin diagnostic across all parameters in the selection
+\code{max_gd} (numeric): The max Gelman-Rubin diagnostic, required of each element of the
+selection separately; can be named by selection as for \code{mean_gd}.
 
 \code{min_unique} (integer): The minimum number of unique samples in the MCMC chains across all parameters in the selection
 

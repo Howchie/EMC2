@@ -1,10 +1,46 @@
-# Sample-stage proposals are adapted increasingly rarely: built when production
-# starts, then rebuilt from all stored production draws once the stage has run
-# 100, 200, 400, ... transitions (add_proposals()).
+# Proposal refreshes use transition counts, independent of stored history.
 
 local_rng_guard()
 
-test_that("sample-stage proposals are rebuilt on a doubling schedule from all production draws", {
+test_that("production refreshes its proposals on a doubling schedule by default", {
+  withr::local_options(list(emc2.sample_rebuilds = NULL))
+  expect_identical(EMC2:::.emc_next_sample_rebuild(0), 100L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(100), 200L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(400), 800L)
+  withr::local_options(list(emc2.sample_rebuilds = "doubling"))
+  expect_identical(EMC2:::.emc_next_sample_rebuild(200), 400L)
+})
+
+test_that("an empty schedule freezes production proposals", {
+  withr::local_options(list(emc2.sample_rebuilds = numeric(0)))
+  expect_identical(EMC2:::.emc_next_sample_rebuild(0), Inf)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(100), Inf)
+  calls <- 0L
+  local_mocked_bindings(
+    create_chain_proposals = function(emc, ...) { calls <<- calls + 1L; emc },
+    create_eff_proposals = function(emc, ...) { calls <<- calls + 1L; emc },
+    .package = "EMC2")
+  emc <- list(list(samples = list(stage = rep("adapt", 20), idx = 20L)))
+  emc <- EMC2:::add_proposals(emc, "sample", 1, NULL)
+  expect_equal(calls, 2L)
+  expect_identical(emc[[1]]$sample_proposals_next, Inf)
+  emc[[1]]$sample_transitions <- 1000L
+  emc[[1]]$samples <- list(stage = c(rep("adapt", 20), rep("sample", 1000)), idx = 1020L)
+  later <- EMC2:::add_proposals(emc, "sample", 1, NULL)
+  expect_equal(calls, 2L)
+  expect_identical(later, emc)
+  expect_false(EMC2:::.emc_sample_rebuild_due(emc))
+})
+
+test_that("production refresh schedules must be finite and integer-valued", {
+  for (at in list(Inf, NA_real_, -1, 0, 1.5, "halving")) {
+    withr::local_options(list(emc2.sample_rebuilds = at))
+    expect_error(EMC2:::.emc_next_sample_rebuild(0), "finite positive integer")
+  }
+})
+
+test_that("explicit production refreshes use every stored production draw", {
+  withr::local_options(list(emc2.sample_rebuilds = c(100L, 200L, 400L, 800L)))
   calls <- list()
   local_mocked_bindings(
     create_chain_proposals = function(emc, samples_idx = NULL, ...) {
@@ -68,6 +104,7 @@ test_that("sample-stage proposals are rebuilt on a doubling schedule from all pr
 # known, with production long enough for four rebuilds (100, 200, 400, 800),
 # with and without the ensemble update.
 test_that("rebuilding sample proposals keeps an exact Gibbs posterior", {
+  withr::local_options(list(emc2.sample_rebuilds = c(100L, 200L, 400L, 800L, 1600L)))
   skip_model_validation()
   skip_on_os("windows")
   data("forstmann", package = "EMC2")
