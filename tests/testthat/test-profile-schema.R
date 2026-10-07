@@ -147,6 +147,9 @@ test_that("rejection counters accumulate per source and difference correctly", {
   expect_true(all(names(fields) %in% names(.emc_profile_schema)))
   row <- do.call(.emc_profile_row, fields)
   expect_identical(row$reject_particle_nume, 2L)
+  # Every source run_stage() reports has its columns in the schema.
+  for (source in c("particle", "gibbs", "ensemble", "pooled"))
+    expect_silent(do.call(.emc_profile_row, .emc_reject_row_fields(delta, source)))
   .emc_reject_reset()
 })
 

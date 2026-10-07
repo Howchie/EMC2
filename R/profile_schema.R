@@ -176,7 +176,9 @@
                          desc = "1 if the pool was marked dead during this iteration")
     ),
     reject_fields("particle"),
-    reject_fields("gibbs")
+    reject_fields("gibbs"),
+    reject_fields("ensemble"),
+    reject_fields("pooled")
   )
   names(fields) <- vapply(fields, `[[`, character(1), "name")
   fields
