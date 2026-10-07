@@ -36,8 +36,8 @@
     instead of a regression fitted to earlier draws, which lagged behind the
     chain. `options(emc2.laplace_conditional = FALSE)` restores the regression.
 
--   **Shear group update (default):** the ensemble group update is now
-    followed by joint moves of the group level and every subject, in which
+-   **Shear group update (opt-in):** with `options(emc2.group_move = "shear")`
+    the ensemble group update is followed by joint moves of the group level and every subject, in which
     each subject keeps its standardised position in its own conditional
     posterior (a well-informed subject barely moves). The
     ensemble draws the group given the subjects; the shear moves them
@@ -53,8 +53,9 @@
     hierarchy the Huang-Wand auxiliary `a_half` is integrated out of each
     step and redrawn after it, so a weakly informed group sd is no longer
     held in place by it. Standard (no group designs) and diagonal-gamma
-    hierarchies; others keep the ensemble update.
-    `options(emc2.group_move = "ensemble")` keeps the ensemble update alone.
+    hierarchies; others keep the ensemble update. The ensemble update alone
+    stays the default: the shear costs more per iteration and its mixing
+    gain is not consistent across problems.
 
 -   **Bug fix:** with `options(emc2.independent_chains = TRUE)`, the efficient
     proposal built at the end of burn failed on the one-chain window.

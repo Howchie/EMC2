@@ -23,8 +23,8 @@ set.seed(5000L + seed)
 # INDEP=1 runs the chains fully independently (no pooled windows, no shared
 # modes); TAG names the variant in the output file.
 if (Sys.getenv("INDEP", "0") == "1") options(emc2.independent_chains = TRUE)
-# GROUP_MOVE=ensemble runs the ensemble group update without the shear.
-options(emc2.group_move = Sys.getenv("GROUP_MOVE", "shear"))
+# GROUP_MOVE=shear adds the shear after the ensemble group update.
+options(emc2.group_move = Sys.getenv("GROUP_MOVE", "ensemble"))
 # SAVE_EMC=1 also saves the fitted object (all draws) next to the summary.
 tag <- Sys.getenv("TAG", "")
 options(emc2.sample_rebuilds = switch(arm,

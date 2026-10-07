@@ -13,8 +13,8 @@ cores <- as.integer(Sys.getenv("CORES_PER_CHAIN", "2"))
 emc <- readRDS(file.path(src, paste0("preburn_", case, ".rds")))
 # INDEP=1 runs the chains fully independently from burn onwards.
 if (Sys.getenv("INDEP", "0") == "1") options(emc2.independent_chains = TRUE)
-# GROUP_MOVE=ensemble runs the ensemble group update without the shear.
-options(emc2.group_move = Sys.getenv("GROUP_MOVE", "shear"))
+# GROUP_MOVE=shear adds the shear after the ensemble group update.
+options(emc2.group_move = Sys.getenv("GROUP_MOVE", "ensemble"))
 set.seed(1000L * seed + 7L)
 # Seed 1 keeps the chain streams stored with the preburn; other seeds replace them.
 if (seed != 1L) for (j in seq_along(emc)) emc[[j]]$rng <- NULL

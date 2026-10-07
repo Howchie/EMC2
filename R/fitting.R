@@ -53,7 +53,7 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 }
 
 .EMC_PRODUCTION_OPTION_DEFAULTS <- list(
-  emc2.group_move = "shear", emc2.independent_chains = TRUE,
+  emc2.group_move = "ensemble", emc2.independent_chains = TRUE,
   emc2.ensemble = TRUE, emc2.ensemble_pool = 32L, emc2.ensemble_rounds = 10L,
   emc2.ensemble_cadence = 1L, emc2.ensemble_latent_weight = "conditional",
   emc2.laplace_conditional = TRUE,

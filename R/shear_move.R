@@ -1,6 +1,6 @@
-# Shear group update, the default group update: the ensemble update
-# (R/ensemble_move.R) followed by a shear of the group state.
-# options(emc2.group_move = "ensemble") keeps the ensemble update alone.
+# Shear group update, opt-in with options(emc2.group_move = "shear"): the
+# ensemble update (R/ensemble_move.R, the default group update) followed by a
+# shear of the group state.
 #
 # Target: pi(mu, V, a | y) propto p(mu) p(V) prod_s L_s(a_s) N(a_s | mu, V).
 # The ensemble update draws the group state given the subjects (the centred
@@ -67,7 +67,7 @@
 # keep the ensemble update alone.
 
 .emc_shear_options <- function() {
-  list(enabled = identical(getOption("emc2.group_move", "shear"), "shear"),
+  list(enabled = identical(getOption("emc2.group_move", "ensemble"), "shear"),
        target = 0.44)
 }
 
