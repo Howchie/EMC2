@@ -123,6 +123,16 @@
   list(dirs = dirs, lam = lam, w = pmin(1, pmax(0, w / n)))
 }
 
+# Every chain's plan, from the proposal window create_chain_proposals() uses.
+.emc_shear_set_plans <- function(emc, samples_idx, stage) {
+  if (!.emc_shear_active(emc[[1L]])) return(emc)
+  idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
+  for (j in seq_along(emc))
+    emc[[j]] <- .emc_shear_set_plan(
+      emc[[j]], emc[[j]]$samples$theta_var[, , idx, drop = FALSE])
+  emc
+}
+
 # Plan from the mean group covariance over the chain's proposal window.
 .emc_shear_set_plan <- function(chain, var_draws) {
   if (!.emc_shear_active(chain)) return(chain)

@@ -412,6 +412,8 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
       emc, samples_idx = sample_window, do_block = stage != "sample",
       stage = stage)
     emc <- .emc_check_likelihood_fits(emc, n_cores)
+    # The shear plan uses only checked fits, so it is built after the checks.
+    emc <- .emc_shear_set_plans(emc, sample_window, stage)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
         # Independent chains block on their own covariances only.
@@ -973,9 +975,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       win_mu <- wm$mu; win_cov <- wm$cov
       block_idx <- block_variance_idx(attr(emc[[j]]$data, "components"))
     }
-    # Shear directions and step probabilities, from this chain's window.
-    emc[[j]] <- .emc_shear_set_plan(
-      emc[[j]], emc[[j]]$samples$theta_var[, , samples_idx, drop = FALSE])
     old_chains_var <- emc[[j]]$chains_var
     old_chains_mu <- emc[[j]]$chains_mu
     old_ensemble_q <- emc[[j]]$ensemble_q

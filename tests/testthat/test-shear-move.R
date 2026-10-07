@@ -369,11 +369,40 @@ test_that("a complete shear fit is identical serially, statically, and queued", 
     emc[[1]]
   }
   serial <- fit_on(1, FALSE)
-  expect_gt(sum(serial$shear$scale_accepted), 0)
+  # The identity checks below only mean something if the shear moved the state.
+  expect_gt(sum(serial$shear$dir_accepted) + sum(serial$shear$scale_accepted), 0)
   for (parallel in list(fit_on(2, FALSE), fit_on(3, TRUE))) {
     expect_identical(parallel$samples$alpha, serial$samples$alpha)
     expect_identical(parallel$samples$theta_mu, serial$samples$theta_mu)
     expect_identical(parallel$samples$theta_var, serial$samples$theta_var)
     expect_identical(parallel$shear, serial$shear)
+  }
+})
+
+test_that("the shear plan is built from the checked likelihood fits", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  withr::local_seed(95)
+  withr::local_options(list(emc2.group_move = "shear", emc2.worker_backend = "fork",
+                            emc2.independent_chains = TRUE))
+  local_mocked_bindings(calc_ll_manager = function(proposals, ...) {
+    -rowSums(proposals^2) / 2
+  }, .package = "EMC2")
+  subjects <- levels(forstmann$subjects)[1:3]
+  dat <- droplevels(forstmann[forstmann$subjects %in% subjects, ])
+  des <- suppressMessages(design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1)))
+  emc <- suppressMessages(make_emc(dat, des, n_chains = 2L, type = "standard"))
+  for (stage in c("preburn", "burn", "adapt"))
+    emc <- suppressMessages(run_emc(emc, stage = stage, step_size = 6L, max_tries = 1L,
+      verbose = FALSE, trim = FALSE, cores_for_chains = 1L, cores_per_chain = 1L,
+      stop_criteria = list(iter = 24L, max_gd = Inf, selection = c("alpha", "mu"),
+                           min_unique = 0, min_es = 0)))
+  emc <- EMC2:::restore_duplicates(emc)
+  for (ch in emc) {
+    fits <- EMC2:::.emc_shear_fits(ch)
+    expect_true(all(!vapply(fits, is.null, logical(1))))
+    # Without fits every scale weight is exactly 1; a subject with a fit
+    # carries likelihood information, so its prior share is below 1.
+    expect_true(all(ch$shear$plan$w < 1))
   }
 })
