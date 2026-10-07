@@ -1115,15 +1115,21 @@ LogicalRules_rfun <- function(data, pars, model) {
 #' @param group_means A numeric vector. The group level means for each parameter, in the same order as `sampled_pars(design)`
 #' @param n_subj An integer. The number of subjects to generate parameters for. If `NULL` will be inferred from design
 #' @param variance_proportion A non-negative double. Optional. If ``covariances``
-#'   are not specified, this controls the default relative spread of the
-#'   subject-level effects. Identity-transformed parameters use a standard
-#'   deviation of ``variance_proportion * max(abs(mean), 1)``; exponential
-#'   parameters use a log-normal spread with this coefficient of variation;
-#'   probit parameters use this value as the latent-scale standard deviation.
-#'   The covariances are 0.
+#'   are not specified, this sets the default relative spread of the
+#'   subject-level parameters in each design cell (each combination of factor
+#'   levels). Exponential parameters get a log-normal spread with this
+#'   coefficient of variation; probit parameters use this value as the
+#'   latent-scale standard deviation; identity-transformed parameters use a
+#'   standard deviation of ``variance_proportion * max(abs(cell mean), 1)``.
+#'   The coefficient covariance is chosen so that every cell gets this spread
+#'   (exactly when the design has one coefficient per cell, on average
+#'   otherwise); with treatment contrasts the contrast coefficients are
+#'   therefore negatively correlated with the intercept. Parameters of
+#'   different types are independent.
 #' @param covariances A covariance matrix. Optional. Specify the intended covariance matrix.
 #' @param max_tries An integer. Maximum number of redraw rounds used to replace
-#'   subject-level parameter draws that fall outside the model bounds.
+#'   subject-level parameter draws that fall outside the model bounds (bounds
+#'   are exclusive, as in the likelihood).
 #'
 #' @return A matrix of subject-level parameters.
 #' @examples
@@ -1175,59 +1181,13 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
   if (is.na(max_tries) || max_tries < 1L)
     stop("max_tries must be a positive integer")
 
-  if(is.null(covariances)) {
-    if (length(variance_proportion) != 1L || !is.finite(variance_proportion) ||
-        variance_proportion < 0)
-      stop("variance_proportion must be a single non-negative finite number")
-    model <- design$model()
-    base_names <- get_p_types(sampled_names)
-    if (is.null(model$transform) || is.null(model$transform$func)) {
-      transform <- rep("identity", length(sampled_names))
-    } else {
-      transform <- model$transform$func[base_names]
-      if (length(transform) != length(sampled_names) || anyNA(transform))
-        stop("Could not determine parameter transforms for the design")
-    }
-
-    # Draws are made on EMC2's sampled scale.  Use a relative natural-scale
-    # spread rather than treating a log parameter's numeric value as a scale.
-    # For exp transforms, log1p(cv^2) gives a log-normal coefficient of
-    # variation equal to variance_proportion exactly.
-    vars <- vapply(seq_along(group_means), function(i) {
-      if (transform[[i]] == "exp") {
-        log1p(variance_proportion^2)
-      } else if (transform[[i]] == "pnorm") {
-        variance_proportion^2
-      } else {
-        (variance_proportion * max(abs(group_means[[i]]), 1))^2
-      }
-    }, numeric(1))
-    covariances <- diag(vars)
-  } else {
-    covariances <- as.matrix(covariances)
-    if (!all(dim(covariances) == length(group_means)))
-      stop("covariances must be a square matrix with one row/column per parameter")
-    if (!is.null(rownames(covariances)) && all(sampled_names %in% rownames(covariances)) &&
-        !is.null(colnames(covariances)) && all(sampled_names %in% colnames(covariances))) {
-      covariances <- covariances[sampled_names, sampled_names, drop = FALSE]
-    }
-  }
-
-  # Pooled parameters take the group mean for every subject.
-  pooled <- intersect(design$pooled, sampled_names)
-  if (length(pooled)) {
-    pool_idx <- match(pooled, sampled_names)
-    covariances[pool_idx, ] <- 0
-    covariances[, pool_idx] <- 0
-  }
-
-  # Build the same parameter map used by make_data(), so the guard checks
-  # natural, cell-level parameters rather than individual regression
-  # coefficients (which may legitimately be negative).
-  bound_checker <- NULL
+  # The parameter map make_data() uses, one design cell per row, so spreads
+  # and bounds apply to natural, cell-level parameters rather than to
+  # individual regression coefficients (which may legitimately be negative).
   model <- design$model()
-  if (!is.null(model$bound) && !is.null(design$Ffactors)) {
-    guard_design <- design
+  guard_design <- design
+  guard_dadm <- NULL
+  if (!is.null(design$Ffactors)) {
     guard_design$Ffactors$subjects <- subnames
     guard_dadm <- tryCatch({
       guard_data <- minimal_design(
@@ -1247,10 +1207,44 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
         compress = FALSE, verbose = FALSE, rt_check = FALSE
       )
     }, error = function(e) {
-      stop("Could not construct the parameter-bounds guard: ",
-           conditionMessage(e), call. = FALSE)
+      if (!is.null(model$bound))
+        stop("Could not construct the parameter-bounds guard: ",
+             conditionMessage(e), call. = FALSE)
+      NULL
     })
+  }
 
+  if(is.null(covariances)) {
+    if (length(variance_proportion) != 1L || !is.finite(variance_proportion) ||
+        variance_proportion < 0)
+      stop("variance_proportion must be a single non-negative finite number")
+    covariances <- .random_effects_covariance(
+      group_means, model, design$constants,
+      if (is.null(guard_dadm)) NULL else attr(guard_dadm, "designs"),
+      variance_proportion
+    )
+  } else {
+    covariances <- as.matrix(covariances)
+    if (!all(dim(covariances) == length(group_means)))
+      stop("covariances must be a square matrix with one row/column per parameter")
+    if (!is.null(rownames(covariances)) && all(sampled_names %in% rownames(covariances)) &&
+        !is.null(colnames(covariances)) && all(sampled_names %in% colnames(covariances))) {
+      covariances <- covariances[sampled_names, sampled_names, drop = FALSE]
+    }
+  }
+
+  # Pooled parameters take the group mean for every subject.
+  pooled <- intersect(design$pooled, sampled_names)
+  if (length(pooled)) {
+    pool_idx <- match(pooled, sampled_names)
+    covariances[pool_idx, ] <- 0
+    covariances[, pool_idx] <- 0
+  }
+
+  # Draws must pass the likelihood's own (strict) bound check, or the subject
+  # would start with every trial at the likelihood floor.
+  bound_checker <- NULL
+  if (!is.null(model$bound) && !is.null(guard_dadm)) {
     guard_dadm_by_subj <- lapply(subnames, function(s) {
       row_idx <- which(guard_dadm$subjects == s)
       dadm_s <- .oo_subset_dadm(guard_dadm, row_idx)
@@ -1269,10 +1263,7 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
         p_mat <- draws[i, , drop = FALSE]
         mapped <- get_pars_oo(p_mat, dadm_s, guard_design$model)
         mapped <- model$Ttransform(mapped, dadm_s)
-        # Use the same inclusive bound convention as make_data() itself.
-        mapped <- fix_bound(mapped, model$bound, dadm_s$lR, fix = FALSE)
-        ok <- attr(mapped, "ok")
-        if (is.null(ok)) TRUE else all(ok)
+        all(do_bound(mapped, model$bound, dadm_s$lR))
       }, logical(1))
     }
   }
@@ -1304,4 +1295,53 @@ make_random_effects <- function(design, group_means, n_subj = NULL,
          max_tries, " attempts")
   }
   return(random_effects)
+}
+
+# Default subject-level covariance of the sampled coefficients.  The target is
+# a spread per design cell, on the sampled scale: log1p(cv^2) for exp-
+# transformed parameters (a log-normal with coefficient of variation cv),
+# cv^2 for probit parameters, and (cv * max(|cell mean|, 1))^2 for identity
+# parameters.  For a parameter type with cell design X (sampled columns) and
+# target cell variances D, the coefficients get (X' D^-1 X)^-1: exactly D when
+# there is one coefficient per cell, so a contrast does not add its own spread
+# on top of the intercept's; with more cells than coefficients it is scaled
+# to match D on average.  Coefficients outside any cell design (or of a type
+# whose design is rank deficient) keep their own spread.
+.random_effects_covariance <- function(group_means, model, constants, designs, cv) {
+  sampled <- names(group_means)
+  tf <- model$transform$func
+  type_tf <- function(type) {
+    out <- if (is.null(tf)) NA_character_ else unname(tf[type])
+    if (is.na(out)) "identity" else out
+  }
+  cell_var <- function(tr, m) {
+    if (tr == "exp") rep(log1p(cv^2), length(m))
+    else if (tr == "pnorm") rep(cv^2, length(m))
+    else (cv * pmax(abs(m), 1))^2
+  }
+  base <- get_p_types(sampled)
+  out <- diag(vapply(seq_along(sampled), function(i)
+    cell_var(type_tf(base[[i]]), group_means[[i]]), numeric(1)),
+    nrow = length(sampled))
+  dimnames(out) <- list(sampled, sampled)
+  if (cv == 0 || is.null(designs)) return(out)
+  for (type in names(designs)) {
+    X <- designs[[type]]
+    cols <- intersect(colnames(X), sampled)
+    if (!length(cols)) next
+    const_cols <- intersect(colnames(X), names(constants))
+    offset <- if (length(const_cols))
+      drop(X[, const_cols, drop = FALSE] %*% constants[const_cols]) else 0
+    keep <- rowSums(X[, cols, drop = FALSE] != 0) > 0
+    Xs <- X[keep, cols, drop = FALSE]
+    d <- cell_var(type_tf(type),
+                  drop(Xs %*% group_means[cols]) + rep_len(offset, nrow(X))[keep])
+    prec <- crossprod(Xs, Xs / d)
+    V <- tryCatch(chol2inv(chol(prec)), error = function(e) NULL)
+    if (is.null(V)) next
+    out[cols, ] <- 0
+    out[, cols] <- 0
+    out[cols, cols] <- V * (nrow(Xs) / length(cols))
+  }
+  out
 }

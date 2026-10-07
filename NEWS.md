@@ -1,6 +1,14 @@
 # EMC2 3.4.0
 ## Development
 
+-   **`make_random_effects()` defaults:** the default spread
+    (`variance_proportion`) now applies to each design cell rather than to
+    each regression coefficient, so a cell reached through a contrast
+    (intercept plus contrast) no longer gets the sum of both spreads. Draws
+    are checked against the likelihood's exclusive bounds; a parameter
+    exactly on a bound was previously accepted and then gave every trial the
+    likelihood floor.
+
 -   **Likelihood of binned response times:** with `rt_resolution` each
     response time now stands for its bin instead of the bin's lower edge.
     Race models average the density over the part of the bin above `t0` with

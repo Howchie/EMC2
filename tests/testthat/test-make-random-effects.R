@@ -104,3 +104,60 @@ test_that("make_random_effects errors when bounded draws cannot be resampled", {
     "Could not draw in-bound random effects"
   )
 })
+
+test_that("the default spread is set per design cell, not per coefficient", {
+  matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+  design_lba <- design(
+    factors = list(subjects = 1:5, S = c("left", "right"), L = c("Low", "Med", "High")),
+    Rlevels = c("left", "right"),
+    matchfun = matchfun,
+    model = BAwL,
+    constants = c(sv = log(1)),
+    formula = list(v ~ lM, B ~ L, t0 ~ 1, A ~ 1),
+    report_p_vector = FALSE
+  )
+  means <- sampled_pars(design_lba)
+  means[] <- c(2, 2.5, log(.7), log(1.2), log(1.5), log(.2), log(.5))
+  cv <- 0.3
+  set.seed(7)
+  eff <- make_random_effects(design_lba, means, n_subj = 4000, variance_proportion = cv)
+
+  # Every B cell (log scale) has the log-normal spread of coefficient of
+  # variation cv, whether it is the intercept or intercept + contrast.
+  B_cells <- cbind(eff[, "B"], eff[, "B"] + eff[, "B_LMed"], eff[, "B"] + eff[, "B_LHigh"])
+  expect_equal(apply(B_cells, 2, var), rep(log1p(cv^2), 3), tolerance = 0.08)
+  expect_lt(cor(eff[, "B"], eff[, "B_LMed"]), -0.5)
+  # Identity cells: sd = cv * |cell mean|.
+  v_cells <- cbind(eff[, "v"], eff[, "v"] + eff[, "v_lMTRUE"])
+  expect_equal(apply(v_cells, 2, sd), cv * c(2, 4.5), tolerance = 0.08)
+  # Types stay independent.
+  expect_lt(abs(cor(eff[, "B"], eff[, "v"])), 0.06)
+})
+
+test_that("make_random_effects applies the likelihood's strict bounds", {
+  matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+  design_lba <- design(
+    factors = list(subjects = 1:2, S = c("left", "right")),
+    Rlevels = c("left", "right"),
+    matchfun = matchfun,
+    model = BAwL,
+    constants = c(sv = log(1)),
+    formula = list(v ~ lM, B ~ 1, t0 ~ 1, A ~ 1, pContaminant ~ 1),
+    report_p_vector = FALSE
+  )
+  means <- sampled_pars(design_lba)
+  # pContaminant exactly on its upper bound (0.999): accepted by an inclusive
+  # check, but the likelihood rejects it.
+  means[] <- c(2, 2.5, log(.7), log(.2), log(.5), qnorm(0.999))
+  expect_identical(pnorm(qnorm(0.999)), 0.999)
+  zero_covariance <- matrix(0, nrow = length(means), ncol = length(means))
+  expect_error(
+    make_random_effects(design_lba, means, n_subj = 2,
+                        covariances = zero_covariance, max_tries = 2),
+    "Could not draw in-bound random effects"
+  )
+  means["pContaminant"] <- qnorm(0.05)
+  expect_equal(dim(make_random_effects(design_lba, means, n_subj = 2,
+                                       covariances = zero_covariance, max_tries = 2)),
+               c(2, length(means)))
+})

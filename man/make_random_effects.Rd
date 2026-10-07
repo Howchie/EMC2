@@ -21,17 +21,23 @@ make_random_effects(
 \item{n_subj}{An integer. The number of subjects to generate parameters for. If \code{NULL} will be inferred from design}
 
 \item{variance_proportion}{A non-negative double. Optional. If \code{covariances}
-are not specified, this controls the default relative spread of the
-subject-level effects. Identity-transformed parameters use a standard
-deviation of \code{variance_proportion * max(abs(mean), 1)}; exponential
-parameters use a log-normal spread with this coefficient of variation;
-probit parameters use this value as the latent-scale standard deviation.
-The covariances are 0.}
+are not specified, this sets the default relative spread of the
+subject-level parameters in each design cell (each combination of factor
+levels). Exponential parameters get a log-normal spread with this
+coefficient of variation; probit parameters use this value as the
+latent-scale standard deviation; identity-transformed parameters use a
+standard deviation of \code{variance_proportion * max(abs(cell mean), 1)}.
+The coefficient covariance is chosen so that every cell gets this spread
+(exactly when the design has one coefficient per cell, on average
+otherwise); with treatment contrasts the contrast coefficients are
+therefore negatively correlated with the intercept. Parameters of
+different types are independent.}
 
 \item{covariances}{A covariance matrix. Optional. Specify the intended covariance matrix.}
 
 \item{max_tries}{An integer. Maximum number of redraw rounds used to replace
-subject-level parameter draws that fall outside the model bounds.}
+subject-level parameter draws that fall outside the model bounds (bounds
+are exclusive, as in the likelihood).}
 }
 \value{
 A matrix of subject-level parameters.
