@@ -53,14 +53,14 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 }
 
 .EMC_PRODUCTION_OPTION_DEFAULTS <- list(
-  emc2.group_move = "ensemble", emc2.independent_chains = TRUE,
+  emc2.group_move = "shear", emc2.independent_chains = TRUE,
   emc2.ensemble = TRUE, emc2.ensemble_pool = 32L, emc2.ensemble_rounds = 10L,
   emc2.ensemble_cadence = 1L, emc2.ensemble_latent_weight = "conditional",
   emc2.laplace_conditional = TRUE,
   emc2.sample_rebuilds = "doubling",
   emc2.pooled_candidates = 8L, emc2.iwish_rcond_tol = 1e-12,
-  emc2.subject_hmc = FALSE, emc2.subject_hmc_h = 1e-4, emc2.subject_hmc_pilots = 20L,
-  emc2.subject_hmc_min_evidence = 10L)
+  emc2.subject_hmc = TRUE, emc2.subject_hmc_h = 1e-4, emc2.subject_hmc_pilots = 20L,
+  emc2.subject_hmc_min_evidence = 10L, emc2.collapsed_move = TRUE)
 
 # Production transition options travel with the checkpoint so a resumed run
 # uses the same kernel. Worker allocation and diagnostics remain session-local.

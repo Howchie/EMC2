@@ -138,10 +138,15 @@ test_that("unsupported hierarchies take no HMC and a round without rates draws n
   s <- list(type = "factor", nuisance = rep(FALSE, 2), n_pars = 2, par_names = c("a", "b"),
             data = list(data.frame(x = 1)))
   expect_false(EMC2:::.emc_hmc_support(s)$ok)
-  s$type <- "standard"; s$marginalise <- list(param = "a")
-  expect_false(EMC2:::.emc_hmc_support(s)$ok)
-  s$marginalise <- NULL
+  s$type <- "standard"
   expect_true(EMC2:::.emc_hmc_support(s)$ok)
+  # Marginalised and pooled samplers store complete subject vectors and their
+  # likelihoods, so HMC moves them like any other.
+  s$marginalise <- list(param = "a")
+  expect_true(EMC2:::.emc_hmc_support(s)$ok)
+  s$marginalise <- NULL; s$pooled <- list(value = c(c = 0))
+  expect_true(EMC2:::.emc_hmc_support(s)$ok)
+  s$pooled <- NULL
   local_test_rng(9)
   streams <- list(.Random.seed, .Random.seed)
   before <- get(".Random.seed", envir = globalenv())

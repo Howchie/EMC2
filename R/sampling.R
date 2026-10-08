@@ -39,49 +39,48 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   } else if (!is.null(names(marginalise)) && "n_nodes" %in% names(marginalise)) {
     as.integer(marginalise[["n_nodes"]])
   } else if (length(marginalise) > 1 && is.null(names(marginalise))) {
-    if (suppressWarnings(!is.na(as.integer(marginalise[2])))) as.integer(marginalise[2]) else 12L
-  } else 12L
+    if (suppressWarnings(!is.na(as.integer(marginalise[2])))) as.integer(marginalise[2]) else 5L
+  } else 5L
 
-  if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
-    stop("marginalise$n_nodes must be an integer >= 2")
+  if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 3L) {
+    stop("marginalise$n_nodes must be an integer >= 3")
   }
   list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
 }
 
 compute_marginal_grid <- function(proposals, data, model, marginalise,
-                                  r_cores = 1, warm = NULL) {
+                                  r_cores = 1) {
   model_spec <- if (is.function(model)) model() else model
   set_stop_method_from_model(model_spec)
   data <- .cache_ll_data_attrs(data)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA
   designs <- .oo_expanded_designs(data, expand = FALSE)
-  if (!is.null(warm) && all(is.finite(warm)) && warm[["sd"]] > 0) {
-    marginalise$warm_mode <- unname(warm[["mode"]])
-    marginalise$warm_sd <- unname(warm[["sd"]])
-  }
-  one <- function(props) {
+  one <- function(props, spec) {
     calc_ll_oo_marginal_nodes(
       props, data, constants = constants, designs = designs,
       type = model_spec$c_name, bounds = model_spec$bound,
       transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
       p_types = names(model_spec$p_types), min_ll = log(1e-10),
-      marginalise = marginalise, trend = model_spec$trend
+      marginalise = spec, trend = model_spec$trend
     )
   }
-  if (r_cores <= 1 || nrow(proposals) <= r_cores) return(one(proposals))
+  if (r_cores <= 1 || nrow(proposals) <= r_cores) return(one(proposals, marginalise))
   idx <- .split_work_indices(nrow(proposals), r_cores)
   parts <- auto_mclapply(1:r_cores, function(i) {
-    one(proposals[idx == i, , drop = FALSE])
+    spec <- marginalise
+    for (f in c("mu", "centre", "probe_sd", "log_offset"))
+      if (length(spec[[f]]) > 1L) spec[[f]] <- spec[[f]][idx == i]
+    one(proposals[idx == i, , drop = FALSE], spec)
   }, mc.cores = r_cores)
   list(nodes = do.call(rbind, lapply(parts, `[[`, "nodes")),
        log_terms = do.call(rbind, lapply(parts, `[[`, "log_terms")),
        ll = unlist(lapply(parts, `[[`, "ll")),
        mode = unlist(lapply(parts, `[[`, "mode")),
        sd = unlist(lapply(parts, `[[`, "sd")),
-       warm_used = mean(unlist(lapply(parts, `[[`, "warm_used"))),
-       pred_used = mean(unlist(lapply(parts, `[[`, "pred_used"))),
-       repaired = sum(unlist(lapply(parts, `[[`, "repaired"))))
+       rounds = unlist(lapply(parts, `[[`, "rounds")),
+       gl_used = sum(unlist(lapply(parts, `[[`, "gl_used"))),
+       screened = sum(unlist(lapply(parts, `[[`, "screened"))))
 }
 
 .split_work_indices <- function(n, n_workers) {
@@ -93,21 +92,28 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
   rep.int(seq_len(n_workers), q + (seq_len(n_workers) <= rem))
 }
 
-marginal_warm_state <- function(grid, idx) {
-  if (is.null(grid$mode) || is.null(grid$sd)) return(NULL)
-  m <- grid$mode[idx]; s <- grid$sd[idx]
-  if (!is.finite(m) || !is.finite(s) || s <= 0) return(NULL)
-  c(mode = m, sd = s)
-}
-
-marginal_warm_backoff <- function(state, attempted, used) {
-  pen <- if (is.null(state$penalty)) 0L else state$penalty
-  wait <- if (is.null(state$backoff)) 0L else state$backoff
-  if (attempted) {
-    if (isTRUE(used)) { pen <- 0L; wait <- 0L }
-    else { pen <- min(16L, max(1L, pen * 2L)); wait <- pen }
-  } else wait <- max(0L, wait - 1L)
-  list(penalty = pen, backoff = wait)
+# Where a batch's peaks sat: a regression of each particle's located peak and
+# log scale on the rest of its vector, which starts the next batch's rules.
+# Coordinates the batch held fixed keep the subject's posterior slope
+# (`predict`, a .marginal_conditional of the chains' moments) when there is
+# one. NULL when the batch cannot identify the regression.
+.marginal_state <- function(grid, proposals, cond, predict = NULL) {
+  ok <- is.finite(grid$mode) & is.finite(grid$sd) & grid$sd > 0
+  X <- proposals[ok, cond$o, drop = FALSE]
+  if (!nrow(X)) return(NULL)
+  x0 <- colMeans(X)
+  D <- sweep(X, 2L, x0)
+  vary <- colSums(D != 0) > 0
+  if (nrow(X) <= sum(vary) + 1L) return(NULL)
+  Z <- cbind(1, D[, vary, drop = FALSE])
+  fm <- stats::lm.wfit(Z, grid$mode[ok], w = 1 / grid$sd[ok]^2)$coefficients
+  fs <- stats::lm.fit(Z, log(grid$sd[ok]))$coefficients
+  if (anyNA(fm) || anyNA(fs)) return(NULL)
+  beta <- if (!is.null(predict)) predict$b else numeric(length(cond$o))
+  lbeta <- numeric(length(cond$o))
+  beta[vary] <- fm[-1L]
+  lbeta[vary] <- fs[-1L]
+  list(x0 = x0, m0 = fm[[1L]], beta = beta, l0 = fs[[1L]], lbeta = lbeta)
 }
 
 marginal_ll_from_grid <- function(log_terms) {
@@ -127,15 +133,81 @@ marginal_ll_from_grid <- function(log_terms) {
   res
 }
 
-draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
-  nodes <- as.numeric(nodes)
-  if (length(nodes) == 0L || all(!is.finite(log_terms_row))) {
-    return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
+# The marginalised parameter's prior given the rest of a subject's vector:
+# under the group normal, x_k | x_o ~ N(a + x_o b, sd^2).
+.marginal_conditional <- function(group_mu, group_var, marginal_idx) {
+  k <- which(marginal_idx)
+  o <- which(!marginal_idx)
+  group_mu <- as.numeric(group_mu)
+  b <- numeric(length(o))
+  v <- group_var[k, k]
+  s_ok <- group_var[o, k]
+  if (length(o) && any(s_ok != 0)) {
+    b <- solve(group_var[o, o, drop = FALSE], s_ok)
+    v <- v - sum(s_ok * b)
   }
-  w <- exp(log_terms_row - max(log_terms_row[is.finite(log_terms_row)]))
-  w[!is.finite(w)] <- 0
-  if (!any(w > 0)) return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
-  nodes[[sample.int(length(nodes), size = 1L, prob = w)]]
+  if (!is.finite(v) || v <= 0)
+    stop(errorCondition(
+      "group covariance is not positive definite; marginalised prior undefined",
+      class = c("emc_group_prior_failure", "emc_failure"),
+      emc_class = "numerical", emc_source = "particle"))
+  list(k = k, o = o, a = group_mu[k] - sum(b * group_mu[o]), b = b, sd = sqrt(v))
+}
+
+.marginal_cond_mean <- function(cond, x) {
+  as.numeric(cond$a + x[, cond$o, drop = FALSE] %*% cond$b)
+}
+
+# The quadrature spec for a batch of particles: each particle's own
+# conditional prior mean and the common conditional SD. Each rule starts at
+# the particle's predicted peak: from the subject's last batch (`state`, a
+# .marginal_state) when there is one, else from its posterior moments
+# (`predict`, a .marginal_conditional of the chains' mean and covariance).
+.marginal_batch_spec <- function(marginalise, cond, proposals, state = NULL,
+                                 predict = NULL) {
+  marginalise$mu <- .marginal_cond_mean(cond, proposals)
+  marginalise$sigma <- cond$sd
+  if (!is.null(state)) {
+    D <- sweep(proposals[, cond$o, drop = FALSE], 2L, state$x0)
+    marginalise$centre <- as.numeric(state$m0 + D %*% state$beta)
+    marginalise$probe_sd <- as.numeric(exp(state$l0 + D %*% state$lbeta))
+  } else if (!is.null(predict)) {
+    marginalise$centre <- .marginal_cond_mean(predict, proposals)
+    marginalise$probe_sd <- predict$sd
+  }
+  marginalise
+}
+
+# Completes subject vector x with a draw of the marginalised parameter from
+# its conditional posterior given the rest of x. A node drawn from the
+# quadrature's discrete posterior starts one independence Metropolis step
+# towards the continuous conditional, proposing from the grid's Laplace fit.
+# Returns the completed vector and its log-likelihood.
+.marginal_draw <- function(x, cond, nodes, log_terms, mode, sd, data, model) {
+  k <- cond$k
+  m <- .marginal_cond_mean(cond, matrix(x, nrow = 1L))
+  fin <- is.finite(log_terms)
+  cur <- if (length(nodes) && any(fin)) {
+    w <- exp(log_terms - max(log_terms[fin]))
+    w[!fin] <- 0
+    nodes[[sample.int(length(nodes), size = 1L, prob = w)]]
+  } else stats::rnorm(1L, m, cond$sd)
+  laplace <- length(mode) == 1L && length(sd) == 1L &&
+    is.finite(mode) && is.finite(sd) && sd > 0
+  rows <- matrix(x, nrow = if (laplace) 2L else 1L, ncol = length(x),
+                 byrow = TRUE, dimnames = list(NULL, names(x)))
+  rows[1L, k] <- cur
+  if (laplace) rows[2L, k] <- stats::rnorm(1L, mode, sd)
+  ll <- as.numeric(calc_ll_manager(rows, dadm = data, model))
+  j <- 1L
+  if (laplace) {
+    lt <- ll + stats::dnorm(rows[, k], m, cond$sd, log = TRUE) -
+      stats::dnorm(rows[, k], mode, sd, log = TRUE)
+    log_a <- lt[2L] - lt[1L]
+    if (is.finite(log_a) && log(stats::runif(1L)) < log_a) j <- 2L
+  }
+  x[k] <- rows[j, k]
+  list(x = x, ll = ll[j])
 }
 
 pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
@@ -446,17 +518,23 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
   data_s <- pmwgs$data[[which(pmwgs$subjects == s)]]
   marginalise <- pmwgs$marginalise
   if (!is.null(marginalise)) {
-    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise,
+    cond <- .marginal_conditional(group_pars$mu, group_pars$var,
+                                  .marginal_par_idx(colnames(proposals), marginalise))
+    # Selection is by likelihood alone, so particles far below the best can
+    # keep their first rule.
+    spec <- .marginal_batch_spec(marginalise, cond, proposals)
+    spec$log_offset <- numeric(n_particles)
+    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, spec,
                                   r_cores = r_cores)
     lw <- marginal_ll_from_grid(grid)
     weight <- exp(lw - max(lw))
     idx <- sample(x = n_particles, size = 1, prob = weight)
     proposal <- proposals[idx,]
     names(proposal) <- colnames(proposals)
-    p_idx <- match(marginalise$param, names(proposal))
-    proposal[p_idx] <- draw_marginal_node(grid$nodes[idx, ],
-                                          as.numeric(grid$log_terms[idx, ]), marginalise)
-    return(list(proposal = proposal, ll = lw[idx]))
+    out <- .marginal_draw(proposal, cond, as.numeric(grid$nodes[idx, ]),
+                          as.numeric(grid$log_terms[idx, ]), grid$mode[idx],
+                          grid$sd[idx], data_s, pmwgs$model)
+    return(list(proposal = out$x, ll = out$ll))
   }
   # Pooled coefficients are drawn per particle from their prior here; init()
   # pools the selected draws into one start value.
@@ -579,6 +657,9 @@ run_stage <- function(pmwgs,
   }
   if (is.null(tune)) tune <- list()
   pmwgs <- .emc_pooled_sync(pmwgs)
+  # Each block refreshes the pooled move's curvature once (R/pooled.R).
+  if (!is.null(pmwgs$pooled))
+    pmwgs$pooled$block <- (if (is.null(pmwgs$pooled$block)) 0L else pmwgs$pooled$block) + 1L
   components <- attr(pmwgs$data, "components")
   shared_ll_idx <- attr(pmwgs$data, "shared_ll_idx")
   if (is.null(components)) components <- rep.int(1L, n_pars)
@@ -786,11 +867,8 @@ run_stage <- function(pmwgs,
       proc.time()[["elapsed"]] - gibbs_started
     } else NA_real_
     cache_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    group_var_it <- tryCatch(
-      .apply_marginal_group_var(get_group_level(pars_comb, 1L, pmwgs$type)$var,
-                                marginal_idx_blk, pmwgs$marginalise),
-      error = function(e) NULL
-    )
+    group_var_it <- tryCatch(get_group_level(pars_comb, 1L, pmwgs$type)$var,
+                             error = function(e) NULL)
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
                                           marginal_idx_blk,
                                           include_full = length(unique(tune$components)) > 1L)
@@ -889,7 +967,7 @@ run_stage <- function(pmwgs,
       out$rng_seed <- get(".Random.seed", envir = globalenv())
       if (!is.null(ens_pools))
         out$extra_ll <- .emc_ensemble_ll_candidate(ens_pools$rows[[s]], data[[s]],
-                                                   pmwgs$model, pmwgs$marginalise)
+                                                   pmwgs$model)
       out
     }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
     if (!is.null(ens_pools)) {
@@ -1391,14 +1469,6 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
   par_names %in% marginalise$param
 }
 
-.apply_marginal_group_var <- function(group_var, marginal_idx, marginalise) {
-  if (!any(marginal_idx)) return(group_var)
-  group_var[marginal_idx, ] <- 0
-  group_var[, marginal_idx] <- 0
-  group_var[marginal_idx, marginal_idx] <- marginalise$sigma^2
-  group_var
-}
-
 .component_idx_list <- function(components, marginal_idx) {
   unq <- unique(components)
   out <- vector("list", max(unq))
@@ -1487,8 +1557,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   group_mu <- group_pars$mu
   group_var <- group_pars$var
   subj_mu <- if (direct_state) current_alpha else parameters$alpha[,s]
-  marg_nodes <- NULL
-  marg_terms_row <- NULL
+  marg_row <- NULL
+  marg_cond <- NULL
+  marg_pred <- NULL
   marginal_idx <- rep(FALSE, length(subj_mu))
   if (!is.null(marginalise)) {
     if (is.null(names(subj_mu))) {
@@ -1496,8 +1567,16 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       names(subj_mu) <- alpha_names[seq_along(subj_mu)]
     }
     marginal_idx <- .marginal_par_idx(names(subj_mu), marginalise)
-    group_mu[marginal_idx] <- marginalise$mu
-    group_var <- .apply_marginal_group_var(group_var, marginal_idx, marginalise)
+    # The particles see the other parameters' marginal group prior and the
+    # likelihood with the marginalised parameter integrated against its
+    # conditional group prior; it is redrawn from its conditional posterior
+    # once the rest of the vector is final.
+    marg_cond <- .marginal_conditional(group_mu, group_var, marginal_idx)
+    # The subject's posterior regression of the marginalised parameter on the
+    # others predicts where each particle's integrand peaks.
+    marg_pred <- if (!is.null(chains_mu) && !is.null(chains_var))
+      tryCatch(.marginal_conditional(chains_mu, chains_var, marginal_idx),
+               error = function(e) NULL)
   }
   # Likelihood at the final state, per shared-likelihood component: blocks
   # that share one likelihood each end with its value at the state so far.
@@ -1585,9 +1664,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # state and each step size would set the other's acceptance.
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     mix_i <- pm_settings[[i]]$mix
-    # The marginalise path carries grid state for the chosen particle, so it
-    # keeps the single combined step (still invariant, just less efficient).
-    split_steps <- p_idx > 0 && is.null(marginalise) && any(state_centred)
+    split_steps <- p_idx > 0 && any(state_centred)
     steps <- if (split_steps) {
       c(if (any(!state_centred)) list(which(!state_centred)),
         as.list(which(state_centred)))
@@ -1605,6 +1682,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     jump_rooti <- if (p_idx > 0) {
       if (!is.null(bases[["chains"]])) bases[["chains"]]$rooti else bases[[sig_tags[1L]]]$rooti
     } else NULL
+    marg_seen <- list()
     for (ks in steps) {
       if (sum(particle_numbers[ks]) == 0) next
       mus_i <- lapply(Mus, function(m) m[idx])
@@ -1636,20 +1714,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         colnames(proposals) <- names(subj_mu)
       }
 
-      if (!is.null(marginalise)) {
-        warm_state <- pm_settings[[i]]$marg_warm
-        warm_arg <- if (!is.null(warm_state) && warm_state$backoff <= 0L) {
-          c(mode = warm_state$mode, sd = warm_state$sd)
-        } else NULL
-        pred_state <- pm_settings[[i]]$marg_pred
-        use_pred <- is.null(pred_state) || pred_state$backoff <= 0L
-        marg_spec <- marginalise
-        if (!use_pred) marg_spec$predict_mode <- FALSE
-        marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
-                                           data, model, marg_spec,
-                                           r_cores = r_cores, warm = warm_arg)
-        lw <- marginal_ll_from_grid(marg_grid)
-      } else {
+      if (is.null(marginalise)) {
         comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
         lw <- tryCatch(
           calc_ll_pooled(proposals[,is_shared], dadm = data, model,
@@ -1660,7 +1725,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
           lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
                                          data, model, comp_arg)
       }
-      lw_total <- lw + ref_ll - lw[1]
       lp <- if (p_idx > 0) {
         fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
                            rooti = rootis[[1]], log_const = log_consts[[1]])
@@ -1717,6 +1781,20 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
           x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
           rooti = rootis[[k]], log_const = log_consts[[k]])
       }
+      if (!is.null(marginalise)) {
+        # The rest of each particle's log weight lets the quadrature leave
+        # particles that cannot be selected on their first rule.
+        marg_spec <- .marginal_batch_spec(marginalise, marg_cond, proposals,
+                                          pm_settings[[i]]$marg_state, marg_pred)
+        marg_spec$log_offset <- prior_density + aux_density - lm
+        marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
+                                           data, model, marg_spec,
+                                           r_cores = r_cores)
+        lw <- marginal_ll_from_grid(marg_grid)
+        marg_seen[[length(marg_seen) + 1L]] <- list(
+          mode = marg_grid$mode, sd = marg_grid$sd, x = proposals)
+      }
+      lw_total <- lw + ref_ll - lw[1]
       l <- lw_total + prior_density + aux_density - lm
       weights <- exp(l - max(l))
       idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
@@ -1766,15 +1844,15 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # Gibbs over blocks: later blocks condition on this block's new values.
     subj_mu[idx] <- ref
     if (!is.null(marginalise)) {
-      marg_nodes <- as.numeric(marg_grid$nodes[idx_ll, ])
-      marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
-      warm_next <- marginal_warm_state(marg_grid, idx_ll)
-      warm_next_state <- marginal_warm_backoff(
-        warm_state, attempted = !is.null(warm_arg),
-        used = isTRUE(marg_grid$warm_used >= 0.5))
-      pred_next_state <- marginal_warm_backoff(
-        pred_state, attempted = use_pred && !isTRUE(marg_grid$warm_used == 1),
-        used = isTRUE(marg_grid$pred_used == 1))
+      # The last step selected the state, so its grid holds the chosen row;
+      # the next rules are placed by the peaks of every step's particles.
+      marg_row <- list(nodes = as.numeric(marg_grid$nodes[idx_ll, ]),
+                       log_terms = as.numeric(marg_grid$log_terms[idx_ll, ]),
+                       mode = marg_grid$mode[idx_ll], sd = marg_grid$sd[idx_ll])
+      marg_next <- .marginal_state(
+        list(mode = unlist(lapply(marg_seen, `[[`, "mode")),
+             sd = unlist(lapply(marg_seen, `[[`, "sd"))),
+        do.call(rbind, lapply(marg_seen, `[[`, "x")), marg_cond, marg_pred)
     }
     # Proposal settings adapt only in the discarded stages. Retained samples
     # come from one fixed transition kernel.
@@ -1783,28 +1861,25 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         pm_settings[[i]], better, particle_numbers, weight_ess, tune, sum(idx),
         layout = ifelse(state_centred, sig_tags, "")[-1L], jump = jump)
     }
-    # The warm start centres the marginalisation grid, so it is part of the
-    # likelihood approximation: frozen in the sample stage like the other
-    # proposal settings, so the approximate target does not follow the chain.
-    if (!is.null(marginalise) && stage != "sample") {
-      pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
-        c(as.list(warm_next), warm_next_state)
-      }
-      pm_settings[[i]]$marg_pred <- pred_next_state
+    # The state places the quadrature rules, so it is part of the likelihood
+    # approximation: frozen in the sample stage like the other proposal
+    # settings, so the approximate target does not follow the chain.
+    if (!is.null(marginalise) && stage != "sample" && !is.null(marg_next)) {
+      pm_settings[[i]]$marg_state <- marg_next
     }
   }
   names(proposal_out) <- names(subj_mu)
-  if (!is.null(marginalise)) {
-    p_idx <- match(marginalise$param, names(proposal_out))
-    if (!is.na(p_idx)) {
-      proposal_out[p_idx] <- if (!is.null(marg_terms_row)) {
-        draw_marginal_node(marg_nodes, marg_terms_row, marginalise)
-      } else {
-        stats::rnorm(1L, marginalise$mu, marginalise$sigma)
-      }
-    }
+  ll_out <- sum(ll_shared)
+  if (!is.null(marg_cond)) {
+    # The stored log-likelihood is the complete vector's, like every other
+    # stored alpha.
+    out <- .marginal_draw(proposal_out, marg_cond, marg_row$nodes,
+                          marg_row$log_terms, marg_row$mode, marg_row$sd,
+                          data, model)
+    proposal_out <- out$x
+    ll_out <- out$ll
   }
-  return(list(proposal = proposal_out, ll = sum(ll_shared), pm_settings = pm_settings))
+  return(list(proposal = proposal_out, ll = ll_out, pm_settings = pm_settings))
 }
 
 
@@ -2128,6 +2203,13 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   use_pool <- .emc_ll_route_use_pool()
   dynamic <- use_pool && .emc_ll_route_use_dynamic()
   started <- proc.time()[["elapsed"]]
+  if (use_pool && is.data.frame(dadm)) {
+    # Pool workers hold the data of their template: send the current pooled
+    # values as columns.
+    pc <- .emc_pooled_columns(proposals, dadm, varying)
+    proposals <- pc$proposals
+    varying <- pc$varying
+  }
   out <- if (use_pool) {
     .emc_wpool_ll(proposals, s, component, dynamic, varying)
   } else NULL

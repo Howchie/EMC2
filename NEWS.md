@@ -43,8 +43,14 @@
     instead of a regression fitted to earlier draws, which lagged behind the
     chain. `options(emc2.laplace_conditional = FALSE)` restores the regression.
 
--   **Shear group update (opt-in):** with `options(emc2.group_move = "shear")`
-    the ensemble group update is followed by joint moves of the group level and every subject, in which
+-   **Default sampler:** every hierarchical fit now runs one architecture:
+    the ensemble group update, shear rounds, subject Hamiltonian Monte Carlo
+    and the collapsed group move, with one shared allocation that sets each
+    move's rate (including each subject's particle-step rate) from its
+    measured mixing per unit of the chain's wall time. Hierarchies a move
+    does not support keep the others.
+
+-   **Shear group update:** the ensemble group update is followed by joint moves of the group level and every subject, in which
     each subject keeps its standardised position in its own conditional
     posterior (a well-informed subject barely moves). The
     ensemble draws the group given the subjects; the shear moves them
@@ -60,9 +66,7 @@
     hierarchy the Huang-Wand auxiliary `a_half` is integrated out of each
     step and redrawn after it, so a weakly informed group sd is no longer
     held in place by it. Standard (no group designs) and diagonal-gamma
-    hierarchies; others keep the ensemble update. The ensemble update alone
-    stays the default: the shear costs more per iteration and its mixing
-    gain is not consistent across problems.
+    hierarchies; others keep the ensemble update.
 
 -   **Bug fix:** with `options(emc2.independent_chains = TRUE)`, the efficient
     proposal built at the end of burn failed on the one-chain window.
@@ -125,9 +129,12 @@
     and the group mean together, at about 5-10% extra time per iteration.
     Not available with `type = "single"`, joint models, custom likelihoods,
     `group_design`, nuisance samplers or `marginalise`; bridge sampling and
-    Bayes factors are not yet supported. On a simulated 20-subject LBA with a
-    truly shared `t0`, pooling it recovered `t0` but took about twice as long
-    to converge as leaving `t0` hierarchical.
+    Bayes factors are not yet supported. The move's slope and step come from
+    the summed curvature of the subject likelihoods (alpha-alpha block
+    included), refreshed once per warm-up block, and the collapsed group move
+    conditions its subject approximations on the current pooled value. On a
+    simulated 40-subject RDM with a truly shared `t0`, the pooled fit reached
+    the stopping rule as fast as the hierarchical fit.
 -   **New default (ensemble group update):** every hierarchical fit now
     updates the group level with an ensemble MCMC step (Neal 2011;
     Shestopaloff & Neal 2013). Each sweep draws a pool of candidate states per
@@ -136,8 +143,8 @@
     state from its pool. No likelihood is evaluated after the pool is built.
     The update is exact for the standard, diagonal-gamma, factor,
     infinite-factor and SEM hierarchies (checked against conjugate and Stan
-    references) and is skipped for fits with nuisance or marginalised
-    parameters and for single-subject fits. On simulated RDM fits it gave
+    references) and is skipped for fits with nuisance parameters and for
+    single-subject fits. On simulated RDM fits it gave
     5-28x the effective samples per second on the worst group quantity and
     about 10x on subject parameters, at 1.25-1.65x the time per production
     iteration; warm-up is shorter, so total fit time rose 5-46%. On the real

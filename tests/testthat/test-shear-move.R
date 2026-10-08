@@ -513,15 +513,17 @@ test_that("subject likelihood workers preserve results across model families", {
   }
 })
 
-# Every shear coordinate one round, and every subject with HMC an HMC rate
-# and a particle rate of one half, whatever the measurements say.
+# Every shear coordinate one round, the collapsed move one round, and every
+# subject with HMC an HMC rate and a particle rate of one half, whatever the
+# measurements say.
 force_allocation <- function(env = parent.frame()) {
-  local_mocked_bindings(.emc_alloc_solve = function(units, C_rest, ...) {
+  local_mocked_bindings(.emc_alloc_solve = function(units, C_rest, ..., joint = NULL) {
     hmc <- vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
                   logical(1))
     x <- vapply(units, function(u) if (identical(u$kind, "shear")) 1 else 0, numeric(1))
     x[hmc] <- 0.5
-    list(x = x, q = ifelse(hmc, 0.5, 1), rho = NA_real_, tau = NA_real_, cost = C_rest,
+    list(x = x, q = ifelse(hmc, 0.5, 1), joint = if (!is.null(joint)) 1,
+         rho = NA_real_, tau = NA_real_, cost = C_rest,
          objective = NA_real_, objective0 = NA_real_, tau0 = NA_real_)
   }, .package = "EMC2", .env = env)
 }

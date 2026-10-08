@@ -547,8 +547,9 @@
 
 .emc_burn_mode_start <- function(emc, n_cores, verbose = FALSE) {
   if (!isTRUE(getOption("emc2.burn_mode_start", TRUE))) return(emc)
-  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise) ||
-      !is.null(emc[[1L]]$pooled)) return(emc)
+  if (any(emc[[1L]]$nuisance)) return(emc)
+  # Subject modes are conditional on each chain's current pooled values.
+  for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
   cores <- min(nrow(jobs), n_cores)
@@ -756,8 +757,8 @@
 # state is not moved. create_chain_proposals() consumes these once.
 .emc_laplace_refresh <- function(emc, n_cores, verbose = FALSE) {
   if (!isTRUE(getOption("emc2.laplace_refresh", TRUE))) return(emc)
-  if (any(emc[[1L]]$nuisance) || !is.null(emc[[1L]]$marginalise) ||
-      !is.null(emc[[1L]]$pooled)) return(emc)
+  if (any(emc[[1L]]$nuisance)) return(emc)
+  for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
   emc <- .emc_prepare_chain_rng(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))

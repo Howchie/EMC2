@@ -73,11 +73,22 @@ test_that("component index and marginalise helpers agree with the sampler", {
   # t0 is held out of component 2's proposal block
   expect_equal(idx_list[[2]], c(FALSE, FALSE, TRUE, TRUE, FALSE))
 
-  V <- diag(5)
-  Vm <- EMC2:::.apply_marginal_group_var(V, c(FALSE, FALSE, FALSE, FALSE, TRUE), marg)
-  expect_equal(Vm[5, 5], 0.25)
-  expect_equal(Vm[5, 1:4], rep(0, 4))
-  expect_equal(Vm[1:4, 1:4], diag(4))
+  # The marginalised coordinate's prior given the others is the group
+  # normal's conditional.
+  set.seed(4)
+  V <- crossprod(matrix(rnorm(25), 5)) + diag(5)
+  mu <- rnorm(5)
+  m_idx <- c(FALSE, FALSE, FALSE, FALSE, TRUE)
+  cond <- EMC2:::.marginal_conditional(mu, V, m_idx)
+  x <- matrix(rnorm(15), 3, 5)
+  beta <- solve(V[1:4, 1:4], V[1:4, 5])
+  expect_equal(EMC2:::.marginal_cond_mean(cond, x),
+               as.numeric(mu[5] + sweep(x[, 1:4], 2, mu[1:4]) %*% beta))
+  expect_equal(cond$sd^2, V[5, 5] - sum(V[1:4, 5] * beta))
+  # Independent coordinates leave the group prior as it is.
+  cond0 <- EMC2:::.marginal_conditional(mu, diag(c(1, 1, 1, 1, 0.25)), m_idx)
+  expect_equal(EMC2:::.marginal_cond_mean(cond0, x), rep(mu[5], 3))
+  expect_equal(cond0$sd, 0.5)
 })
 
 test_that("cached subject factorisations match direct factorisation", {

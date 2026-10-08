@@ -267,25 +267,12 @@ gibbs_step_standard <- function(sampler, alpha) {
   p <- nrow(alpha)           # number of subject-level parameters
   n <- ncol(alpha)           # number of subjects
 
-  marginal_idx <- sampler$marginalised_idx
-  if (is.null(marginal_idx)) marginal_idx <- rep(FALSE, p)
-  if (length(marginal_idx) != p && !is.null(sampler$nuisance)) {
-    marginal_idx <- marginal_idx[!sampler$nuisance]
-  }
-  if (length(marginal_idx) != p) marginal_idx <- rep(FALSE, p)
-  marginal_spec <- sampler$marginalise
-  marginal_idx <- as.logical(marginal_idx)
-
   # Some backwards compatibility
   if(is.null(is_blocked) || length(is_blocked) == 0){
     is_blocked <- rep(T, p)
   }
   if(is.null(par_group)){
     par_group <- rep(1, p)
-  }
-  if (any(marginal_idx) && !is.null(marginal_spec)) {
-    # Never let a marginalized coordinate define or enlarge an IW block.
-    is_blocked[marginal_idx] <- FALSE
   }
 
   has_group_designs <- !is.null(sampler$gd) || (!is.null(group_designs) && length(group_designs) > 0)
@@ -297,16 +284,6 @@ gibbs_step_standard <- function(sampler, alpha) {
     }
   } else {
     group_designs <- NULL
-  }
-
-  # Stage 1 marginalization uses a fixed prior eta for the integrated
-  # coordinate. Remove its precision cross-terms from the group update and
-  # replace its residual by zero so the reconstructed draws cannot alter the
-  # covariance of the ordinary parameters.
-  if (any(marginal_idx) && !is.null(marginal_spec)) {
-    tvinv[marginal_idx, ] <- 0
-    tvinv[, marginal_idx] <- 0
-    tvinv[cbind(which(marginal_idx), which(marginal_idx))] <- 1 / marginal_spec$sigma^2
   }
 
   # Calculate total parameters (including regressors)
@@ -361,9 +338,6 @@ gibbs_step_standard <- function(sampler, alpha) {
   for (i in seq_len(n)) {
     resid[, i] <- alpha[, i] - subj_mu[, i]
   }
-  if (any(marginal_idx) && !is.null(marginal_spec)) {
-    resid[marginal_idx, ] <- 0
-  }
 
   ##--------------------------------------------------
   ## 3) Partial-block update of tvar_new and tvinv_new
@@ -417,34 +391,6 @@ gibbs_step_standard <- function(sampler, alpha) {
     tvinv_new[cbind(unblocked_idx, unblocked_idx)] <- tvinv_diag
   }
 
-  if (any(marginal_idx) && !is.null(marginal_spec)) {
-    # Locate the stacked group-design coefficients for each marginalized
-    # subject parameter. An intercept-only t0 design has one coefficient; if a
-    # caller supplied a richer group design, keep eta in the intercept and
-    # hold the additional coefficients at zero.
-    if (has_group_designs) {
-      col_off <- cumsum(c(0L, vapply(group_designs, ncol, integer(1L))))
-    } else {
-      col_off <- 0:p
-    }
-    for (k in which(marginal_idx)) {
-      cols <- (col_off[k] + 1L):col_off[k + 1L]
-      tmu_new[cols] <- c(marginal_spec$mu, rep(0, length(cols) - 1L))
-      tvar_new[k, ] <- 0
-      tvar_new[, k] <- 0
-      tvar_new[k, k] <- marginal_spec$sigma^2
-      
-      tvinv_new[k, ] <- 0
-      tvinv_new[, k] <- 0
-      tvinv_new[k, k] <- 1 / marginal_spec$sigma^2
-    }
-    if (has_group_designs) {
-      subj_mu <- calculate_subject_means(group_designs, tmu_new)
-    } else {
-      subj_mu <- matrix(tmu_new, nrow = p, ncol = n)
-    }
-    subj_mu[marginal_idx, ] <- marginal_spec$mu
-  }
   ##--------------------------------------------------
   ## 4) Update a_half
   ##--------------------------------------------------
@@ -462,9 +408,6 @@ gibbs_step_standard <- function(sampler, alpha) {
   shape_vec <- (prior$v + block_dim) / 2
   rate_vec  <- prior$v * diag(tvinv_new) + 1/(prior$A^2)
   a_half_new <- 1 / rgamma(p, shape=shape_vec, rate=rate_vec)
-  if (any(marginal_idx) && !is.null(marginal_spec)) {
-    a_half_new[marginal_idx] <- a_half[marginal_idx]
-  }
 
   ##--------------------------------------------------
   ## 5) Return updated values

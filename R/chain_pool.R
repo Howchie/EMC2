@@ -1149,8 +1149,9 @@
       started <- proc.time()
       failures <- list()
       ll <- lapply(seq_along(msg$subs), function(k) {
-        tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]], ctx$data[[msg$subs[k]]],
-                                         ctx$model, ctx$marginalise),
+        tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]],
+                                         .emc_pooled_set_one(ctx$data[[msg$subs[k]]], msg$pooled),
+                                         ctx$model),
           error = function(e) {
             failures[[length(failures) + 1L]] <<- e
             rep(-Inf, nrow(msg$rows[[k]]))
@@ -1196,8 +1197,12 @@
   if (sum(lengths(part)) != n || !setequal(unlist(part), seq_len(n)) ||
       (isTRUE(pool$alive) && length(part) != pool$n))
     stop("Subject likelihood partition must cover each subject exactly once")
+  # Workers hold the data of their template, so the current pooled values
+  # travel with each request.
+  pooled <- if (is.data.frame(ctx$data[[1L]])) attr(ctx$data[[1L]], "pooled_values")
   msgs <- lapply(part, function(subs)
-    list(kind = "subject_ll", subs = subs, rows = rows[subs], notify = FALSE))
+    list(kind = "subject_ll", subs = subs, rows = rows[subs], notify = FALSE,
+         pooled = pooled))
   sent <- logical(length(part))
   if (isTRUE(pool$alive)) {
     for (w in seq_along(part)) {
@@ -1390,7 +1395,7 @@
     # Ensemble pool members for this subject (no RNG use).
     if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
       extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], data_s,
-                                                  ctx$model, ctx$marginalise)
+                                                  ctx$model)
   }
   w_spent <- proc.time() - w_started
   list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,

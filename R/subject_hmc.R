@@ -1,5 +1,4 @@
-# Subject-conditional Hamiltonian Monte Carlo, opt-in with
-# options(emc2.subject_hmc = TRUE).
+# Subject-conditional Hamiltonian Monte Carlo.
 #
 # The last update of an iteration, after the subject, ensemble and shear
 # steps: a subject may take one HMC transition on its conditional posterior
@@ -73,7 +72,7 @@
     v <- suppressWarnings(as.numeric(getOption(name, default)))
     if (length(v) != 1L || !is.finite(v)) default else v
   }
-  list(enabled = isTRUE(getOption("emc2.subject_hmc", FALSE)),
+  list(enabled = isTRUE(getOption("emc2.subject_hmc", TRUE)),
        h = num_opt("emc2.subject_hmc_h", 1e-4),
        pilots = max(0L, as.integer(num_opt("emc2.subject_hmc_pilots", 20))),
        min_evidence = max(1L, as.integer(num_opt("emc2.subject_hmc_min_evidence", 10))),
@@ -84,14 +83,10 @@
 # Hierarchies whose subject conditional is the Gaussian prior times the
 # subject likelihood, with one likelihood per subject.
 .emc_hmc_support <- function(sampler) {
-  why <- if (!sampler$type %in% c("standard", "diagonal-gamma")) {
+  why <- if (!isTRUE(sampler$type %in% c("standard", "diagonal-gamma"))) {
     paste("hierarchy type", sampler$type)
   } else if (any(sampler$nuisance)) {
     "nuisance parameters"
-  } else if (!is.null(sampler$marginalise)) {
-    "marginalised parameters"
-  } else if (!is.null(sampler$pooled)) {
-    "pooled coefficients"
   } else if (!is.null(sampler$gd) ||
              (!is.null(sampler$group_designs) && length(sampler$group_designs))) {
     "group design"
@@ -290,7 +285,8 @@
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
     plan_s <- ctx$hmc[[s]]
     plan_s$eps <- msg$eps[k]
-    tasks[[k]] <- .emc_hmc_run(msg$alpha[, k], msg$ll[k], ctx$data[[s]], ctx$model,
+    data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
+    tasks[[k]] <- .emc_hmc_run(msg$alpha[, k], msg$ll[k], data_s, ctx$model,
                                msg$mu[, k], msg$var, plan_s, ctx$r_cores,
                                ctx$par_names)
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
@@ -325,9 +321,12 @@
     return(list(proposals = proposals, streams = streams, tasks = tasks, pool = wpool,
                 plan = plan))
   gl <- lapply(subs, function(s) get_group_level(pars, s, type))
+  # Workers hold the data of their template, so the current pooled values
+  # travel with each request.
+  pooled <- attr(data[[1L]], "pooled_values")
   msg_for <- function(ss) {
     k <- match(ss, subs)
-    list(kind = "hmc", subs = ss, notify = FALSE,
+    list(kind = "hmc", subs = ss, notify = FALSE, pooled = pooled,
          alpha = proposals[seq_len(p), ss, drop = FALSE], ll = proposals[p + 1L, ss],
          mu = vapply(gl[k], function(g) as.numeric(g$mu), numeric(p)),
          var = as.matrix(gl[[1L]]$var), seeds = streams[ss],

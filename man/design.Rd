@@ -119,10 +119,10 @@ corresponding \code{TC} entries.}
 rather than sampled directly. This is available for group-level samplers and
 for \code{type = "single"} alpha-only samplers. Either a character scalar
 (\code{marginalise = "t0"}), or a list giving the parameter plus quadrature
-controls (\code{marginalise = list(param = "t0", n_nodes = 12)}). \code{n_nodes} is the
-number of Gauss-Legendre quadrature nodes per proposal and defaults to \code{12}
-(the rule is centred on each proposal's own conditional mode, so few nodes
-are needed). The named
+controls (\code{marginalise = list(param = "t0", n_nodes = 5)}). \code{n_nodes} is the
+number of Gauss-Hermite nodes per proposal and defaults to \code{5}
+(the rule is centred on each proposal's own conditional peak at its
+curvature scale, so few nodes are needed; at least 3). The named
 parameter must (i) belong to a race model (not \code{DDM()}), (ii) be a sampled
 model parameter (not a \code{constant}, and not a \code{custom_p_vector} design),
 (iii) use an intercept-only design (\code{~ 1}), and (iv) have a finite lower
@@ -163,24 +163,24 @@ poorly (a highly correlated, ill-conditioned proposal geometry). \code{marginali
 addresses this by integrating the shared parameter out of the per-subject
 likelihood instead of sampling it directly.
 
-When \code{marginalise} is set, that parameter is held out of the MCMC proposal
-vector. Its per-subject likelihood contribution is computed by Gauss-Legendre
-quadrature over the parameter (on its sampled/log scale) using \code{n_nodes}
-nodes, weighted by a fixed Gaussian \code{eta} taken from the parameter's existing
-prior mean and variance (its group-level distribution is pinned to that prior,
-not estimated). For \code{type = "single"}, the same fixed prior is used directly;
-no \code{theta_mu} or \code{theta_var} samples are created. A representative value is
-drawn back (reconstructed) from the quadrature grid and stored in each
-posterior sample, so downstream summaries still report the parameter. The
-integration interval is clipped to the parameter's finite lower bound and to
-just below the subject's fastest response time, which is why a finite lower
-bound and the \code{~ 1} design are required.
+When \code{marginalise} is set, that parameter is held out of the subject-level
+proposals. Each proposal's likelihood is integrated over the parameter (on
+its sampled/log scale) by Gauss-Hermite quadrature with \code{n_nodes} nodes,
+weighted by the parameter's group-level distribution conditional on the
+proposal's other parameters. Once a subject's other parameters are updated,
+the parameter is drawn from its conditional posterior and stored in alpha,
+and the group-level mean, variance and covariances are then sampled from the
+complete subject vectors exactly as for any other parameter. This is a
+partially collapsed Gibbs sampler with the same posterior as the ordinary
+one. For \code{type = "single"} the parameter's prior plays the role of the group
+distribution. The integration interval is clipped to the parameter's bounds
+and, for \code{t0}, to just below the subject's fastest response time.
 
-Marginalising does not alter the likelihood: turning it off yields an
-identical model, only sampled with the parameter left in. It typically
-improves mixing/ESS per iteration at the cost of extra quadrature work per
-likelihood evaluation. Currently exactly one parameter may be marginalised,
-and only for race models.
+Marginalising does not alter the model: turning it off yields the same
+posterior, only sampled with the parameter left in. It typically improves
+mixing/ESS per iteration at the cost of extra quadrature work per likelihood
+evaluation. Currently exactly one parameter may be marginalised, and only
+for race models.
 }
 
 \examples{

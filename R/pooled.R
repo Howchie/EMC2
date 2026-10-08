@@ -13,11 +13,10 @@
 # The move is a fixed shear: a candidate phi' = phi + delta carries every
 # subject and the group mean along the same slope c (alpha_s + c delta,
 # mu + c delta), so every alpha_s - mu, and with it the subject prior, is
-# unchanged. c and the step covariance come from a reduced finite-difference
-# curvature grid: it keeps the alpha diagonal, alpha-pooled cross terms and
-# pooled-parameter block, while omitting off-diagonal alpha curvature. They
-# are refreshed outside the sample stage and frozen in it. The map has unit
-# Jacobian, so the target
+# unchanged. c and the step covariance come from a finite-difference
+# curvature grid at the current state. They are refreshed once per block
+# outside the sample stage, when the other proposals are rebuilt, and frozen
+# in it. The map has unit Jacobian, so the target
 # along it is prior(phi) prior(mu) prod_s L_s(alpha_s, phi). phi is drawn by
 # conditional importance sampling with an auxiliary centre: z ~ N(phi, S),
 # K candidates ~ N(z, S), select one of {phi, candidates} by that target.
@@ -210,11 +209,12 @@
   st
 }
 
-# Reduced curvature grid: centre and axial rows estimate the diagonal, one
-# forward corner per alpha/pooled pair estimates the cross block used by the
-# shear, and central corners retain pooled-pooled interactions. Only the
-# alpha-alpha off-diagonal block is omitted.
-.emc_pooled_reduced_fd_rows <- function(x0, h, d, p) {
+# Curvature grid: centre and axial rows estimate the diagonal, one forward
+# corner per pair involving an alpha coordinate estimates its cross term, and
+# central corners estimate the pooled-pooled cross terms. The alpha-alpha
+# block is needed: the shear slope solves against it, and its diagonal alone
+# can make the curvature along the move negative.
+.emc_pooled_fd_rows <- function(x0, h, d, p) {
   D <- length(x0)
   rows <- list(x0)
   for (i in seq_len(D)) {
@@ -223,13 +223,11 @@
     minus[i] <- minus[i] - h[i]
     rows <- c(rows, list(plus, minus))
   }
-  if (d > 0L && p > 0L) {
-    for (i in seq_len(d)) for (j in seq_len(p)) {
-      corner <- x0
-      corner[i] <- corner[i] + h[i]
-      corner[d + j] <- corner[d + j] + h[d + j]
-      rows <- c(rows, list(corner))
-    }
+  for (i in seq_len(d)) for (j in setdiff(seq_len(D), seq_len(i))) {
+    corner <- x0
+    corner[i] <- corner[i] + h[i]
+    corner[j] <- corner[j] + h[j]
+    rows <- c(rows, list(corner))
   }
   if (p > 1L) {
     for (i in seq_len(p - 1L)) for (j in (i + 1L):p) {
@@ -248,9 +246,36 @@
   out
 }
 
+# Negative Hessian of one subject's log-likelihood from its grid values `fs`.
+.emc_pooled_fd_hessian <- function(fs, hs, d, p) {
+  D <- d + p
+  Q <- matrix(0, D, D)
+  ax <- function(i) 2L * i
+  for (i in seq_len(D))
+    Q[i, i] <- -(fs[ax(i)] - 2 * fs[1L] + fs[ax(i) + 1L]) / hs[i]^2
+  k <- 2L * D + 2L
+  for (i in seq_len(d)) for (j in setdiff(seq_len(D), seq_len(i))) {
+    Q[i, j] <- Q[j, i] <- -(fs[k] - fs[ax(i)] - fs[ax(j)] + fs[1L]) / (hs[i] * hs[j])
+    k <- k + 1L
+  }
+  if (p > 1L) {
+    for (i in seq_len(p - 1L)) for (j in (i + 1L):p) {
+      ii <- d + i
+      jj <- d + j
+      Q[ii, jj] <- Q[jj, ii] <-
+        -(fs[k] - fs[k + 1L] - fs[k + 2L] + fs[k + 3L]) / (4 * hs[ii] * hs[jj])
+      k <- k + 4L
+    }
+  }
+  Q
+}
+
 # Shear slope c and step covariance from the summed curvature of the subject
 # likelihoods (and the group-mean prior) at the current state: c minimises the
-# curvature along the move.
+# curvature along the move, and the step covariance inverts the curvature left
+# along it (the Schur complement of the pooled block). Away from the mode the
+# summed curvature need not be positive definite; its eigenvalues are then
+# taken in absolute value, which keeps every direction's scale.
 .emc_pooled_curvature <- function(pmwgs, st, alpha, score, h = 1e-3) {
   nm <- names(st$value)
   p <- length(nm)
@@ -259,56 +284,25 @@
   x0 <- lapply(seq_len(ncol(alpha)), function(s)
     stats::setNames(c(alpha[, s], st$value), c(pmwgs$par_names, nm)))
   steps <- lapply(x0, function(x) h * pmax(1, abs(x)))
-  rows <- Map(.emc_pooled_reduced_fd_rows, x0, steps,
-              MoreArgs = list(d = d, p = p))
+  rows <- Map(.emc_pooled_fd_rows, x0, steps, MoreArgs = list(d = d, p = p))
   f <- score(rows)
   if (any(!is.finite(f))) return(st)
-  Q <- matrix(0, D, D)
-  for (s in seq_len(ncol(f))) {
-    fs <- f[, s]
-    hs <- steps[[s]]
-    for (i in seq_len(D)) {
-      ip <- 2L + 2L * (i - 1L)
-      im <- ip + 1L
-      Q[i, i] <- Q[i, i] -
-        (fs[ip] - 2 * fs[1L] + fs[im]) / hs[i]^2
-    }
-    if (d > 0L && p > 0L) {
-      for (i in seq_len(d)) for (j in seq_len(p)) {
-        pooled_idx <- d + j
-        ip <- 2L + 2L * (i - 1L)
-        jp <- 2L + 2L * (pooled_idx - 1L)
-        cross_idx <- 1L + 2L * D + (i - 1L) * p + j
-        qij <- -(fs[cross_idx] - fs[ip] - fs[jp] + fs[1L]) /
-          (hs[i] * hs[pooled_idx])
-        Q[i, pooled_idx] <- Q[i, pooled_idx] + qij
-        Q[pooled_idx, i] <- Q[pooled_idx, i] + qij
-      }
-    }
-    if (p > 1L) {
-      k <- 2L + 2L * D + d * p
-      for (i in seq_len(p - 1L)) for (j in (i + 1L):p) {
-        ii <- d + i
-        jj <- d + j
-        qij <- -(fs[k] - fs[k + 1L] - fs[k + 2L] + fs[k + 3L]) /
-          (4 * hs[ii] * hs[jj])
-        Q[ii, jj] <- Q[ii, jj] + qij
-        Q[jj, ii] <- Q[jj, ii] + qij
-        k <- k + 4L
-      }
-    }
-  }
+  A <- matrix(0, D, D)
+  for (s in seq_len(ncol(f))) A <- A + .emc_pooled_fd_hessian(f[, s], steps[[s]], d, p)
   ia <- seq_len(d)
   ip <- d + seq_len(p)
-  mu_prec <- .emc_pooled_mu_prec(pmwgs$prior, d)
-  Qaa <- Q[ia, ia, drop = FALSE] + mu_prec
-  if (inherits(try(chol(Qaa), silent = TRUE), "try-error")) return(st)
-  shear <- -solve(Qaa, Q[ia, ip, drop = FALSE])
-  M <- rbind(shear, diag(p))
-  curv <- diag(1 / as.numeric(st$prior_var), p) + crossprod(M, Q %*% M) +
-    crossprod(shear, mu_prec %*% shear)
+  A[ia, ia] <- A[ia, ia] + .emc_pooled_mu_prec(pmwgs$prior, d)
+  A[ip, ip] <- A[ip, ip] + diag(1 / as.numeric(st$prior_var), p)
+  A <- (A + t(A)) / 2
+  if (inherits(try(chol(A), silent = TRUE), "try-error")) {
+    e <- eigen(A, symmetric = TRUE)
+    lam <- pmax(abs(e$values), max(abs(e$values)) * .Machine$double.eps)
+    A <- e$vectors %*% (lam * t(e$vectors))
+  }
+  shear <- if (d > 0L) -solve(A[ia, ia, drop = FALSE], A[ia, ip, drop = FALSE]) else
+    matrix(0, 0L, p)
+  curv <- A[ip, ip, drop = FALSE] + crossprod(A[ia, ip, drop = FALSE], shear)
   curv <- (curv + t(curv)) / 2
-  if (inherits(try(chol(curv), silent = TRUE), "try-error")) return(st)
   st$shear <- shear
   st$cov <- solve(curv)
   if (st$n_adapt == 0L) st$log_eps <- 0
@@ -380,8 +374,10 @@
     if (!is.null(wpool) && !is.null(sc$alive)) wpool$alive <<- sc$alive
     sc$ll
   }
-  if (!identical(stage, "sample") && st$n_adapt %% 20L == 0L)
+  if (!identical(stage, "sample") && !isTRUE(st$curvature_block == st$block)) {
     st <- .emc_pooled_curvature(pmwgs, st, alpha, score)
+    st$curvature_block <- st$block
+  }
   if (!is.null(pmwgs$rng$gibbs))
     assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
   L <- t(chol(exp(2 * st$log_eps) * st$cov))

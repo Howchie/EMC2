@@ -1,5 +1,4 @@
-# Shear group update, opt-in with options(emc2.group_move = "shear"): the
-# ensemble update (R/ensemble_move.R, the default group update) followed by a
+# Shear group update: the ensemble update (R/ensemble_move.R) followed by a
 # shear of the group state.
 #
 # Target: pi(mu, V, a | y) propto p(mu) p(V) prod_s L_s(a_s) N(a_s | mu, V).
@@ -82,14 +81,13 @@
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
 
 .emc_shear_options <- function() {
-  list(enabled = identical(getOption("emc2.group_move", "ensemble"), "shear"))
+  list(enabled = identical(getOption("emc2.group_move", "shear"), "shear"))
 }
 
 .emc_shear_supported <- function(sampler) {
   isTRUE(sampler$type %in% c("standard", "diagonal-gamma")) &&
     !any(sampler$nuisance) &&
-    !any(as.logical(sampler$marginalised_idx), na.rm = TRUE) &&
-    is.null(sampler$pooled) && is.null(sampler$gd) &&
+    is.null(sampler$gd) &&
     length(sampler$group_designs) == 0L &&
     isTRUE(sampler$n_subjects >= 2L)
 }

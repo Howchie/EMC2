@@ -313,8 +313,8 @@ test_that("marginalisation includes feasible sub-millisecond bin support", {
   P <- matrix(p, 1, dimnames = list(NULL, names(p)))
   grid <- EMC2:::compute_marginal_grid(P, dadm, des$model,
     list(param = "t0", mu = log(0.4405), sigma = 0.001, n_nodes = 48, n_scan = 15))
-  expect_gt(max(exp(grid$nodes)), 0.4405)
-  expect_lt(max(exp(grid$nodes)), 0.441)
+  expect_gt(max(exp(grid$nodes), na.rm = TRUE), 0.4405)
+  expect_lt(max(exp(grid$nodes), na.rm = TRUE), 0.441)
 })
 
 test_that("uniform guesses remove the marginal t0 ceiling", {
@@ -324,7 +324,7 @@ test_that("uniform guesses remove the marginal t0 ceiling", {
   P <- matrix(p, 1, dimnames = list(NULL, names(p)))
   grid <- EMC2:::compute_marginal_grid(P, dadm, des$model,
     list(param = "t0", mu = log(0.8), sigma = 0.1, n_nodes = 48))
-  expect_gt(max(exp(grid$nodes)), 0.8)
+  expect_gt(max(exp(grid$nodes), na.rm = TRUE), 0.8)
   expect_true(is.finite(grid$ll))
 })
 

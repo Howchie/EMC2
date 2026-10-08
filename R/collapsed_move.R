@@ -1,6 +1,5 @@
-# Collapsed group move, opt-in with options(emc2.collapsed_move = TRUE): a
-# move of the whole group state (mu and every free entry of V) with the
-# subjects carried in their conditional frames.
+# Collapsed group move: a move of the whole group state (mu and every free
+# entry of V) with the subjects carried in their conditional frames.
 #
 # Target: pi(mu, V, a | y) propto p(mu) p(V) prod_s L_s(a_s) N(a_s | mu, V).
 # Write each subject as a whitened residual in its conditional frame,
@@ -67,7 +66,7 @@
 .EMC_COLLAPSED_EPS_RANGE <- c(0.01, 1.5)
 
 .emc_collapsed_options <- function() {
-  list(enabled = isTRUE(getOption("emc2.collapsed_move", FALSE)))
+  list(enabled = isTRUE(getOption("emc2.collapsed_move", TRUE)))
 }
 
 .emc_collapsed_active <- function(sampler) {
@@ -164,6 +163,7 @@
   spec <- .emc_shear_v_spec(sampler)
   fits <- sampler$collapsed$fits
   if (length(fits) != sampler$n_subjects) fits <- .emc_shear_fits(sampler)
+  fits <- .emc_collapsed_condition(fits, sampler$pooled$value)
   chart <- .emc_collapsed_chart(spec, sampler$n_pars)
   list(fits = fits, spec = spec, prior = sampler$prior, chart = chart,
        cpp = .emc_collapsed_cpp_model(chart, fits, sampler$prior, spec))
@@ -206,15 +206,36 @@
 }
 
 # Every subject's fit from the window draws of every chain, else its Laplace
-# fit.
+# fit. Each draw's likelihood was taken at that draw's pooled coefficients
+# (design(pooled = )), so with pooled coefficients the quadratic is fitted in
+# (alpha, pooled) jointly and keeps the cross block, from which
+# .emc_collapsed_condition() gives the quadratic in alpha at the current
+# pooled value: the one the move's likelihoods are evaluated at.
 .emc_collapsed_fits <- function(emc, idx) {
   ch <- emc[[1L]]
   laplace <- .emc_shear_fits(ch)
+  p <- ch$n_pars
+  pooled <- if (!is.null(ch$pooled) && is.matrix(ch$samples$pooled))
+    do.call(rbind, lapply(emc, function(c) t(c$samples$pooled[, idx, drop = FALSE])))
   lapply(seq_len(ch$n_subjects), function(s) {
-    A <- do.call(rbind, lapply(emc, function(c) t(matrix(c$samples$alpha[, s, idx], ch$n_pars))))
+    A <- do.call(rbind, lapply(emc, function(c) t(matrix(c$samples$alpha[, s, idx], p))))
     y <- unlist(lapply(emc, function(c) c$samples$subj_ll[s, idx]))
-    fit <- tryCatch(.emc_collapsed_fit_subject(A, y), error = function(e) NULL)
-    if (is.null(fit)) laplace[[s]] else fit
+    fit <- tryCatch(.emc_collapsed_fit_subject(cbind(A, pooled), y), error = function(e) NULL)
+    if (is.null(fit)) return(laplace[[s]])
+    if (is.null(pooled)) return(fit)
+    a <- seq_len(p)
+    list(prec = fit$prec[a, a, drop = FALSE], lin = fit$lin[a],
+         cross = fit$prec[a, -a, drop = FALSE])
+  })
+}
+
+# The fits as quadratics in alpha at pooled coefficients `value`: the joint
+# quadratic -x'Hx/2 + lin'x in x = (alpha, pooled) has linear part
+# lin_a - H_ap value in alpha.
+.emc_collapsed_condition <- function(fits, value) {
+  lapply(fits, function(f) {
+    if (is.null(f$cross) || is.null(value)) return(f)
+    list(prec = f$prec, lin = f$lin - drop(f$cross %*% as.numeric(value)))
   })
 }
 

@@ -60,13 +60,14 @@
 }
 
 # Supported hierarchies: those whose group Gibbs step and subject prior are
-# already used by the particle update. Nuisance and marginalised coordinates
-# have their own samplers and are not yet covered.
+# already used by the particle update. Nuisance coordinates have their own
+# samplers and are not yet covered. A marginalised coordinate is stored as a
+# draw from its conditional posterior, so the subject states the move sees
+# are complete.
 .emc_ensemble_supported <- function(sampler) {
   isTRUE(sampler$type %in% c("standard", "diagonal-gamma", "factor",
                              "infnt_factor", "SEM")) &&
     !any(sampler$nuisance) &&
-    !any(as.logical(sampler$marginalised_idx), na.rm = TRUE) &&
     isTRUE(sampler$n_subjects >= 2L)
 }
 
@@ -265,9 +266,9 @@
 # Log-likelihoods of a matrix of candidate states for one subject. A failure
 # is a zero-density candidate: it is counted under the failure policy and
 # returned as -Inf (strict mode stops instead).
-.emc_ensemble_ll_checked <- function(props, data, model, marginalise = NULL) {
+.emc_ensemble_ll_checked <- function(props, data, model) {
   ll <- tryCatch(as.numeric(calc_ll_manager(props, dadm = data, model = model,
-                                             r_cores = 1L, marginalise = marginalise)),
+                                             r_cores = 1L)),
     error = function(e) {
       cls <- .emc_classify_failure(e)
       stop(errorCondition(paste("Ensemble pool likelihood evaluation failed:",
@@ -284,8 +285,8 @@
   ll
 }
 
-.emc_ensemble_ll_candidate <- function(props, data, model, marginalise = NULL) {
-  tryCatch(.emc_ensemble_ll_checked(props, data, model, marginalise),
+.emc_ensemble_ll_candidate <- function(props, data, model) {
+  tryCatch(.emc_ensemble_ll_checked(props, data, model),
     error = function(e) {
       cls <- if (inherits(e, "emc_failure") && !is.null(e$emc_class))
         e$emc_class else .emc_classify_failure(e)
@@ -305,7 +306,7 @@
   if (is.null(ll)) ll <- vector("list", n)
   for (s in seq_len(n)) if (is.null(ll[[s]]) || length(ll[[s]]) != M1)
     ll[[s]] <- .emc_ensemble_ll_candidate(pools$rows[[s]], sampler$data[[s]],
-                                          sampler$model, sampler$marginalise)
+                                          sampler$model)
   ll_new <- matrix(unlist(ll), nrow = M1)
   if (anyNA(ll_new) || any(ll_new == Inf))
     stop("Invalid ensemble pool likelihood")

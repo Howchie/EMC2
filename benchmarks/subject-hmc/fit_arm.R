@@ -1,10 +1,15 @@
 # One default fit() arm of the optional-moves panel.
 #   EMC_LIB=<lib> Rscript benchmarks/subject-hmc/fit_arm.R <case> <arm> <seed> <out.rds>
-# case: T30 | corr15 | lbaA | forstmann
+# case: T30 | corr15 | lbaA | forstmann | T30m | T30p (T30 with t0 drawn
+#   independently of the other effects / shared by all subjects; read from
+#   FIXTURE_DIR, default benchmarks/subject-hmc/fixtures)
 # arm: base (ensemble only) | shear | hmc | full (ensemble + shear + subject HMC)
 #   | fullc (full + collapsed group move).
 # Chains 3 x CORES_PER_CHAIN cores (default 5). CPU is measured outside, from
 # the run's cgroup.
+# FEATURE=marginalise|pooled applies to FEATURE_PAR (default t0).
+# Recovery is scored against the subjects the data were simulated from (their
+# realised means and SDs), which is what the fit can see.
 args <- commandArgs(TRUE)
 lib <- Sys.getenv("EMC_LIB")
 suppressPackageStartupMessages({ library(EMC2, lib.loc = lib); library(posterior) })
@@ -30,7 +35,21 @@ fx <- switch(case,
   }),
   forstmann = list(data = forstmann, design = q(design(data = forstmann, model = LNR,
     matchfun = matchfun, formula = list(m ~ lM, s ~ 1, t0 ~ 1), verbose = FALSE))),
+  T30m = , T30p = readRDS(file.path(Sys.getenv("FIXTURE_DIR", "benchmarks/subject-hmc/fixtures"),
+                                    paste0("fixture_", case, ".rds"))),
   stop("unknown case"))
+feature <- Sys.getenv("FEATURE")
+feature_par <- Sys.getenv("FEATURE_PAR", "t0")
+prior_in <- NULL
+if (nzchar(feature)) {
+  model <- if (case == "forstmann") LNR else get(fx$settings$model, asNamespace("EMC2"))
+  form <- if (case == "forstmann") list(m ~ lM, s ~ 1, t0 ~ 1) else fx$settings$formula
+  consts <- if (case == "forstmann") NULL else fx$settings$constants
+  extra <- switch(feature, marginalise = list(marginalise = feature_par),
+                  pooled = list(pooled = feature_par), stop("unknown FEATURE"))
+  fx$design <- q(do.call(design, c(list(data = fx$data, model = model, matchfun = matchfun,
+    formula = form, constants = consts, verbose = FALSE), extra)))
+}
 # CPU of the whole scope (master and every worker) at each stage boundary,
 # read from this process's cgroup around fit()'s own run_emc() calls.
 cg_file <- file.path("/sys/fs/cgroup", sub("^0::", "", readLines("/proc/self/cgroup")[1]), "cpu.stat")
@@ -50,7 +69,7 @@ timed_run_emc <- function(emc, stage, ...) {
 }
 unlockBinding("run_emc", ns); assign("run_emc", timed_run_emc, envir = ns); lockBinding("run_emc", ns)
 set.seed(seed)
-emc <- q(make_emc(fx$data, fx$design, n_chains = 3))
+emc <- q(make_emc(fx$data, fx$design, n_chains = 3, prior = prior_in))
 t0 <- proc.time()[["elapsed"]]
 cores_per_chain <- as.integer(Sys.getenv("CORES_PER_CHAIN", "5"))
 emc <- suppressWarnings(q(fit(emc, cores_per_chain = cores_per_chain, cores_for_chains = 3,
@@ -69,16 +88,20 @@ stop_ok <- !is.null(ls) && !is.null(ls$gd$stats) && all(ls$gd$stats$value < ls$g
 draws <- function(f) {
   arr <- lapply(emc, function(ch) {
     w <- which(ch$samples$stage == "sample" & seq_along(ch$samples$stage) <= ch$samples$idx)
-    t(vapply(w, function(t) f(ch, t), numeric(length(f(ch, w[1])))))
+    matrix(vapply(w, function(t) f(ch, t), numeric(length(f(ch, w[1])))), nrow = length(w), byrow = TRUE)
   })
   n <- min(vapply(arr, nrow, 1L))
   simplify2array(lapply(arr, function(a) a[seq_len(n), , drop = FALSE]))
 }
-ut <- upper.tri(diag(p))
-mu <- draws(function(ch, t) ch$samples$theta_mu[, t])
-lsd <- draws(function(ch, t) 0.5 * log(diag(as.matrix(ch$samples$theta_var[, , t]))))
-cr <- if (emc[[1]]$type == "standard") draws(function(ch, t) cov2cor(as.matrix(ch$samples$theta_var[, , t]))[ut]) else NULL
+hier <- seq_len(p)
+ph <- pn[hier]
+ut <- upper.tri(diag(length(hier)))
+mu <- draws(function(ch, t) ch$samples$theta_mu[hier, t])
+lsd <- draws(function(ch, t) 0.5 * log(diag(as.matrix(ch$samples$theta_var[, , t])))[hier])
+cr <- if (emc[[1]]$type == "standard") draws(function(ch, t) cov2cor(as.matrix(ch$samples$theta_var[hier, hier, t]))[ut]) else NULL
 al <- draws(function(ch, t) as.vector(ch$samples$alpha[, , t]))
+pooled <- if (is.null(emc[[1]]$samples$pooled)) NULL else
+  draws(function(ch, t) ch$samples$pooled[, t])
 diag_of <- function(a) {
   a <- aperm(a, c(1, 3, 2))   # iterations x chains x quantities
   r <- apply(a, 3, rhat); eb <- apply(a, 3, ess_bulk); et <- apply(a, 3, ess_tail)
@@ -87,11 +110,22 @@ diag_of <- function(a) {
 }
 d <- list(mu = diag_of(mu), lsd = diag_of(lsd), alpha = diag_of(al))
 if (!is.null(cr)) d$cor <- diag_of(cr)
+if (!is.null(pooled)) d$pooled <- diag_of(pooled)
 rec <- NULL
-if (!is.null(fx$group_means)) {
-  z_mu <- (apply(mu, 2, mean) - fx$group_means[pn]) / apply(mu, 2, sd)
-  z_lsd <- (apply(lsd, 2, mean) - log(sqrt(diag(fx$intended_covariance[pn, pn])))) / apply(lsd, 2, sd)
-  rec <- list(z_mu = z_mu, z_lsd = z_lsd)
+if (!is.null(fx$subject_effects)) {
+  se <- fx$subject_effects
+  if (!is.null(rownames(se))) se <- se[dimnames(emc[[1]]$samples$alpha)[[2]], , drop = FALSE]
+  zof <- function(a, truth) (apply(a, 2, mean) - truth) / apply(a, 2, sd)
+  flat <- function(a) matrix(aperm(a, c(1, 3, 2)), ncol = dim(a)[2])
+  z_mu <- stats::setNames(zof(flat(mu), colMeans(se[, ph, drop = FALSE])), ph)
+  z_lsd <- stats::setNames(zof(flat(lsd), log(apply(se[, ph, drop = FALSE], 2, sd))), ph)
+  z_alpha <- zof(flat(al), as.vector(t(se[, pn, drop = FALSE])))
+  z_alpha <- matrix(z_alpha, length(pn), dimnames = list(pn, rownames(se)))
+  z_pooled <- if (is.null(pooled)) NULL else {
+    pnames <- rownames(emc[[1]]$samples$pooled)
+    stats::setNames(zof(flat(pooled), colMeans(fx$subject_effects[, pnames, drop = FALSE])), pnames)
+  }
+  rec <- list(z_mu = z_mu, z_lsd = z_lsd, z_alpha = z_alpha, z_pooled = z_pooled)
 }
 moves <- lapply(emc, function(ch) list(
   hmc = ch$subject_hmc$totals,
@@ -99,7 +133,7 @@ moves <- lapply(emc, function(ch) list(
   history = ch$alloc$history,
   collapsed = if (is.null(ch$collapsed)) NULL else list(iterations = ch$collapsed$iterations,
     rounds = ch$collapsed$rounds, accepted = ch$collapsed$accepted, eps = ch$collapsed$plan$eps)))
-res <- list(case = case, arm = arm, seed = seed, lib = find.package("EMC2"), elapsed = elapsed,
+res <- list(case = case, arm = arm, seed = seed, feature = feature, feature_par = feature_par, lib = find.package("EMC2"), elapsed = elapsed,
             iters = chain_n(emc), stage_iters = stage_iters, stage_cpu = stage_cpu, stop_ok = stop_ok, sample_try = if (is.null(ls)) NA else ls$try,
             sample_gd = if (is.null(ls)) NULL else ls$gd$stats, diag = d, recovery = rec, moves = moves,
             blocks = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_block_profile() else NULL,
@@ -111,7 +145,15 @@ cat(sprintf("%s %s seed %d: iterations run %s (kept %d) | elapsed %.0f s | fit()
 cat("  CPU by stage (s):", paste(sprintf("%s %.0f", names(stage_cpu), vapply(stage_cpu, `[[`, 0, "cpu")), collapse = ", "), "\n")
 for (nm in names(d)) cat(sprintf("  %-5s max R-hat %.3f  min ESS bulk %.0f tail %.0f  median %.0f\n",
   nm, d[[nm]]$max_rhat, d[[nm]]$min_ess_bulk, d[[nm]]$min_ess_tail, d[[nm]]$med_ess_bulk))
-if (!is.null(rec)) cat(sprintf("  recovery: max |z| mu %.2f, log sd %.2f\n", max(abs(rec$z_mu)), max(abs(rec$z_lsd))))
+if (!is.null(rec)) {
+  cat(sprintf("  recovery (z vs simulated subjects): mu max |z| %.2f, log sd max |z| %.2f mean z %+.2f | alpha within 2 sd %.0f%%, max |z| %.2f\n",
+    max(abs(rec$z_mu)), max(abs(rec$z_lsd)), mean(rec$z_lsd), 100 * mean(abs(rec$z_alpha) < 2), max(abs(rec$z_alpha))))
+  if (feature == "marginalise") cat(sprintf("  marginalised %s: group mean z %+.2f, log sd z %+.2f | by subject: within 2 sd %.0f%%, max |z| %.2f, mean z %+.2f\n", feature_par,
+    rec$z_mu[[feature_par]], rec$z_lsd[[feature_par]],
+    100 * mean(abs(rec$z_alpha[feature_par, ]) < 2), max(abs(rec$z_alpha[feature_par, ])), mean(rec$z_alpha[feature_par, ])))
+  if (!is.null(rec$z_pooled)) cat(sprintf("  pooled %s: z %s\n", paste(names(rec$z_pooled), collapse = ","),
+    paste(sprintf("%+.2f", rec$z_pooled), collapse = ",")))
+}
 for (j in seq_along(moves)) {
   m <- moves[[j]]
   if (!is.null(m$collapsed)) cat(sprintf("  chain %d: collapsed moves with a likelihood round %s, accepted iterations %s over %s its, eps %.3f, last plan moves/it %.2f\n",

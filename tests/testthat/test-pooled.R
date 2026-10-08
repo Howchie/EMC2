@@ -21,52 +21,18 @@ pooled_data <- function(n_trials = 80, seed = 1) {
   make_data(re, des, n_trials = n_trials)
 }
 
-# Test-only reference for the former full central-difference curvature grid.
-# Keep this out of R/pooled.R: the sampler has one production curvature path.
-pooled_full_fd_rows_reference <- function(x0, h) {
-  D <- length(x0)
-  E <- diag(h, D)
-  rows <- list(x0)
-  for (i in seq_len(D)) rows <- c(rows, list(x0 + E[i, ], x0 - E[i, ]))
-  for (i in seq_len(D - 1L)) for (j in (i + 1L):D)
-    rows <- c(rows, list(x0 + E[i, ] + E[j, ], x0 + E[i, ] - E[j, ],
-                         x0 - E[i, ] + E[j, ], x0 - E[i, ] - E[j, ]))
-  out <- do.call(rbind, rows)
-  colnames(out) <- names(x0)
-  out
-}
-
-pooled_full_curvature_reference <- function(pmwgs, st, alpha, score, h = 1e-3) {
-  d <- nrow(alpha)
+# The shear and step covariance a quadratic log-likelihood with negative
+# Hessian `precision` implies (the precision of one subject's (alpha, phi)).
+pooled_curvature_reference <- function(pmwgs, st, precision) {
+  d <- length(pmwgs$par_names)
   p <- length(st$value)
-  D <- d + p
-  rows <- lapply(seq_len(ncol(alpha)), function(s)
-    pooled_full_fd_rows_reference(
-      stats::setNames(c(alpha[, s], st$value), c(pmwgs$par_names, names(st$value))), h))
-  f <- score(rows)
-  Q <- matrix(0, D, D)
-  for (s in seq_len(ncol(f))) {
-    fs <- f[, s]
-    H <- matrix(0, D, D)
-    for (i in seq_len(D))
-      H[i, i] <- (fs[2L * i] - 2 * fs[1L] + fs[2L * i + 1L]) / h^2
-    k <- 2L * D + 1L
-    for (i in seq_len(D - 1L)) for (j in (i + 1L):D) {
-      H[i, j] <- H[j, i] <-
-        (fs[k + 1L] - fs[k + 2L] - fs[k + 3L] + fs[k + 4L]) / (4 * h^2)
-      k <- k + 4L
-    }
-    Q <- Q - H
-  }
   ia <- seq_len(d)
   ip <- d + seq_len(p)
-  mu_prec <- EMC2:::.emc_pooled_mu_prec(pmwgs$prior, d)
-  Qaa <- Q[ia, ia, drop = FALSE] + mu_prec
-  shear <- -solve(Qaa, Q[ia, ip, drop = FALSE])
-  M <- rbind(shear, diag(p))
-  curv <- diag(1 / as.numeric(st$prior_var), p) + crossprod(M, Q %*% M) +
-    crossprod(shear, mu_prec %*% shear)
-  list(shear = shear, cov = solve((curv + t(curv)) / 2))
+  A <- precision
+  A[ia, ia] <- A[ia, ia] + EMC2:::.emc_pooled_mu_prec(pmwgs$prior, d)
+  A[ip, ip] <- A[ip, ip] + diag(1 / as.numeric(st$prior_var), p)
+  shear <- -solve(A[ia, ia], A[ia, ip, drop = FALSE])
+  list(shear = shear, cov = solve(A[ip, ip] + crossprod(A[ia, ip, drop = FALSE], shear)))
 }
 
 test_that("sampled_pars leaves pooled coefficients out unless asked", {
@@ -103,31 +69,42 @@ test_that("prior() gives pooled coefficients their own normal prior", {
   expect_error(prior(des, type = "single"), "hierarchical type")
 })
 
-test_that("reduced pooled curvature matches the full reference on diagonal alpha curvature", {
-  precision <- rbind(c(5, 0, 1.2, 0.4),
-                     c(0, 4, -0.7, 0.8),
-                     c(1.2, -0.7, 3, 0.5),
-                     c(0.4, 0.8, 0.5, 2.5))
-  alpha <- matrix(c(0.3, -0.5), ncol = 1,
-                  dimnames = list(c("a", "b"), "subject1"))
+test_that("pooled curvature recovers the shear and step of a quadratic likelihood", {
   st <- list(value = c(phi1 = 0.2, phi2 = -0.3),
              prior_var = c(phi1 = 2, phi2 = 1.5), n_adapt = 1L, log_eps = 0)
   pmwgs <- list(par_names = c("a", "b"),
                 prior = list(theta_mu_invar = diag(c(0.4, 0.6))))
-  score <- function(rows) {
+  alpha <- matrix(c(0.3, -0.5), ncol = 1,
+                  dimnames = list(c("a", "b"), "subject1"))
+  quadratic <- function(precision) function(rows) {
     x <- rows[[1L]]
     matrix(-0.5 * rowSums((x %*% precision) * x), ncol = 1L)
   }
-  reference <- pooled_full_curvature_reference(pmwgs, st, alpha, score)
-  reduced <- EMC2:::.emc_pooled_curvature(pmwgs, st, alpha, score)
-  expect_equal(reduced$shear, reference$shear, tolerance = 1e-6)
-  expect_equal(reduced$cov, reference$cov, tolerance = 1e-6)
+  # Strongly coupled alpha coordinates that share the pooled direction: the
+  # alpha diagonal alone would leave negative curvature along the move.
+  precision <- rbind(c(4, 3.6, 1.8, 0.2),
+                     c(3.6, 4, 1.8, 0.1),
+                     c(1.8, 1.8, 2, 0.3),
+                     c(0.2, 0.1, 0.3, 2.5))
+  expect_true(all(eigen(precision)$values > 0))
+  ref <- pooled_curvature_reference(pmwgs, st, precision)
+  got <- EMC2:::.emc_pooled_curvature(pmwgs, st, alpha, quadratic(precision))
+  expect_equal(got$shear, ref$shear, tolerance = 1e-5)
+  expect_equal(got$cov, ref$cov, tolerance = 1e-5)
+
+  # Away from a mode the curvature can be indefinite: the refresh still
+  # returns a shear and a positive definite step covariance.
+  indefinite <- precision
+  indefinite[3, 3] <- -2
+  got <- EMC2:::.emc_pooled_curvature(pmwgs, st, alpha, quadratic(indefinite))
+  expect_false(is.null(got$shear))
+  expect_true(all(eigen(got$cov)$values > 0))
 
   x0 <- c(a = 0.3, b = -0.5, phi1 = 0.2, phi2 = -0.3)
-  rows <- EMC2:::.emc_pooled_reduced_fd_rows(x0, rep(1e-3, 4L), 2L, 2L)
-  expect_equal(nrow(rows), 1L + 2L * length(x0) + 2L * 2L + 4L)
-  rows_one_pool <- EMC2:::.emc_pooled_reduced_fd_rows(x0[1:3], rep(1e-3, 3L), 2L, 1L)
-  expect_equal(nrow(rows_one_pool), 1L + 2L * 3L + 2L)
+  rows <- EMC2:::.emc_pooled_fd_rows(x0, rep(1e-3, 4L), 2L, 2L)
+  expect_equal(nrow(rows), 1L + 2L * 4L + (3L + 2L) + 4L)
+  rows_one_pool <- EMC2:::.emc_pooled_fd_rows(x0[1:3], rep(1e-3, 3L), 2L, 1L)
+  expect_equal(nrow(rows_one_pool), 1L + 2L * 3L + 3L)
 })
 
 test_that("the likelihood boundary appends pooled values only when missing", {
@@ -332,14 +309,19 @@ test_that(".emc_pooled_mu_prec inverts matrix variance when theta_mu_invar is NU
   expect_equal(prec, solve(V), tolerance = 1e-12)
 })
 
-test_that("mode_start and laplace_refresh skip when pooled parameters are present", {
+test_that("mode_start runs with pooled parameters at their current value", {
   dat <- pooled_data(n_trials = 20)
   des <- pooled_design(dat)
   pr <- prior(des, pmean = c(t0 = log(.3)), psd = c(t0 = .5))
+  set.seed(1)
   emc <- make_emc(dat, des, prior_list = pr, n_chains = 1, compress = FALSE,
                   rt_resolution = NULL)
-  expect_identical(EMC2:::.emc_burn_mode_start(emc, n_cores = 1), emc)
-  expect_identical(EMC2:::.emc_laplace_refresh(emc, n_cores = 1), emc)
+  emc <- EMC2:::run_emc(emc, stage = "preburn", stop_criteria = list(iter = 30),
+                        cores_for_chains = 1, cores_per_chain = 1, verbose = FALSE)
+  out <- suppressMessages(EMC2:::.emc_burn_mode_start(emc, n_cores = 1))
+  expect_true(all(out[[1]]$burn_mode_stats$hessian))
+  expect_identical(out[[1]]$pooled$value, emc[[1]]$pooled$value)
+  expect_equal(attr(out[[1]]$data[[1]], "pooled_values"), emc[[1]]$pooled$value)
 })
 
 
@@ -378,4 +360,27 @@ test_that("pooled candidate likelihoods follow the failure policy", {
   expect_error(ev(function(r) c(-1, -2)), class = "emc_failure")
   expect_equal(as.numeric(ev(function(r) stop("not positive definite"))), rep(-Inf, 4))
   EMC2:::.emc_reject_reset("pooled")
+})
+
+test_that("collapsed-move fits are conditioned on the current pooled value", {
+  set.seed(5)
+  p <- 2L
+  n_it <- 400L
+  H <- rbind(c(3, 0.8, 1.5), c(0.8, 2, -0.6), c(1.5, -0.6, 4))
+  lin <- c(0.5, -0.2, 0.3)
+  X <- MASS::mvrnorm(n_it, c(0.1, -0.2, 0.3), solve(H) * 4)
+  ll <- -0.5 * rowSums((X %*% H) * X) + drop(X %*% lin)
+  ch <- list(n_subjects = 1L, n_pars = p, pooled = list(value = c(phi = 0.3)),
+             samples = list(alpha = array(t(X[, 1:2]), c(p, 1L, n_it)),
+                            pooled = matrix(X[, 3], 1L, dimnames = list("phi", NULL)),
+                            subj_ll = matrix(ll, 1L)))
+  local_mocked_bindings(.emc_shear_fits = function(sampler) list(NULL), .package = "EMC2")
+  fits <- EMC2:::.emc_collapsed_fits(list(ch), seq_len(n_it))
+  expect_equal(fits[[1]]$prec, H[1:2, 1:2], tolerance = 1e-6)
+  expect_equal(fits[[1]]$cross, H[1:2, 3, drop = FALSE], tolerance = 1e-6)
+  cond <- EMC2:::.emc_collapsed_condition(fits, c(phi = 0.3))
+  expect_equal(cond[[1]]$lin, lin[1:2] - H[1:2, 3] * 0.3, tolerance = 1e-6)
+  expect_null(cond[[1]]$cross)
+  # Without pooled coefficients the fits pass through unchanged.
+  expect_identical(EMC2:::.emc_collapsed_condition(fits, NULL), fits)
 })
