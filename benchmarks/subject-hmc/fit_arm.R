@@ -3,7 +3,8 @@
 # case: T30 | corr15 | lbaA | forstmann
 # arm: base (ensemble only) | shear | hmc | full (ensemble + shear + subject HMC)
 #   | fullc (full + collapsed group move).
-# Chains 3 x 5 cores. CPU is measured outside, from the run's cgroup.
+# Chains 3 x CORES_PER_CHAIN cores (default 5). CPU is measured outside, from
+# the run's cgroup.
 args <- commandArgs(TRUE)
 lib <- Sys.getenv("EMC_LIB")
 suppressPackageStartupMessages({ library(EMC2, lib.loc = lib); library(posterior) })
@@ -51,7 +52,9 @@ unlockBinding("run_emc", ns); assign("run_emc", timed_run_emc, envir = ns); lock
 set.seed(seed)
 emc <- q(make_emc(fx$data, fx$design, n_chains = 3))
 t0 <- proc.time()[["elapsed"]]
-emc <- suppressWarnings(q(fit(emc, cores_per_chain = 5, cores_for_chains = 3, verbose = FALSE)))
+cores_per_chain <- as.integer(Sys.getenv("CORES_PER_CHAIN", "5"))
+emc <- suppressWarnings(q(fit(emc, cores_per_chain = cores_per_chain, cores_for_chains = 3,
+                              verbose = FALSE)))
 elapsed <- proc.time()[["elapsed"]] - t0
 emc <- EMC2:::restore_duplicates(emc)
 pn <- emc[[1]]$par_names; p <- length(pn)
