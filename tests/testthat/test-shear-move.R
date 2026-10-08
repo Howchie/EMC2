@@ -18,7 +18,7 @@ test_that("the shear plan is the centred Gibbs step's lag-1 operator", {
   Pc <- n * Vi + P0
   expect_equal(diag(t(plan$dirs) %*% Pc %*% plan$dirs), 1 / (1 - plan$lam), tolerance = 1e-8)
   expect_equal(plan$w, Reduce(`+`, lapply(Qi, function(q) diag(q %*% Vi))) / n, tolerance = 1e-12)
-  # With a flat mean prior the expected numbers of mean and scale steps agree.
+  # With a flat mean prior the mean and scale lag-1 totals agree.
   flat <- EMC2:::.emc_shear_plan(fits, list(theta_mu_invar = diag(0, p)), V)
   expect_equal(sum(flat$lam), sum(flat$w), tolerance = 1e-10)
   # No information from the data: every direction mixes as slowly as it can.
@@ -49,6 +49,17 @@ test_that("the plan's lambda is the lag-1 autocorrelation of centred Gibbs", {
     expect_equal(stats::acf(z[, i], lag.max = 1, plot = FALSE)$acf[2], plan$lam[i], tolerance = 0.02)
 })
 
+# A plan as .emc_shear_set_plan() leaves it, with the given expected rounds
+# per coordinate.
+shear_ready <- function(plan, n, rounds) {
+  p <- nrow(plan$dirs)
+  zero <- list(E = numeric(2 * p), n = integer(2 * p), moved = integer(2 * p))
+  plan$log_step <- c(rep(0, p), rep(-0.5 * log(2 * n), p)) + log(EMC2:::.EMC_SHEAR_STEP0)
+  plan$rounds <- rep_len(rounds, 2 * p)
+  plan$block <- plan$last <- zero
+  plan
+}
+
 # A small hierarchy with an inverse-Wishart block (parameters 1-2), an
 # unblocked parameter (3), subjects with and without a likelihood fit.
 shear_fixture <- function(type) {
@@ -72,18 +83,15 @@ shear_fixture <- function(type) {
        u = c(0.3, -0.2, 0.1, 0.25, -0.15, 0.2))
 }
 
-test_that("only checked, usable likelihood fits shape the move", {
+test_that("every finite likelihood fit shapes the move, checked or not", {
   f <- shear_fixture("standard")
   expect_identical(vapply(f$ctx$fits, is.null, logical(1)), c(FALSE, FALSE, FALSE, TRUE))
-  expect_false(f$ctx$delayed)
   s <- f$sampler
   s$lik_laplace[[1]]$check <- NULL
   s$lik_laplace[[2]]$check <- list(pareto_k = Inf, outside = 0, laplace_status = "ok")
   s$lik_laplace[[3]]$lin[1] <- NA_real_
-  expect_true(all(vapply(EMC2:::.emc_shear_context(s)$fits, is.null, logical(1))))
-  s <- f$sampler
-  s$lik_laplace[[4]] <- s$lik_laplace[[1]]
-  expect_true(EMC2:::.emc_shear_context(s)$delayed)
+  expect_identical(vapply(EMC2:::.emc_shear_context(s)$fits, is.null, logical(1)),
+                   c(FALSE, FALSE, TRUE, TRUE))
 })
 
 test_that("the shear map is inverted by the opposite step and has the stated Jacobian", {
@@ -110,18 +118,56 @@ test_that("the shear map is inverted by the opposite step and has the stated Jac
       list(mu = x[seq_len(p)], V = V,
            alpha = matrix(x[-seq_len(p + nrow(free))], p))
     }
-    map <- function(x) {
+    map <- function(x, u = f$u) {
       s <- unpack(x)
-      out <- EMC2:::.emc_shear_propose(state(s$mu, s$V), f$u, s$alpha, fits, prior, spec)
+      out <- EMC2:::.emc_shear_propose(state(s$mu, s$V), u, s$alpha, fits, prior, spec)
       pack(out$state$mu, out$state$V, out$alpha)
     }
     x0 <- pack(f$mu, f$V, f$alpha)
     h <- 1e-6
-    J <- vapply(seq_along(x0), function(i) {
+    jacobian <- function(u) vapply(seq_along(x0), function(i) {
       e <- replace(numeric(length(x0)), i, h)
-      (map(x0 + e) - map(x0 - e)) / (2 * h)
+      (map(x0 + e, u) - map(x0 - e, u)) / (2 * h)
     }, numeric(length(x0)))
-    expect_equal(as.numeric(determinant(J)$modulus), fwd$log_jac, tolerance = 1e-6)
+    expect_equal(as.numeric(determinant(jacobian(f$u))$modulus), fwd$log_jac, tolerance = 1e-6)
+
+    # A mean step only moves the centres, and its Jacobian is 1.
+    u_mu <- replace(f$u, p + seq_len(p), 0)
+    fast <- EMC2:::.emc_shear_propose(cur, u_mu, f$alpha, fits, prior, spec)
+    full <- state(f$mu + u_mu[seq_len(p)], f$V)
+    expect_equal(fast$state$lp, full$lp, tolerance = 1e-12)
+    expect_equal(lapply(fast$state$frames, `[[`, "m"), lapply(full$frames, `[[`, "m"),
+                 tolerance = 1e-12)
+    expect_identical(fast$log_jac, 0)
+    expect_equal(as.numeric(determinant(jacobian(u_mu))$modulus), 0, tolerance = 1e-6)
+
+    # Maps compose: T_v T_u = T_(u+v), and so do their Jacobians, which is
+    # what makes a round's candidates points of one orbit.
+    v <- c(-0.1, 0.25, 0.05, -0.2, 0.1, 0.3)
+    two <- EMC2:::.emc_shear_propose(fwd$state, v, fwd$alpha, fits, prior, spec)
+    one <- EMC2:::.emc_shear_propose(cur, f$u + v, f$alpha, fits, prior, spec)
+    expect_equal(two$alpha, one$alpha, tolerance = 1e-10)
+    expect_equal(two$state$V, one$state$V, tolerance = 1e-12)
+    expect_equal(fwd$log_jac + two$log_jac, one$log_jac, tolerance = 1e-10)
+  }
+})
+
+test_that("mean-step candidates on the line match the full map", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu)
+    fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+    cur <- EMC2:::.emc_shear_state(f$mu, f$V, fits, prior, spec)
+    d <- c(0.4, -0.3, 0.2)
+    t <- c(-1.3, -0.2, 0.7, 2.1)
+    line <- EMC2:::.emc_shear_line(cur, d, f$alpha, t, prior)
+    for (i in seq_along(t)) {
+      full <- EMC2:::.emc_shear_propose(cur, c(t[i] * d, numeric(p)), f$alpha, fits, prior, spec)
+      expect_equal(f$alpha + t[i] * line$Delta, full$alpha, tolerance = 1e-12)
+      expect_equal(line$delta[i],
+                   EMC2:::.emc_shear_log_hier(full$alpha, full$state) + full$state$lp -
+                     EMC2:::.emc_shear_log_hier(f$alpha, cur) - cur$lp, tolerance = 1e-10)
+    }
   }
 })
 
@@ -214,10 +260,24 @@ test_that("the shear move leaves the joint posterior invariant with the group va
                  list(prec = 4 * Si, lin = drop(4 * Si %*% (y[, s] + 0.5)), check = ok_check)))
   prior <- list(theta_mu_mean = rep(m0, p), theta_mu_invar = diag(P0, p),
                 shape = rep(shape, p), rate = rep(rate, p))
-  # Steps taken with the plan's own probabilities, and every step forced.
-  for (forced in c(FALSE, TRUE)) for (lik in fits) {
+  # Rounds taken with the plan's lag-1 values as probabilities, then two
+  # rounds on every coordinate, each with exact and with wrong fits; then a
+  # broken control that drops the scale map's Jacobian, which must fail.
+  runs <- list(list(rounds = NULL, lik = fits$exact), list(rounds = NULL, lik = fits$wrong),
+               list(rounds = 2, lik = fits$exact), list(rounds = 2, lik = fits$wrong),
+               list(rounds = 2, lik = fits$exact, broken = TRUE))
+  for (run in runs) {
+    lik <- run$lik
     plan <- EMC2:::.emc_shear_plan(lik, prior, diag(exp(2 * colMeans(lsd))))
-    if (forced) plan$lam[] <- plan$w[] <- 1
+    plan <- shear_ready(plan, n, if (is.null(run$rounds)) c(plan$lam, plan$w) else run$rounds)
+    if (isTRUE(run$broken)) {
+      propose <- EMC2:::.emc_shear_propose
+      local_mocked_bindings(.emc_shear_propose = function(...) {
+        out <- propose(...)
+        if (!is.null(out)) out$log_jac <- 0
+        out
+      }, .package = "EMC2")
+    }
     sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
                     n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
                     model = NULL, prior = prior, lik_laplace = lik, rng = list(),
@@ -234,10 +294,39 @@ test_that("the shear move leaves the joint posterior invariant with the group va
     }, numeric(2 * p + p * n)))
     expect_gt(mean(after[, p + 1] != before[, p + 1]), 0.1)
     se <- apply(before, 2, sd) / sqrt(N)
-    expect_true(all(abs(colMeans(after) - colMeans(before)) / se < 4.5))
-    v_ratio <- apply(after, 2, var) / apply(before, 2, var)
-    expect_true(all(abs(v_ratio - 1) < 4.5 * sqrt(2 / N)))
+    z_mean <- abs(colMeans(after) - colMeans(before)) / se
+    z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
+    if (isTRUE(run$broken)) {
+      expect_gt(max(z_mean, z_var), 6)
+    } else {
+      expect_true(all(z_mean < 4.5))
+      expect_true(all(z_var < 4.5))
+    }
   }
+})
+
+test_that("updates after the shear see the moved group mean as every subject's prior mean", {
+  f <- shear_fixture("standard")
+  p <- f$sampler$n_pars; n <- f$sampler$n_subjects
+  pn <- paste0("x", seq_len(p))
+  local_mocked_bindings(
+    calc_ll_manager = function(proposals, dadm, ...) -0.5 * rowSums(sweep(proposals, 2, dadm)^2),
+    .package = "EMC2")
+  withr::local_options(list(emc2.group_move = "shear"))
+  plan <- EMC2:::.emc_shear_plan(f$ctx$fits, f$sampler$prior, f$V)
+  sampler <- c(f$sampler, list(par_names = pn, model = NULL, rng = list(),
+                               data = lapply(seq_len(n), function(s) f$alpha[, s] + 0.3),
+                               shear = list(plan = shear_ready(plan, n, 3))))
+  al <- matrix(f$alpha, p, dimnames = list(pn, NULL))
+  ll <- -0.5 * colSums(0.3^2 + 0 * al)
+  pars <- list(tmu = setNames(f$mu, pn), tvar = f$V, tvinv = solve(f$V),
+               a_half = setNames(rep(1, p), pn), subj_mu = matrix(f$mu, p, n))
+  set.seed(4)
+  out <- EMC2:::.emc_shear_move(sampler, pars, rbind(al, ll), "sample")
+  expect_false(isTRUE(all.equal(out$pars$tmu, pars$tmu)))
+  for (s in seq_len(n))
+    expect_equal(as.numeric(EMC2:::get_group_level(out$pars, s, "standard")$mu),
+                 as.numeric(out$pars$tmu))
 })
 
 test_that("worker evaluation preserves the complete shear transition and RNG", {
@@ -252,8 +341,7 @@ test_that("worker evaluation preserves the complete shear transition and RNG", {
     s <- f$sampler
     s$par_names <- paste0("x", seq_len(s$n_pars))
     s$data <- lapply(seq_len(s$n_subjects), function(j) rep(j / 3, s$n_pars))
-    plan <- EMC2:::.emc_shear_plan(f$ctx$fits, s$prior, f$V)
-    plan$lam[] <- plan$w[] <- 1
+    plan <- shear_ready(EMC2:::.emc_shear_plan(f$ctx$fits, s$prior, f$V), s$n_subjects, 1)
     s$shear <- list(plan = plan)
     pars <- list(tmu = setNames(f$mu, s$par_names), tvar = f$V,
                  tvinv = solve(f$V), a_half = c(0.7, 1.2, 0.9))
@@ -351,13 +439,25 @@ test_that("subject likelihood workers preserve results across model families", {
   }
 })
 
-test_that("a complete shear fit is identical serially, statically, and queued", {
+# Every shear coordinate one round and every subject HMC rate one half,
+# whatever the measurements say.
+force_allocation <- function(env = parent.frame()) {
+  local_mocked_bindings(.emc_alloc_solve = function(units, C_rest, ...) {
+    x <- vapply(units, function(u) switch(u$kind, shear = 1, hmc = 0.5, 0), numeric(1))
+    list(x = x, rho = NA_real_, tau = NA_real_, cost = C_rest, objective = NA_real_,
+         objective0 = NA_real_, tau0 = NA_real_)
+  }, .package = "EMC2", .env = env)
+}
+
+test_that("a fit with shear and subject HMC is identical serially, statically, and queued", {
   skip_on_os("windows")
   skip_on_cran()
-  withr::local_options(list(emc2.group_move = "shear", emc2.independent_chains = TRUE))
+  withr::local_options(list(emc2.group_move = "shear", emc2.subject_hmc = TRUE,
+                            emc2.independent_chains = TRUE))
+  force_allocation()
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
   dat$subjects <- droplevels(dat$subjects)
-  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  des <- suppressMessages(design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1)))
   fit_on <- function(cores, queue) {
     withr::local_options(list(emc2.worker_queue = queue))
     RNGkind("L'Ecuyer-CMRG"); set.seed(23)
@@ -369,17 +469,20 @@ test_that("a complete shear fit is identical serially, statically, and queued", 
     emc[[1]]
   }
   serial <- fit_on(1, FALSE)
-  # The identity checks below only mean something if the shear moved the state.
-  expect_gt(sum(serial$shear$dir_accepted) + sum(serial$shear$scale_accepted), 0)
+  # The identity checks below only mean something if both moves ran.
+  expect_gt(sum(serial$shear$plan$block$moved), 0)
+  expect_gt(serial$subject_hmc$totals$attempts, 0)
   for (parallel in list(fit_on(2, FALSE), fit_on(3, TRUE))) {
     expect_identical(parallel$samples$alpha, serial$samples$alpha)
     expect_identical(parallel$samples$theta_mu, serial$samples$theta_mu)
     expect_identical(parallel$samples$theta_var, serial$samples$theta_var)
-    expect_identical(parallel$shear, serial$shear)
+    expect_identical(parallel$shear$plan[c("rounds", "log_step", "block")],
+                     serial$shear$plan[c("rounds", "log_step", "block")])
+    expect_identical(parallel$rng, serial$rng)
   }
 })
 
-test_that("the shear plan is built from the checked likelihood fits", {
+test_that("rebuilds carry step scales to matching directions and record the window", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
   withr::local_seed(95)
@@ -393,7 +496,7 @@ test_that("the shear plan is built from the checked likelihood fits", {
   des <- suppressMessages(design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1)))
   emc <- suppressMessages(make_emc(dat, des, n_chains = 2L, type = "standard"))
   for (stage in c("preburn", "burn", "adapt"))
-    emc <- suppressMessages(run_emc(emc, stage = stage, step_size = 6L, max_tries = 1L,
+    emc <- suppressMessages(run_emc(emc, stage = stage, step_size = 12L, max_tries = 1L,
       verbose = FALSE, trim = FALSE, cores_for_chains = 1L, cores_per_chain = 1L,
       stop_criteria = list(iter = 24L, max_gd = Inf, selection = c("alpha", "mu"),
                            min_unique = 0, min_es = 0)))
@@ -404,5 +507,33 @@ test_that("the shear plan is built from the checked likelihood fits", {
     # Without fits every scale weight is exactly 1; a subject with a fit
     # carries likelihood information, so its prior share is below 1.
     expect_true(all(ch$shear$plan$w < 1))
+    pl <- ch$shear$plan
+    expect_true(all(is.finite(pl$rounds) & pl$rounds >= 0 &
+                      pl$rounds <= EMC2:::.EMC_ALLOC_MAX_ROUNDS))
+    expect_true(all(pl$log_step >= EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[1] &
+                      pl$log_step <= EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[2]))
+    # Every rebuild after the first measured a recorded window.
+    h <- ch$alloc$history
+    expect_gt(length(h), 2L)
+    expect_false(h[[length(h)]]$stored)
+    expect_gt(h[[length(h)]]$pairs[["group"]], 0)
   }
+  # A rebuilt plan whose directions match keeps their scales.
+  ch <- emc[[1]]
+  old <- ch$shear$plan
+  old$log_step[] <- log(1.7)
+  ch$shear$plan <- old
+  again <- EMC2:::.emc_shear_set_plan(ch, seq_len(ch$samples$idx), "burn")$shear$plan
+  p <- ncol(old$dirs)
+  cosine <- abs(crossprod(old$dirs, again$dirs)) /
+    outer(sqrt(colSums(old$dirs^2)), sqrt(colSums(again$dirs^2)))
+  for (k in seq_len(p)) {
+    m <- which.max(cosine[, k])
+    expected <- if (cosine[m, k] >= 0.9) {
+      log(1.7) + 0.5 * log(sum(old$dirs[, m]^2) / sum(again$dirs[, k]^2))
+    } else log(EMC2:::.EMC_SHEAR_STEP0)
+    expect_equal(again$log_step[k], expected, tolerance = 1e-10)
+  }
+  # A log group sd always matches itself.
+  expect_equal(again$log_step[p + seq_len(p)], rep(log(1.7), p))
 })

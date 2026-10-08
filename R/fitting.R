@@ -58,7 +58,9 @@ get_stop_criteria <- function(stage, stop_criteria, type){
   emc2.ensemble_cadence = 1L, emc2.ensemble_latent_weight = "conditional",
   emc2.laplace_conditional = TRUE,
   emc2.sample_rebuilds = "doubling",
-  emc2.pooled_candidates = 8L, emc2.iwish_rcond_tol = 1e-12)
+  emc2.pooled_candidates = 8L, emc2.iwish_rcond_tol = 1e-12,
+  emc2.subject_hmc = FALSE, emc2.subject_hmc_h = 1e-4, emc2.subject_hmc_pilots = 20L,
+  emc2.subject_hmc_min_evidence = 10L)
 
 # Production transition options travel with the checkpoint so a resumed run
 # uses the same kernel. Worker allocation and diagnostics remain session-local.
@@ -202,7 +204,8 @@ run_emc <- function(emc, stage, stop_criteria,
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
     prop_started <- proc.time()[["elapsed"]]
-    emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks)
+    emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks,
+                         block_iter = progress$step_size * max(1, cur_thin))
     prop_elapsed <- proc.time()[["elapsed"]] - prop_started
     last_stage <- get_last_stage(emc)
     if(stage == "preburn"){
@@ -383,7 +386,7 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   if (length(later)) as.integer(later[1L]) else Inf
 }
 
-add_proposals <- function(emc, stage, n_cores, n_blocks){
+add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
   prof <- .emc_profile_enabled()
   split <- c(chain = NA_real_, eff = NA_real_)
   # Production proposal refreshes follow the transition counter, independent
@@ -471,7 +474,12 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
     if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
     next_at <- .emc_next_sample_rebuild(n_sample)
     for (j in seq_along(emc)) emc[[j]]$sample_proposals_next <- next_at
+    block_iter <- next_at - n_sample
   }
+  # Shear rounds and subject HMC rates (R/move_allocation.R) on the same
+  # rebuild clock, after the likelihood fits are checked and the shear plans
+  # built; block_iter transitions run before the next.
+  emc <- .emc_alloc_rebuild(emc, stage, n_cores, block_iter)
   if (prof) .emc_profile_state$proposal_split <- split
   return(emc)
 }

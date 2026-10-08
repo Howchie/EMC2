@@ -984,18 +984,22 @@
 .emc_wpool_compute <- function(msg, ctx, shared = NULL) {
   if (identical(msg$kind, "subject_ll")) {
     return(.emc_with_preserved_rng({
+      started <- proc.time()
       failures <- list()
-      ll <- vapply(seq_along(msg$subs), function(k) {
+      ll <- lapply(seq_along(msg$subs), function(k) {
         tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]], ctx$data[[msg$subs[k]]],
                                          ctx$model, ctx$marginalise),
           error = function(e) {
             failures[[length(failures) + 1L]] <<- e
-            -Inf
+            rep(-Inf, nrow(msg$rows[[k]]))
           })
-      }, numeric(1))
-      list(ll = ll, failures = failures)
+      })
+      spent <- proc.time() - started
+      list(ll = ll, failures = failures,
+           cpu = unname(spent[["user.self"]] + spent[["sys.self"]]))
     }))
   }
+  if (identical(msg$kind, "hmc")) return(.emc_hmc_compute(msg, ctx))
   if (identical(msg$kind, "ll")) {
     return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
                                      model = ctx$model, component = msg$component,
@@ -1014,9 +1018,11 @@
   .emc_wpool_compute_particle(msg, ctx, shared)
 }
 
-# Evaluate one candidate for each subject on the chain's existing workers.
-# Replies keep subject order; missing replies are recomputed on the master
-# before the MH decision, so transport failure cannot change acceptance.
+# Evaluate each subject's candidate rows (the same number for every subject)
+# on the chain's existing workers: a vector with one row each, else a
+# subjects x rows matrix. Replies keep subject order; missing replies are
+# recomputed on the master before the decision, so transport failure cannot
+# change it. Worker CPU accumulates in .emc_pool_state$subject_ll_cpu.
 .emc_wpool_subject_ll <- function(pool, rows, ctx, part = NULL) {
   n <- length(rows)
   if (is.null(pool) || !isTRUE(pool$alive)) {
@@ -1041,17 +1047,26 @@
       }
     }
   }
-  ll <- numeric(n)
   replies <- vector("list", length(part))
   deadline <- .emc_wpool_deadline()
+  k <- nrow(rows[[1L]])
+  valid <- function(res, subs) {
+    is.list(res$ll) && length(res$ll) == length(subs) &&
+      all(vapply(res$ll, function(x) is.numeric(x) && length(x) == k &&
+                   !anyNA(x) && !any(x == Inf), logical(1)))
+  }
+  worker_cpu <- 0
   for (w in which(sent)) {
     res <- .emc_wpool_reply(pool, w, deadline)
-    if (is.null(res) || !is.null(res$failed) ||
-        length(res$ll) != length(part[[w]]) || anyNA(res$ll) || any(res$ll == Inf)) {
+    if (is.null(res) || !is.null(res$failed) || !valid(res, part[[w]])) {
       .emc_wpool_degraded("subject likelihood worker gave no valid reply")
       pool$alive <- FALSE
-    } else replies[[w]] <- res
+    } else {
+      replies[[w]] <- res
+      if (is.numeric(res$cpu)) worker_cpu <- worker_cpu + res$cpu
+    }
   }
+  ll <- matrix(0, n, k)
   for (w in seq_along(part)) {
     if (!length(part[[w]])) next
     res <- replies[[w]]
@@ -1061,9 +1076,12 @@
       if (identical(.emc_failure_action(cls), "abort"))
         .emc_failure_abort(cls, "ensemble", e)
     }
-    ll[part[[w]]] <- res$ll
+    ll[part[[w]], ] <- do.call(rbind, res$ll)
   }
-  list(ll = ll, pool = pool)
+  .emc_pool_state$subject_ll_cpu <-
+    (if (is.null(.emc_pool_state$subject_ll_cpu)) 0 else .emc_pool_state$subject_ll_cpu) +
+    worker_cpu
+  list(ll = if (k == 1L) ll[, 1L] else ll, pool = pool)
 }
 
 .emc_wpool_run_loo <- function(ll_mat, cores) {
@@ -1414,6 +1432,7 @@
   n_subjects <- length(pm_settings)
   props <- matrix(0, ctx$n_pars + 1L, n_subjects)
   times <- numeric(n_subjects)
+  cpu_total <- 0
   extra_ll <- if (is.null(extra)) NULL else vector("list", n_subjects)
 
   population_mu <- vapply(seq_len(n_subjects), function(s) {
@@ -1506,6 +1525,7 @@
       fallback_workers <<- fallback_workers + 1L
       fallback_subjects <<- fallback_subjects + length(subs)
     }
+    if (identical(source, "worker") && is.numeric(res$cpu)) cpu_total <<- cpu_total + res$cpu
     if (!profile || is.na(w)) return(invisible(NULL))
     # A worker may serve several queue chunks: its CPU and elapsed times add up.
     finish_at[w] <<- proc.time()[["elapsed"]] - iter_started
@@ -1775,7 +1795,7 @@
   } else if (measure_wire) 0 else NA_real_
   worker_load <- vapply(assigned, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       extra_ll = extra_ll, alive = pool$alive, rejects = rejects,
+       extra_ll = extra_ll, alive = pool$alive, rejects = rejects, worker_cpu = cpu_total,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,

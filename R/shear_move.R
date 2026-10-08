@@ -21,35 +21,40 @@
 # .emc_lik_canonical) and prior N(mu, V), and primes denote the moved group
 # state. A well-informed subject barely moves; a prior-dominated one is
 # shifted and rescaled with the group. Without a usable approximation
-# H_s = 0, so a_s -> mu' + D (a_s - mu). For a given u the map is a
-# bijection whose inverse is the same map with -u, and u and -u are equally
-# likely, so the Metropolis-Hastings ratio is the posterior ratio times the
-# Jacobian: sum_i (g_i + 1) u_sd,i for V (g_i is the size of the covariance
-# block holding parameter i; the prior density of V is taken over the free
-# entries of its blocks) and sum_s log|R_s| - log|R_s'| for the subjects. The
-# approximation shapes the proposal only; a wrong one lowers acceptance but
-# not validity.
+# H_s = 0, so a_s -> mu' + D (a_s - mu). The moved subjects depend only on
+# the start and end group states, so the maps compose, T_v T_u = T_(u+v),
+# and T_-u inverts T_u. The Jacobian of T_u is
+#   J_u = exp(sum_i (g_i + 1) u_sd,i) prod_s |R_s| / |R_s'|
+# (g_i is the size of the covariance block holding parameter i; the prior
+# density of V is taken over the free entries of its blocks), and it composes
+# the same way. The approximation shapes the map only; a wrong one makes the
+# moves smaller, not invalid.
 #
-# Where the steps go. Under the approximations, the centred Gibbs step moves
+# A round moves along one coordinate: a mean direction d (u = t (d, 0)) or
+# the log group sd of one parameter (u = t e_i). Restricted to the orbit
+# t -> T_tv(x) the posterior has density f(t) = pi(T_tv x) J_tv(x), and the
+# orbit through any point of it gives the same f up to a shift in t. A round
+# is the multiple-proposal step of Tjelmeland (2004) and Calderhead (2014) on
+# t: an auxiliary point t~ ~ N(0, c^2), N candidates t_j ~ N(t~, c^2), all
+# evaluated in one likelihood round, and one of the N + 1 points (the
+# current one is t_0 = 0) chosen with probability proportional to f(t_j).
+# Given t~ the N + 1 points are exchangeable, so the choice is a Gibbs step
+# on their index and leaves the posterior invariant. Per round, N = 8
+# candidates halve the autocorrelation time of a single Metropolis step at
+# about the same cost, because a likelihood call's fixed cost dwarfs its
+# extra rows.
+#
+# Which coordinates. Under the approximations the centred Gibbs step moves
 # the group mean as an autoregression with matrix
 #   A = (n V^-1 + P0)^-1 V^-1 (sum_s Q_s^-1) V^-1,  Q_s = H_s + V^-1,
-# whose eigenvalues lambda_i are the lag-1 autocorrelations of its
-# directions; for a group sd, the prior share of each subject's conditional
-# precision, w_i = mean_s (Q_s^-1 V^-1)_ii, plays that role. Each iteration
-# takes a mean step (u_sd = 0) along direction i with probability lambda_i
-# and a scale step (u_mu = 0) on parameter i with probability w_i, in random
-# order, so a well-informed hierarchy gets few steps. The directions and
-# probabilities are computed at proposal rebuilds from the group covariance
-# over the chain's own window and frozen in between, so they never depend on
-# the state being moved. Every direction and every scale has its own step
-# size (directions in units of their posterior sd under the
-# approximations), adapted by Robbins-Monro in the discarded stages only.
-#
-# When every subject has a usable approximation, each step is delayed
-# acceptance (Christen & Fox 2005): a first stage on the approximations,
-# which costs no likelihood evaluation, then the exact correction
-# exp(sum_s r_s(a_s') - r_s(a_s)), r = ll - log L~; otherwise it is one
-# exact stage.
+# whose eigenvectors are the mean directions (columns of dirs, each moving mu
+# by one posterior sd of its direction under the approximations) and whose
+# eigenvalues lambda_i predict their lag-1 autocorrelations; for a group sd,
+# w_i = mean_s (Q_s^-1 V^-1)_ii is the prior share of each subject's
+# conditional precision. How many rounds each coordinate gets per iteration
+# is set by the move allocation (R/move_allocation.R) from what the rest of
+# the iteration already mixes, at proposal rebuilds, and frozen in between.
+# Mean steps keep V, and so every R_s: only the centres move.
 #
 # Under the Huang-Wand prior (standard type), V | a ~ IW(v + d - 1,
 # 2 v diag(1 / a)) with a_k ~ IG(1/2, 1 / A_k^2). Holding a fixed would pin
@@ -57,7 +62,7 @@
 # say. Given V the inverse-Wishart density factorises over the a_k, so a
 # integrates out in closed form:
 #   log p(V) = -(df + d + 1)/2 log|V| - (v + d)/2 sum_k log(v (V^-1)_kk + 1/A_k^2)
-# (for an unblocked parameter, the d = 1 case on its variance). The steps
+# (for an unblocked parameter, the d = 1 case on its variance). The rounds
 # target the posterior with a integrated out, and a is then drawn from its
 # conditional given the final V, the draw the Gibbs step makes: together a
 # valid update of (V, a).
@@ -66,9 +71,18 @@
 # group mean (standard without group designs, diagonal-gamma); the others
 # keep the ensemble update alone.
 
+# Candidates per round, and the share of rounds that should move (the
+# optimum of the step scale c for N = 8 on a Gaussian orbit is flat around
+# this value).
+.EMC_SHEAR_CANDIDATES <- 8L
+.EMC_SHEAR_MOVE_TARGET <- 0.68
+# Initial step scale in posterior sds of the coordinate, and the bounds every
+# adapted scale stays in.
+.EMC_SHEAR_STEP0 <- 2.5
+.EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
+
 .emc_shear_options <- function() {
-  list(enabled = identical(getOption("emc2.group_move", "ensemble"), "shear"),
-       target = 0.44)
+  list(enabled = identical(getOption("emc2.group_move", "ensemble"), "shear"))
 }
 
 .emc_shear_supported <- function(sampler) {
@@ -84,23 +98,25 @@
   .emc_shear_options()$enabled && .emc_shear_supported(sampler)
 }
 
-# Each subject's likelihood approximation if it is usable (checked, and the
-# check not poor), else NULL. The particle step uses the same ones.
+# Each subject's likelihood approximation if it is finite, else NULL. The
+# particle step's Pareto check does not apply: it judges the Gaussian
+# conditional at one group state, while the map is valid with any
+# approximation and moves an informative subject far better with a rough one
+# than with none (H_s = 0).
 .emc_shear_fits <- function(sampler) {
   p <- sampler$n_pars
   lapply(seq_len(sampler$n_subjects), function(s) {
     fit <- if (length(sampler$lik_laplace) >= s) sampler$lik_laplace[[s]] else NULL
     ok <- is.list(fit) && is.matrix(fit$prec) && all(dim(fit$prec) == p) &&
-      length(fit$lin) == p && all(is.finite(fit$prec)) && all(is.finite(fit$lin)) &&
-      is.list(fit$check) && !isTRUE(any(.emc_laplace_poor(fit$check)))
+      length(fit$lin) == p && all(is.finite(fit$prec)) && all(is.finite(fit$lin))
     if (ok) fit else NULL
   })
 }
 
-# Mean directions and step probabilities at group covariance V (see the
-# header). Columns of dirs move mu by one posterior sd of their direction
-# under the approximations: mu = mu0 + t d with d' (n V^-1 + P0) d = 1 has
-# collapsed precision 1 - lambda in t.
+# Mean directions and scale weights at group covariance V (see the header).
+# Columns of dirs move mu by one posterior sd of their direction under the
+# approximations: mu = mu0 + t d with d' (n V^-1 + P0) d = 1 has collapsed
+# precision 1 - lambda in t.
 .emc_shear_plan <- function(fits, prior, V) {
   p <- nrow(V)
   n <- length(fits)
@@ -123,29 +139,84 @@
   list(dirs = dirs, lam = lam, w = pmin(1, pmax(0, w / n)))
 }
 
-# Every chain's plan, from the proposal window create_chain_proposals() uses.
+# The move along coordinate k (1..p mean directions, p+1..2p log group sds)
+# as a step direction in u = (u_mu, u_sd).
+.emc_shear_coord_dir <- function(plan, k) {
+  p <- nrow(plan$dirs)
+  if (k <= p) c(plan$dirs[, k], numeric(p)) else replace(numeric(2L * p), k, 1)
+}
+
+# Every chain's plan from the proposal window create_chain_proposals() uses.
+# Step scales and the last block's round records carry over to the new
+# directions they match (|cosine| >= 0.9; a log group sd always matches
+# itself); the round counts are set by the move allocation afterwards.
 .emc_shear_set_plans <- function(emc, samples_idx, stage) {
   if (!.emc_shear_active(emc[[1L]])) return(emc)
   idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
-  for (j in seq_along(emc))
-    emc[[j]] <- .emc_shear_set_plan(
-      emc[[j]], emc[[j]]$samples$theta_var[, , idx, drop = FALSE])
+  if (!length(idx)) return(emc)
+  for (j in seq_along(emc)) emc[[j]] <- .emc_shear_set_plan(emc[[j]], idx, stage)
   emc
 }
 
-# Plan from the mean group covariance over the chain's proposal window.
-.emc_shear_set_plan <- function(chain, var_draws) {
+.emc_shear_set_plan <- function(chain, idx, stage) {
   if (!.emc_shear_active(chain)) return(chain)
-  if (length(dim(var_draws)) != 3L || dim(var_draws)[3] < 1L) return(chain)
-  V <- apply(var_draws, 1:2, mean)
+  n <- chain$n_subjects
+  p <- chain$n_pars
+  V <- apply(chain$samples$theta_var[, , idx, drop = FALSE], 1:2, mean)
   plan <- tryCatch(.emc_shear_plan(.emc_shear_fits(chain), chain$prior, V),
                    error = function(e) NULL)
   if (is.null(plan)) return(chain)
   st <- chain$shear
   if (is.null(st)) st <- list()
+  old <- st$plan
+  base <- c(rep(0, p), rep(-0.5 * log(2 * n), p))
+  plan$log_step <- base + log(.EMC_SHEAR_STEP0)
+  plan$rounds <- numeric(2L * p)
+  plan$last <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
+  if (is.list(old) && is.matrix(old$dirs) && all(dim(old$dirs) == p)) {
+    scale <- c(rep(NA_real_, p), rep(1, p))
+    match <- c(rep(NA_integer_, p), p + seq_len(p))
+    for (k in seq_len(p)) {
+      d <- plan$dirs[, k]
+      cs <- abs(drop(crossprod(old$dirs, d))) /
+        (sqrt(colSums(old$dirs^2)) * sqrt(sum(d^2)))
+      m <- which.max(cs)
+      if (cs[m] >= 0.9) {
+        match[k] <- m
+        scale[k] <- sqrt(sum(old$dirs[, m]^2) / sum(d^2))
+      }
+    }
+    got <- which(!is.na(match))
+    blk <- old$block
+    plan$log_step[got] <- old$log_step[match[got]] + log(scale[got])
+    if (!is.null(blk)) {
+      plan$last$E[got] <- blk$E[match[got]] * scale[got]^2
+      plan$last$n[got] <- blk$n[match[got]]
+      plan$last$moved[got] <- blk$moved[match[got]]
+    }
+  }
+  # Discarded stages adapt the scales round by round; production only here.
+  if (identical(stage, "sample")) plan <- .emc_shear_tune_steps(plan)
+  plan$block <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
   st$plan <- plan
   chain$shear <- st
   chain
+}
+
+# A production rebuild moves each step scale towards the target share of
+# moving rounds, from the last block's rounds (rounds within a block never
+# change it).
+.emc_shear_tune_steps <- function(plan) {
+  lst <- plan$last
+  ok <- lst$n >= 10L
+  if (any(ok)) {
+    rate <- lst$moved[ok] / lst$n[ok]
+    plan$log_step[ok] <- plan$log_step[ok] +
+      pmax(-log(2), pmin(log(2), 2 * (rate - .EMC_SHEAR_MOVE_TARGET)))
+  }
+  plan$log_step <- pmin(.EMC_SHEAR_LOG_STEP_RANGE[2],
+                        pmax(.EMC_SHEAR_LOG_STEP_RANGE[1], plan$log_step))
+  plan
 }
 
 # Covariance prior as each variant's Gibbs step targets it: diagonal-gamma
@@ -231,8 +302,22 @@
   if (any(vapply(frames, is.null, logical(1)))) return(NULL)
   lp_v <- tryCatch(.emc_shear_log_prior_v(V, spec), error = function(e) NA_real_)
   list(mu = mu, V = V, Vi = Vi, chol_V = chol_V, frames = frames,
-       logdet = sum(vapply(frames, `[[`, 0, "logdet")),
+       logdet = sum(vapply(frames, `[[`, 0, "logdet")), lp_v = lp_v,
        lp = .emc_shear_log_prior_mu(mu, prior) + lp_v)
+}
+
+# The state after a mean step u_mu: V, and so every R_s, is unchanged and
+# each centre moves by Q_s^-1 V^-1 u_mu.
+.emc_shear_shift_state <- function(cur, u_mu, prior) {
+  Vi_u <- drop(cur$Vi %*% u_mu)
+  new <- cur
+  new$frames <- lapply(cur$frames, function(f) {
+    f$m <- f$m + drop(backsolve(f$R, forwardsolve(t(f$R), Vi_u)))
+    f
+  })
+  new$mu <- cur$mu + u_mu
+  new$lp <- .emc_shear_log_prior_mu(new$mu, prior) + cur$lp_v
+  new
 }
 
 # sum_s log N(a_s | mu, V).
@@ -241,12 +326,19 @@
   -0.5 * sum(z^2) - ncol(alpha) * sum(log(diag(state$chol_V)))
 }
 
-# The deterministic map for a given u, from the group state cur and subjects
-# alpha: the moved state, the moved subjects and log|det| of the map's
-# Jacobian. NULL when the moved state is invalid.
+# The map for a given u, from the group state cur and subjects alpha: the
+# moved state, the moved subjects and log|det| of the map's Jacobian. NULL
+# when the moved state is invalid.
 .emc_shear_propose <- function(cur, u, alpha, fits, prior, spec) {
   p <- length(cur$mu)
   u_sd <- u[p + seq_len(p)]
+  if (all(u_sd == 0)) {
+    new <- .emc_shear_shift_state(cur, u[seq_len(p)], prior)
+    if (!is.finite(new$lp)) return(NULL)
+    shift <- vapply(seq_along(new$frames), function(s)
+      new$frames[[s]]$m - cur$frames[[s]]$m, numeric(p))
+    return(list(state = new, alpha = alpha + shift, log_jac = 0))
+  }
   d <- exp(u_sd)
   new <- .emc_shear_state(cur$mu + u[seq_len(p)], cur$V * outer(d, d),
                           fits, prior, spec)
@@ -259,53 +351,88 @@
        log_jac = sum((spec$size + 1) * u_sd) + cur$logdet - new$logdet)
 }
 
-# Gaussian log-likelihood difference; subjects without a fit contribute none.
-.emc_shear_lik_delta <- function(alpha, proposed, fits) {
-  delta <- 0
-  for (s in seq_len(ncol(alpha))) {
-    fit <- fits[[s]]
-    if (is.null(fit)) next
-    a <- alpha[, s]
-    b <- proposed[, s]
-    delta <- delta + sum((b - a) * (fit$lin - drop(fit$prec %*% (a + b)) / 2))
-  }
-  if (is.finite(delta)) delta else NA_real_
-}
-
-# What every step of one move shares: the usable fits, the covariance prior,
-# and whether to screen on the fits first (only when every subject has one).
+# What every round of one move shares: the usable fits and the covariance
+# prior.
 .emc_shear_context <- function(sampler) {
-  fits <- .emc_shear_fits(sampler)
-  list(fits = fits, spec = .emc_shear_v_spec(sampler),
-       delayed = !any(vapply(fits, is.null, logical(1))))
+  list(fits = .emc_shear_fits(sampler), spec = .emc_shear_v_spec(sampler))
 }
 
-# One Metropolis-Hastings step of the map with step u; x carries the current
-# state, its subject likelihoods and the worker pool.
-.emc_shear_mh <- function(x, u, sampler, ctx) {
-  x$accept_prob <- 0
-  x$accepted <- FALSE
-  prop <- .emc_shear_propose(x$cur, u, x$alpha, ctx$fits, sampler$prior, ctx$spec)
-  if (is.null(prop)) return(x)
-  pn <- sampler$par_names
-  new_hier <- .emc_shear_log_hier(prop$alpha, prop$state)
-  common <- new_hier - x$cur_hier + prop$state$lp - x$cur$lp + prop$log_jac
-  approx_delta <- if (ctx$delayed) .emc_shear_lik_delta(x$alpha, prop$alpha, ctx$fits) else NA_real_
-  delayed <- is.finite(common + approx_delta)
-  probability <- function(log_ratio) if (is.na(log_ratio)) 0 else exp(min(0, log_ratio))
-  screen <- if (delayed) probability(common + approx_delta) else 1
-  if (delayed && stats::runif(1L) >= screen) return(x)
-  rows <- lapply(seq_len(ncol(x$alpha)), function(s)
-    matrix(prop$alpha[, s], 1L, dimnames = list(NULL, pn)))
-  evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part)
-  ll_new <- evaluated$ll
-  x$wpool <- evaluated$pool
-  x$rounds <- x$rounds + 1L
-  correction <- sum(ll_new - x$ll) + if (delayed) -approx_delta else common
-  x$accept_prob <- screen * probability(correction)
-  if (stats::runif(1L) < probability(correction)) {
-    x$cur <- prop$state; x$cur_hier <- new_hier
-    x$alpha <- prop$alpha; x$ll <- ll_new; x$accepted <- TRUE
+# A mean step's candidates lie on a line: with Delta_s = Q_s^-1 V^-1 d, the
+# subjects move to a_s + t Delta_s and mu to mu + t d, so the hierarchical
+# and mean-prior terms are quadratics in t. Returns, per candidate, the moved
+# subjects and the change of those terms (V, and so the Jacobian, fixed).
+.emc_shear_line <- function(cur, d, alpha, t, prior) {
+  Vi_d <- drop(cur$Vi %*% d)
+  Delta <- vapply(cur$frames, function(f)
+    drop(backsolve(f$R, forwardsolve(t(f$R), Vi_d))), numeric(length(d)))
+  Delta <- matrix(Delta, length(d))
+  Z0 <- backsolve(cur$chol_V, alpha - cur$mu, transpose = TRUE)
+  Zd <- backsolve(cur$chol_V, Delta - d, transpose = TRUE)
+  P0 <- as.matrix(prior$theta_mu_invar)
+  m0 <- cur$mu - prior$theta_mu_mean
+  a1 <- sum(Z0 * Zd) + sum(m0 * (P0 %*% d))
+  a2 <- sum(Zd^2) + sum(d * (P0 %*% d))
+  list(Delta = Delta, delta = -(a1 * t + 0.5 * a2 * t^2))
+}
+
+# One round along step direction v with scale step (see the header); x
+# carries the current state, its subject likelihoods and the worker pool.
+# Adds E, the selection-weighted squared move in t, and whether it moved.
+.emc_shear_round <- function(x, v, step, sampler, ctx) {
+  t_aux <- step * stats::rnorm(1L)
+  t <- t_aux + step * stats::rnorm(.EMC_SHEAR_CANDIDATES)
+  p <- nrow(x$alpha)
+  n <- ncol(x$alpha)
+  mean_step <- all(v[p + seq_len(p)] == 0)
+  if (mean_step) {
+    d <- v[seq_len(p)]
+    line <- .emc_shear_line(x$cur, d, x$alpha, t, sampler$prior)
+    ok <- which(is.finite(line$delta))
+    moved_alpha <- function(i) x$alpha + t[i] * line$Delta
+    prior_delta <- line$delta
+  } else {
+    props <- lapply(t, function(tj)
+      .emc_shear_propose(x$cur, tj * v, x$alpha, ctx$fits, sampler$prior, ctx$spec))
+    ok <- which(!vapply(props, is.null, logical(1)))
+    moved_alpha <- function(i) props[[i]]$alpha
+    prior_delta <- vapply(seq_along(t), function(i) {
+      pr <- props[[i]]
+      if (is.null(pr)) return(-Inf)
+      .emc_shear_log_hier(pr$alpha, pr$state) + pr$state$lp + pr$log_jac -
+        x$cur_hier - x$cur$lp
+    }, numeric(1))
+  }
+  lw <- rep(-Inf, length(t))
+  ll_new <- NULL
+  if (length(ok)) {
+    pn <- sampler$par_names
+    cand <- lapply(ok, moved_alpha)
+    rows <- lapply(seq_len(n), function(s)
+      matrix(vapply(cand, function(a) a[, s], numeric(p)), length(ok), byrow = TRUE,
+             dimnames = list(NULL, pn)))
+    evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part)
+    x$wpool <- evaluated$pool
+    x$rounds <- x$rounds + 1L
+    ll_new <- matrix(evaluated$ll, n, length(ok))
+    v_ok <- colSums(ll_new) - sum(x$ll) + prior_delta[ok]
+    lw[ok] <- ifelse(is.finite(v_ok), v_ok, -Inf)
+  }
+  w <- c(0, lw)
+  w <- exp(w - max(w))
+  w <- w / sum(w)
+  j <- sample.int(length(w), 1L, prob = w) - 1L
+  x$E <- sum(w[-1L] * t^2)
+  x$moved <- j > 0L
+  if (x$moved) {
+    if (mean_step) {
+      x$cur <- .emc_shear_shift_state(x$cur, t[j] * d, sampler$prior)
+      x$alpha <- moved_alpha(j)
+    } else {
+      x$cur <- props[[j]]$state
+      x$alpha <- props[[j]]$alpha
+    }
+    x$cur_hier <- .emc_shear_log_hier(x$alpha, x$cur)
+    x$ll <- ll_new[, match(j, ok)]
   }
   x
 }
@@ -318,77 +445,70 @@
   plan <- st$plan
   n <- sampler$n_subjects
   p <- sampler$n_pars
-  if (!is.list(plan) || !is.matrix(plan$dirs) || any(dim(plan$dirs) != p)) return(keep)
-  cfg <- .emc_shear_options()
-  # Mean steps start at one posterior sd of their direction; scale steps near
-  # the posterior sd of a log group sd informed by n subjects, 1 / sqrt(2 n).
-  if (length(st$dir_log_step) != p) {
-    st$dir_log_step <- numeric(p)
-    st$dir_n_adapt <- st$dir_proposed <- st$dir_accepted <- integer(p)
-  }
-  if (length(st$scale_log_step) != p) {
-    st$scale_log_step <- rep(-0.5 * log(2 * n), p)
-    st$scale_n_adapt <- st$scale_proposed <- st$scale_accepted <- integer(p)
-  }
+  if (!is.list(plan) || !is.matrix(plan$dirs) || any(dim(plan$dirs) != p) ||
+      length(plan$rounds) != 2L * p || !any(plan$rounds > 0)) return(keep)
   if (is.null(st$iterations)) st$iterations <- st$rounds <- 0L
+  if (!is.null(sampler$rng$gibbs))
+    assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
+  # The allocated expected rounds per coordinate: the whole part, plus one
+  # more with the fractional part as probability, in random order.
+  whole <- floor(plan$rounds)
+  n_rounds <- whole + (stats::runif(2L * p) < plan$rounds - whole)
+  take <- rep.int(seq_len(2L * p), n_rounds)
+  st$iterations <- st$iterations + 1L
+  if (!length(take)) {
+    sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
+    sampler$shear <- st
+    keep$sampler <- sampler
+    return(keep)
+  }
   ctx <- .emc_shear_context(sampler)
   alpha <- matrix(proposals[seq_len(p), ], p)
   cur <- .emc_shear_state(as.numeric(pars$tmu), as.matrix(pars$tvar), ctx$fits,
                           sampler$prior, ctx$spec)
-  if (is.null(cur) || !is.finite(cur$lp)) return(keep)
+  if (is.null(cur) || !is.finite(cur$lp)) {
+    sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
+    sampler$shear <- st
+    keep$sampler <- sampler
+    return(keep)
+  }
   x <- list(cur = cur, cur_hier = .emc_shear_log_hier(alpha, cur),
             alpha = alpha, ll = proposals[p + 1L, ], rounds = 0L,
             wpool = wpool, wpool_part = wpool_part)
-
-  if (!is.null(sampler$rng$gibbs))
-    assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
   adapt <- stage != "sample"
-  zero <- numeric(p)
-  any_accepted <- FALSE
-  # Candidate steps: p mean directions, then p scale parameters, each taken
-  # with its frozen probability, in random order. Each is a complete
-  # Metropolis-Hastings step from the current state.
-  take <- which(stats::runif(2L * p) < c(plan$lam, plan$w))
+  any_moved <- FALSE
+  blk <- plan$block
   for (k in take[sample.int(length(take))]) {
-    if (k <= p) {
-      u <- c(exp(st$dir_log_step[k]) * stats::rnorm(1L) * plan$dirs[, k], zero)
-      x <- .emc_shear_mh(x, u, sampler, ctx)
-      st$dir_proposed[k] <- st$dir_proposed[k] + 1L
-      st$dir_accepted[k] <- st$dir_accepted[k] + as.integer(x$accepted)
-      if (adapt) {
-        st$dir_n_adapt[k] <- st$dir_n_adapt[k] + 1L
-        st$dir_log_step[k] <- st$dir_log_step[k] +
-          (x$accepted - cfg$target) / sqrt(st$dir_n_adapt[k])
-      }
-    } else {
-      i <- k - p
-      u_sd <- zero
-      u_sd[i] <- exp(st$scale_log_step[i]) * stats::rnorm(1L)
-      x <- .emc_shear_mh(x, c(zero, u_sd), sampler, ctx)
-      st$scale_proposed[i] <- st$scale_proposed[i] + 1L
-      st$scale_accepted[i] <- st$scale_accepted[i] + as.integer(x$accepted)
-      if (adapt) {
-        st$scale_n_adapt[i] <- st$scale_n_adapt[i] + 1L
-        st$scale_log_step[i] <- st$scale_log_step[i] +
-          (x$accepted - cfg$target) / sqrt(st$scale_n_adapt[i])
-      }
+    x <- .emc_shear_round(x, .emc_shear_coord_dir(plan, k), exp(plan$log_step[k]),
+                          sampler, ctx)
+    blk$E[k] <- blk$E[k] + x$E
+    blk$n[k] <- blk$n[k] + 1L
+    blk$moved[k] <- blk$moved[k] + as.integer(x$moved)
+    if (adapt) {
+      plan$log_step[k] <- min(.EMC_SHEAR_LOG_STEP_RANGE[2], max(.EMC_SHEAR_LOG_STEP_RANGE[1],
+        plan$log_step[k] + (x$moved - .EMC_SHEAR_MOVE_TARGET) / sqrt(blk$n[k])))
     }
-    any_accepted <- any_accepted || x$accepted
+    any_moved <- any_moved || x$moved
   }
-  st$iterations <- st$iterations + 1L
+  plan$block <- blk
+  st$plan <- plan
   st$rounds <- st$rounds + x$rounds
   if (ctx$spec$uses_a_half)
     pars$a_half <- stats::setNames(.emc_shear_draw_a_half(x$cur$V, ctx$spec),
                                    names(pars$a_half))
   sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
-  if (any_accepted) {
+  if (any_moved) {
     pars$tmu <- stats::setNames(x$cur$mu, names(pars$tmu))
     pars$tvar <- `dimnames<-`(x$cur$V, dimnames(pars$tvar))
     pars$tvinv <- `dimnames<-`(x$cur$Vi, dimnames(pars$tvar))
+    # Every subject's prior mean is the group mean here (see
+    # .emc_shear_supported); updates later in the iteration read it.
+    if (is.matrix(pars$subj_mu)) pars$subj_mu[] <- x$cur$mu
     proposals[seq_len(p), ] <- x$alpha
     proposals[p + 1L, ] <- x$ll
     pars$alpha <- x$alpha
   }
   sampler$shear <- st
-  list(sampler = sampler, pars = pars, proposals = proposals, wpool = x$wpool)
+  list(sampler = sampler, pars = pars, proposals = proposals, wpool = x$wpool,
+       rounds = x$rounds)
 }

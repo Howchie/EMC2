@@ -167,6 +167,18 @@
       .emc_profile_field("particle_weight_ess", "numeric", "work", "count",
                          desc = "importance-weight ESS of the proposal cloud, mean over subjects"),
 
+      # -- optional moves (R/move_allocation.R) ----------------------------
+      .emc_profile_field("shear_rounds", "integer", "work", "count",
+                         desc = "shear likelihood rounds"),
+      .emc_profile_field("shear_cpu", "numeric", "work", "s",
+                         desc = "CPU of the shear: master plus its worker rounds"),
+      .emc_profile_field("hmc_attempts", "integer", "work", "count",
+                         desc = "subject HMC transitions attempted"),
+      .emc_profile_field("hmc_accepted", "integer", "work", "count",
+                         desc = "subject HMC transitions accepted"),
+      .emc_profile_field("hmc_cpu", "numeric", "work", "s",
+                         desc = "CPU of the subject HMC round, master and workers"),
+
       # -- health -----------------------------------------------------------
       .emc_profile_field("fallback_subjects", "integer", "health", "count",
                          desc = "subjects recomputed in the master after a failure"),
