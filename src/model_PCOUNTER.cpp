@@ -10,6 +10,7 @@
 
 #include "col_registry.h"
 #include "race_contract.h"
+#include "rt_bins.h"
 
 namespace {
 
@@ -131,6 +132,7 @@ double c_log_likelihood_pcounter_corr(Rcpp::NumericMatrix pars,
       dadm.hasAttribute("pContaminant"))
     Rcpp::stop("PCOUNTERcorr does not support variable races or nuisance mixtures.");
   Rcpp::NumericVector rt = dadm["rt"];
+  RtBinCache bins; bins.init(dadm, 2);
   const int n_unique = n_trials / 2;
   std::vector<double> ll(static_cast<size_t>(n_unique), min_ll);
   std::vector<double> p1(static_cast<size_t>(pars.ncol()));
@@ -144,7 +146,16 @@ double c_log_likelihood_pcounter_corr(Rcpp::NumericMatrix pars,
       p1[static_cast<size_t>(col)] = pars(at, col);
       p2[static_cast<size_t>(col)] = pars(at + 1, col);
     }
-    double z = pcorr_log_density(t, w, p1.data(), p2.data(), rho_col);
+    double z;
+    if (bins.active()) {
+      const int t0 = emc2col::pcounter_corr::t0;
+      const double onset = w == 0 ? p1[t0] : p2[t0];
+      const double refine = std::max(rt_bin_survivor_weight(bins.bins[j], p1[t0]),
+                                     rt_bin_survivor_weight(bins.bins[j], p2[t0]));
+      z = rt_bin_log_average(bins.bins[j], onset, [&](double tt) {
+        return pcorr_log_density(tt, w, p1.data(), p2.data(), rho_col);
+      }, refine);
+    } else z = pcorr_log_density(t, w, p1.data(), p2.data(), rho_col);
     ll[static_cast<size_t>(j)] = R_FINITE(z) && z > min_ll ? z : min_ll;
   }
   if (trial_ll_out != nullptr) {

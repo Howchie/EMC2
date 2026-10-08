@@ -59,7 +59,19 @@ bool ddm_data_all_finite_untruncated(const Rcpp::DataFrame& data,
   if (data.containsElementNamed("UT")) {
     Rcpp::NumericVector UT = data["UT"];
     for (int i = 0; i < n_trials; ++i) {
-      if (R_FINITE(UT[i])) return false;
+      if (UT[i] != R_PosInf) return false;
+    }
+  }
+  if (data.containsElementNamed("LC")) {
+    Rcpp::NumericVector LC = data["LC"];
+    for (int i = 0; i < n_trials; ++i) {
+      if (LC[i] != 0.0) return false;
+    }
+  }
+  if (data.containsElementNamed("UC")) {
+    Rcpp::NumericVector UC = data["UC"];
+    for (int i = 0; i < n_trials; ++i) {
+      if (UC[i] != R_PosInf) return false;
     }
   }
 
@@ -242,7 +254,139 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
   if (shared != nullptr) shared->ddm_endpoint_cache.new_particle();
   auto d_raw = [&](const double* rts, const int* Rs, const int* mask,
                    const int* ok_, double* out, double floor_) {
-    ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+    if (shared == nullptr || !shared->rt_bins.active()) {
+      ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+      return;
+    }
+
+    bool have_boundary = false;
+    for (int i = 0; i < n_trials; ++i) {
+      if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
+          static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+      const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
+      if (!(bin.hi > bin.lo) ||
+          rt_bin_near_support(bin, cols[emc2col::ddm::t0][i])) {
+        // The boundary route replaces this density entirely; leave the bulk
+        // kernel's expensive point evaluation out of the way.
+        out[i] = R_NegInf;
+        have_boundary = true;
+      }
+    }
+
+    // Most particles have no onset inside the retained bin. Keep that common
+    // path allocation free: one bulk midpoint pass, then only the bin-width
+    // correction. Construct sparse masks only when an integral will replace
+    // at least one point density.
+    if (!have_boundary) {
+      ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+      for (int i = 0; i < n_trials; ++i) {
+        if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
+            static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+        out[i] += shared->rt_bins.log_fraction[static_cast<size_t>(i)];
+      }
+      return;
+    }
+
+    std::vector<int> point_mask(static_cast<size_t>(n_trials));
+    for (int i = 0; i < n_trials; ++i)
+      point_mask[static_cast<size_t>(i)] =
+        mask == nullptr || mask[i] ? 1 : 0;
+    for (int i = 0; i < n_trials; ++i) {
+      if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
+          static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+      const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
+      if (!(bin.hi > bin.lo) ||
+          rt_bin_near_support(bin, cols[emc2col::ddm::t0][i])) {
+        point_mask[static_cast<size_t>(i)] = 0;
+      }
+    }
+    ker.d_raw(rts, Rs, cols, n_trials, point_mask.data(), ok_, out, floor_, kctx);
+
+    // DDM and BOU use a dedicated likelihood kernel rather than the generic
+    // race post-pass. Replace point densities with the same bin average used
+    // by the race models, including support clipping and the nominal-width
+    // denominator.
+    int n_row_cols = emc2col::ddm::N_REQ;
+    if (kctx->bou_cache) {
+      n_row_cols = emc2col::bou::N_REQ;
+      if (kctx->bnd_kind != fpe::FPE_BND_FIXED)
+        n_row_cols = emc2col::bou::tau + 1;
+      if (kctx->bnd_kind == fpe::FPE_BND_WEIBULL)
+        n_row_cols = emc2col::bou::pw + 1;
+    }
+    std::vector<const double*> row_cols(static_cast<size_t>(n_row_cols));
+    for (int c = 0; c < n_row_cols; ++c) row_cols[static_cast<size_t>(c)] = cols[c];
+
+    const EndpointQueryPlan* saved_queries = kctx->endpoint_queries;
+    kctx->endpoint_queries = nullptr;
+    for (int i = 0; i < n_trials; ++i) {
+      if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
+          static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+      const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
+      const double onset = cols[emc2col::ddm::t0][i];
+      if (!(bin.hi > bin.lo)) {
+        out[i] = R_NegInf;
+        continue;
+      }
+      if (point_mask[static_cast<size_t>(i)] != 0) {
+        // The bulk kernel already evaluated the stored (clipped-bin) midpoint.
+        // Keep it and apply only the retained-width correction; a one-row
+        // kernel call here would repeat the same expensive density evaluation.
+        out[i] += shared->rt_bins.log_fraction[static_cast<size_t>(i)];
+        continue;
+      }
+      for (int c = 0; c < n_row_cols; ++c)
+        row_cols[static_cast<size_t>(c)] = cols[c] + i;
+      const int row_mask = 1;
+
+      if (ker.p_raw != nullptr) {
+        const double lo = std::max(bin.lo, onset);
+        if (!(bin.hi > lo)) {
+          out[i] = R_NegInf;
+          continue;
+        }
+        const double weight = rt_bin_quadrature_weight(bin, onset);
+        auto midpoint_val = [&]() {
+          double row_value = R_NegInf;
+          const double mid_t = bin.lo + (bin.hi - bin.lo) / 2.0;
+          ker.d_raw(&mid_t, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
+                    &row_value, R_NegInf, kctx);
+          return row_value + std::log((bin.hi - bin.lo) / bin.h);
+        };
+        if (weight == 0.0) {
+          out[i] = midpoint_val();
+          continue;
+        }
+        double log_integral = R_NegInf;
+        double log_p_hi = R_NegInf;
+        ker.p_raw(&bin.hi, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
+                  &log_p_hi, R_NegInf, kctx);
+        if (lo <= onset) {
+          log_integral = log_p_hi - std::log(bin.h);
+        } else {
+          double log_p_lo = R_NegInf;
+          ker.p_raw(&lo, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
+                    &log_p_lo, R_NegInf, kctx);
+          if (R_FINITE(log_p_hi) && log_p_hi > log_p_lo) {
+            log_integral = log_diff_exp(log_p_hi, log_p_lo) - std::log(bin.h);
+          } else {
+            log_integral = R_NegInf;
+          }
+        }
+        out[i] = (weight >= 1.0) ? log_integral :
+          log_sum_exp(std::log(weight) + log_integral,
+                      std::log1p(-weight) + midpoint_val());
+      } else {
+        double row_value = R_NegInf;
+        auto row_density = [&](double t) {
+          ker.d_raw(&t, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
+                    &row_value, R_NegInf, kctx);
+          return row_value;
+        };
+        out[i] = rt_bin_log_average(bin, onset, row_density);
+      }
+    }
+    kctx->endpoint_queries = saved_queries;
   };
   auto p_raw = [&](const double* rts, const int* Rs, const int* mask,
                    const int* ok_, double* out, double floor_) {
@@ -263,9 +407,13 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
   const bool use_mix = (pc_ptr != nullptr) || (pg_ptr != nullptr && gk.active());
   auto apply_mix = [&](double ll, int i) -> double {
     const double pC = (pc_ptr != nullptr) ? pc_ptr[i] : 0.0;
-    const double pG = (pg_ptr != nullptr) ? pg_ptr[i] : 0.0;
+    const double pG = (pg_ptr != nullptr && gk.active()) ? pg_ptr[i] : 0.0;
     if (pC == 0.0 && pG == 0.0) return ll;
-    return mix_contaminants_rt(ll, pC, pG, gk, rt_ptr[i], R_ptr[i] != NA_INTEGER);
+    const GuessKernel trial_guess = shared != nullptr && shared->rt_bins.active() &&
+      R_FINITE(rt_ptr[i]) && static_cast<size_t>(i) < shared->rt_bins.bins.size()
+        ? rt_bin_guess(gk, shared->rt_bins.bins[static_cast<size_t>(i)]) : gk;
+    return mix_contaminants_rt(ll, pC, pG, trial_guess, rt_ptr[i],
+                               R_ptr[i] != NA_INTEGER);
   };
 
   // 1. Fast Path: All RTs finite, no truncation, no censoring
@@ -657,6 +805,7 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
   shared.lF_UC_2_buf.assign(static_cast<size_t>(n_trials), R_NegInf);
   Rcpp::IntegerVector R_col = data["R"];
   shared.shared_R_levels = R_col.attr("levels");
+  shared.rt_bins.init(data, 1);
   shared.valid = true;
 
   Rcpp::NumericVector rts = data["rt"];
@@ -730,6 +879,7 @@ bool init_ddm_shared_state(DataFrame data, int n_trials,
   shared.all_ones_int_buf.assign(n_trials, 1);
   Rcpp::IntegerVector R_col = data["R"];
   shared.shared_R_levels = R_col.attr("levels");
+  shared.rt_bins.init(data, 1);
   shared.valid = true;
 
   // Contaminant nuisance columns.  Both are trailing p_types, so they sit past

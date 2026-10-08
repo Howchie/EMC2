@@ -41,6 +41,7 @@ struct CorrDriftSharedState {
   int n_par = 0;
 
   // R holders keeping backing memory alive
+  double rt_resolution = 0.0;
   Rcpp::NumericVector rt, LT, UT, LC, UC;
   Rcpp::IntegerVector race_nacc;
   Rcpp::LogicalVector race_mask;
@@ -133,6 +134,7 @@ struct RDMSWTNCorrSharedState {
   int pg_col = -1;    // pGuess column, -1 when absent
   GuessKernel guess;  // uniform guess kernel; inactive when pGuess is unused
   bool has_RACE = false;
+  double rt_resolution = 0.0;
   Rcpp::NumericVector rt, LT, UT, LC, UC;
   Rcpp::IntegerVector lR_codes;
   Rcpp::IntegerVector race_nacc;

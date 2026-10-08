@@ -30,6 +30,7 @@
 #include "logicalrules_likelihood.h"
 #include "correlated_likelihood.h"
 #include "likelihood_shared.h"
+#include "rt_bins.h"
 #include "likelihood_ddm.h"
 #include "marginal_likelihood.h"
 #include <gsl/gsl_integration.h>
@@ -64,6 +65,129 @@ static inline int count_resp_accumulators(const int* lR_codes, int start, int n,
     if (code != time_code && code != nogo_code) count++;
   }
   return count;
+}
+
+static bool race_bin_near_support(const RtBin& bin, const double* const* cols,
+                                 int start, int n_acc, int t0_col,
+                                 bool pre_t0_mass) {
+  if (pre_t0_mass && rt_bin_near_support(bin, 0.0)) return true;
+  if (t0_col < 0) return false;
+  for (int k = 0; k < n_acc; ++k)
+    if (pre_t0_mass ? rt_bin_internal_onset_weight(bin, cols[t0_col][start + k]) > 0.0 :
+        rt_bin_near_support(bin, cols[t0_col][start + k])) return true;
+  return false;
+}
+
+// Exceptional finite-bin path. Integrate each generating cause on its own
+// support before summing a timed mixture or marginalising a missing response.
+static double race_bin_average(const RtBin& bin, const double* const* cols,
+    int start, int n_acc, int n_par, const int* ok, int winner_local,
+    const int* codes, int time_code, int nogo_code,
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
+  if (!(bin.hi > bin.lo)) return R_NegInf;
+  std::vector<double> pars(static_cast<size_t>(n_acc) * n_par);
+  for (int k = 0; k < n_acc; ++k) {
+    if (!ok[start + k]) return R_NegInf;
+    for (int c = 0; c < n_par; ++c) pars[k * n_par + c] = cols[c][start + k];
+  }
+  ContextForRaceModels scalar_ctx = *ctx;
+  scalar_ctx.min_lik_for_pdf = 0.0;
+  // Before every decision onset, identical local clocks give identical racer
+  // distributions. Each cause owns 1/n of the race's interval probability,
+  // including defective local-kill clocks. Two endpoint CDFs suffice; avoid
+  // quadrature of smooth guess-only bins near true zero or just before t0.
+  bool identical_pre_clocks = ctx->has_pre_t0_mass() && ctx->t0_index >= 0 &&
+    ctx->mean_g_index >= 0 && bin.hi > bin.lo;
+  for (int k = 0; k < n_acc && identical_pre_clocks; ++k) {
+    const int row = start + k;
+    identical_pre_clocks = cols[ctx->t0_index][row] >= bin.hi &&
+      codes[row] != time_code && codes[row] != nogo_code &&
+      cols[ctx->mean_g_index][row] == cols[ctx->mean_g_index][start];
+    if (ctx->mean_k_index >= 0)
+      identical_pre_clocks = identical_pre_clocks &&
+        cols[ctx->mean_k_index][row] == cols[ctx->mean_k_index][start];
+    if (ctx->erlang_omega_index >= 0)
+      identical_pre_clocks = identical_pre_clocks &&
+        cols[ctx->erlang_omega_index][row] == cols[ctx->erlang_omega_index][start];
+  }
+  if (identical_pre_clocks) {
+    const double fl = cdf1(bin.lo, pars.data(), &scalar_ctx);
+    const double fh = cdf1(bin.hi, pars.data(), &scalar_ctx);
+    if (R_FINITE(fl) && R_FINITE(fh) && fl >= 0.0 && fh >= fl && fh <= 1.0) {
+      const double mass = log_diff_exp(n_acc * std::log1p(-fl), n_acc * std::log1p(-fh));
+      const double exact = mass - std::log(bin.h) -
+        (winner_local < 0 ? 0.0 : std::log(n_acc));
+      // Preserve the same smooth fade to the ordinary midpoint. With an
+      // unknown response the identical causes' refinement weights average.
+      double weight = 0.0;
+      for (int k = 0; k < n_acc; ++k)
+        if (winner_local < 0 || winner_local == k)
+          weight += std::max(rt_bin_quadrature_weight(bin, 0.0),
+            rt_bin_internal_onset_weight(bin, cols[ctx->t0_index][start + k]));
+      if (winner_local < 0) weight /= n_acc;
+      if (weight >= 1.0) return exact;
+      const double mid = bin.lo + (bin.hi - bin.lo) / 2.0;
+      const double fm = pdf1(mid, pars.data(), &scalar_ctx);
+      const double Fm = cdf1(mid, pars.data(), &scalar_ctx);
+      if (R_FINITE(fm) && R_FINITE(Fm) && Fm >= 0.0 && Fm <= 1.0) {
+        const double point = fm > 0.0 ? std::log(fm) +
+          (n_acc > 1 ? (n_acc - 1) * std::log1p(-Fm) : 0.0) +
+          std::log((bin.hi - bin.lo) / bin.h) +
+          (winner_local < 0 ? std::log(n_acc) : 0.0) : R_NegInf;
+        return weight == 0.0 ? point :
+          log_sum_exp(std::log(weight) + exact, std::log1p(-weight) + point);
+      }
+    }
+  }
+  double refine = 0.0;
+  if (ctx->t0_index >= 0)
+    for (int k = 0; k < n_acc; ++k)
+      refine = std::max(refine, rt_bin_survivor_weight(bin, cols[ctx->t0_index][start + k]));
+  gsl_race_params_scalar p;
+  p.pars = pars.data(); p.n_lR = n_acc; p.n_par = n_par;
+  p.isok = ok + start; p.pdf1 = pdf1; p.cdf1 = cdf1; p.ctx = &scalar_ctx;
+  auto cause = [&](int k) {
+    p.winner_idx0 = k;
+    const double onset = ctx->has_pre_t0_mass() || ctx->t0_index < 0 ? 0.0 :
+      cols[ctx->t0_index][start + k];
+    const double cause_refine = ctx->has_pre_t0_mass() && ctx->t0_index >= 0 ?
+      std::max(refine, rt_bin_internal_onset_weight(bin, cols[ctx->t0_index][start + k])) : refine;
+    if (ctx->has_pre_t0_mass() && ctx->t0_index >= 0) {
+      std::vector<double> trans;
+      for (int a = 0; a < n_acc; ++a) {
+        const double ta = cols[ctx->t0_index][start + a];
+        if (R_FINITE(ta) && ta > bin.lo && ta < bin.hi) trans.push_back(ta);
+      }
+      return rt_bin_log_average_split(bin, onset, [&](double t) {
+        double value = log_race_integrand_scalar(t, &p);
+        if (ctx->is_global_kill && ctx->kill_active)
+          value += erlang_log_surv(t,
+            erlang_lambda_from_mean(cols[ctx->mean_k_index][start], ctx->kill_shape),
+            ctx->kill_shape);
+        return value;
+      }, cause_refine, trans);
+    }
+    return rt_bin_log_average(bin, onset, [&](double t) {
+      double value = log_race_integrand_scalar(t, &p);
+      if (ctx->is_global_kill && ctx->kill_active)
+        value += erlang_log_surv(t,
+          erlang_lambda_from_mean(cols[ctx->mean_k_index][start], ctx->kill_shape),
+          ctx->kill_shape);
+      return value;
+    }, cause_refine);
+  };
+  int timer = -1, n_resp = 0;
+  double value = R_NegInf;
+  for (int k = 0; k < n_acc; ++k) {
+    if (codes[start + k] == time_code) { timer = k; continue; }
+    if (codes[start + k] == nogo_code) continue;
+    ++n_resp;
+    if (winner_local < 0 || winner_local == k) value = log_sum_exp(value, cause(k));
+  }
+  if (timer >= 0 && n_resp > 0)
+    value = log_sum_exp(value, cause(timer) -
+      (winner_local < 0 ? 0.0 : std::log(n_resp)));
+  return value;
 }
 
 NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
@@ -201,7 +325,21 @@ static bool race_data_all_finite_untruncated(const Rcpp::DataFrame& data,
   if (data.containsElementNamed("UT")) {
     Rcpp::NumericVector UT = data["UT"];
     for (int start = 0; start < n_trials; start += n_lR) {
-      if (R_FINITE(UT[start])) return false;
+      if (UT[start] != R_PosInf) return false;
+    }
+  }
+
+  if (data.containsElementNamed("LC")) {
+    Rcpp::NumericVector LC = data["LC"];
+    for (int start = 0; start < n_trials; start += n_lR) {
+      if (LC[start] != 0.0) return false;
+    }
+  }
+
+  if (data.containsElementNamed("UC")) {
+    Rcpp::NumericVector UC = data["UC"];
+    for (int start = 0; start < n_trials; start += n_lR) {
+      if (UC[start] != R_PosInf) return false;
     }
   }
 
@@ -698,11 +836,7 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
           lR_code_vec.begin(), start, n_lR_curr, time_code, nogo_code);
     }
   }
-  {
-    Rcpp::NumericVector rt = data["rt"];
-    race_shared.rt_bins.init(data, rt.begin(), race_shared.idx_win.data(), n_trials, n_lR,
-                             has_RACE_col ? RACE_nacc.begin() : nullptr);
-  }
+  race_shared.rt_bins.init(data, n_lR);
   race_shared.valid = true;
   return race_shared;
 }
@@ -957,7 +1091,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         else if (nm == "pContaminant") pc_col = j;
         else if (nm == "pGuess") pg_col = j;
       }
-      const GuessKernel lr_guess = resolve_guess_kernel(data);
+      GuessKernel lr_guess = resolve_guess_kernel(data);
+      lr_guess.pg_col = pg_col;
       const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
@@ -1011,13 +1146,23 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // unique-trial sum.
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
-      all_finite_trials &&  // already scanned above; avoids a redundant O(n) pass
+      all_finite_trials &&  // already scanned above
       !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated && !adapter.ctx.pcounter_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
 
+    RtBinCache rt_bins;
+    rt_bins.init(data, n_lR);
     const int n_unique_fp = n_trials / n_lR;
+    std::vector<unsigned char> boundary_bin_fp;
+    std::vector<int> boundary_trials_fp;
+    if (rt_bins.active())
+      boundary_bin_fp.assign(static_cast<size_t>(n_unique_fp), 0);
+    bool have_boundary_bin_fp = false;
+    std::vector<int> winner_kernel_mask_fp(static_cast<size_t>(n_trials), 0);
+    std::vector<int> loser_kernel_mask_fp(static_cast<size_t>(n_trials), 0);
+    std::vector<int> time_kernel_mask_fp(static_cast<size_t>(n_trials), 0);
     std::vector<double> res_buf;
     std::vector<double> ll_uniq_buf;
     std::vector<int> winner_int_buf;
@@ -1025,8 +1170,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     std::vector<int> isok_int_fp;
     NumericVector rts_fp_hold;
     const double* rt_ptr = nullptr;
-    const double* rt_data_ptr = nullptr;
-    FlooredRtBins rt_bins;
     const int* expand_ptr = expand.begin();
     const int n_exp = expand.length();
 
@@ -1078,8 +1221,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
       }
       rts_fp_hold = data["rt"];
-      rt_data_ptr = rts_fp_hold.begin();
-      rt_ptr = rt_data_ptr;
+      rt_ptr = rts_fp_hold.begin();
 
       // Resolve keep_names[j] -> base column pointer once; kernels index the
       // leading columns positionally, so a missing required column is fatal.
@@ -1101,13 +1243,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       fast_guess = resolve_guess_kernel(data);
       fast_guess.pg_col = fast_pg_col;
-      const int t0_col = adapter.ctx.t0_index;
-      if (t0_col >= 0 && t0_col < n_kn && race_cols[t0_col] != nullptr &&
-          !adapter.ctx.has_pre_t0_mass()) {
-        rt_bins.init(data, rt_data_ptr, winner_int_buf.data(), n_trials, n_lR,
-                     has_RACE_col_fp ? RACE_fp.begin() : nullptr);
-        if (rt_bins.active()) rt_ptr = rt_bins.rt_eff.data();
-      }
+
     }
 
     // --- Build shared state for the mixed (non-raw-fast) path ---
@@ -1139,6 +1275,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         [&pt]() { return pt.materialize_reusable(); };
 
     for (int i = 0; i < n_particles; ++i) {
+      have_boundary_bin_fp = false;
       is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
       // PDE-backed models cache one solve per distinct parameter tuple; the
@@ -1154,8 +1291,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
 
         const double* const* pars_cols = race_cols.data();
-        if (rt_bins.active())
-          rt_bins.apply(rt_data_ptr, pars_cols[adapter.ctx.t0_index], isok_int_fp.data(), n_lR);
         adapter.ctx.mode_hint = 0;
         adapter.ctx.kill_active = adapter.ctx.is_local_guess ||
                                   adapter.ctx.is_global_kill ||
@@ -1197,36 +1332,85 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.ctx.mode_hint = sv_zero ? 1 : 2;
         }
 
+        // Boundary bins are replaced by race_bin_average below. Exclude their
+        // rows from the bulk point-density/survivor kernels so the fallback
+        // does not pay for a density that it immediately discards.
+        bool any_win_kernel = true;
+        bool any_loss_kernel = n_lR > 1;
+        bool any_time_kernel = !time_win_int_buf.empty();
+        boundary_trials_fp.clear();
+        if (rt_bins.active()) {
+          for (int j = 0; j < n_unique_fp; ++j) {
+            const int base = j * n_lR;
+            const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
+            const RtBin& bin = rt_bins.bins[static_cast<size_t>(j)];
+            const bool is_bnd = (R_FINITE(rt_ptr[base]) && rt_ptr[base] > 0.0 &&
+               (!(bin.hi > bin.lo) || race_bin_near_support(bin, pars_cols, base, n_lR_j,
+                 adapter.ctx.t0_index, adapter.ctx.has_pre_t0_mass())));
+            boundary_bin_fp[static_cast<size_t>(j)] = is_bnd ? 1 : 0;
+            if (is_bnd) boundary_trials_fp.push_back(j);
+          }
+          have_boundary_bin_fp = !boundary_trials_fp.empty();
+          if (have_boundary_bin_fp) {
+            any_win_kernel = false;
+            any_loss_kernel = false;
+            any_time_kernel = false;
+            for (int row = 0; row < n_trials; ++row) {
+              const bool keep_row = !boundary_bin_fp[static_cast<size_t>(row / n_lR)];
+              const int win = keep_row ? winner_int_buf[static_cast<size_t>(row)] : 0;
+              const int loss = keep_row ? loser_int_buf[static_cast<size_t>(row)] : 0;
+              winner_kernel_mask_fp[static_cast<size_t>(row)] = win;
+              loser_kernel_mask_fp[static_cast<size_t>(row)] = loss;
+              any_win_kernel = any_win_kernel || win != 0;
+              any_loss_kernel = any_loss_kernel || loss != 0;
+              if (!time_win_int_buf.empty()) {
+                const int tm = keep_row ? time_win_int_buf[static_cast<size_t>(row)] : 0;
+                time_kernel_mask_fp[static_cast<size_t>(row)] = tm;
+                any_time_kernel = any_time_kernel || tm != 0;
+              }
+            }
+          }
+        }
+
         const bool floor_raw_log_lik_prev = adapter.ctx.floor_raw_log_lik;
         if (time_code != -1) adapter.ctx.floor_raw_log_lik = false;
 
         // Log-density for winner rows
-        adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
-                               winner_int_buf.data(), isok_int_fp.data(),
-                               res_buf.data(), min_ll, &adapter.ctx);
+        if (any_win_kernel)
+          adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
+                                 have_boundary_bin_fp ? winner_kernel_mask_fp.data() : winner_int_buf.data(),
+                                 isok_int_fp.data(),
+                                 res_buf.data(), min_ll, &adapter.ctx);
 
         // Log-survivor for loser rows (writes into same buffer, different slots)
-        if (n_lR > 1) {
+        if (any_loss_kernel) {
           adapter.model_pfun_raw(rt_ptr, pars_cols, n_trials,
-                                 loser_int_buf.data(), isok_int_fp.data(),
+                                 have_boundary_bin_fp ? loser_kernel_mask_fp.data() : loser_int_buf.data(),
+                                 isok_int_fp.data(),
                                  res_buf.data(), min_ll, &adapter.ctx);
         }
 
         if (time_code != -1) {
           // Get f_T
-          adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
-                                 time_win_int_buf.data(), isok_int_fp.data(),
-                                 alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+          if (any_time_kernel)
+            adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
+                                   have_boundary_bin_fp ? time_kernel_mask_fp.data() : time_win_int_buf.data(),
+                                   isok_int_fp.data(),
+                                   alt_res_buf_fp.data(), min_ll, &adapter.ctx);
           // Get S_W
-          adapter.model_pfun_raw(rt_ptr, pars_cols, n_trials,
-                                 winner_int_buf.data(), isok_int_fp.data(),
-                                 alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+          if (any_win_kernel)
+            adapter.model_pfun_raw(rt_ptr, pars_cols, n_trials,
+                                   have_boundary_bin_fp ? winner_kernel_mask_fp.data() : winner_int_buf.data(),
+                                   isok_int_fp.data(),
+                                   alt_res_buf_fp.data(), min_ll, &adapter.ctx);
           adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
           const double* mean_k_ptr = pars_cols[adapter.ctx.mean_k_index];
           for (int j = 0; j < n_trials; ++j) {
-            if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
+            if (!isok_int_fp[j] || !winner_int_buf[j] ||
+                (!boundary_bin_fp.empty() &&
+                 boundary_bin_fp[static_cast<size_t>(j / n_lR)])) continue;
             const double tt = rt_ptr[j];
             alt_res_buf_fp[j] = (tt > 0.0)
                 ? erlang_log_surv(tt, erlang_lambda_from_mean(mean_k_ptr[j], adapter.ctx.kill_shape), adapter.ctx.kill_shape)
@@ -1234,11 +1418,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           }
         }
         if (time_code == -1) adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
-        // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
+        // 1. Vectorized bulk pass for all unique trials:
         for (int j = 0; j < n_unique_fp; ++j) {
-          double s = 0.0;
           const int base = j * n_lR;
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
+          double s = 0.0;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
 
           if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
@@ -1263,22 +1447,48 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               s = log_sum_exp(s, s_T - std::log(n_resp_fp[j]));
             }
           }
-          if (rt_bins.active()) s += rt_bins.log_frac[j];
+          if (rt_bins.active()) {
+            s += rt_bins.log_fraction[j];
+          }
           s = s < min_ll ? min_ll : s;
-          // Contaminant mixture.  This path is reached only when every trial has
-          // a finite rt and a known R (see .cache_ll_data_attrs), so no trial is
-          // an omission and every trial is guess-eligible; mix_contaminants()
-          // still owns the arithmetic so the sites cannot drift apart.
           if (fast_pc_col >= 0 || (fast_pg_col >= 0 && fast_guess.active())) {
             const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
-            // A guess must not lift an invalid-parameter trial off min_ll; the
-            // pC branch stays unconditional, exactly as it was before pGuess.
             const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                 ? pars_cols[fast_pg_col][base] : 0.0;
+            double log_guess = fast_guess.log_g;
+            if (pG > 0.0 && rt_bins.active())
+              log_guess = rt_bin_guess(fast_guess, rt_bins.bins[j]).log_g;
             if (pC != 0.0 || pG != 0.0)
-              s = mix_contaminants(s, pC, pG, fast_guess.log_g, false);
+              s = mix_contaminants(s, pC, pG, log_guess, false);
           }
           ll_uniq_buf[j] = s;
+        }
+
+        // 2. Overwrite specifically the boundary trials:
+        if (have_boundary_bin_fp) {
+          for (int j : boundary_trials_fp) {
+            const int base = j * n_lR;
+            const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
+            int w = -1;
+            for (int k = 0; k < n_lR_j; ++k)
+              if (winner_int_buf[base + k]) w = k;
+            double s = race_bin_average(rt_bins.bins[static_cast<size_t>(j)], pars_cols,
+              base, n_lR_j, keep_names.size(), isok_int_fp.data(), w,
+              lR_code_vec.begin(), time_code, nogo_code, adapter.pdf1_ptr,
+              adapter.cdf1_ptr, &adapter.ctx);
+            s = s < min_ll ? min_ll : s;
+            if (fast_pc_col >= 0 || (fast_pg_col >= 0 && fast_guess.active())) {
+              const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
+              const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
+                                  ? pars_cols[fast_pg_col][base] : 0.0;
+              double log_guess = fast_guess.log_g;
+              if (pG > 0.0 && rt_bins.active())
+                log_guess = rt_bin_guess(fast_guess, rt_bins.bins[j]).log_g;
+              if (pC != 0.0 || pG != 0.0)
+                s = mix_contaminants(s, pC, pG, log_guess, false);
+            }
+            ll_uniq_buf[j] = s;
+          }
         }
 
         // Expand unique-trial LLs and accumulate (1-based expand indices)
@@ -1513,7 +1723,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
         else if (nm == "pContaminant") pc_col = j;
         else if (nm == "pGuess") pg_col = j;
       }
-      const GuessKernel lr_guess = resolve_guess_kernel(data);
+      GuessKernel lr_guess = resolve_guess_kernel(data);
+      lr_guess.pg_col = pg_col;
       const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
@@ -2299,32 +2510,29 @@ double c_log_likelihood_race(
   const std::vector<int>& other_unique_trial_indices = *other_unique_view;
   const std::vector<int>& active_nogo_trial_mask = *nogo_mask_view;
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
-  // Floored-rt bin rule (FlooredRtBins): kernels read rt_eval, trial sums add
-  // rt_bin_log_frac.
   const double* rt_eval = rts_dadm.begin();
-  const double* rt_bin_log_frac = nullptr;
-  FlooredRtBins local_bins;
-  {
-    const int t0_col = ctx ? ctx->t0_index : -1;
-    if (t0_col >= 0 && t0_col < n_par && !ctx->has_pre_t0_mass()) {
-      FlooredRtBins* bins = &local_bins;
-      if (use_shared) {
-        bins = &shared->rt_bins;
-      } else {
-        // Winner rows of finite trials; non-finite trials keep their rt.
-        std::vector<int> win_finite(static_cast<size_t>(n_trials), 0);
-        for (int i = 0; i < n_trials; ++i)
-          win_finite[i] = (winner[i] && R_FINITE(rts_dadm[i]) &&
-                           (!has_RACE_col || RACE_mask[i])) ? 1 : 0;
-        local_bins.init(dadm, rts_dadm.begin(), win_finite.data(), n_trials, n_lR,
-                        has_RACE_col ? RACE.begin() : nullptr);
-      }
-      if (bins->active()) {
-        bins->apply(rts_dadm.begin(), cols_view[t0_col], isok.begin(), n_lR);
-        rt_eval = bins->rt_eff.data();
-        rt_bin_log_frac = bins->log_frac.data();
-      }
+  RtBinCache local_bins;
+  if (!use_shared) local_bins.init(dadm, n_lR);
+  const RtBinCache& rt_bins = use_shared ? shared->rt_bins : local_bins;
+  std::vector<unsigned char> boundary_bins_unique;
+  std::vector<int> boundary_trials_unique;
+  bool have_boundary_bins = false;
+  if (rt_bins.active()) {
+    boundary_bins_unique.assign(static_cast<size_t>(n_unique_trials), 0);
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const int start = j * n_lR;
+      const double rt = rts_dadm[start];
+      if (!R_FINITE(rt) || !(rt > 0.0)) continue;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      const bool is_bnd = (R_idxs_dadm[start] == NA_INTEGER ||
+         !(rt_bins.bins[static_cast<size_t>(j)].hi >
+           rt_bins.bins[static_cast<size_t>(j)].lo) ||
+         race_bin_near_support(rt_bins.bins[static_cast<size_t>(j)], cols_view,
+           start, n_lR_j, ctx->t0_index, ctx->has_pre_t0_mass()));
+      boundary_bins_unique[static_cast<size_t>(j)] = is_bnd ? 1 : 0;
+      if (is_bnd) boundary_trials_unique.push_back(j);
     }
+    have_boundary_bins = !boundary_trials_unique.empty();
   }
 
   std::vector<int> winner_row_by_trial;
@@ -2363,9 +2571,13 @@ double c_log_likelihood_race(
     std::vector<int> idx_win_int_local;
     std::vector<int> idx_loss_int_local;
     std::vector<int> isok_int_all_local;
+    std::vector<int> idx_win_bin_local;
+    std::vector<int> idx_loss_bin_local;
     // Pointers resolved below (point into shared or local storage)
     const int* idx_win_ptr  = nullptr;
     const int* idx_loss_ptr = nullptr;
+    const int* idx_win_eval_ptr = nullptr;
+    const int* idx_loss_eval_ptr = nullptr;
     int*       isok_ptr     = nullptr;
 
     const bool use_shared_bufs = use_shared &&
@@ -2401,23 +2613,47 @@ double c_log_likelihood_race(
       isok_ptr     = isok_int_all_local.data();
     }
 
+    idx_win_eval_ptr = idx_win_ptr;
+    idx_loss_eval_ptr = idx_loss_ptr;
+    bool any_win_eval = any_win;
+    bool any_loss_eval = any_loss;
+    if (have_boundary_bins) {
+      idx_win_bin_local.resize(static_cast<size_t>(n_trials));
+      idx_loss_bin_local.resize(static_cast<size_t>(n_trials));
+      any_win_eval = false;
+      any_loss_eval = false;
+      for (int row = 0; row < n_trials; ++row) {
+        const bool keep_row = !boundary_bins_unique[static_cast<size_t>(row / n_lR)];
+        const int win = keep_row ? idx_win_ptr[row] : 0;
+        const int loss = keep_row ? idx_loss_ptr[row] : 0;
+        idx_win_bin_local[static_cast<size_t>(row)] = win;
+        idx_loss_bin_local[static_cast<size_t>(row)] = loss;
+        any_win_eval = any_win_eval || win != 0;
+        any_loss_eval = any_loss_eval || loss != 0;
+      }
+      idx_win_eval_ptr = idx_win_bin_local.data();
+      idx_loss_eval_ptr = idx_loss_bin_local.data();
+    }
+
     const double* rt_ptr = rt_eval;
     const double* const* pars_cm = cols_view;
     const bool dense_floor_raw_log_lik_prev = dense_ctx.floor_raw_log_lik;
     if (has_time) dense_ctx.floor_raw_log_lik = false;
-    if (any_win) {
+    if (any_win_eval) {
       model_dfun_raw(rt_ptr, pars_cm, n_trials,
-                     idx_win_ptr, isok_ptr,
+                     idx_win_eval_ptr, isok_ptr,
                      lds_ptr, min_ll, dense_ctx_ptr);
     }
-    if (n_lR > 1 && any_loss) {
+    if (n_lR > 1 && any_loss_eval) {
       model_pfun_raw(rt_ptr, pars_cm, n_trials,
-                     idx_loss_ptr, isok_ptr,
+                     idx_loss_eval_ptr, isok_ptr,
                      lds_ptr, min_ll, dense_ctx_ptr);
     }
 
     std::vector<int> idx_time_only_local;
+    std::vector<int> idx_time_bin_local;
     const int* idx_time_only_ptr = nullptr;
+    const int* idx_time_eval_ptr = nullptr;
     std::vector<double> alt_lds_local;
     double* alt_lds_ptr = nullptr;
     std::vector<int> n_resp_local;
@@ -2459,12 +2695,27 @@ double c_log_likelihood_race(
         idx_time_only_ptr = idx_time_only_local.data();
         alt_lds_ptr = alt_lds_local.data();
       }
-      model_dfun_raw(rt_ptr, pars_cm, n_trials,
-                     idx_time_only_ptr, isok_ptr,
-                     alt_lds_ptr, min_ll, dense_ctx_ptr);
-      model_pfun_raw(rt_ptr, pars_cm, n_trials,
-                     idx_win_ptr, isok_ptr,
-                     alt_lds_ptr, min_ll, dense_ctx_ptr);
+      idx_time_eval_ptr = idx_time_only_ptr;
+      bool any_time_eval = true;
+      if (have_boundary_bins) {
+        idx_time_bin_local.resize(static_cast<size_t>(n_trials));
+        any_time_eval = false;
+        for (int row = 0; row < n_trials; ++row) {
+          const bool keep_row = !boundary_bins_unique[static_cast<size_t>(row / n_lR)];
+          const int time = keep_row ? idx_time_only_ptr[row] : 0;
+          idx_time_bin_local[static_cast<size_t>(row)] = time;
+          any_time_eval = any_time_eval || time != 0;
+        }
+        idx_time_eval_ptr = idx_time_bin_local.data();
+      }
+      if (any_time_eval)
+        model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                       idx_time_eval_ptr, isok_ptr,
+                       alt_lds_ptr, min_ll, dense_ctx_ptr);
+      if (any_win_eval)
+        model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                       idx_win_eval_ptr, isok_ptr,
+                       alt_lds_ptr, min_ll, dense_ctx_ptr);
     }
     dense_ctx.floor_raw_log_lik = dense_floor_raw_log_lik_prev;
 
@@ -2692,7 +2943,6 @@ double c_log_likelihood_race(
           } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
             current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
           }
-          if (rt_bin_log_frac) current_trial_ll_sum += rt_bin_log_frac[unique_trial_idx];
           if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
             ll_unique[unique_trial_idx] = min_ll;
           } else if (hit_min_ll) {
@@ -2726,7 +2976,6 @@ double c_log_likelihood_race(
       } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
         current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
       }
-      if (rt_bin_log_frac) current_trial_ll_sum += rt_bin_log_frac[unique_trial_idx];
       ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
     }
 
@@ -2987,13 +3236,17 @@ double c_log_likelihood_race(
         }
       }
     } else if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER) {
-      ensure_buffers();
-      current_ll_val = log_min_density_rowmajor(rt_j,
-                                                pars_rowmajor_buffer,
-                                                isok_int_buffer,
-                                                n_lR_j, n_par, pdf1, cdf1,
-                                                model_context_for_funcs,
-                                                logS_k_buffer);
+      // Finite unknown-winner bins are recomputed cause by cause below. Their
+      // pointwise marginal density would be discarded, so skip it here.
+      if (!rt_bins.active() || !boundary_bins_unique[static_cast<size_t>(unique_trial_idx)]) {
+        ensure_buffers();
+        current_ll_val = log_min_density_rowmajor(rt_j,
+                                                  pars_rowmajor_buffer,
+                                                  isok_int_buffer,
+                                                  n_lR_j, n_par, pdf1, cdf1,
+                                                  model_context_for_funcs,
+                                                  logS_k_buffer);
+      }
     }
 
 apply_trial_trunc:
@@ -3014,6 +3267,43 @@ apply_trial_trunc:
   }
   
   
+  // Retain the batched midpoint result away from support boundaries. Missing
+  // responses and boundary trials need their generating causes treated alike.
+  if (rt_bins.active()) {
+    #pragma omp simd
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const int start = j * n_lR;
+      if (R_FINITE(rts_dadm[start]) && rts_dadm[start] > 0.0) {
+        ll_unique[j] = std::max(min_ll, ll_unique[j] + rt_bins.log_fraction[j]);
+      }
+    }
+    if (have_boundary_bins) {
+      Rcpp::IntegerVector codes = dadm["lR"];
+      std::vector<int> ok(n_trials);
+      for (int row = 0; row < n_trials; ++row) ok[row] = isok[row] ? 1 : 0;
+      for (int j : boundary_trials_unique) {
+        const int start = j * n_lR;
+        if (!R_FINITE(rts_dadm[start]) || !(rts_dadm[start] > 0.0)) continue;
+        const int n_acc = has_RACE_col ? RACE[start] : n_lR;
+        const RtBin& bin = rt_bins.bins[j];
+        int w = -1;
+        if (R_idxs_dadm[start] != NA_INTEGER)
+          for (int k = 0; k < n_acc; ++k) if (winner[start + k]) w = k;
+        double value = race_bin_average(bin, cols_view, start, n_acc, n_par,
+          ok.data(), w, codes.begin(), time_code, nogo_code, pdf1, cdf1, ctx);
+        if (R_FINITE(value) && apply_truncation_correction && may_need_ct &&
+            (LT[start] != 0.0 || UT[start] != R_PosInf)) {
+          fill_trial_buffers(start, n_acc);
+          const double log_z = get_trunc_normaliser_rowmajor_cpp(
+            pars_rowmajor_buffer, isok_int_buffer, pdf1, cdf1, LT[start], UT[start],
+            n_acc, n_par, gsl_ctl, model_context_for_funcs, workspace);
+          value = R_FINITE(log_z) ? value - log_z : R_NegInf;
+        }
+        ll_unique[j] = std::max(min_ll, value);
+      }
+    }
+  }
+
   // --- Summation of log-likelihoods for all unique trials ---
   // pC modification (if any) is kept in a separate pass so the final summation
   // loop is a pure reduction — allowing #pragma omp simd to vectorize it.
@@ -3034,8 +3324,10 @@ apply_trial_trunc:
     const double rt_j = rts_dadm[j * n_lR];
     const double pC = use_pC ? pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR] : 0.0;
     const double pG = use_pG ? pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR] : 0.0;
+    const GuessKernel trial_guess = rt_bins.active() && R_FINITE(rt_j) ?
+      rt_bin_guess(guess, rt_bins.bins[j]) : guess;
     ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC, pG,
-                                       guess, rt_j,
+                                       trial_guess, rt_j,
                                        R_idxs_dadm[j * n_lR] != NA_INTEGER);
   };
   const bool use_mix = use_pC || use_pG;

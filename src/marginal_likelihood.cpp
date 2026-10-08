@@ -1,6 +1,7 @@
 #include "marginal_likelihood.h"
 
 #include "gl_quad.h"
+#include "rt_bins.h"
 
 #include <Rcpp.h>
 #include <algorithm>
@@ -267,20 +268,36 @@ static MarginalGrid calc_ll_oo_marginal_core(
         break;
       }
   }
-  // --- upper clip: feasibility ceiling log(min finite rt - eps); for binned
-  // rts (attr "rt_resolution") the top of the earliest bin. ---
+  // A local guess clock or an estimated uniform-guess mixture removes the
+  // hard RT ceiling. Otherwise use the retained bin top, without discarding
+  // the final millisecond of its feasible support.
   double log_ms = R_PosInf;
   {
     NumericVector rt = data["rt"];
     double mn = R_PosInf;
     for (int k = 0; k < rt.size(); ++k)
       if (R_FINITE(rt[k]) && rt[k] < mn) mn = rt[k];
-    if (R_FINITE(mn) && data.hasAttribute("rt_resolution")) {
-      const double h = Rcpp::as<double>(data.attr("rt_resolution"));
-      if (R_FINITE(h) && h > 0.0) mn = h * std::floor(mn / h) + h;
+    const double h = rt_bin_width(data);
+    if (h > 0.0) {
+      RtBinCache bins; bins.init(data, 1);
+      mn = R_PosInf;
+      for (int k = 0; k < rt.size(); ++k)
+        if (R_FINITE(rt[k])) mn = std::min(mn, bins.bins[k].hi);
     }
-    if (R_FINITE(mn)) {
-      double top = mn - eps;
+    bool guesses = false;
+    for (int j = 0; j < p_names.size(); ++j)
+      if (Rcpp::as<std::string>(p_names[j]) == "pGuess") guesses = true;
+    if (constants.hasAttribute("names")) {
+      CharacterVector cn = constants.attr("names");
+      for (int j = 0; j < cn.size(); ++j)
+        if (Rcpp::as<std::string>(cn[j]) == "pGuess" && constants[j] != R_NegInf)
+          guesses = true;
+    }
+    const std::string type_name = Rcpp::as<std::string>(Rcpp::wrap(type));
+    guesses = guesses || type_name.find("LOCAL_GUESS") != std::string::npos ||
+      type_name.find("LOCAL_KILL_GUESS") != std::string::npos;
+    if (R_FINITE(mn) && !guesses) {
+      double top = h > 0.0 ? std::nextafter(mn, 0.0) : mn - eps;
       if (top < std::numeric_limits<double>::min()) top = std::numeric_limits<double>::min();
       log_ms = std::log(top);
     }

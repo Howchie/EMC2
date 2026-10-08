@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Rcpp;
@@ -166,6 +168,7 @@ LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& d
   out.LC_unique.assign(out.n_unique_trials, 0.0);
   out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
+  out.rt_bins.init(dadm, n_acc);
 
   for (int j = 0; j < out.n_unique_trials; ++j) {
     const int start = j * n_acc;
@@ -1796,20 +1799,257 @@ double c_log_likelihood_logicalrules(
     int tau_col,
     int pc_col,
     int pg_col,
-    const GuessKernel* guess) {
+    const GuessKernel* guess,
+    bool internal_bin_quadrature,
+    const unsigned char* only_trials,
+    bool skip_bin_wrapper) {
   if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
     Rcpp::stop("c_log_likelihood_logicalrules: invalid logical-rules configuration.");
   }
   const int n_trials = shared.n_trials;
+  const int n_unique_trials = shared.n_unique_trials;
   if (ok_params.size() != n_trials) {
     Rcpp::stop("c_log_likelihood_logicalrules: ok_params size must match shared data.");
   }
   if (n_trials == 0) return 0.0;
+
+  // LogicalRules is evaluated by a dedicated pointwise rule engine, so it
+  // cannot use the generic race bin post-pass. Reuse this evaluator at
+  // quadrature points for bins near an accumulator onset; away from support
+  // transitions the existing midpoint value plus retained-width correction
+  // is accurate and avoids extra evaluations.
+  if (shared.rt_bins.active() && !internal_bin_quadrature && !skip_bin_wrapper) {
+    bool have_finite_bin = false;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const double rt = shared.rt_unique[static_cast<size_t>(j)];
+      if (R_FINITE(rt) && rt > 0.0) { have_finite_bin = true; break; }
+    }
+    if (have_finite_bin) {
+      const Rcpp::IntegerVector no_expand(0);
+      std::vector<double> result(static_cast<size_t>(n_unique_trials), R_NegInf);
+      std::vector<unsigned char> integrate(static_cast<size_t>(n_unique_trials), 0);
+      std::vector<unsigned char> point_trials(static_cast<size_t>(n_unique_trials), 1);
+      std::vector<int> integrate_trials;
+      std::vector<double> onset(static_cast<size_t>(n_unique_trials), 0.0);
+      std::vector<double> zlo(static_cast<size_t>(n_unique_trials), 0.0);
+      std::vector<double> zhi(static_cast<size_t>(n_unique_trials), 0.0);
+      std::vector<unsigned char> finite_bin(static_cast<size_t>(n_unique_trials), 0);
+      std::vector<std::vector<double>> transitions(static_cast<size_t>(n_unique_trials));
+      bool any_quadrature = false;
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const size_t sj = static_cast<size_t>(j);
+        const double rt = shared.rt_unique[sj];
+        if (!R_FINITE(rt) || !(rt > 0.0)) continue;
+        const RtBin& bin = shared.rt_bins.bins[sj];
+        finite_bin[sj] = 1;
+        if (!(bin.hi > bin.lo)) {
+          result[sj] = R_NegInf;
+          point_trials[sj] = 0;
+          continue;
+        }
+        double first_onset = R_PosInf;
+        const int rows[] = {shared.idxA[sj], shared.idxB[sj],
+                            shared.idxnA[sj], shared.idxnB[sj],
+                            shared.idxNogo[sj]};
+        if (!model_ctx->has_pre_t0_mass() && model_ctx->t0_index >= 0 &&
+            model_ctx->t0_index < n_par) {
+          for (int row : rows) {
+            if (row >= 0 && row < n_trials)
+              first_onset = std::min(first_onset,
+                pars_cols[model_ctx->t0_index][row]);
+          }
+        }
+        if (!R_FINITE(first_onset)) first_onset = 0.0;
+        onset[sj] = model_ctx->has_pre_t0_mass() ? 0.0 : first_onset;
+
+        double refine = 0.0;
+        if (model_ctx->t0_index >= 0 && model_ctx->t0_index < n_par) {
+          for (int row : rows) {
+            if (row < 0 || row >= n_trials) continue;
+            const double t0 = pars_cols[model_ctx->t0_index][row];
+            if (R_FINITE(t0)) transitions[sj].push_back(t0);
+            if (model_ctx->has_pre_t0_mass())
+              refine = std::max(refine, rt_bin_internal_onset_weight(bin, t0));
+            else
+              refine = std::max(refine, rt_bin_quadrature_weight(bin, t0));
+          }
+        }
+        const double lo = std::max(bin.lo, onset[sj]);
+        if (refine > 0.0 && bin.hi > lo) {
+          integrate[sj] = 1;
+          point_trials[sj] = 0;
+          integrate_trials.push_back(j);
+          any_quadrature = true;
+          zlo[sj] = std::sqrt(lo - onset[sj]);
+          zhi[sj] = std::sqrt(bin.hi - onset[sj]);
+        }
+      }
+
+      // The data RT is already the midpoint for a full bin. Only copy the
+      // large shared state when a clipped, point-evaluated bin needs its
+      // retained-window midpoint substituted.
+      LogicalRulesSharedState point_shared;
+      const LogicalRulesSharedState* point_state = &shared;
+      bool point_state_owned = false;
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const size_t sj = static_cast<size_t>(j);
+        if (!finite_bin[sj] || !point_trials[sj]) continue;
+        const RtBin& bin = shared.rt_bins.bins[sj];
+        const double mid = bin.lo + (bin.hi - bin.lo) / 2.0;
+        if (mid == shared.rt_unique[sj]) continue;
+        point_shared = shared;
+        point_state_owned = true;
+        for (int k = j; k < n_unique_trials; ++k) {
+          const size_t sk = static_cast<size_t>(k);
+          if (!finite_bin[sk] || !point_trials[sk]) continue;
+          const RtBin& point_bin = shared.rt_bins.bins[sk];
+          const double point_mid = point_bin.lo +
+            (point_bin.hi - point_bin.lo) / 2.0;
+          point_shared.rt_unique[sk] = point_mid;
+          const int start = k * n_acc;
+          for (int a = 0; a < n_acc; ++a)
+            point_shared.rt_by_row[static_cast<size_t>(start + a)] = point_mid;
+        }
+        point_state = &point_shared;
+        break;
+      }
+
+      Rcpp::NumericVector point_ll(n_unique_trials);
+      // Boundary rows are replaced by the quadrature result, so do not pay
+      // for their midpoint likelihood too. Contaminants are mixed once below.
+      c_log_likelihood_logicalrules(
+        pars_cols, n_par, no_expand, min_ll, ok_params, n_acc, model_ctx,
+        pdf1, cdf1, model_dfun_raw, model_pfun_raw, *point_state, &point_ll,
+        kappa_col, tau_col, -1, -1, nullptr, false, point_trials.data(), true);
+      for (int j = 0; j < n_unique_trials; ++j)
+        if (point_trials[static_cast<size_t>(j)])
+          result[static_cast<size_t>(j)] = point_ll[j];
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const size_t sj = static_cast<size_t>(j);
+        if (finite_bin[sj] && point_trials[sj] &&
+            shared.rt_bins.bins[sj].hi > shared.rt_bins.bins[sj].lo)
+          result[sj] += shared.rt_bins.log_fraction[sj];
+      }
+
+      if (any_quadrature) {
+        LogicalRulesSharedState eval_shared;
+        if (point_state_owned) eval_shared = std::move(point_shared);
+        else eval_shared = shared;
+        Rcpp::NumericVector node_ll(n_unique_trials);
+        auto eval_node = [&](double u, const GLRule& rule, int k,
+                             double u_lo, double u_hi,
+                             std::vector<double>& sum) {
+          for (int j : integrate_trials) {
+            const size_t sj = static_cast<size_t>(j);
+            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
+            const double t = onset[sj] + z * z;
+            eval_shared.rt_unique[sj] = t;
+            const int start = j * n_acc;
+            for (int a = 0; a < n_acc; ++a)
+              eval_shared.rt_by_row[static_cast<size_t>(start + a)] = t;
+          }
+          c_log_likelihood_logicalrules(
+            pars_cols, n_par, no_expand, R_NegInf, ok_params, n_acc, model_ctx,
+            pdf1, cdf1, model_dfun_raw, model_pfun_raw, eval_shared, &node_ll,
+            kappa_col, tau_col, -1, -1, nullptr, true, integrate.data());
+          const double half = (u_hi - u_lo) / 2.0;
+          for (size_t q = 0; q < integrate_trials.size(); ++q) {
+            const int j = integrate_trials[q];
+            const size_t sj = static_cast<size_t>(j);
+            const RtBin& bin = shared.rt_bins.bins[sj];
+            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
+            if (!(z > 0.0) || !R_FINITE(node_ll[sj])) continue;
+            const double dz = zhi[sj] - zlo[sj];
+            const double log_weight = std::log(half * rule.w[k] * dz * 2.0 * z /
+                                               bin.h);
+            sum[q] = log_sum_exp(sum[q], log_weight + node_ll[sj]);
+          }
+        };
+
+        std::function<std::vector<double>(double, double, int)> integrate_panel;
+        integrate_panel = [&](double u_lo, double u_hi, int depth) {
+          std::vector<double> coarse(integrate_trials.size(), R_NegInf);
+          std::vector<double> fine(integrate_trials.size(), R_NegInf);
+          const GLRule& g4 = gl_get_rule(4);
+          const GLRule& g8 = gl_get_rule(8);
+          for (int k = 0; k < 4; ++k) {
+            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g4.x[k] + 1.0);
+            eval_node(u, g4, k, u_lo, u_hi, coarse);
+          }
+          for (int k = 0; k < 8; ++k) {
+            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g8.x[k] + 1.0);
+            eval_node(u, g8, k, u_lo, u_hi, fine);
+          }
+          bool converged = true;
+          for (size_t q = 0; q < integrate_trials.size(); ++q) {
+            const int j = integrate_trials[q];
+            const size_t sj = static_cast<size_t>(j);
+            const double a = coarse[q], b = fine[q];
+            if (a == R_NegInf && b == R_NegInf) {
+              const RtBin& bin = shared.rt_bins.bins[sj];
+              const double lo = std::max(bin.lo, onset[sj]);
+              const double dz = zhi[sj] - zlo[sj];
+              for (double boundary : transitions[sj]) {
+                if (!(boundary > lo && boundary < bin.hi) || !(dz > 0.0)) continue;
+                const double ub = (std::sqrt(boundary - onset[sj]) - zlo[sj]) / dz;
+                if (ub > u_lo && ub < u_hi) { converged = false; break; }
+              }
+              continue;
+            }
+            if (R_FINITE(a) && R_FINITE(b) && std::fabs(a - b) < 1e-6) continue;
+            if (!R_FINITE(a) || !R_FINITE(b)) { converged = false; continue; }
+            const double err = log_diff_exp(std::max(a, b), std::min(a, b));
+            if (!(err < std::log(1e-12))) converged = false;
+          }
+          if (depth >= 8 || converged) return fine;
+          const double mid = u_lo + (u_hi - u_lo) / 2.0;
+          std::vector<double> left = integrate_panel(u_lo, mid, depth + 1);
+          std::vector<double> right = integrate_panel(mid, u_hi, depth + 1);
+          for (size_t q = 0; q < integrate_trials.size(); ++q)
+            left[q] = log_sum_exp(left[q], right[q]);
+          return left;
+        };
+        const std::vector<double> integrated = integrate_panel(0.0, 1.0, 0);
+        for (size_t q = 0; q < integrate_trials.size(); ++q)
+          result[static_cast<size_t>(integrate_trials[q])] = integrated[q];
+      }
+
+      const GuessKernel gk = (guess != nullptr) ? *guess : GuessKernel();
+      for (int j = 0; j < n_unique_trials; ++j) {
+        if (only_trials && !only_trials[j]) continue;
+        const size_t sj = static_cast<size_t>(j);
+        const double pC = pc_col >= 0 ? pars_cols[pc_col][sj * n_acc] : 0.0;
+        const double pG = pg_col >= 0 && gk.active()
+          ? pars_cols[pg_col][sj * n_acc] : 0.0;
+        if (pC == 0.0 && pG == 0.0) continue;
+        const GuessKernel trial_guess = finite_bin[sj]
+          ? rt_bin_guess(gk, shared.rt_bins.bins[sj]) : gk;
+        result[sj] = mix_contaminants_rt(result[sj], pC, pG, trial_guess,
+          shared.rt_unique[sj], shared.resp_code[sj] != 0);
+      }
+
+      const int n_out = expand.length() > 0 ? expand.length() : n_unique_trials;
+      if (trial_ll_out != nullptr && trial_ll_out->size() != n_out)
+        Rcpp::stop("c_log_likelihood_logicalrules: trial_ll_out size mismatch.");
+      double total = 0.0;
+      for (int i = 0; i < n_out; ++i) {
+        const int idx = expand.length() > 0 ? expand[i] - 1 : i;
+        double value = result[static_cast<size_t>(idx)];
+        if (!R_FINITE(value) || value < min_ll) value = min_ll;
+        if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
+        total += value;
+      }
+      return total;
+    }
+  }
+
   // ParamTable columns are refilled in place for each particle, so no cache
   // entry may survive this likelihood call.
-  shared.clear_particle_cache();
-  if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
-  if (model_ctx->rlf_cache) model_ctx->rlf_cache->new_particle();
+  if (!internal_bin_quadrature) {
+    shared.clear_particle_cache();
+    if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
+    if (model_ctx->rlf_cache) model_ctx->rlf_cache->new_particle();
+  }
   // Keep scratch width at least 64 for optional trailing kernel columns.
   const size_t lr_row_width = static_cast<size_t>(std::max(n_par, 64));
   const bool capacity = kappa_col >= 0 || tau_col >= 0;
@@ -1817,16 +2057,22 @@ double c_log_likelihood_logicalrules(
                    kappa_col >= n_par || tau_col >= n_par)) {
     Rcpp::stop("c_log_likelihood_logicalrules: invalid LogicalRules capacity columns.");
   }
-  const bool count_capacity = capacity && lr_capacity_counters_enabled();
+  const bool count_capacity = capacity && lr_capacity_counters_enabled() &&
+    !internal_bin_quadrature;
   const int lrcap_scan_n = capacity
     ? emc2_quad_nodes("EMC2_LRCAP_SCAN_N", 12) : 0;
   const int lrcap_fine_n = capacity
     ? emc2_quad_nodes("EMC2_LRCAP_FINE_N", 12) : 0;
 
   static const double kMinSurv = 1e-300;
-  const int n_unique_trials = shared.n_unique_trials;
   static thread_local LogicalRulesScratch scratch;
-  resize_assign_double(scratch.ll_unique, static_cast<size_t>(n_unique_trials), min_ll);
+  if (only_trials == nullptr ||
+      scratch.ll_unique.size() != static_cast<size_t>(n_unique_trials)) {
+    resize_assign_double(scratch.ll_unique, static_cast<size_t>(n_unique_trials), min_ll);
+  } else {
+    for (int j = 0; j < n_unique_trials; ++j)
+      if (only_trials[j]) scratch.ll_unique[static_cast<size_t>(j)] = min_ll;
+  }
   std::vector<double>& ll_unique = scratch.ll_unique;
   const bool use_raw_local =
     (model_dfun_raw != nullptr &&
@@ -1839,7 +2085,8 @@ double c_log_likelihood_logicalrules(
   gsl_ctl.rel_tol = 1e-5;  // 1e-4 let the adaptive rule's optimistic error estimate through
 
   bool any_ok = false;
-  for (int i = 0; i < n_trials && !any_ok; ++i) any_ok = (bool)ok_params[i];
+  for (int i = 0; i < n_trials && !any_ok; ++i)
+    any_ok = (!only_trials || only_trials[i / n_acc]) && (bool)ok_params[i];
   if (!any_ok) {
     const int n_out = expand.length() > 0 ? (int)expand.length() : n_unique_trials;
     if (trial_ll_out != nullptr) for (int i = 0; i < n_out; ++i) (*trial_ll_out)[i] = min_ll;
@@ -1866,7 +2113,11 @@ double c_log_likelihood_logicalrules(
     resize_assign_double(logS_all, static_cast<size_t>(n_trials), min_ll);
     resize_assign_int(all_mask, static_cast<size_t>(n_trials), 1);
     isok_int_all.resize(static_cast<size_t>(n_trials));
-    for (int i = 0; i < n_trials; ++i) isok_int_all[static_cast<size_t>(i)] = ok_params[i] ? 1 : 0;
+    for (int i = 0; i < n_trials; ++i) {
+      const bool selected = !only_trials || only_trials[i / n_acc];
+      isok_int_all[static_cast<size_t>(i)] = selected && ok_params[i] ? 1 : 0;
+      all_mask[static_cast<size_t>(i)] = selected ? 1 : 0;
+    }
     model_dfun_raw(shared.rt_by_row.data(), pars_cols, n_trials,
                    all_mask.data(), isok_int_all.data(),
                    logf_all.data(), min_ll, model_ctx);
@@ -1907,6 +2158,12 @@ double c_log_likelihood_logicalrules(
     pair_ok_B.resize(static_cast<size_t>(n_unique_trials));
     bool any_unequal = false;
     for (int j = 0; j < n_unique_trials; ++j) {
+      if (only_trials && !only_trials[j]) {
+        ch_eq_vec[static_cast<size_t>(j)] = 0;
+        pair_ok_A[static_cast<size_t>(j)] = 0;
+        pair_ok_B[static_cast<size_t>(j)] = 0;
+        continue;
+      }
       const int iA  = shared.idxA[j],  inA = shared.idxnA[j];
       const int iB  = shared.idxB[j],  inB = shared.idxnB[j];
       const double t0nA = (t0_col >= 0 && t0_col < n_par && inA >= 0)
@@ -2084,6 +2341,7 @@ double c_log_likelihood_logicalrules(
 
     bool any_aux = false;
     for (int j = 0; j < n_unique_trials; ++j) {
+      if (only_trials && !only_trials[j]) continue;
       const int rc = shared.rule_code[static_cast<size_t>(j)];
       if (rc == 5) continue;   // analytic detection keeps its own route; GNG (6) uses four horses
       const int iA = shared.idxA[static_cast<size_t>(j)], inA = shared.idxnA[static_cast<size_t>(j)];
@@ -2197,6 +2455,7 @@ double c_log_likelihood_logicalrules(
   int isok_2buf[2] = {1, 1};
 
   for (int j = 0; j < n_unique_trials; ++j) {
+    if (only_trials && !only_trials[j]) continue;
     const int idxA = shared.idxA[static_cast<size_t>(j)];
     const int idxB = shared.idxB[static_cast<size_t>(j)];
     const int idxnA = shared.idxnA[static_cast<size_t>(j)];
@@ -2684,6 +2943,7 @@ double c_log_likelihood_logicalrules(
   if (use_pG) {
     bool all_zero = true;
     for (int j = 0; j < n_unique_trials; ++j) {
+      if (only_trials && !only_trials[j]) continue;
       if (pars_cols[pg_col][j * n_acc] != 0.0) { all_zero = false; break; }
     }
     if (all_zero) use_pG = false;
@@ -2691,6 +2951,7 @@ double c_log_likelihood_logicalrules(
 
   if (use_pC || use_pG) {
     for (int j = 0; j < n_unique_trials; ++j) {
+      if (only_trials && !only_trials[j]) continue;
       const size_t sj = static_cast<size_t>(j);
       const double pC = use_pC ? pars_cols[pc_col][sj * n_acc] : 0.0;
       const double pG = use_pG ? pars_cols[pg_col][sj * n_acc] : 0.0;
@@ -2719,6 +2980,7 @@ double c_log_likelihood_logicalrules(
       Rcpp::stop("c_log_likelihood_logicalrules: trial_ll_out size mismatch (compressed path).");
     }
     for (int j = 0; j < n_unique_trials; ++j) {
+      if (only_trials && !only_trials[j]) continue;
       double val = ll_unique[static_cast<size_t>(j)];
       if (!R_FINITE(val) || val < min_ll) val = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[j] = val;

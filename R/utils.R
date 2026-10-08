@@ -55,8 +55,9 @@ na_locf <- function(x, na.rm = FALSE) {
 # censoring bounds; the midpoint of that interval is stored, so every
 # likelihood evaluates inside the bin rather than at its lower edge.  The race
 # likelihood recovers the bin from attr(dadm, "rt_resolution") and averages
-# the density over it (floored_rt_bin_rule in src/particle_ll.cpp).
+# the density over it near support boundaries (src/rt_bins.h).
 .rt_bin_midpoint <- function(x, rt_resolution, lower = 0, upper = Inf) {
+  original <- x
   x <- .floor_to_rt_resolution(x, rt_resolution)
   finite <- is.finite(x)
   if (!any(finite)) return(x)
@@ -64,14 +65,21 @@ na_locf <- function(x, na.rm = FALSE) {
   upper <- rep_len(upper, length(x))[finite]
   lo <- pmax(x[finite], lower)
   hi <- pmin(x[finite] + rt_resolution, upper)
-  x[finite] <- ifelse(hi > lo, (lo + hi) / 2, x[finite] + rt_resolution / 2)
+  # Equality at a grid-aligned upper bound is allowed by make_missing() and
+  # rt_check_function(). Assign that endpoint to the preceding retained bin.
+  endpoint <- is.finite(upper) & original[finite] <= upper &
+    x[finite] >= upper & hi <= lo
+  lo[endpoint] <- pmax(x[finite][endpoint] - rt_resolution, lower[endpoint])
+  if (any(!is.finite(lo) | is.na(hi) | hi <= lo))
+    stop("Finite response time has no retained RT bin")
+  x[finite] <- lo + (hi - lo) / 2
   x
 }
 
 # Whether a model tolerates having its response times binned.
 #
 # Binning rt (rt_resolution) is a lossy compression: the likelihood then
-# evaluates the density AT the bin edge instead of integrating over the bin.
+# approximates the bin density at its midpoint away from support boundaries.
 # For closed-form models that is worth it, because collapsing duplicate rows is
 # what makes the likelihood cheap.  For models whose likelihood is a grid solve
 # cached per parameter tuple (RLF, ROU) it is pure loss: the cost is the time
@@ -221,7 +229,7 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   out
 }
 
-.emc2_ll_cache_version <- 3L
+.emc2_ll_cache_version <- 4L
 
 .is_valid_ll_cache <- function(dadm, n_trials, n_lR, has_RACE_col) {
   if (!is.data.frame(dadm)) return(FALSE)
@@ -374,7 +382,9 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
       ok <- is.finite(rts) & rts > 0 & !is.na(R_idx)
       LT <- if ("LT" %in% cols) dadm[["LT"]][start_idx] else rep(0, length(start_idx))
       UT <- if ("UT" %in% cols) dadm[["UT"]][start_idx] else rep(Inf, length(start_idx))
-      ok <- ok & (LT == 0) & is.infinite(UT)
+      LC <- if ("LC" %in% cols) dadm[["LC"]][start_idx] else rep(0, length(start_idx))
+      UC <- if ("UC" %in% cols) dadm[["UC"]][start_idx] else rep(Inf, length(start_idx))
+      ok <- ok & (LT == 0) & (UT == Inf) & (LC == 0) & (UC == Inf)
       if (!all(ok)) all_finite_trials <- FALSE
     }
   }

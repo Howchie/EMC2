@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "race_contract.h"
+#include "rt_bins.h"
 
 struct GuessKernel;
 
@@ -45,6 +46,7 @@ struct LogicalRulesSharedState {
   std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
+  RtBinCache rt_bins;
 
   // Pre-computed design cells and trial-to-cell mapping
   int n_cells = 0;
@@ -84,7 +86,10 @@ double c_log_likelihood_logicalrules(
     int tau_col = -1,
     int pc_col = -1,
     int pg_col = -1,
-    const GuessKernel* guess = nullptr);
+    const GuessKernel* guess = nullptr,
+    bool internal_bin_quadrature = false,
+    const unsigned char* only_trials = nullptr,
+    bool skip_bin_wrapper = false);
 
 Rcpp::List lr_capacity_counter_values();
 void lr_capacity_counters_reset();

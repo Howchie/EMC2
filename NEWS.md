@@ -11,12 +11,19 @@
 
 -   **Likelihood of binned response times:** with `rt_resolution` each
     response time now stands for its bin instead of the bin's lower edge.
-    Race models average the density over the part of the bin above `t0` with
-    one evaluation per trial (at the bin midpoint in `sqrt(t - t0)`, weighted by
-    the feasible fraction of the bin), so `t0` can enter the earliest bin
-    without the likelihood dropping to its floor; other models evaluate the
-    density at the bin midpoint. This removes the first-order bias of
-    evaluating at the lower edge. The bin width is stored on the data, and
+    Race models use one midpoint evaluation away from support boundaries and
+    integrate within the fractional bin and its onset transition (using a
+    $C^1$ smoothstep blend and floor-aware low-order quadrature), so `t0` can
+    enter the earliest bin without discarding its remaining probability.
+    DDM/BOU, stop-signal, and LogicalRules likelihoods now apply the same
+    clipped-bin integration in their dedicated kernels. Bins are clipped to
+    censoring and truncation bounds; timed mixtures, missing responses and
+    correlated races use the same bin convention.
+    Local Erlang guess clocks retain their support from true zero, including
+    the guess mass before the decision onset in bins that straddle `t0`.
+    An RT exactly at a grid-aligned upper bound belongs to the preceding bin.
+    This removes the first-order bias of evaluating at the lower edge. The
+    bin width is stored on the data, and
     `score_held_out()` checks against it.
 
 -   **R-hat stopping rules per selection:** `mean_gd` and `max_gd` now apply

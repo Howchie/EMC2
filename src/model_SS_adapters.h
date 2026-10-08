@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "rt_bins.h"
 
 enum SsTrialKind : uint8_t {
   SS_TRIAL_LC_CENSORED = 0,  // rt == -Inf: integrate response mass over [LT, LC)
@@ -23,6 +24,7 @@ struct SsSharedState {
   int n_acc = 0;                          // accumulators per trial
   std::vector<uint8_t> kind;              // SsTrialKind per trial
   std::vector<double> rt, SSD, UC, LC, LT;
+  RtBinCache rt_bins;
   std::vector<int> resp_code;             // R code, NA_INTEGER if no response
   std::vector<int> n_go, n_st, first_go_row;   // first_go_row: offset in trial
   std::vector<uint8_t> is_go_row, is_st_row, win_row;  // n_trials * n_acc
@@ -63,7 +65,9 @@ double c_log_likelihood_ss_pt(
     const Rcpp::LogicalVector& is_ok,
     const Rcpp::IntegerVector& expand,
     double min_ll,
-    SsRawWorkspace& ws);
+    SsRawWorkspace& ws,
+    const unsigned char* only_trials = nullptr,
+    bool skip_rt_bin_wrapper = false);
 
 struct SSModelAdapter {
   Rcpp::NumericVector (*go_lpdf_ptr)(Rcpp::NumericVector, Rcpp::NumericMatrix,

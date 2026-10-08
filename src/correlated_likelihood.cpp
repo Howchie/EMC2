@@ -11,6 +11,7 @@
 #include "bawl_corr_counters.h"
 #include "drift_factor.h"
 #include "contaminant_mixture.h"
+#include "rt_bins.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -143,6 +144,7 @@ CorrDriftSharedState build_corr_drift_shared_state(
   // Truncation windows.  emc2_all_finite_trials guarantees LT = 0/UT = Inf,
   // so these are all zero whenever the caller reports all-finite data.
   s.rt = dadm["rt"];
+  s.rt_resolution = rt_bin_width(dadm);
   s.LT = get_col_with_default(dadm, "LT", 0.0);
   s.UT = get_col_with_default(dadm, "UT", R_PosInf);
   s.LC = get_col_with_default(dadm, "LC", R_PosInf);
@@ -627,7 +629,59 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
 
   double log_value = R_NegInf;
   if (R_FINITE(rt) && rt > 0.0) {
-    log_value = finite_cause(rt, known ? known_row : -1, &st);
+    if (s.rt_resolution > 0.0) {
+      const RtBin bin = rt_bin(rt, s.rt_resolution, LT, UT, LC, UC);
+      const int n_acc = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+      double refine = 0.0;
+      bool boundary = !(bin.hi > bin.lo) ||
+        (ctx->has_pre_t0_mass() && rt_bin_near_support(bin, 0.0));
+      for (int k = 0; k < n_acc; ++k) {
+        if (!bawl_corr_row_active(s, start + k)) continue;
+        const double onset = cols[ctx->t0_index][start + k];
+        refine = std::max(refine, rt_bin_survivor_weight(bin, onset));
+        if (ctx->has_pre_t0_mass()) {
+          refine = std::max(refine, rt_bin_internal_onset_weight(bin, onset));
+          boundary = boundary || rt_bin_internal_onset_weight(bin, onset) > 0.0;
+        } else {
+          boundary = boundary || rt_bin_near_support(bin, onset);
+        }
+      }
+      if (!boundary) {
+        const double noise_before = noise_num;
+        log_value = finite_cause(rt, known ? known_row : -1, &st);
+        const double fraction = bin.hi > bin.lo ? (bin.hi - bin.lo) / bin.h : 0.0;
+        if (fraction > 0.0) {
+          log_value += std::log(fraction);
+          noise_num = noise_before + (noise_num - noise_before) * fraction;
+        } else {
+          log_value = R_NegInf;
+        }
+      } else {
+        auto cause = [&](int row) {
+          double max_noise = 0.0;
+          const double onset = ctx->has_pre_t0_mass() ? 0.0 : cols[ctx->t0_index][row];
+          const double cause_refine = ctx->has_pre_t0_mass()
+            ? std::max(refine, rt_bin_internal_onset_weight(
+                bin, cols[ctx->t0_index][row])) : refine;
+          const double value = rt_bin_log_average(bin, onset, [&](double t) {
+            const double before = noise_num;
+            const double result = component_cause(row, t, &st);
+            max_noise = std::max(max_noise, noise_num - before);
+            noise_num = before;
+            return result;
+          }, cause_refine);
+          // A bound on the density error integrates to at most retained width
+          // times that bound. Do not add each quadrature evaluation's error as
+          // though it were a complete observation.
+          noise_num += max_noise * std::max(0.0, bin.hi - bin.lo) / bin.h;
+          return value;
+        };
+        if (known) log_value = cause(known_row);
+        else for (int k = 0; k < n_acc; ++k)
+          if (bawl_corr_row_active(s, start + k))
+            log_value = log_sum_exp(log_value, cause(start + k));
+      }
+    } else log_value = finite_cause(rt, known ? known_row : -1, &st);
   } else if (rt == R_NegInf) {
     if (known) log_value = interval_cause(LT, LC, known_row, &st);
     else log_value = survival_difference(LT, LC, &st);
@@ -761,7 +815,9 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     const double pC = (s.pc_col >= 0) ? cols[static_cast<size_t>(s.pc_col)][start] : 0.0;
     const double pG = (s.pg_col >= 0 && s.guess.active())
                         ? cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
-    log_value = mix_contaminants_rt(log_value, pC, pG, s.guess, rt, known);
+    const GuessKernel guess = s.rt_resolution > 0.0 && R_FINITE(rt) ?
+      rt_bin_guess(s.guess, rt_bin(rt, s.rt_resolution, LT, UT, LC, UC)) : s.guess;
+    log_value = mix_contaminants_rt(log_value, pC, pG, guess, rt, known);
   }
   out.log_likelihood = (!R_FINITE(log_value) || log_value < min_ll)
     ? min_ll : log_value;
@@ -880,6 +936,28 @@ double c_log_likelihood_corr_drift(
   // outside the kernels.  Everything else falls back to the generic race
   // evaluator below.  The fused evaluator is built on BAwLPreparedRow, so it
   // is available only to models with an affine-in-drift survivor.
+  std::vector<unsigned char> boundary_bin_unique(static_cast<size_t>(n_unique), 0);
+  if (cshared.rt_resolution > 0.0) {
+    for (int j = 0; j < n_unique; ++j) {
+      const int start = j * n_lR;
+      if (!R_FINITE(cshared.rt[start])) continue;
+      const RtBin bin = rt_bin(cshared.rt[start], cshared.rt_resolution,
+        cshared.LT[start], cshared.UT[start], cshared.LC[start], cshared.UC[start]);
+      const int n_acc = cshared.has_RACE ? cshared.race_nacc[start] : n_lR;
+      bool boundary = !(bin.hi > bin.lo) ||
+        (ctx->has_pre_t0_mass() && rt_bin_near_support(bin, 0.0));
+      if (ctx->t0_index >= 0 && ctx->t0_index < n_par) {
+        for (int k = 0; k < n_acc; ++k) {
+          const double onset = cshared.cols[ctx->t0_index][start + k];
+          boundary = boundary ||
+            (ctx->has_pre_t0_mass()
+              ? rt_bin_internal_onset_weight(bin, onset) > 0.0
+              : rt_bin_near_support(bin, onset));
+        }
+      }
+      boundary_bin_unique[static_cast<size_t>(j)] = boundary ? 1 : 0;
+    }
+  }
   const bool use_fast_node_eval =
       !cshared.generic_only &&
       all_finite_trials && !has_truncation &&
@@ -1011,8 +1089,13 @@ double c_log_likelihood_corr_drift(
   }
 
   int n_fallback_trials = 0;
+  int n_boundary_fallback_trials = 0;
   for (int j = 0; j < n_unique; ++j)
-    if (!exact_done[static_cast<size_t>(j)]) ++n_fallback_trials;
+    if (!exact_done[static_cast<size_t>(j)]) {
+      ++n_fallback_trials;
+      if (boundary_bin_unique[static_cast<size_t>(j)])
+        ++n_boundary_fallback_trials;
+    }
   if (n_fallback_trials == 0) {
     // The exact component has already applied truncation, contamination, and
     // the final floor.  Do not enter the GH machinery when every unique trial
@@ -1206,19 +1289,33 @@ double c_log_likelihood_corr_drift(
 
   // The generic-clock node evaluator is the only remaining consumer of a
   // materialised parameter matrix; produce it once per particle and only
-  // when that route is actually selected.
+  // when that route is actually selected. The fused route still needs it when
+  // a small subset of boundary bins uses the generic evaluator.
   Rcpp::NumericMatrix pars_generic;
-  if (!use_fast_node_eval) pars_generic = materialize();
+  if (!use_fast_node_eval || n_boundary_fallback_trials > 0)
+    pars_generic = materialize();
   // Per-trial log(1 - pG) for the generic node evaluator, and the matching
   // suppression of pGuess inside the nested race call -- same split as the fast
   // path above: the constant factor is integrated, the guess mass is not.
   std::vector<double> generic_log1m_pg(static_cast<size_t>(n_unique), 0.0);
-  if (!use_fast_node_eval && cshared.pg_col >= 0 && cshared.guess.active()) {
+  if ((!use_fast_node_eval || n_boundary_fallback_trials > 0) &&
+      cshared.pg_col >= 0 && cshared.guess.active()) {
     for (int j = 0; j < n_unique; ++j) {
       const double pG = pars_generic(j * n_lR, cshared.pg_col);
       if (pG != 0.0) generic_log1m_pg[static_cast<size_t>(j)] = log1m(pG);
     }
     for (int r = 0; r < n_trials; ++r) pars_generic(r, cshared.pg_col) = 0.0;
+  }
+
+  // Keep one conditional parameter matrix for the whole node sweep. Only the
+  // factor-shifted v/sv columns change at each node; cloning the full trial
+  // matrix for every boundary evaluation made sparse fallbacks scale with the
+  // entire dataset's allocation and copy cost.
+  Rcpp::NumericMatrix pars_q_work;
+  Rcpp::LogicalVector isok_q_work;
+  if (!use_fast_node_eval || n_boundary_fallback_trials > 0) {
+    pars_q_work = Rcpp::clone(pars_generic);
+    isok_q_work = Rcpp::clone(isok);
   }
 
   // Step 4: the no-clock route consumes prepared BAwL geometry directly;
@@ -1256,6 +1353,14 @@ double c_log_likelihood_corr_drift(
     fast_ok.resize(static_cast<size_t>(n_trials));
     for (int r = 0; r < n_trials; ++r) {
       if (exact_done[static_cast<size_t>(r / n_lR)]) {
+        fast_ok[static_cast<size_t>(r)] = 0;
+        fast_winner[static_cast<size_t>(r)] = 0;
+        fast_loser[static_cast<size_t>(r)] = 0;
+        fast_const_winner[static_cast<size_t>(r)] = 0;
+        fast_const_loser[static_cast<size_t>(r)] = 0;
+        continue;
+      }
+      if (boundary_bin_unique[static_cast<size_t>(r / n_lR)]) {
         fast_ok[static_cast<size_t>(r)] = 0;
         fast_winner[static_cast<size_t>(r)] = 0;
         fast_loser[static_cast<size_t>(r)] = 0;
@@ -1374,7 +1479,8 @@ double c_log_likelihood_corr_drift(
     const std::vector<int>& winner_mask = use_fine_masks ? fine_winner : fast_winner;
     const std::vector<int>& loser_mask = use_fine_masks ? fine_loser : fast_loser;
     for (int j = 0; j < n_unique; ++j) {
-      if (exact_done[static_cast<size_t>(j)]) continue;
+      if (exact_done[static_cast<size_t>(j)] ||
+          boundary_bin_unique[static_cast<size_t>(j)]) continue;
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
       double s = has_fast_const ? fast_const_ll[static_cast<size_t>(j)] : 0.0;
@@ -1419,6 +1525,14 @@ double c_log_likelihood_corr_drift(
           // reserved for the positivity denominator, so adding lp here
           // would double-count every loaded loser.
           s + fast_log1m_pc[static_cast<size_t>(j)];
+      if (need_num && cshared.rt_resolution > 0.0) {
+        const RtBin bin = rt_bin(cshared.rt[start], cshared.rt_resolution,
+          cshared.LT[start], cshared.UT[start], cshared.LC[start], cshared.UC[start]);
+        if (bin.hi > bin.lo)
+          node_num[static_cast<size_t>(j)] += std::log((bin.hi - bin.lo) / bin.h);
+        else
+          node_num[static_cast<size_t>(j)] = R_NegInf;
+      }
       if (joint_posdrift && den_eval_mask[static_cast<size_t>(j)])
         node_den[static_cast<size_t>(j)] = lp;
     }
@@ -1434,14 +1548,20 @@ double c_log_likelihood_corr_drift(
     node_num.assign(static_cast<size_t>(n_unique), R_NegInf);
     node_den.assign(static_cast<size_t>(n_unique),
                     joint_posdrift ? R_NegInf : 0.0);
-    Rcpp::NumericMatrix pars_q = Rcpp::clone(pars_generic);
-    Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
+    Rcpp::NumericMatrix& pars_q = pars_q_work;
+    Rcpp::LogicalVector& isok_q = isok_q_work;
 
     for (int r = 0; r < n_trials; ++r) {
       const int j = r / n_lR;
       if (exact_done[static_cast<size_t>(j)] ||
-          (!need_num && need_den && !den_eval_mask[static_cast<size_t>(j)]))
+          (use_fast_node_eval && !boundary_bin_unique[static_cast<size_t>(j)]) ||
+          (!need_num && need_den && !den_eval_mask[static_cast<size_t>(j)])) {
         isok_q[r] = false;
+        continue;
+      }
+      isok_q[r] = isok[r];
+      pars_q(r, factor_cols.v) = pars_generic(r, factor_cols.v);
+      pars_q(r, factor_cols.sv) = pars_generic(r, factor_cols.sv);
     }
 
     // Conditional factor model preserving each marginal sv; see
@@ -1458,7 +1578,8 @@ double c_log_likelihood_corr_drift(
     std::vector<double> log_pos(static_cast<size_t>(n_unique), 0.0);
     if (joint_posdrift) {
       for (int j = 0; j < n_unique; ++j) {
-        if (!exact_done[static_cast<size_t>(j)])
+        if (!exact_done[static_cast<size_t>(j)] &&
+            (!use_fast_node_eval || boundary_bin_unique[static_cast<size_t>(j)]))
           log_pos[static_cast<size_t>(j)] = log_positive_trial(pars_q, isok_q, j);
       }
     }
@@ -1474,7 +1595,8 @@ double c_log_likelihood_corr_drift(
 
       // Expanded rows of one unique trial share the integrand; report once.
       for (int j = 0; j < n_unique; ++j) {
-        if (exact_done[static_cast<size_t>(j)]) continue;
+        if (exact_done[static_cast<size_t>(j)] ||
+            (use_fast_node_eval && !boundary_bin_unique[static_cast<size_t>(j)])) continue;
         const int i = j_to_i[static_cast<size_t>(j)];
         if (i < 0) continue;
         node_num[static_cast<size_t>(j)] =
@@ -1674,8 +1796,25 @@ double c_log_likelihood_corr_drift(
                            std::vector<double>& den) {
     if (use_fast_node_eval) {
       evaluate_node_fast(z_by_trial, need_num, num, den);
+      bool have_boundary_fallback = false;
+      for (int j = 0; j < n_unique && !have_boundary_fallback; ++j)
+        have_boundary_fallback = boundary_bin_unique[static_cast<size_t>(j)] &&
+          !exact_done[static_cast<size_t>(j)] &&
+          (need_num || (need_den && den_eval_mask[static_cast<size_t>(j)]));
+      if (have_boundary_fallback) {
+        std::vector<double> generic_num, generic_den;
+        evaluate_node(z_by_trial, need_num, need_den, generic_num, generic_den);
+        for (int j = 0; j < n_unique; ++j) {
+          if (!boundary_bin_unique[static_cast<size_t>(j)] ||
+              exact_done[static_cast<size_t>(j)]) continue;
+          if (need_num) num[static_cast<size_t>(j)] = generic_num[static_cast<size_t>(j)];
+          if (need_den && den_eval_mask[static_cast<size_t>(j)])
+            den[static_cast<size_t>(j)] = generic_den[static_cast<size_t>(j)];
+        }
+      }
       if (count_routes)
-        route_counters.fused_node_evaluations += n_fallback_trials;
+        route_counters.fused_node_evaluations +=
+          n_fallback_trials - n_boundary_fallback_trials;
     } else {
       evaluate_node(z_by_trial, need_num, need_den, num, den);
     }
@@ -1972,8 +2111,11 @@ double c_log_likelihood_corr_drift(
     if (!R_FINITE(rt_j) || rt_j <= 0.0) return value;
     const double pC = (cshared.pc_col >= 0)
       ? cshared.cols[static_cast<size_t>(cshared.pc_col)][start] : 0.0;
+    const GuessKernel guess = cshared.rt_resolution > 0.0 ?
+      rt_bin_guess(cshared.guess, rt_bin(rt_j, cshared.rt_resolution,
+        cshared.LT[start], cshared.UT[start], cshared.LC[start], cshared.UC[start])) : cshared.guess;
     return log_sum_exp(value,
-                       std::log(pG) + log1m(pC) + cshared.guess.log_g);
+                       std::log(pG) + log1m(pC) + guess.log_g);
   };
 
   double total_ll = 0.0;
@@ -2021,6 +2163,7 @@ RDMSWTNCorrSharedState build_rdmswtn_corr_shared_state(
     Rcpp::stop("RDMSWTNcorr: rho column is outside the parameter table.");
   }
   s.rt = dadm["rt"];
+  s.rt_resolution = rt_bin_width(dadm);
   s.LT = get_col_with_default(dadm, "LT", 0.0);
   s.UT = get_col_with_default(dadm, "UT", R_PosInf);
   s.LC = get_col_with_default(dadm, "LC", R_PosInf);
@@ -2364,7 +2507,45 @@ static double rdmswtn_corr_trial_loglik(
 
   double value = R_NegInf;
   if (R_FINITE(rt) && rt > 0.0) {
-    value = finite_cause(known ? known_row : -1, rt);
+    if (s.rt_resolution > 0.0) {
+      const RtBin bin = rt_bin(rt, s.rt_resolution, LT, UT, LC, UC);
+      double refine = 0.0;
+      bool boundary = !(bin.hi > bin.lo) ||
+        (ctx->has_pre_t0_mass() && rt_bin_near_support(bin, 0.0));
+      for (int k = 0; k < n_lR_j; ++k) {
+        if (!rdmswtn_corr_row_active(s, start + k)) continue;
+        const double onset = s.cols[ctx->t0_index][start + k];
+        refine = std::max(refine, rt_bin_survivor_weight(bin, onset));
+        if (ctx->has_pre_t0_mass()) {
+          refine = std::max(refine, rt_bin_internal_onset_weight(bin, onset));
+          boundary = boundary || rt_bin_internal_onset_weight(bin, onset) > 0.0;
+        } else {
+          boundary = boundary || rt_bin_near_support(bin, onset);
+        }
+      }
+      if (!boundary) {
+        value = finite_cause(known ? known_row : -1, rt);
+        if (bin.hi > bin.lo)
+          value += std::log((bin.hi - bin.lo) / bin.h);
+        else
+          value = R_NegInf;
+      } else {
+        auto bin_cause = [&](int row) {
+          const double onset = ctx->has_pre_t0_mass() ? 0.0 : s.cols[ctx->t0_index][row];
+          return rt_bin_log_average(bin, onset,
+            [&](double t) { return single_cause(row, t); }, refine);
+        };
+        if (known) value = bin_cause(known_row);
+        else for (int k = 0; k < n_lR_j; ++k) {
+          const int row = start + k;
+          if (!rdmswtn_corr_row_active(s, row) ||
+              s.lR_codes[row] == ctx->time_code || s.lR_codes[row] == ctx->nogo_code) continue;
+          value = log_sum_exp(value, bin_cause(row));
+        }
+        if (time_row >= 0 && n_resp > 0)
+          value = log_sum_exp(value, bin_cause(time_row) - (known ? std::log(n_resp) : 0.0));
+      }
+    } else value = finite_cause(known ? known_row : -1, rt);
   } else if (rt == R_NegInf) {
     if (!known && nogo_row >= 0) {
       for (int k = 0; k < n_lR_j; ++k) {
@@ -2407,7 +2588,9 @@ static double rdmswtn_corr_trial_loglik(
     const double pC = (s.pc_col >= 0) ? s.cols[static_cast<size_t>(s.pc_col)][start] : 0.0;
     const double pG = (s.pg_col >= 0 && s.guess.active())
                         ? s.cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
-    value = mix_contaminants_rt(value, pC, pG, s.guess, rt, known);
+    const GuessKernel guess = s.rt_resolution > 0.0 && R_FINITE(rt) ?
+      rt_bin_guess(s.guess, rt_bin(rt, s.rt_resolution, LT, UT, LC, UC)) : s.guess;
+    value = mix_contaminants_rt(value, pC, pG, guess, rt, known);
   }
   return (!R_FINITE(value) || value < min_ll) ? min_ll : value;
 }

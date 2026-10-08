@@ -1,6 +1,6 @@
 # Floored response times: design_model() stores a point inside each
 # rt_resolution bin and the race likelihood averages the density over the bin
-# (FlooredRtBins in src/likelihood_shared.h).
+# (src/rt_bins.h: midpoint away from onset, integration near onset).
 
 bin_design <- function(model, formula) {
   design(factors = list(subjects = 1, S = c("left", "right")),
@@ -137,4 +137,284 @@ test_that("every subject's data keeps the bin width", {
   dat <- make_data(rdm_case$p, des, n_trials = 10)
   emc <- suppressMessages(make_emc(dat, des, n_chains = 1, rt_resolution = 1 / 60))
   for (d in emc[[1]]$data) expect_equal(attr(d, "rt_resolution"), 1 / 60)
+})
+
+bin_trial <- function(rt = 0.44, response = "left") {
+  data.frame(subjects = factor(1),
+             S = factor("left", levels = c("left", "right")),
+             R = factor(response, levels = c("left", "right")), rt = rt)
+}
+
+# Independent analytical reference: no likelihood floors inside the integral.
+lnr_bin_ref <- function(p, lo, hi, h, response = "left") {
+  t0 <- exp(p[["t0"]]); s <- exp(p[["s"]])
+  m <- p[["m"]] + c(left = p[["m_lMTRUE"]], right = 0)
+  f <- function(t) {
+    x <- t - t0
+    d <- vapply(c("left", "right"), function(r)
+      dlnorm(x, m[[r]], s) * plnorm(x, m[[setdiff(names(m), r)]], s,
+                                   lower.tail = FALSE), numeric(length(t)))
+    if (is.na(response)) rowSums(d) else d[, response]
+  }
+  if (hi <= max(lo, t0)) return(log(1e-10))
+  max(log(1e-10), log(integrate(f, max(lo, t0), hi, rel.tol = 1e-9)$value / h))
+}
+
+test_that("boundary bins agree with unfloored analytical densities", {
+  des <- bin_design(LNR, lnr_case$formula)
+  for (h in c(1/60, 0.05)) {
+    dat <- bin_trial()
+    lo <- h * floor(dat$rt / h); hi <- lo + h
+    for (t0 in c(lo + 0.1 * h, lo + 0.5 * h, lo + 0.9 * h, hi)) {
+      p <- lnr_case$p; p[["t0"]] <- log(t0)
+      expect_equal(bin_ll(p, bin_dadm(dat, des, h), des),
+                   lnr_bin_ref(p, lo, hi, h), tolerance = 1e-5)
+    }
+  }
+})
+
+test_that("clipped bins weight both process and uniform-guess densities", {
+  des <- bin_design(LNR, c(lnr_case$formula, list(pGuess ~ 1)))
+  p <- c(lnr_case$p, pGuess = qnorm(0.3)); p[["t0"]] <- log(0.405)
+  for (bound in c("LC", "UC", "LT", "UT")) {
+    dat <- bin_trial()
+    lower <- bound %in% c("LC", "LT")
+    dat[[bound]] <- if (lower) 0.42 else 0.445
+    dadm <- bin_dadm(dat, des, 0.05)
+    lo <- if (lower) 0.42 else 0.4
+    hi <- if (lower) 0.45 else 0.445
+    # The unbinned likelihood supplies the existing truncation normaliser.
+    ub <- bin_dadm(dat, des, NULL)
+    f <- function(t) vapply(t, function(tt) {
+      ub$rt[] <- tt; exp(bin_ll(p, ub, des))
+    }, 0)
+    expect_equal(bin_ll(p, dadm, des),
+      log(integrate(f, lo, hi, rel.tol = 1e-8)$value / 0.05), tolerance = 1e-5)
+  }
+})
+
+test_that("upper grid endpoints remain inside the retained window", {
+  des <- bin_design(LNR, lnr_case$formula)
+  for (bound in c("UC", "UT")) {
+    dat <- bin_trial(0.45); dat[[bound]] <- 0.45
+    dadm <- bin_dadm(dat, des, 0.05)
+    expect_equal(dadm$rt, rep(0.425, 2))
+    expect_true(all(dadm$rt < dadm[[bound]]))
+  }
+  expect_error(EMC2:::.rt_bin_midpoint(0.45, 0.05, lower = 0.45, upper = 0.45),
+               "no retained RT bin")
+})
+
+test_that("unknown responses equal the sum of generating response bins", {
+  des <- bin_design(LNR, lnr_case$formula)
+  p <- lnr_case$p; p[["m"]] <- -3.4; p[["t0"]] <- log(0.43)
+  known <- vapply(c("left", "right"), function(r)
+    exp(bin_ll(p, bin_dadm(bin_trial(response = r), des, 0.05), des)), 0)
+  expect_equal(bin_ll(p, bin_dadm(bin_trial(response = NA_character_), des, 0.05), des),
+               log(sum(known)), tolerance = 1e-7)
+})
+
+test_that("correlated bin likelihoods approach their independent limit", {
+  des <- bin_design(LNRcorr, c(lnr_case$formula, list(rho ~ 1)))
+  p <- c(lnr_case$p, rho = 0); p[["m"]] <- -3.4; p[["t0"]] <- log(0.43)
+  dadm <- bin_dadm(bin_trial(), des, 0.05)
+  independent <- bin_ll(p, dadm, des)
+  for (rho in c(-1e-8, 1e-8)) {
+    p[["rho"]] <- qnorm((rho + 1) / 2)
+    expect_equal(bin_ll(p, dadm, des), independent, tolerance = 1e-6)
+  }
+})
+
+test_that("shared-gamma counter bins agree with the integrated R density", {
+  des <- bin_design(PCOUNTERcorr,
+    list(nu ~ 1, c ~ 1, gamma ~ 1, k ~ 1, omega ~ 1, t0 ~ 1, rho ~ 1))
+  p <- c(nu = log(12), c = log(0.3), gamma = -Inf, k = log(2),
+         omega = -Inf, t0 = log(0.1), rho = qnorm(0.4))
+  pars <- matrix(rep(c(12, 0.3, 0, 2, 0, 0.1, 0.4), 2), nrow = 2, byrow = TRUE,
+    dimnames = list(NULL, c("nu", "c", "gamma", "k", "omega", "t0", "rho")))
+  expected <- log(integrate(function(t) dPCOUNTERcorr(t, pars, 1),
+                             0.1, 0.15, rel.tol = 1e-9)$value / 0.05)
+  expect_equal(bin_ll(p, bin_dadm(bin_trial(0.14), des, 0.05), des),
+               expected, tolerance = 1e-6)
+})
+
+test_that("drift and copula races retain their boundary-bin probability", {
+  cases <- list(
+    list(model = BAwLcorr,
+      formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+                     mG ~ 1, mK ~ 1, rho ~ 1),
+      p = c(v = 1, sv = log(0.4), B = log(0.012), A = log(0.002),
+            t0 = log(0.43), k = -Inf, mG = -Inf, mK = -Inf, rho = 0)),
+    list(model = RDMSWTNcorr,
+      formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1,
+                     mG ~ 1, mK ~ 1, rho ~ 1),
+      p = c(v = log(10), B = log(0.1), A = log(0.02), t0 = log(0.43),
+            s = 0, sv = -Inf, mG = -Inf, mK = -Inf, rho = 0)))
+  for (case in cases) {
+    des <- bin_design(case$model, case$formula)
+    dadm <- bin_dadm(bin_trial(), des, 0.05)
+    p <- case$p
+    independent <- bin_ll(p, dadm, des)
+    expect_gt(independent, log(1e-10))
+    p[["rho"]] <- qnorm((1 + 1e-8) / 2)
+    expect_equal(bin_ll(p, dadm, des), independent, tolerance = 1e-6)
+    p[["rho"]] <- qnorm((1 + 0.35) / 2)
+    ub <- bin_dadm(bin_trial(), des, NULL)
+    f <- function(t) vapply(t, function(tt) {
+      ub$rt[] <- tt; exp(bin_ll(p, ub, des))
+    }, 0)
+    expect_equal(bin_ll(p, dadm, des),
+      log(integrate(f, 0.43, 0.45, rel.tol = 1e-7)$value / 0.05),
+      tolerance = 1e-5)
+  }
+})
+
+test_that("timed bins retain responses before the response accumulator onset", {
+  des <- design(factors = list(subjects = 1, S = "stim"),
+    Rlevels = c("left", "right", "time"), model = LNR,
+    formula = list(m ~ 0 + lR, s ~ 1, t0 ~ 0 + lR), verbose = FALSE,
+    report_p_vector = FALSE)
+  dat <- data.frame(subjects = factor(1), S = factor("stim"),
+    R = factor("left", levels = c("left", "right", "time")), rt = 0.44)
+  p <- sampled_pars(des, doMap = FALSE)
+  p[c("m_lRleft", "m_lRright", "m_lRtime")] <- c(-1, -1, log(0.01))
+  p[["s"]] <- log(0.4)
+  p[c("t0_lRleft", "t0_lRright", "t0_lRtime")] <- log(c(0.46, 0.46, 0.43))
+  expected <- log((plnorm(0.02, log(0.01), 0.4) / 2) / 0.05)
+  dadm <- bin_dadm(dat, des, 0.05)
+  expect_equal(bin_ll(p, dadm, des), expected, tolerance = 1e-6)
+  P <- matrix(p, 1, dimnames = list(NULL, names(p)))
+  expect_equal(sum(EMC2:::calc_ll_pw(P, dadm, des$model)), bin_ll(p, dadm, des),
+               tolerance = 1e-8)
+})
+
+test_that("ordinary bins retain the single midpoint evaluation", {
+  des <- bin_design(LNR, lnr_case$formula)
+  dat <- bin_trial()
+  dadm <- bin_dadm(dat, des, 1/60)
+  ub <- bin_dadm(transform(dat, rt = dadm$rt[1]), des, NULL)
+  expect_equal(bin_ll(lnr_case$p, dadm, des), bin_ll(lnr_case$p, ub, des),
+               tolerance = 1e-12)
+})
+
+test_that("the boundary fallback turns on continuously", {
+  des <- bin_design(LNR, lnr_case$formula)
+  dadm <- bin_dadm(bin_trial(), des, 0.05)
+  p <- lnr_case$p
+  ll <- function(t0) { p[["t0"]] <- log(t0); bin_ll(p, dadm, des) }
+  # The bin starts at .4; one width before it is .35.
+  expect_equal(ll(0.35 - 1e-10), ll(0.35 + 1e-10), tolerance = 1e-7)
+})
+
+test_that("marginalisation includes feasible sub-millisecond bin support", {
+  des <- bin_design(LNR, lnr_case$formula)
+  p <- lnr_case$p; p[["m"]] <- log(0.0002); p[["m_lMTRUE"]] <- 0
+  dadm <- bin_dadm(bin_trial(0.44), des, 0.001)
+  P <- matrix(p, 1, dimnames = list(NULL, names(p)))
+  grid <- EMC2:::compute_marginal_grid(P, dadm, des$model,
+    list(param = "t0", mu = log(0.4405), sigma = 0.001, n_nodes = 48, n_scan = 15))
+  expect_gt(max(exp(grid$nodes)), 0.4405)
+  expect_lt(max(exp(grid$nodes)), 0.441)
+})
+
+test_that("uniform guesses remove the marginal t0 ceiling", {
+  des <- bin_design(LNR, c(lnr_case$formula, list(pGuess ~ 1)))
+  p <- c(lnr_case$p, pGuess = qnorm(0.5))
+  dadm <- bin_dadm(bin_trial(), des, 0.05)
+  P <- matrix(p, 1, dimnames = list(NULL, names(p)))
+  grid <- EMC2:::compute_marginal_grid(P, dadm, des$model,
+    list(param = "t0", mu = log(0.8), sigma = 0.1, n_nodes = 48))
+  expect_gt(max(exp(grid$nodes)), 0.8)
+  expect_true(is.finite(grid$ll))
+})
+
+bin_erlang_cases <- list(
+  list(model = RDMSWTN,
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, mG ~ 1, mK ~ 1),
+    p = c(v = log(10), B = log(0.1), A = log(0.02), t0 = log(0.43),
+          s = 0, sv = -Inf, mG = log(0.3), mK = log(0.5))),
+  list(model = BAwL,
+    formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1),
+    p = c(v = 1, sv = log(0.4), B = log(0.012), A = log(0.002), t0 = log(0.43),
+          k = -Inf, mG = log(0.3), mK = log(0.5))))
+
+test_that("Erlang races integrate across their internal decision onset", {
+  for (case in bin_erlang_cases) for (shape in list(1L, 2L, "mixed")) {
+    for (type in c("local_guess", "local_kill_guess", "local_kill", "global_kill")) {
+      if (identical(shape, "mixed") && type == "global_kill") next
+      p <- case$p
+      formula <- case$formula
+      if (type == "local_guess") p[["mK"]] <- -Inf
+      if (identical(shape, "mixed")) {
+        formula <- c(formula, list(omega ~ 1)); p <- c(p, omega = qnorm(0.35))
+      }
+      des <- bin_design(case$model(erlang_shape = shape, erlang_type = type), formula)
+      dadm <- bin_dadm(bin_trial(), des, 0.05)
+      ub <- bin_dadm(bin_trial(), des, NULL)
+      f <- function(t) vapply(t, function(tt) {
+        ub$rt[] <- tt; exp(bin_ll(p, ub, des))
+      }, 0)
+      # Split the independent reference at t0: guess clocks use raw time,
+      # while the decision component uses t - t0.
+      expected <- log((integrate(f, 0.4, 0.43, rel.tol = 1e-8)$value +
+                       integrate(f, 0.43, 0.45, rel.tol = 1e-8)$value) / 0.05)
+      expect_equal(bin_ll(p, dadm, des), expected, tolerance = 1e-5,
+                   info = paste(des$model()$c_name, shape, type))
+      if (type %in% c("local_guess", "local_kill_guess")) {
+        p[["t0"]] <- log(0.44)
+        expected <- log((integrate(f, 0.4, 0.44, rel.tol = 1e-8)$value +
+                         integrate(f, 0.44, 0.45, rel.tol = 1e-8)$value) / 0.05)
+        expect_equal(bin_ll(p, dadm, des), expected, tolerance = 1e-5)
+        ll <- function(t0) { p[["t0"]] <- log(t0); bin_ll(p, dadm, des) }
+        for (edge in c(0.45, 0.5))
+          expect_equal(ll(edge - 1e-10), ll(edge + 1e-10), tolerance = 1e-7)
+        p[["t0"]] <- log(0.6)
+        expected <- log(integrate(f, 0, 0.05, rel.tol = 1e-8)$value / 0.05)
+        expect_equal(bin_ll(p, bin_dadm(bin_trial(0.01), des, 0.05), des),
+                     expected, tolerance = 1e-6)
+      }
+    }
+  }
+})
+
+test_that("Erlang guess bins keep their true-zero support before t0", {
+  for (case in bin_erlang_cases) for (shape in list(1L, 2L, "mixed")) {
+    p <- case$p; p[["mK"]] <- -Inf; p[["t0"]] <- log(0.8)
+    formula <- case$formula
+    if (identical(shape, "mixed")) {
+      formula <- c(formula, list(omega ~ 1)); p <- c(p, omega = qnorm(0.35))
+    }
+    des <- bin_design(case$model(erlang_shape = shape, erlang_type = "local_guess"), formula)
+    f <- function(t) {
+      if (identical(shape, "mixed")) {
+        pdf <- 0.35 * dgamma(t, 1, rate = 1 / 0.3) + 0.65 * dgamma(t, 2, rate = 2 / 0.3)
+        surv <- 0.35 * pgamma(t, 1, rate = 1 / 0.3, lower.tail = FALSE) +
+                0.65 * pgamma(t, 2, rate = 2 / 0.3, lower.tail = FALSE)
+      } else {
+        pdf <- dgamma(t, shape, rate = shape / 0.3)
+        surv <- pgamma(t, shape, rate = shape / 0.3, lower.tail = FALSE)
+      }
+      pdf * surv
+    }
+    expected <- log(integrate(f, 0, 0.05, rel.tol = 1e-9)$value / 0.05)
+    expect_equal(bin_ll(p, bin_dadm(bin_trial(0.01), des, 0.05), des),
+                 expected, tolerance = 1e-6)
+    expect_equal(bin_ll(p, bin_dadm(bin_trial(0.01, NA_character_), des, 0.05), des),
+                 expected + log(2), tolerance = 1e-6)
+  }
+})
+
+test_that("unequal Erlang clocks do not use the identical-clock shortcut", {
+  for (case in bin_erlang_cases) {
+    formula <- case$formula
+    formula[[which(vapply(formula, function(f) as.character(f[[2]]) == "mG", TRUE))]] <- mG ~ lM
+    p <- c(case$p, mG_lMTRUE = log(2))
+    p[["t0"]] <- log(0.8); p[["mK"]] <- -Inf
+    des <- bin_design(case$model(erlang_shape = 2L, erlang_type = "local_guess"), formula)
+    expected <- log(integrate(function(t)
+      dgamma(t, 2, rate = 2 / 0.6) * pgamma(t, 2, rate = 2 / 0.3, lower.tail = FALSE),
+      0, 0.05, rel.tol = 1e-9)$value / 0.05)
+    expect_equal(bin_ll(p, bin_dadm(bin_trial(0.01), des, 0.05), des),
+                 expected, tolerance = 1e-6)
+  }
 })

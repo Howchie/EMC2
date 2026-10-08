@@ -22,7 +22,7 @@ test_that("PCOUNTERcorr compiled likelihood agrees with the R reference", {
              t0 = log(.1), rho = qnorm(.4))
   set.seed(71)
   dat <- make_data(theta, des, n_trials = 30, rt_resolution = NULL)
-  emc <- make_emc(dat, des, type = "single")
+  emc <- make_emc(dat, des, type = "single", rt_resolution = NULL)
   dadm <- emc[[1]]$data[[1]]; mod <- emc[[1]]$model(); pt <- names(mod$p_types)
   designs <- lapply(pt, function(nm) { x <- attr(dadm, "designs")[[nm]]; x[attr(x, "expand"), , drop = FALSE] })
   names(designs) <- pt

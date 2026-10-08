@@ -41,6 +41,7 @@
 
 #include "race_integrands.h"     // RaceEndpointGroupCache (ModelSharedState member)
 #include "contaminant_mixture.h" // GuessKernel (ModelSharedState member)
+#include "rt_bins.h"
 
 
 struct DDMEndpointCacheKey {
@@ -95,84 +96,11 @@ struct DDMEndpointCache {
 };
 
 
-// Likelihood of floored response times.  design_model() floors rt to a grid
-// of width h, stores a point inside each bin and records h as attr
-// "rt_resolution".  The observation is then the bin [r, r + h) and its
-// likelihood the bin-averaged density: the integral of f over the part of the
-// bin above the winner's t0, divided by h.  In z = sqrt(t - t0) the integrand
-// is 2 z f(t0 + z^2), which stays bounded at the onset, so the one evaluation
-// per trial sits at the midpoint in z, t_m = t0 + ((z_lo + z_hi) / 2)^2, and
-// is weighted by the feasible fraction of the bin, (hi - lo) / h (zero when
-// the whole bin lies below t0).  init() resolves the data-fixed part once;
-// apply() writes t_m to every row of each trial with a finite winner and the
-// log feasible fraction per unique trial.  Not used for races with density
-// before t0 (ContextForRaceModels::has_pre_t0_mass); those evaluate at the
-// stored bin midpoint.
-struct FlooredRtBins {
-  double h = 0.0;                // 0 = data not binned
-  std::vector<int> win_row;      // winner row per unique trial, -1 if none
-  std::vector<double> lo_bin;    // bin lower edge per unique trial
-  std::vector<double> rt_eff;    // evaluation time per row
-  std::vector<double> log_frac;  // log feasible fraction per unique trial
-
-  bool active() const { return h > 0.0; }
-
-  void init(const Rcpp::DataFrame& data, const double* rt, const int* win,
-            int n_rows, int n_lR, const int* nacc) {
-    h = 0.0;
-    if (!data.hasAttribute("rt_resolution")) return;
-    const double hh = Rcpp::as<double>(data.attr("rt_resolution"));
-    if (!R_FINITE(hh) || hh <= 0.0) return;
-    h = hh;
-    const int n_unique = n_rows / n_lR;
-    win_row.assign(n_unique, -1);
-    lo_bin.assign(n_unique, NA_REAL);
-    log_frac.assign(n_unique, 0.0);
-    rt_eff.assign(rt, rt + n_rows);
-    for (int j = 0; j < n_unique; ++j) {
-      const int start = j * n_lR;
-      const int n_acc = nacc ? nacc[start] : n_lR;
-      for (int k = 0; k < n_acc; ++k) {
-        if (!win[start + k]) continue;
-        if (R_FINITE(rt[start + k])) {
-          win_row[j] = start + k;
-          lo_bin[j] = h * std::floor(rt[start + k] / h);
-        }
-        break;
-      }
-    }
-  }
-
-  void apply(const double* rt, const double* t0, const int* ok, int n_lR) {
-    const int n_unique = static_cast<int>(win_row.size());
-    for (int j = 0; j < n_unique; ++j) {
-      const int w = win_row[j];
-      if (w < 0) continue;
-      const double t0w = t0[w];
-      const double lo = std::max(lo_bin[j], t0w);
-      const double hi = lo_bin[j] + h;
-      double tm = rt[w], lf = 0.0;
-      if (ok[w] && R_FINITE(t0w)) {
-        if (hi <= lo) {
-          lf = R_NegInf;
-        } else {
-          // ((sqrt(a) + sqrt(b)) / 2)^2 with a = lo - t0, b = hi - t0.
-          const double a = lo - t0w, b = hi - t0w;
-          tm = t0w + 0.25 * (a + b + 2.0 * std::sqrt(a * b));
-          if (lo > lo_bin[j]) lf = std::log((hi - lo) / h);
-        }
-      }
-      log_frac[j] = lf;
-      double* r = rt_eff.data() + static_cast<size_t>(j) * n_lR;
-      for (int k = 0; k < n_lR; ++k) r[k] = tm;
-    }
-  }
-};
-
 // Pre-computed per-data state for likelihood functions (Race, DDM, etc.).
 // Built once outside the particle loop; reused across particles to eliminate
 // per-particle R-heap allocations and repeated attribute/column reads.
 struct ModelSharedState {
+  RtBinCache rt_bins;
   bool valid = false;
   // Pre-read censoring/truncation bounds (Rcpp vectors keep memory alive)
   Rcpp::NumericVector LT_vec, UT_vec, LC_vec, UC_vec;
@@ -205,7 +133,6 @@ struct ModelSharedState {
   std::vector<int> n_resp;          // per-unique-trial guessable accumulator count (excl. time, nogo)
   std::vector<double> alt_res_buf;  // scratch for timed-race f_T and S_W
   std::vector<double> ll_unique_buf; // per-unique-trial log-likelihood accumulator
-  FlooredRtBins rt_bins;
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;

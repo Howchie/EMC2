@@ -13,7 +13,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Rcpp;
@@ -325,6 +327,8 @@ double c_log_likelihood_ss(
   // compute log likelihoods (generalized, matching R's log_likelihood_race_ss)
   NumericVector unique_lR = unique(lR);
   const int n_acc = unique_lR.length();
+  RtBinCache rt_bins;
+  rt_bins.init(data, n_acc);
   
   NumericVector tt(n_acc);
   auto log_surv_mask = [&](double t, const NumericMatrix& Pcur,
@@ -379,6 +383,63 @@ double c_log_likelihood_ss(
           break;
         }
       }
+    }
+
+    if (rt_bins.active() && response_observed && R_FINITE(rt) && rt > 0.0) {
+      const RtBin& bin = rt_bins.bins[static_cast<size_t>(trial)];
+      if (!(bin.hi > bin.lo)) {
+        lls[trial] = min_ll;
+        continue;
+      }
+      const bool is_exg = (go_lpdf_ptr == texg_go_lpdf);
+      const int acc_onset_col = is_exg ? emc2col::ss_texg::exg_lb
+                                       : emc2col::ss_rdex::t0;
+      const int stop_onset_col = is_exg ? emc2col::ss_texg::exgS_lb
+                                        : emc2col::ss_rdex::exgS_lb;
+      std::vector<double> transitions;
+      transitions.reserve(static_cast<size_t>(2 * n_acc + 3));
+      double first_onset = R_PosInf;
+      for (int a = 0; a < n_acc; ++a) {
+        const double acc_onset = P(a, acc_onset_col);
+        if (is_go[a] && R_FINITE(acc_onset)) {
+          transitions.push_back(acc_onset);
+          first_onset = std::min(first_onset, acc_onset);
+        }
+        if (stop_signal_presented && is_st[a] && R_FINITE(acc_onset)) {
+          const double stop_onset = SSD[start_row] + acc_onset;
+          transitions.push_back(stop_onset);
+          first_onset = std::min(first_onset, stop_onset);
+        }
+      }
+      if (stop_signal_presented && R_FINITE(SSD[start_row])) {
+        const double ssd_onset = SSD[start_row];
+        transitions.push_back(ssd_onset);
+        first_onset = std::min(first_onset, ssd_onset);
+        int first_go = 0;
+        for (int a = 0; a < n_acc; ++a) if (is_go[a]) { first_go = a; break; }
+        const double stop_r0_onset = ssd_onset + P(0, stop_onset_col);
+        const double stop_g0_onset = ssd_onset + P(first_go, stop_onset_col);
+        if (R_FINITE(stop_r0_onset)) {
+          transitions.push_back(stop_r0_onset);
+          first_onset = std::min(first_onset, stop_r0_onset);
+        }
+        if (R_FINITE(stop_g0_onset)) {
+          transitions.push_back(stop_g0_onset);
+          first_onset = std::min(first_onset, stop_g0_onset);
+        }
+      }
+      if (!R_FINITE(first_onset)) first_onset = 0.0;
+      double refine = 0.0;
+      for (double boundary : transitions)
+        refine = std::max(refine, rt_bin_quadrature_weight(bin, boundary));
+      lls[trial] = rt_bin_log_average_split(bin, first_onset,
+        [&](double t) {
+          return ss_trial_log_response_density(
+            t, P, lR_trial, is_go, is_st, SSD[start_row],
+            stop_signal_presented, tf, gf, go_lpdf_ptr, go_lccdf_ptr,
+            stop_logsurv_ptr, stop_success_ptr, R_NegInf, R[start_row]);
+        }, refine, transitions);
+      continue;
     }
     
     // Build rt vectors for go and st contexts
@@ -688,6 +749,7 @@ SsSharedState build_ss_shared_state(const Rcpp::DataFrame& data,
   }
 
   ss.valid = true;
+  ss.rt_bins.init(data, n_acc);
   return ss;
 }
 
@@ -863,19 +925,261 @@ double c_log_likelihood_ss_pt(
     const LogicalVector& is_ok,
     const IntegerVector& expand,
     double min_ll,
-    SsRawWorkspace& ws
+    SsRawWorkspace& ws,
+    const unsigned char* only_trials,
+    bool skip_rt_bin_wrapper
 ) {
   const int n_out = expand.length();
-  if (is_true(all(!is_ok))) {
+  if (only_trials == nullptr && is_true(all(!is_ok))) {
     return static_cast<double>(n_out) * min_ll;
+  }
+  if (ss.rt_bins.active() && !skip_rt_bin_wrapper) {
+    bool have_finite_response_bin = false;
+    for (int trial = 0; trial < ss.n_trials; ++trial) {
+      const uint8_t kind = ss.kind[static_cast<size_t>(trial)];
+      if ((kind == SS_TRIAL_GO_RESP || kind == SS_TRIAL_STOP_GO_RESP ||
+           kind == SS_TRIAL_STOP_ST_RESP) &&
+          R_FINITE(ss.rt[static_cast<size_t>(trial)]) &&
+          ss.rt[static_cast<size_t>(trial)] > 0.0) {
+        have_finite_response_bin = true;
+        break;
+      }
+    }
+    if (have_finite_response_bin) {
+      std::vector<double> result(static_cast<size_t>(ss.n_trials), R_NegInf);
+      std::vector<unsigned char> integrate(static_cast<size_t>(ss.n_trials), 0);
+      std::vector<unsigned char> point_trials(static_cast<size_t>(ss.n_trials), 1);
+      std::vector<int> integrate_trials;
+      std::vector<double> onset(static_cast<size_t>(ss.n_trials), 0.0);
+      std::vector<double> zlo(static_cast<size_t>(ss.n_trials), 0.0);
+      std::vector<double> zhi(static_cast<size_t>(ss.n_trials), 0.0);
+      std::vector<std::vector<double>> transitions(static_cast<size_t>(ss.n_trials));
+      bool any_quadrature = false;
+      for (int trial = 0; trial < ss.n_trials; ++trial) {
+        const size_t sj = static_cast<size_t>(trial);
+        const uint8_t kind = ss.kind[sj];
+        if ((kind != SS_TRIAL_GO_RESP && kind != SS_TRIAL_STOP_GO_RESP &&
+             kind != SS_TRIAL_STOP_ST_RESP) || !R_FINITE(ss.rt[sj]) ||
+            !(ss.rt[sj] > 0.0) || is_ok[trial * ss.n_acc] != TRUE) continue;
+        const RtBin& bin = ss.rt_bins.bins[sj];
+        if (!(bin.hi > bin.lo)) {
+          result[sj] = R_NegInf;
+          point_trials[sj] = 0;
+          continue;
+        }
+        double first_onset = R_PosInf;
+        std::vector<double> boundaries;
+        boundaries.reserve(static_cast<size_t>(ss.n_acc + 1));
+        if (kind == SS_TRIAL_STOP_GO_RESP || kind == SS_TRIAL_STOP_ST_RESP) {
+          if (R_FINITE(ss.SSD[sj])) {
+            boundaries.push_back(ss.SSD[sj]);
+            first_onset = std::min(first_onset, ss.SSD[sj]);
+          }
+        }
+        double acc[SS_ACC_STRIDE];
+        const int start = trial * ss.n_acc;
+        for (int a = 0; a < ss.n_acc; ++a) {
+          M.fill_acc(cols, start + a, acc);
+          const double acc_onset = acc[3];
+          if (ss.is_go_row[static_cast<size_t>(start + a)]) {
+            if (R_FINITE(acc_onset)) {
+              boundaries.push_back(acc_onset);
+              first_onset = std::min(first_onset, acc_onset);
+            }
+          }
+          if (ss.is_st_row[static_cast<size_t>(start + a)] &&
+              (kind == SS_TRIAL_STOP_GO_RESP || kind == SS_TRIAL_STOP_ST_RESP) &&
+              R_FINITE(acc_onset) && R_FINITE(ss.SSD[sj])) {
+            const double stop_onset = ss.SSD[sj] + acc_onset;
+            boundaries.push_back(stop_onset);
+            first_onset = std::min(first_onset, stop_onset);
+          }
+        }
+        if ((kind == SS_TRIAL_STOP_GO_RESP || kind == SS_TRIAL_STOP_ST_RESP) &&
+            R_FINITE(ss.SSD[sj])) {
+          double stop_r0[4], stop_g0[4];
+          M.fill_stop(cols, start, stop_r0);
+          M.fill_stop(cols, start + ss.first_go_row[sj], stop_g0);
+          const double stop_r_onset = ss.SSD[sj] + stop_r0[3];
+          const double stop_g_onset = ss.SSD[sj] + stop_g0[3];
+          if (R_FINITE(stop_r_onset)) {
+            boundaries.push_back(stop_r_onset);
+            first_onset = std::min(first_onset, stop_r_onset);
+          }
+          if (R_FINITE(stop_g_onset)) {
+            boundaries.push_back(stop_g_onset);
+            first_onset = std::min(first_onset, stop_g_onset);
+          }
+        }
+        transitions[sj] = boundaries;
+        if (!R_FINITE(first_onset)) first_onset = 0.0;
+        onset[sj] = first_onset;
+        double refine = 0.0;
+        for (double boundary : boundaries)
+          refine = std::max(refine, rt_bin_quadrature_weight(bin, boundary));
+        const double lo = std::max(bin.lo, first_onset);
+        if (refine > 0.0 && bin.hi > lo) {
+          integrate[sj] = 1;
+          point_trials[sj] = 0;
+          integrate_trials.push_back(trial);
+          any_quadrature = true;
+          zlo[sj] = std::sqrt(lo - first_onset);
+          zhi[sj] = std::sqrt(bin.hi - first_onset);
+        }
+      }
+
+      // Boundary rows are evaluated only by the node integrator below. The
+      // midpoint result is needed for all other rows, so keep that first pass
+      // sparse too.
+      // Full bins already have their stored RT at the midpoint. Copy the
+      // shared arrays only when a clipped point-evaluated bin needs a
+      // different retained-window midpoint.
+      SsSharedState point_shared;
+      const SsSharedState* point_state = &ss;
+      bool point_state_owned = false;
+      for (int trial = 0; trial < ss.n_trials; ++trial) {
+        const size_t sj = static_cast<size_t>(trial);
+        const uint8_t kind = ss.kind[sj];
+        if (!point_trials[sj] ||
+            (kind != SS_TRIAL_GO_RESP && kind != SS_TRIAL_STOP_GO_RESP &&
+             kind != SS_TRIAL_STOP_ST_RESP)) continue;
+        const RtBin& bin = ss.rt_bins.bins[sj];
+        if (!(bin.hi > bin.lo)) continue;
+        const double mid = bin.lo + (bin.hi - bin.lo) / 2.0;
+        if (mid == ss.rt[sj]) continue;
+        point_shared = ss;
+        point_state_owned = true;
+        for (int k = trial; k < ss.n_trials; ++k) {
+          const size_t sk = static_cast<size_t>(k);
+          const uint8_t point_kind = ss.kind[sk];
+          if (!point_trials[sk] ||
+              (point_kind != SS_TRIAL_GO_RESP &&
+               point_kind != SS_TRIAL_STOP_GO_RESP &&
+               point_kind != SS_TRIAL_STOP_ST_RESP)) continue;
+          const RtBin& point_bin = ss.rt_bins.bins[sk];
+          if (point_bin.hi > point_bin.lo)
+            point_shared.rt[sk] = point_bin.lo +
+              (point_bin.hi - point_bin.lo) / 2.0;
+        }
+        point_state = &point_shared;
+        break;
+      }
+
+      const IntegerVector no_expand(0);
+      c_log_likelihood_ss_pt(cols, *point_state, M, is_ok, no_expand, min_ll, ws,
+                             point_trials.data(), true);
+      for (int trial = 0; trial < ss.n_trials; ++trial)
+        if (point_trials[static_cast<size_t>(trial)])
+          result[static_cast<size_t>(trial)] = ws.lls[static_cast<size_t>(trial)];
+      for (int trial = 0; trial < ss.n_trials; ++trial) {
+        const size_t sj = static_cast<size_t>(trial);
+        if (point_trials[sj] &&
+            (ss.kind[sj] == SS_TRIAL_GO_RESP ||
+             ss.kind[sj] == SS_TRIAL_STOP_GO_RESP ||
+             ss.kind[sj] == SS_TRIAL_STOP_ST_RESP) &&
+            R_FINITE(ss.rt[sj]) && ss.rt[sj] > 0.0 &&
+            ss.rt_bins.bins[sj].hi > ss.rt_bins.bins[sj].lo)
+          result[sj] += ss.rt_bins.log_fraction[sj];
+      }
+
+      if (any_quadrature) {
+        SsSharedState eval_shared;
+        if (point_state_owned) eval_shared = std::move(point_shared);
+        else eval_shared = ss;
+        auto eval_node = [&](double u, const GLRule& rule, int k,
+                             double u_lo, double u_hi,
+                             std::vector<double>& sum) {
+          for (size_t q = 0; q < integrate_trials.size(); ++q) {
+            const int trial = integrate_trials[q];
+            const size_t sj = static_cast<size_t>(trial);
+            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
+            eval_shared.rt[sj] = onset[sj] + z * z;
+          }
+          c_log_likelihood_ss_pt(cols, eval_shared, M, is_ok, no_expand, R_NegInf, ws,
+                                 integrate.data(), true);
+          const double half = (u_hi - u_lo) / 2.0;
+          for (size_t q = 0; q < integrate_trials.size(); ++q) {
+            const int trial = integrate_trials[q];
+            const size_t sj = static_cast<size_t>(trial);
+            const RtBin& bin = ss.rt_bins.bins[sj];
+            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
+            if (!(z > 0.0) || !R_FINITE(ws.lls[sj])) continue;
+            const double dz = zhi[sj] - zlo[sj];
+            const double log_weight = std::log(half * rule.w[k] * dz * 2.0 * z /
+                                               bin.h);
+            sum[q] = log_sum_exp(sum[q], log_weight + ws.lls[sj]);
+          }
+        };
+        std::function<std::vector<double>(double, double, int)> integrate_panel;
+        integrate_panel = [&](double u_lo, double u_hi, int depth) {
+          std::vector<double> coarse(integrate_trials.size(), R_NegInf);
+          std::vector<double> fine(integrate_trials.size(), R_NegInf);
+          const GLRule& g4 = gl_get_rule(4);
+          const GLRule& g8 = gl_get_rule(8);
+          for (int k = 0; k < 4; ++k) {
+            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g4.x[k] + 1.0);
+            eval_node(u, g4, k, u_lo, u_hi, coarse);
+          }
+          for (int k = 0; k < 8; ++k) {
+            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g8.x[k] + 1.0);
+            eval_node(u, g8, k, u_lo, u_hi, fine);
+          }
+          bool converged = true;
+          for (size_t q = 0; q < integrate_trials.size(); ++q) {
+            const int trial = integrate_trials[q];
+            const size_t sj = static_cast<size_t>(trial);
+            const double a = coarse[q], b = fine[q];
+            if (a == R_NegInf && b == R_NegInf) {
+              const RtBin& bin = ss.rt_bins.bins[sj];
+              const double lo = std::max(bin.lo, onset[sj]);
+              const double dz = zhi[sj] - zlo[sj];
+              for (double boundary : transitions[sj]) {
+                if (!(boundary > lo && boundary < bin.hi) || !(dz > 0.0)) continue;
+                const double ub = (std::sqrt(boundary - onset[sj]) - zlo[sj]) / dz;
+                if (ub > u_lo && ub < u_hi) { converged = false; break; }
+              }
+              continue;
+            }
+            if (R_FINITE(a) && R_FINITE(b) && std::fabs(a - b) < 1e-6) continue;
+            if (!R_FINITE(a) || !R_FINITE(b)) { converged = false; continue; }
+            const double err = log_diff_exp(std::max(a, b), std::min(a, b));
+            if (!(err < std::log(1e-12))) converged = false;
+          }
+          if (depth >= 8 || converged) return fine;
+          const double mid = u_lo + (u_hi - u_lo) / 2.0;
+          std::vector<double> left = integrate_panel(u_lo, mid, depth + 1);
+          std::vector<double> right = integrate_panel(mid, u_hi, depth + 1);
+          for (size_t q = 0; q < integrate_trials.size(); ++q)
+            left[q] = log_sum_exp(left[q], right[q]);
+          return left;
+        };
+        const std::vector<double> integrated = integrate_panel(0.0, 1.0, 0);
+        for (size_t q = 0; q < integrate_trials.size(); ++q)
+          result[static_cast<size_t>(integrate_trials[q])] = integrated[q];
+      }
+
+      double total = 0.0;
+      for (int i = 0; i < n_out; ++i) {
+        double value = result[static_cast<size_t>(expand[i] - 1)];
+        if (!R_FINITE(value) || value < min_ll) value = min_ll;
+        total += value;
+      }
+      return total;
+    }
   }
   const int n_acc = ss.n_acc;
   const int n_trials = ss.n_trials;
   ws.acc.resize(static_cast<size_t>(SS_ACC_STRIDE) * n_acc);
   ws.acc_go.resize(static_cast<size_t>(SS_ACC_STRIDE) * n_acc);
-  ws.lls.assign(static_cast<size_t>(n_trials), min_ll);
+  if (only_trials == nullptr || ws.lls.size() != static_cast<size_t>(n_trials)) {
+    ws.lls.assign(static_cast<size_t>(n_trials), min_ll);
+  } else {
+    for (int trial = 0; trial < n_trials; ++trial)
+      if (only_trials[trial]) ws.lls[static_cast<size_t>(trial)] = min_ll;
+  }
 
   for (int trial = 0; trial < n_trials; ++trial) {
+    if (only_trials != nullptr && !only_trials[trial]) continue;
     const int start = trial * n_acc;
     if (is_ok[start] != TRUE) { ws.lls[trial] = min_ll; continue; }
 
