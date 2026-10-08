@@ -227,37 +227,76 @@
 #     hmc: rho, h, cost; a subject unit without a particle factor.
 # Each unit's cost for a target rho* is that of the cheapest allocation that
 # brings its rho to rho*; the objective tau(rho*) * (C_rest + sum costs) is
-# evaluated on a fine grid of targets between the best reachable and the
-# unallocated maximum, plus each unit's own level.
+# evaluated on one fine grid of targets between the best reachable and the
+# unallocated maximum, plus every unit's own level under every candidate
+# collapsed rate. The units the collapsed move does not touch are priced once
+# on that grid; only the group units are re-priced per candidate rate.
 .emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
                              joint = NULL) {
   units <- lapply(units, .emc_alloc_as_subject)
-  best <- .emc_alloc_solve_core(units, C_rest, max_rounds)
-  zero <- best$zero
-  best$joint <- 0
-  if (!is.null(joint)) {
-    for (xc in .emc_alloc_joint_grid(joint$cap)) {
-      fac <- .emc_alloc_shear_factor(joint$g, xc)
-      moved <- units
-      for (i in seq_along(joint$idx))
-        moved[[joint$idx[i]]]$rho <- moved[[joint$idx[i]]]$rho * fac[i]
-      sol <- .emc_alloc_solve_core(moved, C_rest + xc * joint$cost, max_rounds)
-      if (sol$objective < best$objective * (1 - 1e-9)) {
-        best <- sol
-        best$joint <- xc
-      }
+  n_u <- length(units)
+  moved_idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
+  xcs <- c(0, if (!is.null(joint)) .emc_alloc_joint_grid(joint$cap))
+  cand <- lapply(xcs, function(xc) {
+    if (xc == 0) return(units)
+    fac <- .emc_alloc_shear_factor(joint$g, xc)
+    moved <- units
+    for (i in seq_along(moved_idx))
+      moved[[moved_idx[i]]]$rho <- moved[[moved_idx[i]]]$rho * fac[i]
+    moved
+  })
+  ranges <- lapply(cand, .emc_alloc_range, max_rounds = max_rounds)
+  r0 <- ranges[[1L]]
+  c_p0 <- sum(vapply(units, function(u)
+    if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
+    numeric(1)))
+  zero <- list(x = numeric(n_u), q = rep(1, n_u), rho = r0$hi, tau = .emc_alloc_tau(r0$hi),
+               cost = C_rest + c_p0, objective = .emc_alloc_tau(r0$hi) * (C_rest + c_p0),
+               joint = 0)
+  lo <- min(vapply(ranges, `[[`, numeric(1), "lo"))
+  best <- zero
+  if (r0$hi > lo + 1e-12 || c_p0 > 0) {
+    tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(r0$hi)),
+                        length.out = 400L))
+    lv <- unlist(lapply(ranges, function(r) r$levels[r$levels >= r$lo & r$levels <= r$hi]))
+    targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), lv)))
+    tau_t <- .emc_alloc_tau(targets)
+    still <- setdiff(seq_len(n_u), moved_idx)
+    need <- vector("list", n_u)
+    need[still] <- lapply(units[still], .emc_alloc_unit_need, rs = targets,
+                          max_rounds = max_rounds)
+    base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
+    for (c in seq_along(xcs)) {
+      nm <- lapply(cand[[c]][moved_idx], .emc_alloc_unit_need, rs = targets,
+                   max_rounds = max_rounds)
+      cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) +
+        Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets)))
+      obj <- tau_t * cost
+      k <- which.min(obj)
+      if (!length(k) || !is.finite(obj[k]) || obj[k] >= best$objective * (1 - 1e-9)) next
+      need[moved_idx] <- nm
+      best <- list(x = vapply(need, function(z) z$x[k], numeric(1)),
+                   q = vapply(need, function(z) z$q[k], numeric(1)),
+                   rho = targets[k], tau = tau_t[k], cost = cost[k],
+                   objective = obj[k], joint = xcs[c])
     }
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
   # its moves.
-  if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) {
-    best <- zero
-    best$joint <- 0
-  }
-  best$zero <- NULL
+  if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) best <- zero
   best$objective0 <- zero$objective
   best$tau0 <- zero$tau
   best
+}
+
+# The unallocated rho of each unit, and the least rho* every unit can reach.
+.emc_alloc_range <- function(units, max_rounds) {
+  levels <- vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1))
+  best_rho <- vapply(units, function(u) switch(u$kind,
+    fixed = max(u$rho),
+    shear = u$rho * .emc_alloc_shear_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap),
+    subject = max(.emc_alloc_level(u) * if (is.null(u$h)) 1 else u$h)), numeric(1))
+  list(levels = levels, hi = max(levels, 0), lo = max(best_rho, 0))
 }
 
 .emc_alloc_as_subject <- function(u) {
@@ -327,38 +366,6 @@
   k <- max.col(t(-cost), ties.method = "first")
   pick <- cbind(k, seq_len(n_t))
   list(x = r_need[pick], q = qs[k], cost = cost[pick])
-}
-
-# The best allocation of the per-unit moves for a given C_rest, and the empty
-# allocation it is judged against.
-.emc_alloc_solve_core <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS) {
-  units <- lapply(units, .emc_alloc_as_subject)
-  n_u <- length(units)
-  levels <- vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1))
-  best_rho <- vapply(units, function(u) switch(u$kind,
-    fixed = max(u$rho),
-    shear = u$rho * .emc_alloc_shear_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap),
-    subject = max(.emc_alloc_level(u) * if (is.null(u$h)) 1 else u$h)), numeric(1))
-  c_p0 <- sum(vapply(units, function(u)
-    if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
-    numeric(1)))
-  hi <- max(levels, 0)
-  lo <- max(best_rho, 0)
-  zero <- list(x = numeric(n_u), q = rep(1, n_u), rho = hi, tau = .emc_alloc_tau(hi),
-               cost = C_rest + c_p0, objective = .emc_alloc_tau(hi) * (C_rest + c_p0))
-  if (hi <= lo + 1e-12 && c_p0 == 0) return(c(zero, list(zero = zero)))
-  tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(hi)), length.out = 200L))
-  targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), levels[levels >= lo & levels <= hi])))
-  need <- lapply(units, .emc_alloc_unit_need, rs = targets, max_rounds = max_rounds)
-  cost <- C_rest + Reduce(`+`, lapply(need, `[[`, "cost"))
-  obj <- .emc_alloc_tau(targets) * cost
-  k <- which.min(obj)
-  if (!length(k) || !is.finite(obj[k]) || obj[k] >= zero$objective * (1 - 1e-9))
-    return(c(zero, list(zero = zero)))
-  list(x = vapply(need, function(z) z$x[k], numeric(1)),
-       q = vapply(need, function(z) z$q[k], numeric(1)),
-       rho = targets[k], tau = .emc_alloc_tau(targets[k]), cost = cost[k],
-       objective = obj[k], zero = zero)
 }
 
 # The last m stored draws of a chain (at least two).
