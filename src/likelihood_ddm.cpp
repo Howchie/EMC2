@@ -339,52 +339,16 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
         row_cols[static_cast<size_t>(c)] = cols[c] + i;
       const int row_mask = 1;
 
-      if (ker.p_raw != nullptr) {
-        const double lo = std::max(bin.lo, onset);
-        if (!(bin.hi > lo)) {
-          out[i] = R_NegInf;
-          continue;
-        }
-        const double weight = rt_bin_quadrature_weight(bin, onset);
-        auto midpoint_val = [&]() {
-          double row_value = R_NegInf;
-          const double mid_t = bin.lo + (bin.hi - bin.lo) / 2.0;
-          ker.d_raw(&mid_t, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
-                    &row_value, R_NegInf, kctx);
-          return row_value + std::log((bin.hi - bin.lo) / bin.h);
-        };
-        if (weight == 0.0) {
-          out[i] = midpoint_val();
-          continue;
-        }
-        double log_integral = R_NegInf;
-        double log_p_hi = R_NegInf;
-        ker.p_raw(&bin.hi, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
-                  &log_p_hi, R_NegInf, kctx);
-        if (lo <= onset) {
-          log_integral = log_p_hi - std::log(bin.h);
-        } else {
-          double log_p_lo = R_NegInf;
-          ker.p_raw(&lo, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
-                    &log_p_lo, R_NegInf, kctx);
-          if (R_FINITE(log_p_hi) && log_p_hi > log_p_lo) {
-            log_integral = log_diff_exp(log_p_hi, log_p_lo) - std::log(bin.h);
-          } else {
-            log_integral = R_NegInf;
-          }
-        }
-        out[i] = (weight >= 1.0) ? log_integral :
-          log_sum_exp(std::log(weight) + log_integral,
-                      std::log1p(-weight) + midpoint_val());
-      } else {
-        double row_value = R_NegInf;
-        auto row_density = [&](double t) {
-          ker.d_raw(&t, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
-                    &row_value, R_NegInf, kctx);
-          return row_value;
-        };
-        out[i] = rt_bin_log_average(bin, onset, row_density);
-      }
+      // Integrate the density, not a CDF difference: the Wiener CDF is only
+      // accurate to about 1e-3 absolute near onset, which is the size of the
+      // bin's probability there.
+      double row_value = R_NegInf;
+      auto row_density = [&](double t) {
+        ker.d_raw(&t, Rs + i, row_cols.data(), 1, &row_mask, ok_ + i,
+                  &row_value, R_NegInf, kctx);
+        return row_value;
+      };
+      out[i] = rt_bin_log_average(bin, onset, row_density);
     }
     kctx->endpoint_queries = saved_queries;
   };

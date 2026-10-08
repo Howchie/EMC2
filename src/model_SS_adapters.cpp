@@ -947,12 +947,10 @@ double c_log_likelihood_ss_pt(
     }
     if (have_finite_response_bin) {
       std::vector<double> result(static_cast<size_t>(ss.n_trials), R_NegInf);
-      std::vector<unsigned char> integrate(static_cast<size_t>(ss.n_trials), 0);
       std::vector<unsigned char> point_trials(static_cast<size_t>(ss.n_trials), 1);
       std::vector<int> integrate_trials;
       std::vector<double> onset(static_cast<size_t>(ss.n_trials), 0.0);
-      std::vector<double> zlo(static_cast<size_t>(ss.n_trials), 0.0);
-      std::vector<double> zhi(static_cast<size_t>(ss.n_trials), 0.0);
+      std::vector<double> weight(static_cast<size_t>(ss.n_trials), 0.0);
       std::vector<std::vector<double>> transitions(static_cast<size_t>(ss.n_trials));
       bool any_quadrature = false;
       for (int trial = 0; trial < ss.n_trials; ++trial) {
@@ -1019,12 +1017,10 @@ double c_log_likelihood_ss_pt(
           refine = std::max(refine, rt_bin_quadrature_weight(bin, boundary));
         const double lo = std::max(bin.lo, first_onset);
         if (refine > 0.0 && bin.hi > lo) {
-          integrate[sj] = 1;
           point_trials[sj] = 0;
           integrate_trials.push_back(trial);
           any_quadrature = true;
-          zlo[sj] = std::sqrt(lo - first_onset);
-          zhi[sj] = std::sqrt(bin.hi - first_onset);
+          weight[sj] = refine;
         }
       }
 
@@ -1083,79 +1079,27 @@ double c_log_likelihood_ss_pt(
       }
 
       if (any_quadrature) {
+        // Each boundary trial uses the shared bin rule (src/rt_bins.h), as the
+        // materialised route does: panels split at every onset inside the bin,
+        // blended with the midpoint as the onsets leave it, so the likelihood
+        // stays continuous in the onsets.
         SsSharedState eval_shared;
         if (point_state_owned) eval_shared = std::move(point_shared);
         else eval_shared = ss;
-        auto eval_node = [&](double u, const GLRule& rule, int k,
-                             double u_lo, double u_hi,
-                             std::vector<double>& sum) {
-          for (size_t q = 0; q < integrate_trials.size(); ++q) {
-            const int trial = integrate_trials[q];
-            const size_t sj = static_cast<size_t>(trial);
-            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
-            eval_shared.rt[sj] = onset[sj] + z * z;
-          }
-          c_log_likelihood_ss_pt(cols, eval_shared, M, is_ok, no_expand, R_NegInf, ws,
-                                 integrate.data(), true);
-          const double half = (u_hi - u_lo) / 2.0;
-          for (size_t q = 0; q < integrate_trials.size(); ++q) {
-            const int trial = integrate_trials[q];
-            const size_t sj = static_cast<size_t>(trial);
-            const RtBin& bin = ss.rt_bins.bins[sj];
-            const double z = zlo[sj] + u * (zhi[sj] - zlo[sj]);
-            if (!(z > 0.0) || !R_FINITE(ws.lls[sj])) continue;
-            const double dz = zhi[sj] - zlo[sj];
-            const double log_weight = std::log(half * rule.w[k] * dz * 2.0 * z /
-                                               bin.h);
-            sum[q] = log_sum_exp(sum[q], log_weight + ws.lls[sj]);
-          }
-        };
-        std::function<std::vector<double>(double, double, int)> integrate_panel;
-        integrate_panel = [&](double u_lo, double u_hi, int depth) {
-          std::vector<double> coarse(integrate_trials.size(), R_NegInf);
-          std::vector<double> fine(integrate_trials.size(), R_NegInf);
-          const GLRule& g4 = gl_get_rule(4);
-          const GLRule& g8 = gl_get_rule(8);
-          for (int k = 0; k < 4; ++k) {
-            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g4.x[k] + 1.0);
-            eval_node(u, g4, k, u_lo, u_hi, coarse);
-          }
-          for (int k = 0; k < 8; ++k) {
-            const double u = u_lo + (u_hi - u_lo) * 0.5 * (g8.x[k] + 1.0);
-            eval_node(u, g8, k, u_lo, u_hi, fine);
-          }
-          bool converged = true;
-          for (size_t q = 0; q < integrate_trials.size(); ++q) {
-            const int trial = integrate_trials[q];
-            const size_t sj = static_cast<size_t>(trial);
-            const double a = coarse[q], b = fine[q];
-            if (a == R_NegInf && b == R_NegInf) {
-              const RtBin& bin = ss.rt_bins.bins[sj];
-              const double lo = std::max(bin.lo, onset[sj]);
-              const double dz = zhi[sj] - zlo[sj];
-              for (double boundary : transitions[sj]) {
-                if (!(boundary > lo && boundary < bin.hi) || !(dz > 0.0)) continue;
-                const double ub = (std::sqrt(boundary - onset[sj]) - zlo[sj]) / dz;
-                if (ub > u_lo && ub < u_hi) { converged = false; break; }
-              }
-              continue;
-            }
-            if (R_FINITE(a) && R_FINITE(b) && std::fabs(a - b) < 1e-6) continue;
-            if (!R_FINITE(a) || !R_FINITE(b)) { converged = false; continue; }
-            const double err = log_diff_exp(std::max(a, b), std::min(a, b));
-            if (!(err < std::log(1e-12))) converged = false;
-          }
-          if (depth >= 8 || converged) return fine;
-          const double mid = u_lo + (u_hi - u_lo) / 2.0;
-          std::vector<double> left = integrate_panel(u_lo, mid, depth + 1);
-          std::vector<double> right = integrate_panel(mid, u_hi, depth + 1);
-          for (size_t q = 0; q < integrate_trials.size(); ++q)
-            left[q] = log_sum_exp(left[q], right[q]);
-          return left;
-        };
-        const std::vector<double> integrated = integrate_panel(0.0, 1.0, 0);
-        for (size_t q = 0; q < integrate_trials.size(); ++q)
-          result[static_cast<size_t>(integrate_trials[q])] = integrated[q];
+        std::vector<unsigned char> single(static_cast<size_t>(ss.n_trials), 0);
+        for (int trial : integrate_trials) {
+          const size_t sj = static_cast<size_t>(trial);
+          single[sj] = 1;
+          auto density = [&](double t) {
+            eval_shared.rt[sj] = t;
+            c_log_likelihood_ss_pt(cols, eval_shared, M, is_ok, no_expand, R_NegInf,
+                                   ws, single.data(), true);
+            return ws.lls[sj];
+          };
+          result[sj] = rt_bin_log_average_split(ss.rt_bins.bins[sj], onset[sj],
+                                                density, weight[sj], transitions[sj]);
+          single[sj] = 0;
+        }
       }
 
       double total = 0.0;
