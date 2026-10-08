@@ -1167,7 +1167,11 @@
     }
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
     t0 <- sum(proc.time()[c("user.self", "sys.self")])
-    out <- safe_new_particle(
+    # A subject whose particle step the allocation skipped this iteration
+    # (R/move_allocation.R) keeps its state.
+    out <- if (isTRUE(msg$skip[k])) {
+      reject_particle(msg$alpha[, k], msg$prev_ll[k], msg$pm[[k]])
+    } else safe_new_particle(
       s = s, data = data_s, pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
@@ -1426,7 +1430,7 @@
 
 .emc_wpool_iter <- function(pool, ctx, part, pars, group_chol, pm_settings,
                             prev_ll, seeds, extra = NULL, pooled = NULL,
-                            rows_only = FALSE) {
+                            rows_only = FALSE, skip = NULL) {
   profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
   iter_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   n_subjects <- length(pm_settings)
@@ -1473,6 +1477,7 @@
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
          extra = if (is.null(extra)) NULL else extra[subs],
          pooled = pooled, rows_only = rows_only,
+         skip = if (is.null(skip)) NULL else skip[subs],
          notify = watch, w = w, generation = generation, request = request)
   })
   sent <- rep(FALSE, pool$n)
@@ -1552,6 +1557,7 @@
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
          extra = if (is.null(extra)) NULL else extra[subs],
          pooled = pooled, rows_only = rows_only,
+         skip = if (is.null(skip)) NULL else skip[subs],
          notify = watch, w = w, generation = generation, request = req,
          iter_key = request)
   }

@@ -9,6 +9,14 @@ rbou_cpp <- function(n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as
     .Call(`_EMC2_rbou_cpp`, n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind, aInf, tau, pw, dt, t_max, anchor_at_z, anchor_fix)
 }
 
+collapsed_surrogate_cpp <- function(phi, model) {
+    .Call(`_EMC2_collapsed_surrogate_cpp`, phi, model)
+}
+
+collapsed_trajectories_cpp <- function(phi0, C, eps, n_traj, len, model) {
+    .Call(`_EMC2_collapsed_trajectories_cpp`, phi0, C, eps, n_traj, len, model)
+}
+
 EMC2_call_custom_trend <- function(trend_pars, input, funptrSEXP) {
     .Call(`_EMC2_EMC2_call_custom_trend`, trend_pars, input, funptrSEXP)
 }

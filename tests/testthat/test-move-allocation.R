@@ -121,3 +121,82 @@ test_that("a chain held in one region measures slow against the pooled spread", 
   expect_equal(EMC2:::.emc_alloc_rho_lo(0, 1, 10), 1)
   expect_lt(EMC2:::.emc_alloc_rho_lo(2, 1, 100), 0.05)
 })
+
+# rho of a subject unit under particle rate q and HMC rate r.
+alloc_subject_rho <- function(u, q, r) {
+  base <- if (is.null(u$p)) u$rho else u$rho * (1 - q * (1 - u$p))
+  base * if (is.null(u$h)) 1 else (1 - r * (1 - u$h))
+}
+
+test_that("particle and HMC rates are as good as a dense grid over both", {
+  local_test_rng(11)
+  tau <- function(r) (1 + r) / (1 - r)
+  qs <- EMC2:::.EMC_ALLOC_PARTICLE_RATES
+  for (trial in 1:20) {
+    subj <- list(kind = "subject", rho = stats::runif(2, 0.5, 1),
+                 p = stats::runif(2, 0.1, 0.9), c_p = stats::runif(1, 0.05, 0.5),
+                 h = stats::runif(2, 0, 0.9), c_h = stats::runif(1, 0.02, 0.5))
+    units <- list(subj, list(kind = "fixed", rho = stats::runif(1, 0, 0.9), cost = 0))
+    C <- 1
+    level <- subj$rho * subj$p
+    best <- Inf
+    for (q in qs) for (r in seq(0, 1, by = 0.005)) {
+      rho_s <- alloc_subject_rho(subj, q, r)
+      if (any(rho_s > level + 1e-12)) next
+      rho <- max(rho_s, units[[2]]$rho)
+      best <- min(best, tau(rho) * (C + q * subj$c_p + r * subj$c_h))
+    }
+    sol <- EMC2:::.emc_alloc_solve(units, C)
+    q <- sol$q[1]; r <- sol$x[1]
+    rho_s <- alloc_subject_rho(subj, q, r)
+    # No coordinate ends slower than under its particle step alone, and the
+    # solver's accounting is honest.
+    expect_true(all(rho_s <= level + 1e-9))
+    expect_lte(max(rho_s, units[[2]]$rho), sol$rho + 1e-9)
+    expect_equal(sol$cost, C + q * subj$c_p + r * subj$c_h)
+    expect_true(q %in% qs)
+    if (best < 0.88 * sol$objective0) {
+      expect_lte(sol$objective, best * 1.03)
+    } else {
+      expect_lte(sol$objective, sol$objective0 * (1 + 1e-12))
+    }
+  }
+})
+
+test_that("the particle step stands down only for a cheaper, better HMC rate", {
+  solve <- EMC2:::.emc_alloc_solve
+  fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
+  subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
+               h = c(0.1, 0.1), c_h = 0.2)
+  # Its zero allocation runs every particle step and prices it.
+  sol <- solve(list(fixed, replace(subj, "h", list(NULL))), 1)
+  expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
+  expect_equal(sol$objective0, EMC2:::.emc_alloc_tau(0.95 * 0.6) * 2)
+  # HMC that moves the subject more for less replaces it.
+  sol <- solve(list(fixed, subj), 1)
+  expect_lt(sol$q[2], 1)
+  expect_gt(sol$x[2], 0)
+  # An HMC step that moves it less never replaces it.
+  sol <- solve(list(fixed, replace(subj, "h", list(c(0.9, 0.9)))), 1)
+  expect_identical(sol$q[2], 1)
+  # Without a measured particle factor the step always runs, as before.
+  sol <- solve(list(fixed, replace(subj, "p", list(NULL))), 1)
+  expect_identical(sol$q[2], 1)
+})
+
+test_that("particle steps are recorded with their share of the cost", {
+  p <- 2; n <- 3
+  s <- list(n_pars = p, n_subjects = n)
+  before <- matrix(0, p, n)
+  after <- matrix(c(1, 1, 0, 0, 2, 0), p)
+  s <- EMC2:::.emc_alloc_record_particle(s, before, after, c(TRUE, FALSE, TRUE), 3,
+                                         c(1, 5, 2))
+  w <- s$alloc$window
+  expect_identical(w$nP, c(1L, 0L, 1L))
+  expect_equal(w$P[[1]], matrix(1, p, p))
+  expect_equal(w$P[[3]], diag(c(4, 0)))
+  expect_equal(w$cpu_part, c(1, 0, 2))
+  # Without worker times the cost is shared equally.
+  s <- EMC2:::.emc_alloc_record_particle(s, before, after, c(TRUE, TRUE, FALSE), 2, NULL)
+  expect_equal(s$alloc$window$cpu_part, c(2, 1, 2))
+})

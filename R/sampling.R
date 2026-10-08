@@ -731,9 +731,10 @@ run_stage <- function(pmwgs,
     }
     j <- start_iter + i
     if (alloc_on) {
-      cpu_iter <- .emc_cpu_self()
-      sll_iter <- .emc_subject_ll_cpu()
-      worker_cpu_it <- 0
+      # The allocation charges wall time on the cores this chain holds now
+      # (a chain's share grows when other chains finish their block).
+      el_iter <- proc.time()[["elapsed"]]
+      cores_it <- .emc_cores_now(core_ctl, n_cores)
     }
 
     assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
@@ -797,6 +798,20 @@ run_stage <- function(pmwgs,
     } else NA_real_
     recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
     pool_profile <- NULL
+    # Subjects whose particle step the allocation (R/move_allocation.R) skips
+    # this iteration, each drawn from the subject's own stream.
+    part_skip <- NULL
+    q_part <- if (alloc_on) pmwgs$alloc$particle$rate
+    if (length(q_part) == pmwgs$n_subjects && any(q_part < 1)) {
+      part_skip <- logical(pmwgs$n_subjects)
+      .emc_with_preserved_rng(for (s in which(q_part < 1)) {
+        assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
+        part_skip[s] <- stats::runif(1) >= q_part[s]
+        wpool_streams[[s]] <- get(".Random.seed", envir = globalenv())
+      })
+    }
+    part_started <- proc.time()[["elapsed"]]
+    part_cpu_share <- 1
     if (!is.null(llpool)) {
       llpool <- .emc_wpool_recycle(llpool, i, recycle_every, wpool_ctx)
       llpool <- .emc_wpool_grow(llpool, .emc_cores_now(core_ctl, n_cores),
@@ -820,16 +835,16 @@ run_stage <- function(pmwgs,
       if (sampler_profile) {
         grow_elapsed <- proc.time()[["elapsed"]] - grow_started
       }
-      if (wpool$n != n_before) {
-        wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+      if (wpool$n != n_before || !is.null(part_skip)) {
+        wpool_part <- .emc_lpt_partition(
+          if (is.null(part_skip)) wpool_cost else wpool_cost * !part_skip, wpool$n)
       }
       it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
                             group_chol_it, pm_settings,
                             pmwgs$samples$subj_ll[, j - 1], wpool_streams,
                             extra = ens_pools$rows,
-                            pooled = pmwgs$pooled$value)
+                            pooled = pmwgs$pooled$value, skip = part_skip)
       if (!is.null(ens_pools)) ens_pools$ll <- it$extra_ll
-      if (alloc_on && is.numeric(it$worker_cpu)) worker_cpu_it <- it$worker_cpu
       proposals <- it$props
       pm_settings <- it$pm_settings
       wpool_streams <- it$seeds
@@ -838,18 +853,30 @@ run_stage <- function(pmwgs,
       if (!is.null(it$rejects)) {
         stage_rejects$particle <- stage_rejects$particle + it$rejects
       }
-      if (any(it$times > 0)) wpool_cost <- pmax(it$times, min(it$times[it$times > 0]))
+      ran <- if (is.null(part_skip)) rep(TRUE, length(it$times)) else !part_skip
+      if (any(it$times[ran] > 0)) {
+        fresh <- pmax(it$times, min(it$times[ran & it$times > 0]))
+        wpool_cost[ran] <- fresh[ran]
+      }
       wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+      # The pass also computes the ensemble candidates: the particle steps'
+      # share of it is their share of the workers' CPU.
+      if (is.numeric(it$worker_cpu) && it$worker_cpu > 0)
+        part_cpu_share <- min(1, sum(it$times) / it$worker_cpu)
     } else {
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                          r_cores = r_cores,
                                          total_cores = n_cores)
-    if (alloc_on) child_iter <- .emc_cpu_children()
     # Keep each result whole, including its subject tag and post-draw RNG state,
     # so a missing worker cannot shift or recycle another subject's result.
     raw_proposals <- auto_mclapply(seq_len(pmwgs$n_subjects), function(s) {
       assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
-      out <- safe_new_particle(
+      out <- if (isTRUE(part_skip[s])) {
+        r <- reject_particle(pmwgs$samples$alpha[, s, j - 1L],
+                             pmwgs$samples$subj_ll[s, j - 1L], pm_settings[[s]])
+        r$subject <- s
+        r
+      } else safe_new_particle(
         s = s, data = data[[s]], pm_settings = pm_settings[[s]],
         eff_mu = eff_mu[[s]], eff_var = eff_var[[s]],
         chains_mu = chains_mu[[s]], chains_var = chains_var[[s]],
@@ -888,7 +915,14 @@ run_stage <- function(pmwgs,
       stage = stage, iteration = j)
     pm_settings <- assembled$pm_settings
     proposals <- assembled$proposals
-    if (alloc_on) worker_cpu_it <- .emc_cpu_children() - child_iter
+    }
+    if (alloc_on) {
+      pmwgs <- .emc_alloc_record_particle(
+        pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
+        proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
+        if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip,
+        part_cpu_share * .emc_reserved_cost(proc.time()[["elapsed"]] - part_started, cores_it),
+        if (is.null(wpool)) NULL else it$times)
     }
 
     # Ensemble group update (R/ensemble_move.R): after the subject step, so the
@@ -897,11 +931,12 @@ run_stage <- function(pmwgs,
                               wpool_part, ens_pools)
     # Then the shear (R/shear_move.R) when enabled: the non-centred move of
     # the same group state.
-    shear_cpu <- 0
+    shear_cpu <- shear_raw <- shear_el <- 0
     shear_rounds <- 0L
     if (alloc_on) ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
     if (.emc_shear_active(ens$sampler)) {
       shear_started <- .emc_cpu_self()
+      shear_el0 <- proc.time()[["elapsed"]]
       sll_shear <- .emc_subject_ll_cpu()
       sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
                             ens$wpool, wpool_part)
@@ -910,7 +945,28 @@ run_stage <- function(pmwgs,
       ens$proposals <- sh$proposals
       ens$wpool <- sh$wpool
       shear_rounds <- if (is.null(sh$rounds)) 0L else sh$rounds
-      shear_cpu <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
+      shear_raw <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
+      shear_el <- proc.time()[["elapsed"]] - shear_el0
+      if (alloc_on) shear_cpu <- .emc_reserved_cost(shear_el, cores_it)
+    }
+    # Then the collapsed move (R/collapsed_move.R) when enabled: the whole
+    # group state with the subjects in their conditional frames.
+    coll_cpu <- coll_el <- 0
+    coll_moves <- 0L
+    if (.emc_collapsed_active(ens$sampler)) {
+      coll_el0 <- proc.time()[["elapsed"]]
+      moves_before <- ens$sampler$collapsed$plan$block$n
+      cm <- .emc_collapsed_move(ens$sampler, ens$pars, ens$proposals, stage,
+                                ens$wpool, wpool_part)
+      ens$sampler <- cm$sampler
+      ens$pars <- cm$pars
+      ens$proposals <- cm$proposals
+      ens$wpool <- cm$wpool
+      moves_after <- ens$sampler$collapsed$plan$block$n
+      if (length(moves_before) && length(moves_after))
+        coll_moves <- as.integer(moves_after - moves_before)
+      coll_el <- proc.time()[["elapsed"]] - coll_el0
+      if (alloc_on) coll_cpu <- .emc_reserved_cost(coll_el, cores_it)
     }
     ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
     ensemble_rejects <- .emc_reject_counts("ensemble")
@@ -940,11 +996,12 @@ run_stage <- function(pmwgs,
     # Subject HMC (R/subject_hmc.R): the last update of the iteration, from
     # the final group state.
     hmc_tasks <- NULL
-    hmc_master <- 0
+    hmc_master <- hmc_el <- 0
     if (alloc_on)
       pmwgs <- .emc_alloc_record_subjects(pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE])
     if (!is.null(hmc_plan)) {
       hmc_started <- .emc_cpu_self()
+      hmc_el0 <- proc.time()[["elapsed"]]
       hr <- .emc_hmc_round(hmc_plan, proposals, pars, pmwgs$type, wpool_streams,
                            data, pmwgs$model, wpool = wpool,
                            n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
@@ -955,10 +1012,18 @@ run_stage <- function(pmwgs,
       hmc_plan <- hr$plan
       if (!is.null(wpool) && !is.null(hr$pool)) wpool$alive <- hr$pool$alive
       hmc_master <- .emc_cpu_self() - hmc_started
+      hmc_el <- proc.time()[["elapsed"]] - hmc_el0
       attempted <- !vapply(hmc_tasks, is.null, logical(1))
       if (any(attempted)) {
         for (s in which(attempted))
           hmc_tasks[[s]]$cpu <- hmc_tasks[[s]]$cpu + hmc_master / sum(attempted)
+        # The round's wall time on the chain's cores, shared by CPU.
+        if (alloc_on) {
+          cpu_s <- vapply(hmc_tasks[attempted], function(x) x$cpu, numeric(1))
+          share <- if (sum(cpu_s) > 0) cpu_s / sum(cpu_s) else rep(1 / sum(attempted), sum(attempted))
+          for (k in seq_along(share))
+            hmc_tasks[[which(attempted)[k]]]$cost <- .emc_reserved_cost(hmc_el, cores_it) * share[k]
+        }
       }
       pmwgs$subject_hmc <- .emc_hmc_record_tasks(pmwgs$subject_hmc, hmc_tasks)
     }
@@ -974,9 +1039,10 @@ run_stage <- function(pmwgs,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
     if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, j] <- pmwgs$pooled$value
     if (alloc_on) {
-      rest_cpu <- .emc_cpu_self() - cpu_iter + worker_cpu_it + .emc_subject_ll_cpu() - sll_iter -
-        shear_cpu - hmc_master
-      pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, shear_cpu, shear_rounds, hmc_tasks)
+      rest_cpu <- .emc_reserved_cost(proc.time()[["elapsed"]] - el_iter - shear_el - coll_el -
+                                       hmc_el, cores_it)
+      pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, shear_cpu, shear_rounds, hmc_tasks,
+                                      coll_cpu, coll_moves)
     }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
@@ -1045,7 +1111,7 @@ run_stage <- function(pmwgs,
         fallback_workers = pp$fallback_workers,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded,
-        shear_rounds = shear_rounds, shear_cpu = shear_cpu,
+        shear_rounds = shear_rounds, shear_cpu = shear_raw,
         hmc_attempts = sum(!vapply(hmc_tasks, is.null, logical(1))),
         hmc_accepted = sum(vapply(hmc_tasks, function(x) isTRUE(x$accepted), logical(1))),
         hmc_cpu = sum(vapply(hmc_tasks, function(x) if (is.null(x)) 0 else x$cpu, numeric(1)))),

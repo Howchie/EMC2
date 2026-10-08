@@ -18,8 +18,11 @@ test_that("the shear preserves the joint posterior with a full standard covarian
                   prior = list(theta_mu_mean = rep(0, p), theta_mu_invar = P0, v = v, A = A),
                   data = lapply(seq_len(n), function(s) y[, s]), model = NULL,
                   lik_laplace = exact_fit, rng = list())
-  # Every step forced, along fixed directions.
-  plan <- list(dirs = diag(c(0.4, 0.4)), lam = c(1, 1), w = c(1, 1))
+  # One round on every coordinate, along fixed directions, at a fixed step.
+  plan <- list(dirs = diag(c(0.4, 0.4)), rounds = rep(1, 2L * p),
+               log_step = numeric(2L * p),
+               block = list(E = numeric(2L * p), n = integer(2L * p),
+                            moved = integer(2L * p)))
   ll <- function(a) {
     residual <- a - y
     -colSums(residual * (H %*% residual)) / 2

@@ -1,5 +1,7 @@
 # Allocation of the optional moves: shear rounds on group coordinates
-# (R/shear_move.R) and subject HMC transitions (R/subject_hmc.R).
+# (R/shear_move.R), collapsed moves of the whole group state
+# (R/collapsed_move.R) and subject HMC transitions (R/subject_hmc.R), and of
+# how often each subject's particle step runs.
 #
 # A move is worth its cost only where it raises the effective sample size of
 # the fit's slowest coordinate. Every iteration each chain records how far
@@ -8,8 +10,10 @@
 #     the shear;
 #   subjects: alpha_s at the end of the previous iteration -> just before the
 #     subject HMC round, the last update of the iteration;
-# together with the CPU of the rest of the iteration, of each shear round
-# and of each HMC transition. At a proposal rebuild each coordinate's lag-one
+# together with the cost of the rest of the iteration, of each shear round,
+# collapsed move and HMC transition, all as wall time on the cores the chain
+# holds (.emc_reserved_cost), so work that leaves the chain's workers idle is
+# charged for them. At a proposal rebuild each coordinate's lag-one
 # correlation under the rest of the iteration is rho = 1 - ESJD / (2 var),
 # where var is the coordinate's variance over every chain's window draws: a
 # chain held in one region makes jumps small against that pooled spread, and
@@ -29,9 +33,26 @@
 # over expected rounds x_k and rates r_s (.emc_alloc_solve). Coordinates the
 # moves cannot reach (no shear, no usable fit) keep their rest-of-iteration
 # rho and act as a floor: nothing is spent below the slowest of them. A
-# subject the allocation would use without measured HMC moves first gets a
-# bracketed step size and pilot transitions on a private copy of its state.
-# The allocation changes only at rebuilds, as every adapted quantity does.
+# collapsed move moves every group coordinate at once: x_c expected moves
+# multiply coordinate k's rho by g_c,k^x_c (composed like shear rounds), so
+# the solver takes the best of a grid over x_c, each with the per-unit
+# allocation on the reduced rhos and x_c c_coll added to C_rest. Its g_c is
+# measured at the current rate and extrapolated geometrically, so x_c may
+# grow to at most twice that rate per rebuild (or the shared round cap,
+# whichever is larger).
+#
+# Each subject's particle step is a move like the others: it runs with
+# probability q_s, multiplies coordinate i's rho by 1 - q_s + q_s p_i and
+# costs q_s c_p,s, with p and c_p measured from the steps that ran. The rest
+# of the iteration without it has rho t_i = rho_i / (1 - q (1 - p_i)) at the
+# rate q in force, so HMC can stand in for the particle step where it moves
+# the subject more per unit cost; each subject's (q_s, r_s) is the cheapest
+# pair that brings its coordinates to the target. The group's measured
+# mixing depends on how the subjects move, which the units do not model, so
+# no coordinate may end slower than under its particle step alone. A subject the
+# allocation would use without measured HMC moves first gets a bracketed
+# step size and pilot transitions on a private copy of its state. The
+# allocation changes only at rebuilds, as every adapted quantity does.
 
 .EMC_ALLOC_MAX_ROUNDS <- 4
 .EMC_ALLOC_MIN_PAIRS <- 10L
@@ -40,6 +61,9 @@
 # Rounds per iteration on a shear coordinate whose rounds are not yet
 # measured: enough for a measurement in one block, too few to cost much.
 .EMC_ALLOC_EXPLORE_ROUNDS <- 0.25
+# Particle rates the solver considers, highest first so that ties keep the
+# particle step.
+.EMC_ALLOC_PARTICLE_RATES <- seq(1, 0, by = -0.125)
 
 .emc_cpu_self <- function() {
   p <- proc.time()
@@ -58,8 +82,15 @@
   p[["user.child"]] + p[["sys.child"]]
 }
 
+# Every cost the allocation compares is wall time on the cores the chain holds:
+# a move's computation in the chain's own process and its likelihood rounds'
+# round trips keep those cores as busy as they leave them.
+.emc_reserved_cost <- function(elapsed, cores) {
+  max(1, as.numeric(cores)) * max(0, as.numeric(elapsed))
+}
+
 .emc_alloc_wanted <- function(sampler) {
-  .emc_shear_active(sampler) ||
+  .emc_shear_active(sampler) || .emc_collapsed_active(sampler) ||
     (isTRUE(.emc_hmc_options()$enabled) && isTRUE(.emc_hmc_support(sampler)$ok))
 }
 
@@ -68,8 +99,36 @@
 .emc_alloc_empty_window <- function(n, p) {
   list(n = 0L, nG = 0L, G = matrix(0, 2L * p, 2L * p), nA = 0L,
        A = replicate(n, matrix(0, p, p), simplify = FALSE),
-       cpu_rest = 0, cpu_shear = 0, rounds = 0L,
-       cpu_hmc = numeric(n), hmc_att = integer(n))
+       cpu_rest = 0, cpu_shear = 0, rounds = 0L, cpu_coll = 0, coll_moves = 0L,
+       cpu_hmc = numeric(n), hmc_att = integer(n),
+       P = replicate(n, matrix(0, p, p), simplify = FALSE), nP = integer(n),
+       cpu_part = numeric(n))
+}
+
+# The particle step's own jumps and cost. `cost` is the step's wall time on
+# the chain's cores, shared among the subjects that ran by their worker CPU
+# `times` (part of the rest-of-iteration cost recorded by
+# .emc_alloc_record_cost).
+.emc_alloc_record_particle <- function(sampler, before, after, ran, cost, times) {
+  w <- .emc_alloc_window(sampler)
+  if (is.null(w$nP)) {
+    e <- .emc_alloc_empty_window(sampler$n_subjects, sampler$n_pars)
+    w$P <- e$P; w$nP <- e$nP; w$cpu_part <- e$cpu_part
+  }
+  idx <- which(ran)
+  if (!length(idx)) return(sampler)
+  t_ran <- pmax(0, times[idx])
+  share <- if (sum(t_ran) > 0) t_ran / sum(t_ran) else rep(1 / length(idx), length(idx))
+  for (k in seq_along(idx)) {
+    s <- idx[k]
+    d <- after[, s] - before[, s]
+    if (!all(is.finite(d))) next
+    w$P[[s]] <- w$P[[s]] + tcrossprod(d)
+    w$nP[s] <- w$nP[s] + 1L
+    w$cpu_part[s] <- w$cpu_part[s] + cost * share[k]
+  }
+  sampler$alloc$window <- w
+  sampler
 }
 
 .emc_alloc_window <- function(sampler) {
@@ -107,16 +166,20 @@
   sampler
 }
 
-.emc_alloc_record_cost <- function(sampler, rest, shear, rounds, tasks) {
+.emc_alloc_record_cost <- function(sampler, rest, shear, rounds, tasks, coll = 0,
+                                   coll_moves = 0L) {
   w <- .emc_alloc_window(sampler)
   w$n <- w$n + 1L
   w$cpu_rest <- w$cpu_rest + rest
   w$cpu_shear <- w$cpu_shear + shear
   w$rounds <- w$rounds + as.integer(rounds)
+  if (is.null(w$cpu_coll)) w$cpu_coll <- w$coll_moves <- 0
+  w$cpu_coll <- w$cpu_coll + coll
+  w$coll_moves <- w$coll_moves + as.integer(coll_moves)
   for (s in seq_along(tasks)) {
     tk <- tasks[[s]]
     if (is.null(tk)) next
-    w$cpu_hmc[s] <- w$cpu_hmc[s] + tk$cpu
+    w$cpu_hmc[s] <- w$cpu_hmc[s] + if (is.null(tk$cost)) tk$cpu else tk$cost
     w$hmc_att[s] <- w$hmc_att[s] + 1L
   }
   sampler$alloc$window <- w
@@ -145,67 +208,157 @@
   g^m * (1 - f + f * g)
 }
 
-# Choose expected rounds x (group coordinates) and rates r (subjects).
-#   units: list of list(kind = "fixed" | "shear" | "hmc", rho, g or h, cost),
-#     rho a scalar (fixed or shear) or a vector of the subject's coordinates;
-#     g the per-round factor of a shear coordinate; h the per-coordinate
-#     factor of an HMC transition.
-# Each unit's need for a target rho* is the least x (or r) that brings its
-# rho to rho*; the objective tau(rho*) * (C_rest + sum cost * x) is evaluated
-# on a fine grid of targets between the best reachable and the unallocated
-# maximum, plus each unit's own level.
-.emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS) {
-  need <- function(u, rs) {
-    r <- u$rho
-    if (identical(u$kind, "fixed")) return(if (max(r) > rs) Inf else 0)
-    if (identical(u$kind, "shear")) {
-      if (r <= rs) return(0)
-      g <- u$g
-      if (g >= 1 - 1e-9) return(Inf)
-      # Least x with g^m (1 - f + f g) <= rs / r.
-      m <- floor(log(rs / r) / log(g) + 1e-9)
-      base <- r * g^m
-      x <- if (base <= rs * (1 + 1e-12)) m else m + (1 - rs / base) / (1 - g)
-      cap <- if (is.null(u$cap)) max_rounds else u$cap
-      return(if (x > cap + 1e-9) Inf else x)
+# Candidate expected collapsed moves per iteration: eighths up to 4, then
+# halves, then the cap itself.
+.emc_alloc_joint_grid <- function(cap) {
+  x <- seq(0.125, min(cap, 4), by = 0.125)
+  if (cap > 4) x <- c(x, seq(4.5, cap, by = 0.5))
+  sort(unique(c(x[x <= cap], cap)))
+}
+
+# Choose expected rounds x (group coordinates), and HMC rates r and particle
+# rates q (subjects).
+#   units: list of list(kind = "fixed" | "shear" | "subject" | "hmc", ...):
+#     fixed: rho, a scalar or vector no move changes;
+#     shear: rho, g the per-round factor, cost per round, cap (optional);
+#     subject: rho (t, the iteration without the particle step), p the
+#       particle step's factors or NULL (always run, cost in C_rest), c_p,
+#       h the HMC factors or NULL, c_h;
+#     hmc: rho, h, cost; a subject unit without a particle factor.
+# Each unit's cost for a target rho* is that of the cheapest allocation that
+# brings its rho to rho*; the objective tau(rho*) * (C_rest + sum costs) is
+# evaluated on a fine grid of targets between the best reachable and the
+# unallocated maximum, plus each unit's own level.
+.emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
+                             joint = NULL) {
+  units <- lapply(units, .emc_alloc_as_subject)
+  best <- .emc_alloc_solve_core(units, C_rest, max_rounds)
+  zero <- best$zero
+  best$joint <- 0
+  if (!is.null(joint)) {
+    for (xc in .emc_alloc_joint_grid(joint$cap)) {
+      fac <- .emc_alloc_shear_factor(joint$g, xc)
+      moved <- units
+      for (i in seq_along(joint$idx))
+        moved[[joint$idx[i]]]$rho <- moved[[joint$idx[i]]]$rho * fac[i]
+      sol <- .emc_alloc_solve_core(moved, C_rest + xc * joint$cost, max_rounds)
+      if (sol$objective < best$objective * (1 - 1e-9)) {
+        best <- sol
+        best$joint <- xc
+      }
     }
-    act <- r > rs
-    if (!any(act)) return(0)
-    h <- u$h[act]
-    if (any(h >= 1 - 1e-9)) return(Inf)
-    x <- max((1 - rs / r[act]) / (1 - h))
-    if (x > 1 + 1e-9) Inf else min(1, x)
-  }
-  best_rho <- vapply(units, function(u) switch(u$kind,
-    fixed = max(u$rho),
-    shear = u$rho * .emc_alloc_shear_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap),
-    hmc = max(u$rho * u$h)), numeric(1))
-  hi <- max(vapply(units, function(u) max(u$rho), numeric(1)), 0)
-  lo <- max(best_rho, 0)
-  x0 <- numeric(length(units))
-  zero <- list(x = x0, rho = hi, tau = .emc_alloc_tau(hi), cost = C_rest,
-               objective = .emc_alloc_tau(hi) * C_rest)
-  zero$objective0 <- zero$objective
-  zero$tau0 <- zero$tau
-  if (hi <= lo + 1e-12) return(zero)
-  tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(hi)), length.out = 200L))
-  levels <- vapply(units, function(u) max(u$rho), numeric(1))
-  targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), levels[levels >= lo & levels <= hi])))
-  best <- zero
-  for (rs in targets) {
-    x <- vapply(units, need, numeric(1), rs = rs)
-    if (any(!is.finite(x))) next
-    cost <- C_rest + sum(x * vapply(units, `[[`, numeric(1), "cost"))
-    obj <- .emc_alloc_tau(rs) * cost
-    if (obj < best$objective * (1 - 1e-9))
-      best <- list(x = x, rho = rs, tau = .emc_alloc_tau(rs), cost = cost, objective = obj)
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
   # its moves.
-  if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) best <- zero
+  if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) {
+    best <- zero
+    best$joint <- 0
+  }
+  best$zero <- NULL
   best$objective0 <- zero$objective
   best$tau0 <- zero$tau
   best
+}
+
+.emc_alloc_as_subject <- function(u) {
+  if (!identical(u$kind, "hmc")) return(u)
+  list(kind = "subject", rho = u$rho, p = NULL, c_p = 0, h = u$h, c_h = u$cost)
+}
+
+# A unit's rho with nothing allocated: subjects run their particle step.
+.emc_alloc_level <- function(u) {
+  if (identical(u$kind, "subject") && !is.null(u$p)) u$rho * u$p else u$rho
+}
+
+# A unit's allocation for each target rho* in rs: list(x, q, cost), with
+# cost Inf where the target is out of its reach.
+.emc_alloc_unit_need <- function(u, rs, max_rounds) {
+  n_t <- length(rs)
+  if (identical(u$kind, "fixed"))
+    return(list(x = numeric(n_t), q = rep(1, n_t),
+                cost = ifelse(max(u$rho) > rs, Inf, 0)))
+  if (identical(u$kind, "shear")) {
+    r <- u$rho
+    g <- u$g
+    cap <- if (is.null(u$cap)) max_rounds else u$cap
+    x <- numeric(n_t)
+    over <- r > rs
+    if (any(over)) {
+      if (g >= 1 - 1e-9) {
+        x[over] <- Inf
+      } else {
+        ro <- rs[over]
+        # Least x with g^m (1 - f + f g) <= rs / r.
+        m <- floor(log(ro / r) / log(g) + 1e-9)
+        base <- r * g^m
+        xo <- ifelse(base <= ro * (1 + 1e-12), m, m + (1 - ro / base) / (1 - g))
+        xo[!is.finite(xo) | xo > cap + 1e-9] <- Inf
+        x[over] <- xo
+      }
+    }
+    return(list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)))
+  }
+  # Subject: for each particle rate q, the least HMC rate r with
+  # rho_i (1 - q (1 - p_i)) (1 - r (1 - h_i)) <= min(rho*, level_i) on every
+  # coordinate; then the cheapest q.
+  rho <- u$rho
+  level <- .emc_alloc_level(u)
+  qs <- if (is.null(u$p) || is.null(u$h)) 1 else .EMC_ALLOC_PARTICLE_RATES
+  r_need <- matrix(0, length(qs), n_t)
+  for (i in seq_along(rho)) {
+    K <- pmin(rs, level[i])
+    base <- if (is.null(u$p)) rep(rho[i], length(qs)) else rho[i] * (1 - qs * (1 - u$p[i]))
+    over <- outer(base, K * (1 + 1e-12), ">")
+    if (!any(over)) next
+    if (is.null(u$h)) {
+      r_need[over] <- Inf
+      next
+    }
+    val <- (1 - outer(1 / base, K)) / (1 - u$h[i])
+    r_need <- pmax(r_need, ifelse(over, val, 0))
+  }
+  r_need[r_need > 1 + 1e-9] <- Inf
+  fin <- is.finite(r_need)
+  r_need[fin] <- pmin(r_need[fin], 1)
+  c_h <- if (is.null(u$c_h)) 0 else u$c_h
+  c_p <- if (is.null(u$c_p)) 0 else u$c_p
+  cost <- qs * c_p + r_need * c_h
+  cost[!fin] <- Inf
+  k <- max.col(t(-cost), ties.method = "first")
+  pick <- cbind(k, seq_len(n_t))
+  list(x = r_need[pick], q = qs[k], cost = cost[pick])
+}
+
+# The best allocation of the per-unit moves for a given C_rest, and the empty
+# allocation it is judged against.
+.emc_alloc_solve_core <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS) {
+  units <- lapply(units, .emc_alloc_as_subject)
+  n_u <- length(units)
+  levels <- vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1))
+  best_rho <- vapply(units, function(u) switch(u$kind,
+    fixed = max(u$rho),
+    shear = u$rho * .emc_alloc_shear_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap),
+    subject = max(.emc_alloc_level(u) * if (is.null(u$h)) 1 else u$h)), numeric(1))
+  c_p0 <- sum(vapply(units, function(u)
+    if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
+    numeric(1)))
+  hi <- max(levels, 0)
+  lo <- max(best_rho, 0)
+  zero <- list(x = numeric(n_u), q = rep(1, n_u), rho = hi, tau = .emc_alloc_tau(hi),
+               cost = C_rest + c_p0, objective = .emc_alloc_tau(hi) * (C_rest + c_p0))
+  if (hi <= lo + 1e-12 && c_p0 == 0) return(c(zero, list(zero = zero)))
+  tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(hi)), length.out = 200L))
+  targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), levels[levels >= lo & levels <= hi])))
+  need <- lapply(units, .emc_alloc_unit_need, rs = targets, max_rounds = max_rounds)
+  cost <- C_rest + Reduce(`+`, lapply(need, `[[`, "cost"))
+  obj <- .emc_alloc_tau(targets) * cost
+  k <- which.min(obj)
+  if (!length(k) || !is.finite(obj[k]) || obj[k] >= zero$objective * (1 - 1e-9))
+    return(c(zero, list(zero = zero)))
+  list(x = vapply(need, function(z) z$x[k], numeric(1)),
+       q = vapply(need, function(z) z$q[k], numeric(1)),
+       rho = targets[k], tau = .emc_alloc_tau(targets[k]), cost = cost[k],
+       objective = obj[k], zero = zero)
 }
 
 # The last m stored draws of a chain (at least two).
@@ -270,6 +423,19 @@
                     pmin(1 - 1e-6, pmax(0, 1 - (last$E / pmax(1L, last$n)) / (2 * g_var))),
                     .EMC_ALLOC_SHEAR_PRIOR_G)
   }
+  # The collapsed move moves every group coordinate at once: its factors come
+  # from its acceptance-weighted jumps in the same coordinates.
+  coll <- .emc_collapsed_active(ch) && is.list(ch$collapsed$plan) &&
+    is.matrix(ch$collapsed$plan$C)
+  c_fac <- rep(.EMC_ALLOC_SHEAR_PRIOR_G, 2L * p)
+  c_measured <- FALSE
+  if (coll) {
+    last <- ch$collapsed$plan$last
+    c_measured <- is.list(last) && last$n >= 5L
+    if (c_measured)
+      c_fac <- pmin(1 - 1e-6, pmax(0, 1 - (rowSums((T_g %*% last$E) * T_g) / last$n) /
+                                     (2 * g_var)))
+  }
   # Subject coordinates: alpha_s whitened in its fit's reference frame.
   lik <- ch$lik_laplace
   W <- lapply(seq_len(n), function(s) {
@@ -288,11 +454,42 @@
     if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho_lo(
       rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ], w$nA)
   }
-  C_rest <- if (!stored && w$n > 0 && w$cpu_rest > 0) w$cpu_rest / w$n else NA_real_
+  # Particle steps: their own factors and cost per step, carried over from
+  # the last rebuild while the window holds too few of a subject's steps.
+  prev <- ch$alloc$particle
+  nP <- if (stored || is.null(w$nP)) integer(n) else w$nP
+  p_fac <- matrix(NA_real_, n, p)
+  c_part <- rep(NA_real_, n)
+  for (s in seq_len(n)) {
+    if (nP[s] >= .EMC_ALLOC_MIN_PAIRS) {
+      esjd <- rowSums((W[[s]] %*% w$P[[s]]) * W[[s]]) / nP[s]
+      p_fac[s, ] <- pmin(1, pmax(0, 1 - esjd / (2 * pmax(s_var[s, ], .Machine$double.xmin))))
+      c_part[s] <- w$cpu_part[s] / nP[s]
+    } else if (is.matrix(prev$fac) && all(dim(prev$fac) == c(n, p)) &&
+               all(is.finite(prev$fac[s, ])) && is.finite(prev$cost[s])) {
+      p_fac[s, ] <- prev$fac[s, ]
+      c_part[s] <- prev$cost[s]
+    }
+  }
+  q_old <- if (is.null(prev$rate)) rep(1, n) else prev$rate
+  t_rho <- s_rho
+  for (s in which(is.finite(c_part))) {
+    den <- 1 - q_old[s] * (1 - p_fac[s, ])
+    t_rho[s, ] <- ifelse(den > 1e-6, pmin(1, s_rho[s, ] / pmax(den, 1e-6)), 1)
+  }
+  # The rest of the iteration, less the particle steps the units now price.
+  part_in_rest <- if (stored || is.null(w$cpu_part)) 0 else
+    sum(w$cpu_part[is.finite(c_part)])
+  C_rest <- if (!stored && w$n > 0 && w$cpu_rest > part_in_rest)
+    (w$cpu_rest - part_in_rest) / w$n else NA_real_
   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), shear = shear,
        g_rho = g_rho, g_var = g_var, g_fac = g_fac, g_measured = g_measured,
-       W = W, s_rho = s_rho,
-       s_var = s_var, C_rest = C_rest,
+       coll = coll, c_fac = c_fac, c_measured = c_measured,
+       c_coll = if (!stored && isTRUE(w$coll_moves >= 5L)) w$cpu_coll / w$coll_moves
+                else NA_real_,
+       c_rate = if (!stored && w$n > 0) w$coll_moves / w$n else 0,
+       W = W, s_rho = s_rho, t_rho = t_rho, p_fac = p_fac, c_part = c_part,
+       q_old = q_old, s_var = s_var, C_rest = C_rest,
        c_round = if (!stored && w$rounds >= 5L) w$cpu_shear / w$rounds else NA_real_,
        c_hmc = if (!stored) ifelse(w$hmc_att > 0, w$cpu_hmc / pmax(1L, w$hmc_att), NA_real_)
                else rep(NA_real_, n))
@@ -311,7 +508,9 @@
   n <- nrow(ms$s_rho)
   opts <- .emc_hmc_options()
   C_rest <- if (is.finite(ms$C_rest)) ms$C_rest else 1
-  c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_rest
+  # Unmeasured costs are guessed against the whole iteration's.
+  C_iter <- C_rest + sum(ms$c_part[is.finite(ms$c_part)])
+  c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_iter
   units <- lapply(seq_along(ms$g_rho), function(k)
     if (shear_on && is.finite(ms$g_fac[k])) {
       list(kind = "shear", rho = ms$g_rho[k], g = ms$g_fac[k], cost = c_round,
@@ -319,20 +518,35 @@
     } else list(kind = "fixed", rho = ms$g_rho[k], cost = 0))
   for (s in seq_len(n)) {
     sj <- if (is.null(hmc_state)) NULL else hmc_state$subjects[[s]]
-    u <- list(kind = "fixed", rho = ms$s_rho[s, ], cost = 0)
+    # A measured particle step is priced in the subject's unit (and left out
+    # of C_rest); without an HMC rate to stand in for it, it always runs.
+    priced <- !is.null(ms$c_part) && is.finite(ms$c_part[s])
+    u <- list(kind = "subject", rho = ms$s_rho[s, ], p = NULL, c_p = 0, h = NULL, c_h = 0)
     if (isTRUE(sj$eligible)) {
       ev <- hmc_state$evidence[[s]]
       h <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$s_var[s, ], opts$min_evidence)
       if (is.null(h) && optimistic) h <- numeric(length(ms$s_rho[s, ]))
       if (!is.null(h)) {
         c_s <- if (is.finite(ms$c_hmc[s])) ms$c_hmc[s] else if (!is.null(ev) && ev$n > 0 &&
-          ev$cpu > 0) ev$cpu / ev$n else 3 * C_rest / n
-        u <- list(kind = "hmc", rho = ms$s_rho[s, ], h = h, cost = c_s)
+          ev$cpu > 0) ev$cpu / ev$n else 3 * C_iter / n
+        u$h <- h
+        u$c_h <- c_s
       }
+    }
+    if (priced) {
+      u$rho <- ms$t_rho[s, ]
+      u$p <- ms$p_fac[s, ]
+      u$c_p <- ms$c_part[s]
     }
     units[[length(units) + 1L]] <- u
   }
-  list(units = units, C_rest = C_rest, c_round = c_round)
+  joint <- if (isTRUE(ms$coll)) {
+    list(idx = seq_along(ms$g_rho), g = ms$c_fac,
+         cost = if (is.finite(ms$c_coll)) ms$c_coll else 0.1 * C_iter,
+         cap = if (ms$c_measured) max(.EMC_ALLOC_MAX_ROUNDS, 2 * ms$c_rate) else
+           .EMC_ALLOC_EXPLORE_ROUNDS)
+  }
+  list(units = units, C_rest = C_rest, c_round = c_round, joint = joint)
 }
 
 # Rebuild every chain's shear rounds and HMC rates (in add_proposals(), after
@@ -360,7 +574,7 @@
     for (j in seq_len(nch)) {
       if (!isTRUE(hst[[j]]$supported)) next
       u <- .emc_alloc_units(ms[[j]], hst[[j]], shear_on[j], optimistic = TRUE)
-      x <- .emc_alloc_solve(u$units, u$C_rest)$x
+      x <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint)$x
       n_g <- length(ms[[j]]$g_rho)
       for (s in seq_len(emc[[j]]$n_subjects)) {
         sj <- hst[[j]]$subjects[[s]]
@@ -405,16 +619,22 @@
       }
     }
     u <- .emc_alloc_units(m, st, shear_on[j], optimistic = FALSE)
-    sol <- .emc_alloc_solve(u$units, u$C_rest)
+    sol <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint)
     n_g <- length(m$g_rho)
     if (shear_on[j]) ch$shear$plan$rounds <- sol$x[seq_len(n_g)]
+    if (isTRUE(m$coll)) ch$collapsed$plan$rounds <- sol$joint
     rate <- sol$x[n_g + seq_len(ch$n_subjects)]
+    q <- rep(1, ch$n_subjects)
     if (!is.null(st) && isTRUE(st$supported)) {
       for (s in seq_len(ch$n_subjects)) {
         sj <- st$subjects[[s]]
         sj$rate <- if (!isTRUE(sj$eligible)) 0 else if (!is.null(opts$fixed_rate))
           as.numeric(opts$fixed_rate) else if (isTRUE(sj$warmup))
             .EMC_HMC_WARMUP_RATE else rate[s]
+        # The particle step stands down only for the rate chosen with it.
+        if (isTRUE(sj$eligible) && is.null(opts$fixed_rate) && !isTRUE(sj$warmup) &&
+            length(sol$q) >= n_g + s)
+          q[s] <- sol$q[n_g + s]
         st$subjects[[s]] <- sj
       }
     }
@@ -423,26 +643,56 @@
       transitions = if (is.null(ch$sample_transitions)) NA_integer_ else
         as.integer(ch$sample_transitions),
       stored = m$stored, pairs = m$pairs, C_rest = u$C_rest, c_round = u$c_round,
-      c_hmc = m$c_hmc, tau = sol$tau, tau0 = sol$tau0, cost = sol$cost,
+      c_hmc = m$c_hmc, c_part = m$c_part, tau = sol$tau, tau0 = sol$tau0, cost = sol$cost,
       objective = sol$objective, objective0 = sol$objective0,
       group_rho = m$g_rho, group_g = m$g_fac,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
+      collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,
+      collapsed_cost = if (is.null(u$joint)) NA_real_ else u$joint$cost,
+      collapsed_eps = if (isTRUE(m$coll)) ch$collapsed$plan$eps else NA_real_,
       subject_rho = apply(m$s_rho, 1L, max),
       hmc_h = vapply(u$units[n_g + seq_len(ch$n_subjects)], function(x)
-        if (identical(x$kind, "hmc")) max(x$h) else NA_real_, numeric(1)),
+        if (!is.null(x$h)) max(x$h) else NA_real_, numeric(1)),
       rate = if (is.null(st$subjects)) numeric(ch$n_subjects) else
         vapply(st$subjects, function(x) x$rate, numeric(1)),
+      particle_rate = q,
+      particle_p = apply(m$p_fac, 1L, function(x) if (all(is.finite(x))) max(x) else NA_real_),
       eps = if (is.null(st$subjects)) rep(NA_real_, ch$n_subjects) else
         vapply(st$subjects, function(x) x$eps, numeric(1)),
       calib_cpu = if (is.null(st$subjects)) 0 else
         sum(vapply(st$subjects, function(x) x$calib_cpu, numeric(1))))
     ch$alloc <- list(window = .emc_alloc_empty_window(ch$n_subjects, ch$n_pars),
-                     last = rec, history = c(ch$alloc$history, list(rec)))
+                     last = rec, history = c(ch$alloc$history, list(rec)),
+                     particle = list(rate = q, fac = m$p_fac, cost = m$c_part))
     if (!is.null(st)) {
       st$alloc <- rec
       ch$subject_hmc <- st
     }
     emc[[j]] <- ch
+  }
+  # One particle rate per subject for every chain, the largest any chain's
+  # allocation chose, so chains carry the same work.
+  q <- do.call(pmax, lapply(emc, function(ch) ch$alloc$particle$rate))
+  for (j in seq_len(nch)) {
+    emc[[j]]$alloc$particle$rate <- q
+    emc[[j]]$alloc$last$particle_shared <- q
+    h <- emc[[j]]$alloc$history
+    h[[length(h)]]$particle_shared <- q
+    emc[[j]]$alloc$history <- h
+  }
+  # One collapsed rate for every chain, the largest any chain's allocation
+  # chose: its work runs in each chain's own process, and chains wait for
+  # each other at block ends.
+  coll <- vapply(seq_len(nch), function(j) isTRUE(ms[[j]]$coll), logical(1))
+  if (any(coll)) {
+    x_c <- max(vapply(emc[coll], function(ch) ch$collapsed$plan$rounds, numeric(1)))
+    for (j in which(coll)) {
+      emc[[j]]$collapsed$plan$rounds <- x_c
+      emc[[j]]$alloc$last$collapsed_shared <- x_c
+      h <- emc[[j]]$alloc$history
+      h[[length(h)]]$collapsed_shared <- x_c
+      emc[[j]]$alloc$history <- h
+    }
   }
   emc
 }

@@ -205,7 +205,7 @@ test_that("the first burn block moves every eligible subject while its step size
   expect_identical(first$stage, "burn")
   expect_equal(first$rate[eligible], rep(EMC2:::.EMC_HMC_WARMUP_RATE, sum(eligible)))
   # No separate calibration: the moves themselves set the step size.
-  expect_equal(h$totals$calib_cpu, 0)
+  expect_equal(first$calib_cpu, 0)
   expect_gt(h$totals$attempts, 0L)
   p <- fit[[1]]$n_pars
   for (s in which(eligible)) {
