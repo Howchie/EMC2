@@ -74,6 +74,41 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_claim_open
+SEXP emc_claim_open(std::string path);
+RcppExport SEXP _EMC2_emc_claim_open(SEXP pathSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_claim_open(path));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_claim_reset
+void emc_claim_reset(SEXP map, int key);
+RcppExport SEXP _EMC2_emc_claim_reset(SEXP mapSEXP, SEXP keySEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type map(mapSEXP);
+    Rcpp::traits::input_parameter< int >::type key(keySEXP);
+    emc_claim_reset(map, key);
+    return R_NilValue;
+END_RCPP
+}
+// emc_claim_next
+int emc_claim_next(SEXP map, int key, int n);
+RcppExport SEXP _EMC2_emc_claim_next(SEXP mapSEXP, SEXP keySEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type map(mapSEXP);
+    Rcpp::traits::input_parameter< int >::type key(keySEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_claim_next(map, key, n));
+    return rcpp_result_gen;
+END_RCPP
+}
 // collapsed_surrogate_cpp
 Rcpp::List collapsed_surrogate_cpp(const arma::vec& phi, const Rcpp::List& model);
 RcppExport SEXP _EMC2_collapsed_surrogate_cpp(SEXP phiSEXP, SEXP modelSEXP) {
@@ -3465,6 +3500,9 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
+    {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},
+    {"_EMC2_emc_claim_reset", (DL_FUNC) &_EMC2_emc_claim_reset, 2},
+    {"_EMC2_emc_claim_next", (DL_FUNC) &_EMC2_emc_claim_next, 3},
     {"_EMC2_collapsed_surrogate_cpp", (DL_FUNC) &_EMC2_collapsed_surrogate_cpp, 2},
     {"_EMC2_collapsed_trajectories_cpp", (DL_FUNC) &_EMC2_collapsed_trajectories_cpp, 6},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},

@@ -407,7 +407,7 @@ test_that("a pool marked dead still returns every subject's result", {
   expect_false(res$alive)
 })
 
-# --- the dynamic subject queue ------------------------------------------------
+# --- the shared subject queue -------------------------------------------------
 
 test_that("the partition records a costliest-first dispatch order", {
   part <- EMC2:::.emc_lpt_partition(c(2, 9, 5, 7), 2)
@@ -422,7 +422,9 @@ test_that("the partition records a costliest-first dispatch order", {
 })
 
 # A pool whose workers are mocks: every send is answered at once on the
-# completion channel, and `answer(w, subs)` supplies the reply.
+# completion channel.  A worker's reply claims its share of the queue from the
+# shared counter (an even split, in reply order), and `answer(w, subs)`
+# supplies the reply for those subjects.
 queue_harness <- function(n_workers, n_subjects, answer, cost) {
   dir <- tempfile("emc_queue_")
   dir.create(dir)
@@ -435,16 +437,32 @@ queue_harness <- function(n_workers, n_subjects, answer, cost) {
                wcs = as.list(seq_len(n_workers)), rcs = as.list(seq_len(n_workers)),
                alive = TRUE, done = done, generation = gen)
   log <- new.env(parent = emptyenv())
-  log$sent <- list(); log$held <- vector("list", n_workers); log$master <- integer(0)
+  log$sent <- list(); log$held <- vector("list", n_workers)
+  log$claimed <- vector("list", n_workers); log$master <- integer(0)
+  share <- ceiling(n_subjects / n_workers)
   send <- function(con, msg, ...) {
-    log$sent[[length(log$sent) + 1L]] <- list(w = con, subs = msg$subs)
-    log$held[[con]] <- msg$subs
+    log$sent[[length(log$sent) + 1L]] <- msg
+    log$held[[con]] <- msg
     writeBin(EMC2:::.emc_wpool_done_encode(con, gen, msg$request,
                                            EMC2:::.EMC_WPOOL_ST_OK), done$wc)
     flush(done$wc)
     TRUE
   }
-  recv <- function(con, ...) answer(con, log$held[[con]])
+  recv <- function(con, ...) {
+    msg <- log$held[[con]]
+    map <- EMC2:::.emc_wpool_claim_attach(msg$claim_path)
+    order <- EMC2:::.emc_wpool_shared_read(msg$shared_file)$inputs$order
+    subs <- integer(0)
+    while (length(subs) < share) {
+      i <- EMC2:::emc_claim_next(map$ptr, msg$key, msg$n)
+      if (i < 0L) break
+      subs <- c(subs, order[[i + 1L]])
+    }
+    log$claimed[[con]] <- subs
+    out <- answer(con, subs)
+    if (is.list(out) && is.null(out$failed)) out$subs <- subs
+    out
+  }
   in_master <- function(msg, ctx, shared = NULL) {
     log$master <- c(log$master, msg$subs)
     list(props = matrix(-msg$subs, ctx$n_pars + 1L, length(msg$subs), byrow = TRUE),
@@ -473,7 +491,7 @@ worker_answer <- function(subs, seed) {
        times = rep(1, length(subs)))
 }
 
-test_that("the queue hands out one subject at a time, costliest first", {
+test_that("the queue sends one message per worker and is claimed costliest first", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
   withr::local_options(emc2.worker_queue = TRUE)
@@ -482,35 +500,34 @@ test_that("the queue hands out one subject at a time, costliest first", {
   h <- queue_harness(3L, length(cost), function(w, subs) worker_answer(subs, seed_box$s), cost)
   skip_if(is.null(h), "no FIFO available here")
   sent <- h$log$sent
-  expect_length(sent, length(cost))
-  expect_true(all(vapply(sent, function(x) length(x$subs), integer(1)) == 1L))
-  expect_identical(vapply(sent, `[[`, integer(1), "subs"), order(cost, decreasing = TRUE))
+  expect_length(sent, 3L)
+  expect_true(all(vapply(sent, function(x) identical(x$kind, "claim"), logical(1))))
+  expect_identical(unlist(h$log$claimed), order(cost, decreasing = TRUE))
   # Every subject answered once, by a worker, into its own column.
   expect_identical(unname(h$res$props[1L, ]), as.numeric(seq_along(cost)))
   expect_length(h$log$master, 0L)
   expect_true(h$res$alive)
 })
 
-test_that("a subject that fails on a worker is recomputed, and the worker keeps working", {
+test_that("subjects claimed by a worker that fails are recomputed by the chain", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
   withr::local_options(emc2.worker_queue = TRUE)
   cost <- c(5, 4, 3, 2, 1)
   set.seed(31); seed <- get(".Random.seed", envir = globalenv())
   answer <- function(w, subs) {
-    if (identical(subs, 2L)) return(list(failed = "boom"))
+    if (2L %in% subs) return(list(failed = "boom"))
     worker_answer(subs, seed)
   }
   h <- queue_harness(2L, length(cost), answer, cost)
   skip_if(is.null(h), "no FIFO available here")
-  expect_identical(h$log$master, 2L)
-  expect_identical(unname(h$res$props[1L, ]), c(1, -2, 3, 4, 5))
+  lost <- Filter(function(x) 2L %in% x, h$log$claimed)[[1L]]
+  expect_setequal(h$log$master, lost)
+  props <- h$res$props[1L, ]
+  expect_true(all(abs(props) == seq_along(cost)))
+  expect_true(all(sign(props[lost]) == -1))
+  expect_true(all(sign(props[-lost]) == 1))
   expect_true(h$res$alive)
-  # The worker that failed subject 2 was still handed later subjects.
-  w_of_2 <- Filter(function(x) identical(x$subs, 2L), h$log$sent)[[1L]]$w
-  later <- h$log$sent[seq(which(vapply(h$log$sent, function(x) identical(x$subs, 2L),
-                                        logical(1))) + 1L, length(h$log$sent))]
-  expect_true(any(vapply(later, function(x) x$w == w_of_2, logical(1))))
 })
 
 test_that("a worker lost mid-queue leaves every subject answered exactly once", {
@@ -519,23 +536,37 @@ test_that("a worker lost mid-queue leaves every subject answered exactly once", 
   withr::local_options(emc2.worker_queue = TRUE)
   cost <- c(6, 5, 4, 3, 2, 1)
   set.seed(31); seed <- get(".Random.seed", envir = globalenv())
-  answer <- function(w, subs) if (identical(subs, 3L)) NULL else worker_answer(subs, seed)
-  h <- queue_harness(2L, length(cost), answer, cost)
+  answer <- function(w, subs) if (3L %in% subs) NULL else worker_answer(subs, seed)
+  h <- queue_harness(3L, length(cost), answer, cost)
   skip_if(is.null(h), "no FIFO available here")
   expect_false(h$res$alive)
-  # Subject 3's reply never came, and nothing was handed out after that: the
-  # master computed subject 3 and the rest of the queue, and nothing twice.
-  n_sent <- length(h$log$sent)
-  expect_setequal(c(vapply(h$log$sent, `[[`, integer(1), "subs"), h$log$master),
-                  seq_along(cost))
+  # The lost worker's subjects, and whatever was unclaimed after the loss
+  # stopped the queue, were computed by the chain, and nothing twice.
   expect_false(anyDuplicated(h$log$master) > 0L)
   expect_true(3L %in% h$log$master)
   props <- h$res$props[1L, ]
   expect_true(all(abs(props) == seq_along(cost)))
-  expect_identical(sign(props[3L]), -1)
+  expect_setequal(which(props < 0), h$log$master)
 })
 
-test_that("the dynamic queue does not move a pooled fit", {
+test_that("a claim round ends once its key is replaced", {
+  skip_on_os("windows")
+  path <- tempfile("emc_claim_")
+  on.exit(unlink(path), add = TRUE)
+  a <- EMC2:::emc_claim_open(path)
+  b <- EMC2:::emc_claim_open(path)
+  EMC2:::emc_claim_reset(a, 7L)
+  expect_identical(EMC2:::emc_claim_next(b, 7L, 3L), 0L)
+  expect_identical(EMC2:::emc_claim_next(a, 7L, 3L), 1L)
+  expect_identical(EMC2:::emc_claim_next(b, 6L, 3L), -1L)
+  expect_identical(EMC2:::emc_claim_next(b, 7L, 3L), 2L)
+  expect_identical(EMC2:::emc_claim_next(a, 7L, 3L), -1L)
+  EMC2:::emc_claim_reset(a, 8L)
+  expect_identical(EMC2:::emc_claim_next(b, 7L, 3L), -1L)
+  expect_identical(EMC2:::emc_claim_next(b, 8L, 3L), 0L)
+})
+
+test_that("the shared queue does not move a pooled fit", {
   skip_on_os("windows")
   skip_on_cran()
   # More subjects than workers, so the queue actually reorders the work.

@@ -67,6 +67,7 @@
       })
     if (is.null(chunk)) return(NULL)
     k <- length(chunk)
+    if (k == n) return(chunk)
     if (k == 0L) {
       if (is.null(deadline)) {
         .emc_wpool_transport_fail(if (got == 0) {
@@ -214,10 +215,8 @@
       size > .EMC_WPOOL_MAX_FRAME || size > .Machine$integer.max) {
     stop("invalid shared broadcast file", call. = FALSE)
   }
-  con <- file(path, open = "rb")
-  on.exit(try(close(con), silent = TRUE), add = TRUE)
-  payload <- .emc_wpool_get_bytes(con, as.integer(size))
-  if (is.null(payload) || length(payload) != as.integer(size)) {
+  payload <- readBin(path, "raw", as.integer(size))
+  if (length(payload) != as.integer(size)) {
     stop("shared broadcast file was truncated", call. = FALSE)
   }
   tryCatch(unserialize(payload), error = function(e) {
@@ -393,7 +392,8 @@
 }
 
 
-.emc_wpool_spawn <- function(dir, idx, ctx, backend = "fork", template = NULL) {
+.emc_wpool_spawn <- function(dir, idx, ctx, backend = "fork", template = NULL,
+                             ctx_update = NULL) {
   req <- file.path(dir, sprintf("req%d", idx))
   ans <- file.path(dir, sprintf("ans%d", idx))
   made <- tryCatch(
@@ -421,16 +421,23 @@
       if (is.null(template) || !isTRUE(template$alive)) {
         stop("clean worker template is not available")
       }
+      id <- .emc_wpool_next_request()
       if (!.emc_wpool_send(template$wc, list(command = "spawn", idx = idx,
-                                             req = req, ans = ans))) {
+                                             req = req, ans = ans,
+                                             ctx = ctx_update, id = id))) {
         stop(.emc_wpool_transport_error("template stopped accepting requests"))
       }
-      reply <- .emc_wpool_recv(
-        template$rc, deadline = .EMC_WPOOL_TIMEOUT_TEMPLATE,
-        alive = local({ j <- template$job; function() {
-          pid <- .emc_wpool_job_pid(j)
-          is.null(pid) || is.na(pid) || .emc_wpool_pid_alive(pid)
-        } }))
+      # A template kept across blocks may still hold the reply to a command
+      # whose sender died before reading it.
+      repeat {
+        reply <- .emc_wpool_recv(
+          template$rc, deadline = .EMC_WPOOL_TIMEOUT_TEMPLATE,
+          alive = local({ j <- template$job; function() {
+            pid <- .emc_wpool_job_pid(j)
+            is.null(pid) || is.na(pid) || .emc_wpool_pid_alive(pid)
+          } }))
+        if (is.null(reply) || identical(reply$id, id)) break
+      }
       if (!isTRUE(reply$ok) || length(reply$pids) != n) {
         stop(if (is.null(reply$error)) "template could not fork workers" else reply$error)
       }
@@ -487,6 +494,12 @@
 }
 
 .emc_wpool_template_start <- function(dir, ctx_file, lib) {
+  .emc_wpool_template_connect(.emc_wpool_template_launch(dir, ctx_file, lib))
+}
+
+# Start the template's Rscript without waiting for it to load, so several can
+# boot at once; .emc_wpool_template_connect() then waits for each.
+.emc_wpool_template_launch <- function(dir, ctx_file, lib) {
   req <- file.path(dir, "template_req")
   ans <- file.path(dir, "template_ans")
   made <- tryCatch(
@@ -519,6 +532,16 @@
     unlink(c(req, ans, boot, pidfile, log))
     return(NULL)
   }
+  list(req = req, ans = ans, boot = boot, pidfile = pidfile, log = log)
+}
+
+.emc_wpool_template_connect <- function(launch) {
+  if (is.null(launch)) return(NULL)
+  req <- launch$req
+  ans <- launch$ans
+  boot <- launch$boot
+  pidfile <- launch$pidfile
+  log <- launch$log
   job <- list(pid = NA_integer_, pidfile = pidfile, log = log, external = TRUE)
   wc <- rc <- NULL
   success <- FALSE
@@ -561,7 +584,11 @@
   list(wc = wc, rc = rc, job = job, alive = TRUE)
 }
 
-.emc_wpool_start <- function(n_workers, ctx, allow_one = FALSE) {
+# `persistent = TRUE` forks the workers from this chain's template kept by
+# run_emc() across blocks (.emc_wpool_session_start()) when one is available,
+# instead of booting a template for this pool alone.
+.emc_wpool_start <- function(n_workers, ctx, allow_one = FALSE,
+                             persistent = FALSE) {
   n_workers <- as.integer(n_workers)
   if (is.na(n_workers) || n_workers < 1L ||
       (!isTRUE(allow_one) && n_workers <= 1L)) return(NULL)
@@ -572,6 +599,11 @@
 
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
+
+  if (isTRUE(persistent)) {
+    pool <- .emc_wpool_start_kept(dir, n_workers, ctx)
+    if (!is.null(pool)) return(pool)
+  }
 
   backend <- .emc_wpool_backend(ctx)
   ctx_file <- NULL
@@ -607,6 +639,124 @@
        generation = .emc_wpool_next_generation(),
        ctx_file = ctx_file, lib = lib, template = template,
        done = .emc_wpool_done_open(dir))
+}
+
+# Fork a pool from the session template for this chain, sending it this
+# block's context (without the data when the template already holds it).
+.emc_wpool_start_kept <- function(dir, n_workers, ctx) {
+  slot <- .emc_pool_state$session_slot
+  template <- slot$template
+  if (is.null(template) || !isTRUE(template$alive) ||
+      isTRUE(.emc_pool_state$session_in_use) ||
+      !.emc_wpool_pid_alive(.emc_wpool_job_pid(template$job)) ||
+      !identical(.emc_wpool_backend(ctx), "spawn")) return(NULL)
+  upd <- ctx
+  if (identical(ctx$data, slot$data)) upd$data <- NULL
+  ctx_update <- file.path(dir, "context.rds")
+  saved <- tryCatch({ saveRDS(upd, ctx_update, compress = FALSE); TRUE },
+                    error = function(e) FALSE)
+  if (!saved) return(NULL)
+  .emc_pool_state$warned <- FALSE
+  spawned <- .emc_wpool_spawn(dir, seq_len(n_workers), ctx, "spawn",
+                              template = template, ctx_update = ctx_update)
+  if (is.null(spawned)) {
+    # The template is no use to this chain any more; later pools boot their own.
+    .emc_pool_state$session_slot <- NULL
+    unlink(ctx_update)
+    return(NULL)
+  }
+  .emc_pool_state$session_in_use <- TRUE
+  list(n = n_workers, dir = dir, jobs = spawned$jobs, wcs = spawned$wcs,
+       rcs = spawned$rcs, alive = TRUE, backend = "spawn",
+       generation = .emc_wpool_next_generation(),
+       ctx_file = NULL, lib = NULL, template = template, kept = TRUE,
+       done = .emc_wpool_done_open(dir))
+}
+
+# Templates kept for the length of a run_emc() call, one per chain slot.
+# Booting a template (Rscript, the package, the data) is most of the cost of
+# starting a pool, and run_emc() forks fresh chain processes every block.  The
+# workers are still forked afresh every block and recycled within one, so
+# their memory does not accumulate; only the template, which runs no
+# likelihoods, lives on.  A template exits when its control FIFO closes, so it
+# cannot outlive this process.
+.emc_wpool_session_start <- function(base_ctx, n_slots) {
+  n_slots <- as.integer(n_slots)
+  if (is.na(n_slots) || n_slots < 1L) return(NULL)
+  if (Sys.info()[["sysname"]] == "Windows") return(NULL)
+  if (!nzchar(Sys.which("mkfifo"))) return(NULL)
+  if (!identical(.emc_wpool_backend(base_ctx), "spawn")) return(NULL)
+  ns_path <- tryCatch(getNamespaceInfo(asNamespace("EMC2"), "path"),
+                      error = function(e) "")
+  if (!nzchar(ns_path)) return(NULL)
+  lib <- dirname(ns_path)
+  dirs <- character(0)
+  launches <- vector("list", n_slots)
+  for (k in seq_len(n_slots)) {
+    dir <- tempfile("emc_wtemplate_")
+    if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) next
+    dirs <- c(dirs, dir)
+    ctx_file <- file.path(dir, "context.rds")
+    saved <- tryCatch({ saveRDS(base_ctx, ctx_file, compress = FALSE); TRUE },
+                      error = function(e) FALSE)
+    if (saved) launches[[k]] <- .emc_wpool_template_launch(dir, ctx_file, lib)
+  }
+  templates <- lapply(launches, function(l) {
+    if (is.null(l)) return(NULL)
+    t <- .emc_wpool_template_connect(l)
+    if (!is.null(t)) t$dir <- dirname(l$req)
+    t
+  })
+  if (all(vapply(templates, is.null, logical(1)))) {
+    unlink(dirs, recursive = TRUE)
+    return(NULL)
+  }
+  list(templates = templates, data = base_ctx$data, base_ctx = base_ctx,
+       lib = lib)
+}
+
+# Replace any template that has died since the last block.
+.emc_wpool_session_check <- function(session) {
+  if (is.null(session)) return(session)
+  for (k in seq_along(session$templates)) {
+    t <- session$templates[[k]]
+    if (!is.null(t) && .emc_wpool_pid_alive(.emc_wpool_job_pid(t$job))) next
+    if (!is.null(t)) {
+      .emc_wpool_template_stop(t)
+      unlink(t$dir, recursive = TRUE)
+    }
+    dir <- tempfile("emc_wtemplate_")
+    session$templates[k] <- list(NULL)
+    if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) next
+    ctx_file <- file.path(dir, "context.rds")
+    saved <- tryCatch({ saveRDS(session$base_ctx, ctx_file, compress = FALSE); TRUE },
+                      error = function(e) FALSE)
+    fresh <- if (saved) .emc_wpool_template_start(dir, ctx_file, session$lib) else NULL
+    if (is.null(fresh)) {
+      unlink(dir, recursive = TRUE)
+      next
+    }
+    fresh$dir <- dir
+    session$templates[[k]] <- fresh
+  }
+  session
+}
+
+.emc_wpool_session_stop <- function(session) {
+  if (is.null(session)) return(invisible(NULL))
+  for (t in session$templates) {
+    if (is.null(t)) next
+    .emc_wpool_template_stop(t)
+    unlink(t$dir, recursive = TRUE)
+  }
+  invisible(NULL)
+}
+
+# What a chain process needs to use its slot's template.
+.emc_wpool_session_slot <- function(session, k) {
+  if (is.null(session) || k > length(session$templates) ||
+      is.null(session$templates[[k]])) return(NULL)
+  list(template = session$templates[[k]], data = session$data)
 }
 
 .EMC_WPOOL_DONE_BYTES <- 16L
@@ -759,7 +909,7 @@
        alive = TRUE, grow_fails = 0L, grow_skip = 0L,
        generation = .emc_wpool_next_generation(),
        backend = pool$backend, ctx_file = pool$ctx_file, lib = pool$lib,
-       template = pool$template, done = pool$done)
+       template = pool$template, kept = pool$kept, done = pool$done)
 }
 
 .emc_wpool_recycle <- function(pool, i, every, ctx) {
@@ -854,7 +1004,9 @@
   if (!is.null(pool$done)) {
     for (cn in pool$done[c("rc", "wc")]) try(close(cn), silent = TRUE)
   }
-  if (identical(pool$backend, "spawn")) {
+  if (isTRUE(pool$kept)) {
+    .emc_pool_state$session_in_use <- FALSE
+  } else if (identical(pool$backend, "spawn")) {
     .emc_wpool_template_stop(pool$template)
   }
   unlink(pool$dir, recursive = TRUE)
@@ -913,7 +1065,8 @@
 }
 
 .emc_wpool_template <- function(boot) {
-  ctx <- readRDS(boot$ctx)
+  base <- readRDS(boot$ctx)
+  ctx <- base
   rc <- fifo(boot$req, "rb", blocking = TRUE)
   wc <- fifo(boot$ans, "wb", blocking = TRUE)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
@@ -926,6 +1079,13 @@
     if (is.null(command)) { orphaned <- TRUE; break }
     reply <- tryCatch({
       if (!identical(command$command, "spawn")) stop("unknown template command")
+      # A template kept across blocks takes each block's context as an update
+      # over the one it booted with; recycling within a block keeps it.
+      if (!is.null(command$ctx)) {
+        upd <- readRDS(command$ctx)
+        ctx <- base
+        ctx[names(upd)] <- upd
+      }
       keys <- as.character(command$idx)
       old <- jobs[keys]
       old <- old[!vapply(old, is.null, logical(1))]
@@ -954,8 +1114,10 @@
         jobs[keys] <- NULL
         stop(conditionMessage(made))
       }
-      list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)))
-    }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
+      list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)),
+           id = command$id)
+    }, error = function(e) list(ok = FALSE, error = conditionMessage(e),
+                                id = command$id))
     if (!.emc_wpool_send(wc, reply)) { orphaned <- TRUE; break }
   }
   if (length(jobs)) {
@@ -1000,6 +1162,7 @@
     }))
   }
   if (identical(msg$kind, "hmc")) return(.emc_hmc_compute(msg, ctx))
+  if (identical(msg$kind, "claim")) return(.emc_wpool_compute_claim(msg, ctx))
   if (identical(msg$kind, "ll")) {
     return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
                                      model = ctx$model, component = msg$component,
@@ -1110,41 +1273,78 @@
   res$value
 }
 
+.emc_wpool_shared_chol <- function(shared) {
+  group_chol <- shared$group_chol
+  if (is.null(group_chol) && !is.null(shared$group_var)) {
+    group_chol <- build_group_chol_cache(shared$group_var, shared$idx_list,
+                                         shared$marginal_idx,
+                                         include_full = if (is.null(shared$include_full))
+                                           TRUE else shared$include_full)
+  }
+  group_chol
+}
+
+# Map the shared subject-queue counter at `path` (src/claim_counter.cpp),
+# once per process; NULL where it cannot be mapped.
+.emc_wpool_claim_attach <- function(path) {
+  cached <- .emc_pool_state$claim_map
+  if (!is.null(cached) && identical(cached$path, path)) return(cached)
+  ptr <- tryCatch(emc_claim_open(path), error = function(e) NULL)
+  if (is.null(ptr)) return(NULL)
+  .emc_pool_state$claim_map <- list(path = path, ptr = ptr)
+  .emc_pool_state$claim_map
+}
+
+# One worker's share of the shared subject queue: claim subjects from the
+# counter until it runs out, then answer for all of them at once.
+.emc_wpool_compute_claim <- function(msg, ctx) {
+  t_recv <- Sys.time()
+  started <- proc.time()
+  map <- .emc_wpool_claim_attach(msg$claim_path)
+  if (is.null(map)) stop("cannot map the subject queue counter")
+  b <- .emc_wpool_shared_read(msg$shared_file)
+  shared <- list(group_var = b$group_var, group_chol = .emc_wpool_shared_chol(b))
+  inp <- b$inputs
+  got <- integer(0)
+  outs <- list()
+  repeat {
+    i <- emc_claim_next(map$ptr, msg$key, msg$n)
+    if (i < 0L) break
+    s <- inp$order[[i + 1L]]
+    one <- list(subs = s, alpha = inp$alpha[, s, drop = FALSE],
+                population_mu = inp$population_mu[, s, drop = FALSE],
+                pm = inp$pm[s], prev_ll = inp$prev_ll[s], seeds = inp$seeds[s],
+                extra = if (is.null(inp$extra)) NULL else inp$extra[s],
+                pooled = inp$pooled, rows_only = inp$rows_only,
+                skip = if (is.null(inp$skip)) NULL else inp$skip[s])
+    outs[[length(outs) + 1L]] <- .emc_wpool_compute_particle(one, ctx, shared)
+    got <- c(got, s)
+  }
+  spent <- proc.time() - started
+  rejects <- if (length(outs)) Reduce(`+`, lapply(outs, `[[`, "rejects"))
+             else stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                                  .EMC_REJECT_CLASSES)
+  list(subs = got,
+       props = if (length(outs)) do.call(cbind, lapply(outs, `[[`, "props"))
+               else matrix(0, ctx$n_pars + 1L, 0L),
+       pm = do.call(c, lapply(outs, `[[`, "pm")),
+       seeds = do.call(c, lapply(outs, `[[`, "seeds")),
+       times = as.numeric(unlist(lapply(outs, `[[`, "times"))),
+       extra_ll = if (is.null(inp$extra)) NULL else do.call(c, lapply(outs, `[[`, "extra_ll")),
+       t_recv = t_recv, t_done = Sys.time(),
+       cpu = unname(spent[["user.self"]] + spent[["sys.self"]]),
+       elapsed = unname(spent[["elapsed"]]), rejects = rejects)
+}
+
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
-  # Under the dynamic subject queue one worker serves several requests per
-  # iteration that share one broadcast; decode it and rebuild the group
-  # Cholesky cache once.  The key is the iteration's broadcast file plus its
-  # request id, both unique per iteration.
-  cache_key <- if (is.null(shared) && !is.null(msg$shared_file) &&
-                   !is.null(msg$iter_key)) {
-    paste(msg$shared_file, msg$iter_key)
-  } else NULL
-  cached <- .emc_pool_state$worker_shared
-  group_chol <- NULL
-  if (!is.null(cache_key) && !is.null(cached) &&
-      identical(cached$key, cache_key)) {
-    shared <- cached$shared
-    group_chol <- cached$group_chol
-  } else {
-    if (is.null(shared)) {
-      shared <- if (!is.null(msg$shared_file)) {
-        .emc_wpool_shared_read(msg$shared_file)
-      } else {
-        unserialize(msg$shared)
-      }
-    }
-    group_chol <- shared$group_chol
-    if (is.null(group_chol) && !is.null(shared$group_var)) {
-      group_chol <- build_group_chol_cache(shared$group_var, shared$idx_list,
-                                           shared$marginal_idx,
-                                           include_full = if (is.null(shared$include_full))
-                                             TRUE else shared$include_full)
-    }
-    if (!is.null(cache_key)) {
-      .emc_pool_state$worker_shared <- list(key = cache_key, shared = shared,
-                                            group_chol = group_chol)
+  if (is.null(shared)) {
+    shared <- if (!is.null(msg$shared_file)) {
+      .emc_wpool_shared_read(msg$shared_file)
+    } else {
+      unserialize(msg$shared)
     }
   }
+  group_chol <- .emc_wpool_shared_chol(shared)
   subs <- msg$subs
   props <- matrix(0, ctx$n_pars + 1L, length(subs))
   pm <- vector("list", length(subs))
@@ -1450,8 +1650,28 @@
                  include_full = group_chol$include_full,
                  group_chol = group_chol)
   was_alive <- isTRUE(pool$alive)
+  watch <- !is.null(pool$done)
+  # Shared subject queue: per-subject cost varies ~30% between iterations with
+  # the proposals, so a partition planned from last iteration's times leaves
+  # workers idle while the unluckiest finishes.  Every subject's inputs go out
+  # once in the broadcast, and each worker claims the next subject (costliest
+  # first) from a shared counter as it frees up, replying once when the queue
+  # is empty.  Each subject carries its own RNG stream, so the result does not
+  # depend on which worker computes it.
+  claim_map <- if (was_alive && watch && pool$n > 1L &&
+                   isTRUE(getOption("emc2.worker_queue", TRUE))) {
+    .emc_wpool_claim_attach(file.path(pool$dir, "claim"))
+  } else NULL
+  claim <- !is.null(claim_map)
+  order <- if (claim) .emc_wpool_queue_order(part) else NULL
   shared_raw <- if (was_alive) {
-    serialize(shared[c("group_var", "idx_list", "marginal_idx", "include_full")], NULL)
+    serialize(c(shared[c("group_var", "idx_list", "marginal_idx", "include_full")],
+                if (claim) list(inputs = list(
+                  alpha = alpha, population_mu = population_mu,
+                  pm = pm_settings, prev_ll = prev_ll, seeds = seeds,
+                  extra = extra, pooled = pooled, rows_only = rows_only,
+                  skip = skip, order = order))),
+              NULL)
   } else raw(0)
   shared_file <- NULL
   on.exit(if (!is.null(shared_file)) unlink(shared_file), add = TRUE)
@@ -1466,11 +1686,9 @@
   shared_elapsed <- if (profile) {
     proc.time()[["elapsed"]] - shared_started
   } else NA_real_
-  watch <- !is.null(pool$done)
   generation <- .emc_wpool_one_int(pool$generation)
   request <- .emc_wpool_next_request()
-  msgs <- lapply(seq_along(part), function(w) {
-    subs <- part[[w]]
+  subject_msg <- function(subs, w) {
     list(subs = subs, shared_file = shared_file,
          alpha = alpha[, subs, drop = FALSE],
          population_mu = population_mu[, subs, drop = FALSE],
@@ -1479,7 +1697,15 @@
          pooled = pooled, rows_only = rows_only,
          skip = if (is.null(skip)) NULL else skip[subs],
          notify = watch, w = w, generation = generation, request = request)
+  }
+  msgs <- lapply(seq_len(pool$n), function(w) {
+    if (claim) {
+      list(kind = "claim", shared_file = shared_file, claim_path = claim_map$path,
+           key = request, n = length(order), notify = TRUE, w = w,
+           generation = generation, request = request)
+    } else subject_msg(part[[w]], w)
   })
+  has_work <- if (claim) rep(TRUE, pool$n) else lengths(part) > 0L
   sent <- rep(FALSE, pool$n)
   dispatch_at <- finish_at <- rep(NA_real_, pool$n)
   dispatch_wall <- rep(Sys.time()[NA], pool$n)
@@ -1489,20 +1715,11 @@
   rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                              .EMC_REJECT_CLASSES)
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
-  sendable <- was_alive && !is.null(shared_file)
-  # Dynamic subject queue: per-subject cost varies ~30% between iterations
-  # with the proposals, so a partition planned from last iteration's times
-  # leaves workers idle while the unluckiest finishes.  With the completion
-  # channel, each worker instead takes the next subject (costliest first) as
-  # it frees up.  Each subject carries its own RNG stream, so the result does
-  # not depend on which worker computes it.
-  dynamic <- sendable && watch && pool$n > 1L &&
-    isTRUE(getOption("emc2.worker_queue", TRUE))
-  queue_delays <- numeric(0)
-  if (sendable && !dynamic) {
+  if (was_alive && !is.null(shared_file)) {
+    if (claim) emc_claim_reset(claim_map$ptr, request)
     send_deadline <- .emc_wpool_deadline()
     for (w in seq_len(pool$n)) {
-      if (!length(part[[w]])) next
+      if (!has_work[w]) next
       sent[w] <- .emc_wpool_request(pool, w, msgs[[w]], send_deadline)
       if (profile && sent[w]) {
         dispatch_at[w] <- proc.time()[["elapsed"]] - iter_started
@@ -1519,11 +1736,15 @@
     proc.time()[["elapsed"]] - send_started
   } else NA_real_
   receive_started <- proc.time()[["elapsed"]]
+  queue_delays <- numeric(0)
+  assigned <- if (claim) vector("list", pool$n) else part
+  stored <- logical(n_subjects)
   store <- function(w, res, source = "worker", subs = part[[w]]) {
     props[, subs] <<- res$props
     times[subs] <<- res$times
     pm_settings[subs] <<- res$pm
     seeds[subs] <<- res$seeds
+    stored[subs] <<- TRUE
     if (!is.null(extra) && !is.null(res$extra_ll)) extra_ll[subs] <<- res$extra_ll
     if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
     if (identical(source, "master") && was_alive) {
@@ -1531,16 +1752,11 @@
       fallback_subjects <<- fallback_subjects + length(subs)
     }
     if (identical(source, "worker") && is.numeric(res$cpu)) cpu_total <<- cpu_total + res$cpu
+    if (claim && !is.na(w)) assigned[[w]] <<- c(assigned[[w]], subs)
     if (!profile || is.na(w)) return(invisible(NULL))
-    # A worker may serve several queue chunks: its CPU and elapsed times add up.
     finish_at[w] <<- proc.time()[["elapsed"]] - iter_started
-    if (!is.null(res$cpu)) {
-      worker_cpu[w] <<- if (is.na(worker_cpu[w])) res$cpu else worker_cpu[w] + res$cpu
-    }
-    if (!is.null(res$elapsed)) {
-      worker_elapsed[w] <<- if (is.na(worker_elapsed[w])) res$elapsed
-                            else worker_elapsed[w] + res$elapsed
-    }
+    if (!is.null(res$cpu)) worker_cpu[w] <<- res$cpu
+    if (!is.null(res$elapsed)) worker_elapsed[w] <<- res$elapsed
     if (identical(source, "worker") && !is.null(res$t_recv) &&
         !is.na(dispatch_wall[w])) {
       queue_delay[w] <<- as.numeric(difftime(res$t_recv, dispatch_wall[w],
@@ -1549,149 +1765,26 @@
     }
     invisible(NULL)
   }
-  recompute <- function(w) .emc_wpool_compute(msgs[[w]], ctx, shared = shared)
-  subject_msg <- function(subs, w, req) {
-    list(subs = subs, shared_file = shared_file,
-         alpha = alpha[, subs, drop = FALSE],
-         population_mu = population_mu[, subs, drop = FALSE],
-         pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs],
-         extra = if (is.null(extra)) NULL else extra[subs],
-         pooled = pooled, rows_only = rows_only,
-         skip = if (is.null(skip)) NULL else skip[subs],
-         notify = watch, w = w, generation = generation, request = req,
-         iter_key = request)
+  # A claim reply must name subjects of this iteration that no other reply
+  # holds, with one result column each.
+  claim_valid <- function(res) {
+    subs <- res$subs
+    is.numeric(subs) && !anyNA(subs) && all(subs >= 1L & subs <= n_subjects) &&
+      !anyDuplicated(subs) && !any(stored[subs]) &&
+      is.matrix(res$props) && ncol(res$props) == length(subs) &&
+      length(res$pm) == length(subs) && length(res$seeds) == length(subs)
   }
-  assigned <- part
-  sent_msgs <- msgs
+  # Under the shared queue the subjects a failed worker had claimed are not
+  # known, so they are recomputed with the unclaimed ones after the replies.
+  recompute <- function(w) {
+    if (!claim) store(w, .emc_wpool_compute(msgs[[w]], ctx, shared = shared),
+                      source = "master")
+  }
+  stop_claims <- function() if (claim) emc_claim_reset(claim_map$ptr, 0L)
 
-  pending <- sent & vapply(part, length, integer(1)) > 0L
+  pending <- sent & has_work
   picked_up <- rep(FALSE, pool$n)
-  if (dynamic) {
-    queue <- .emc_wpool_queue_order(part)
-    assigned <- vector("list", pool$n)
-    sent_msgs <- list()
-    measure_msgs <- .emc_profile_expensive()
-    chunk <- vector("list", pool$n)       # outstanding subjects per worker
-    issued <- integer(pool$n)             # request id of that chunk
-    issued_iter <- integer(0)             # every request id sent this iteration
-    dispatching <- TRUE
-    deadline <- .emc_wpool_deadline()
-    outstanding <- function() which(!vapply(chunk, is.null, logical(1)))
-    count_stale <- function() {
-      .emc_pool_state$stale_records <-
-        (if (is.null(.emc_pool_state$stale_records)) 0L
-         else .emc_pool_state$stale_records) + 1L
-    }
-    send_next <- function(w) {
-      if (!dispatching || !length(queue)) return(FALSE)
-      subs <- queue[1L]
-      req <- .emc_wpool_next_request()
-      msg <- subject_msg(subs, w, req)
-      if (!.emc_wpool_request(pool, w, msg, deadline)) {
-        .emc_wpool_degraded(
-          .emc_wpool_transport_error("send to a worker failed"))
-        pool$alive <<- FALSE
-        dispatching <<- FALSE
-        return(FALSE)
-      }
-      queue <<- queue[-1L]
-      issued[w] <<- req
-      issued_iter <<- c(issued_iter, req)
-      chunk[[w]] <<- subs
-      picked_up[w] <<- FALSE
-      if (profile) {
-        if (is.na(dispatch_at[w])) {
-          dispatch_at[w] <<- proc.time()[["elapsed"]] - iter_started
-        }
-        dispatch_wall[w] <<- Sys.time()
-      }
-      if (measure_msgs) sent_msgs[[length(sent_msgs) + 1L]] <<- msg
-      TRUE
-    }
-    note_start <- function(rec) {
-      w <- rec$w
-      if (!is.na(w) && w >= 1L && w <= pool$n &&
-          identical(rec$request, issued[w])) {
-        picked_up[w] <<- TRUE
-      } else {
-        count_stale()
-      }
-      invisible(NULL)
-    }
-    for (w in seq_len(pool$n)) if (!send_next(w)) break
-    send_elapsed <- if (profile) {
-      proc.time()[["elapsed"]] - send_started
-    } else NA_real_
-    while (length(outstanding())) {
-      rec <- .emc_wpool_await_record(pool, outstanding, deadline,
-                                     on_start = note_start)
-      w <- if (identical(rec$code, "record")) rec$w else NA_integer_
-      # A request id this iteration never issued is a leftover from an earlier
-      # one: skip it.  One it did issue, arriving for a worker that is not
-      # holding that request, means channel and reply alignment is lost.
-      if (identical(rec$code, "record") && !(rec$request %in% issued_iter)) {
-        count_stale()
-        next
-      }
-      if (is.na(w) || w < 1L || w > pool$n || is.null(chunk[[w]]) ||
-          !identical(rec$request, issued[w])) {
-        stuck <- outstanding()
-        if (identical(rec$code, "timeout")) {
-          idle <- stuck[!picked_up[stuck]]
-          .emc_wpool_degraded(sprintf(
-            "worker%s %s produced no reply within %.0f s (subject%s %s)%s",
-            if (length(stuck) > 1L) "s" else "", paste(stuck, collapse = ", "),
-            deadline, if (length(unlist(chunk[stuck])) > 1L) "s" else "",
-            paste(unlist(chunk[stuck]), collapse = ", "),
-            if (length(idle)) {
-              sprintf("; worker%s %s never collected the request",
-                      if (length(idle) > 1L) "s" else "",
-                      paste(idle, collapse = ", "))
-            } else ""))
-          .emc_wpool_terminate_jobs(pool$jobs[stuck], wait = TRUE,
-                                    terminate = TRUE)
-        } else if (identical(rec$code, "dead") || is.na(w)) {
-          .emc_wpool_degraded("worker gave no reply")
-        } else {
-          .emc_wpool_degraded("lost alignment on the worker completion channel")
-        }
-        pool$alive <- FALSE
-        dispatching <- FALSE
-        .emc_wpool_retire(pool)
-        for (k in stuck) {
-          subs <- chunk[[k]]
-          store(k, .emc_wpool_compute(subject_msg(subs, k, issued[k]), ctx,
-                                      shared = shared),
-                source = "master", subs = subs)
-        }
-        chunk[] <- list(NULL)
-        break
-      }
-      subs <- chunk[[w]]
-      res <- .emc_wpool_reply(pool, w, deadline)
-      chunk[w] <- list(NULL)
-      source <- "worker"
-      if (is.null(res) || !is.null(res$failed)) {
-        if (is.null(res)) {
-          .emc_wpool_degraded(.emc_wpool_transport_error("worker gave no reply"))
-          pool$alive <- FALSE
-          dispatching <- FALSE
-        }
-        res <- .emc_wpool_compute(subject_msg(subs, w, issued[w]), ctx,
-                                  shared = shared)
-        source <- "master"
-      }
-      store(w, res, source = source, subs = subs)
-      assigned[[w]] <- c(assigned[[w]], subs)
-      send_next(w)
-    }
-    # Subjects never handed out (the pool degraded mid-iteration) run here.
-    for (s in queue) {
-      store(NA_integer_, .emc_wpool_compute(subject_msg(s, NA_integer_, 0L), ctx,
-                                            shared = shared),
-            source = "master", subs = s)
-    }
-  } else if (watch && any(pending)) {
+  if (watch && any(pending)) {
     deadline <- .emc_wpool_deadline()
     note_start <- function(rec) {
       w <- rec$w
@@ -1722,14 +1815,19 @@
         next
       }
       if (is.na(w) || w < 1L || w > pool$n || !pending[w]) {
+        stop_claims()
         if (identical(rec$code, "timeout")) {
           stuck <- which(pending)
           idle <- stuck[!picked_up[stuck]]
+          stuck_subs <- if (claim) integer(0) else unlist(part[stuck])
           .emc_wpool_degraded(sprintf(
-            "worker%s %s produced no reply within %.0f s (subject%s %s)%s",
+            "worker%s %s produced no reply within %.0f s%s%s",
             if (length(stuck) > 1L) "s" else "", paste(stuck, collapse = ", "),
-            deadline, if (length(unlist(part[stuck])) > 1L) "s" else "",
-            paste(unlist(part[stuck]), collapse = ", "),
+            deadline,
+            if (length(stuck_subs)) {
+              sprintf(" (subject%s %s)", if (length(stuck_subs) > 1L) "s" else "",
+                      paste(stuck_subs, collapse = ", "))
+            } else "",
             if (length(idle)) {
               sprintf("; worker%s %s never collected the request",
                       if (length(idle) > 1L) "s" else "",
@@ -1744,58 +1842,63 @@
         }
         pool$alive <- FALSE
         .emc_wpool_retire(pool)
-        for (k in which(pending)) store(k, recompute(k), source = "master")
+        for (k in which(pending)) recompute(k)
         pending[] <- FALSE
         break
       }
       res <- .emc_wpool_reply(pool, w, deadline)
-      source <- "worker"
-      if (is.null(res) || !is.null(res$failed)) {
-        if (is.null(res)) {
-          .emc_wpool_degraded(.emc_wpool_transport_error("worker gave no reply"))
-          pool$alive <- FALSE
-        }
-        res <- recompute(w)
-        source <- "master"
-      }
-      store(w, res, source = source)
       pending[w] <- FALSE
+      if (is.null(res)) {
+        stop_claims()
+        .emc_wpool_degraded(.emc_wpool_transport_error("worker gave no reply"))
+        pool$alive <- FALSE
+        recompute(w)
+      } else if (!is.null(res$failed) || (claim && !claim_valid(res))) {
+        recompute(w)
+      } else if (claim) {
+        store(w, res, subs = as.integer(res$subs))
+      } else {
+        store(w, res)
+      }
     }
-    for (w in seq_len(pool$n)) {
-      if (length(part[[w]]) && !sent[w]) store(w, recompute(w), source = "master")
-    }
+    for (w in seq_len(pool$n)) if (has_work[w] && !sent[w]) recompute(w)
   } else {
     deadline <- .emc_wpool_deadline()
     for (w in seq_len(pool$n)) {
-      subs <- part[[w]]
-      if (!length(subs)) next
+      if (!has_work[w]) next
       res <- if (sent[w]) .emc_wpool_reply(pool, w, deadline) else NULL
-      source <- "worker"
       if (is.null(res) || !is.null(res$failed)) {
         if (sent[w] && is.null(res)) {
           .emc_wpool_degraded("worker gave no reply")
           pool$alive <- FALSE
         }
-        res <- recompute(w)
-        source <- "master"
+        recompute(w)
+      } else {
+        store(w, res)
       }
-      store(w, res, source = source)
+    }
+  }
+  # Subjects no worker answered for (claimed by a worker that failed, or never
+  # claimed because the pool degraded) run here.
+  if (claim) {
+    for (s in which(!stored)) {
+      store(NA_integer_, .emc_wpool_compute(subject_msg(s, NA_integer_), ctx,
+                                            shared = shared),
+            source = "master", subs = s)
     }
   }
   receive_elapsed <- proc.time()[["elapsed"]] - receive_started
   if (was_alive) .emc_wpool_record_receive(receive_elapsed)
   measure_wire <- .emc_profile_expensive()
   private_bytes <- if (measure_wire) {
-    sum(vapply(sent_msgs, function(msg) {
+    sum(vapply(msgs[sent], function(msg) {
       msg$shared <- NULL
       msg$shared_file <- NULL
       length(serialize(msg, NULL))
     }, integer(1)))
   } else NA_real_
   shared_path_bytes <- if (measure_wire && !is.null(shared_file)) {
-    active <- if (dynamic) rep(TRUE, length(sent_msgs))
-              else vapply(part, length, integer(1)) > 0L
-    sum(vapply(sent_msgs[active], function(msg) {
+    sum(vapply(msgs[sent], function(msg) {
       length(serialize(list(shared_file = msg$shared_file), NULL))
     }, integer(1)))
   } else if (measure_wire) 0 else NA_real_
@@ -1851,7 +1954,7 @@
     load[w] <- load[w] + cost[s]
   }
   out <- lapply(out, function(x) if (is.null(x)) integer(0) else x)
-  # The dynamic subject queue in .emc_wpool_iter() hands subjects out in this
+  # The shared subject queue in .emc_wpool_iter() hands subjects out in this
   # order (costliest first), so the tail of an iteration is the cheapest work.
   attr(out, "order") <- order(cost, decreasing = TRUE)
   out

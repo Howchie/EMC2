@@ -663,7 +663,7 @@ run_stage <- function(pmwgs,
   startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
   n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
   wpool_part <- NULL
-  wpool <- .emc_wpool_start(n_workers, wpool_ctx)
+  wpool <- .emc_wpool_start(n_workers, wpool_ctx, persistent = TRUE)
   if (!is.null(wpool)) {
     on.exit(.emc_wpool_stop(wpool), add = TRUE)
   } else if (n_workers <= 1L) {
@@ -678,7 +678,8 @@ run_stage <- function(pmwgs,
   llpool <- NULL
   if (pmwgs$n_subjects == 1L && pool_budget$likelihood > 1L &&
       isTRUE(getOption("emc2.ll_pool", TRUE))) {
-    llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx)
+    llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx,
+                               persistent = TRUE)
     if (!is.null(llpool)) {
       outer_ll <- list(pool = .emc_pool_state$ll_pool,
                        s = .emc_pool_state$ll_subject,

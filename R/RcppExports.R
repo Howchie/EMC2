@@ -9,6 +9,25 @@ rbou_cpp <- function(n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as
     .Call(`_EMC2_rbou_cpp`, n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind, aInf, tau, pw, dt, t_max, anchor_at_z, anchor_fix)
 }
 
+#' Map the claim counter at `path`, creating the file if needed
+#' @noRd
+emc_claim_open <- function(path) {
+    .Call(`_EMC2_emc_claim_open`, path)
+}
+
+#' Start round `key`: the next claim returns index 0
+#' @noRd
+emc_claim_reset <- function(map, key) {
+    invisible(.Call(`_EMC2_emc_claim_reset`, map, key))
+}
+
+#' Claim the next index of round `key` below `n`; -1 once the round is
+#' exhausted or has been replaced by another
+#' @noRd
+emc_claim_next <- function(map, key, n) {
+    .Call(`_EMC2_emc_claim_next`, map, key, n)
+}
+
 collapsed_surrogate_cpp <- function(phi, model) {
     .Call(`_EMC2_collapsed_surrogate_cpp`, phi, model)
 }

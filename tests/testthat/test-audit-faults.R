@@ -912,9 +912,10 @@ test_that("exactly one result updates the iteration", {
     flush(done$wc)
     TRUE
   }
+  # Worker 1's reply under the shared queue: it claimed subject 1.
   from_worker <- function(...) {
-    list(props = matrix(1, 3L, 1L), pm = list(NULL), seeds = list(seed),
-         times = 1)
+    list(subs = 1L, props = matrix(1, 3L, 1L), pm = list(NULL),
+         seeds = list(seed), times = 1)
   }
   # The master's own recomputation is distinguishable from a worker reply, so
   # the test can say which one landed where.

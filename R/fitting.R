@@ -178,6 +178,16 @@ run_emc <- function(emc, stage, stop_criteria,
     frozen_tries <- integer(length(emc))
     last_snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
   }
+  # Worker templates kept across blocks: one per chain when every chain runs
+  # at once, or one shared when they run one after another.
+  pool_slots <- if (cores_for_chains >= length(emc)) length(emc)
+                else if (cores_for_chains <= 1L) 1L else 0L
+  pool_session <- if (cores_per_chain > 1L && pool_slots > 0L) {
+    .emc_wpool_session_start(
+      list(data = emc[[1L]]$data,
+           model = .emc_wpool_slim_model(emc[[1L]]$model)), pool_slots)
+  } else NULL
+  on.exit(.emc_wpool_session_stop(pool_session), add = TRUE)
   block_no <- 0L
   while(!progress$done){
     block_no <- block_no + 1L
@@ -221,7 +231,17 @@ run_emc <- function(emc, stage, stop_criteria,
     stage_iter <- progress$step_size*max(1,cur_thin)
     core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain,
                               cores_for_chains = cores_for_chains)
+    pool_session <- .emc_wpool_session_check(pool_session)
+    for (j in seq_along(sub_emc)) {
+      attr(sub_emc[[j]], "emc_pool_slot") <-
+        .emc_wpool_session_slot(pool_session, min(j, pool_slots))
+    }
     sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
+                             outer_slot <- .emc_pool_state$session_slot
+                             on.exit(.emc_pool_state$session_slot <- outer_slot,
+                                     add = TRUE)
+                             .emc_pool_state$session_slot <- attr(sampler, "emc_pool_slot")
+                             attr(sampler, "emc_pool_slot") <- NULL
                              sampler <- .emc_set_sampler_rng(sampler)
                              run_stages(sampler, ...)
                            }, stage = stage, iter= stage_iter,
