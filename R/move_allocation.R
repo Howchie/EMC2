@@ -211,8 +211,8 @@
 # Candidate expected collapsed moves per iteration: eighths up to 4, then
 # halves, then the cap itself.
 .emc_alloc_joint_grid <- function(cap) {
-  x <- seq(0.125, min(cap, 4), by = 0.125)
-  if (cap > 4) x <- c(x, seq(4.5, cap, by = 0.5))
+  x <- seq(0.125, 4, by = 0.125)
+  if (cap >= 4.5) x <- c(x, seq(4.5, cap, by = 0.5))
   sort(unique(c(x[x <= cap], cap)))
 }
 

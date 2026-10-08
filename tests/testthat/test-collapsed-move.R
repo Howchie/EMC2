@@ -319,6 +319,9 @@ test_that("the allocation buys collapsed moves only where they pay", {
   expect_lt(free, 64)
   expect_identical(max(EMC2:::.emc_alloc_joint_grid(9.3)), 9.3)
   expect_identical(EMC2:::.emc_alloc_joint_grid(0.25), c(0.125, 0.25))
+  # Caps between grid steps, at either end of the eighths.
+  expect_identical(utils::tail(EMC2:::.emc_alloc_joint_grid(4.25), 2), c(4, 4.25))
+  expect_identical(EMC2:::.emc_alloc_joint_grid(0.1), 0.1)
   # The cap: exploration until measured, then twice the measured rate.
   ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = 0.99, g_fac = NA_real_,
              g_measured = FALSE, C_rest = 1, c_round = NA_real_, coll = TRUE,
