@@ -21,6 +21,54 @@ pooled_data <- function(n_trials = 80, seed = 1) {
   make_data(re, des, n_trials = n_trials)
 }
 
+# Test-only reference for the former full central-difference curvature grid.
+# Keep this out of R/pooled.R: the sampler has one production curvature path.
+pooled_full_fd_rows_reference <- function(x0, h) {
+  D <- length(x0)
+  E <- diag(h, D)
+  rows <- list(x0)
+  for (i in seq_len(D)) rows <- c(rows, list(x0 + E[i, ], x0 - E[i, ]))
+  for (i in seq_len(D - 1L)) for (j in (i + 1L):D)
+    rows <- c(rows, list(x0 + E[i, ] + E[j, ], x0 + E[i, ] - E[j, ],
+                         x0 - E[i, ] + E[j, ], x0 - E[i, ] - E[j, ]))
+  out <- do.call(rbind, rows)
+  colnames(out) <- names(x0)
+  out
+}
+
+pooled_full_curvature_reference <- function(pmwgs, st, alpha, score, h = 1e-3) {
+  d <- nrow(alpha)
+  p <- length(st$value)
+  D <- d + p
+  rows <- lapply(seq_len(ncol(alpha)), function(s)
+    pooled_full_fd_rows_reference(
+      stats::setNames(c(alpha[, s], st$value), c(pmwgs$par_names, names(st$value))), h))
+  f <- score(rows)
+  Q <- matrix(0, D, D)
+  for (s in seq_len(ncol(f))) {
+    fs <- f[, s]
+    H <- matrix(0, D, D)
+    for (i in seq_len(D))
+      H[i, i] <- (fs[2L * i] - 2 * fs[1L] + fs[2L * i + 1L]) / h^2
+    k <- 2L * D + 1L
+    for (i in seq_len(D - 1L)) for (j in (i + 1L):D) {
+      H[i, j] <- H[j, i] <-
+        (fs[k + 1L] - fs[k + 2L] - fs[k + 3L] + fs[k + 4L]) / (4 * h^2)
+      k <- k + 4L
+    }
+    Q <- Q - H
+  }
+  ia <- seq_len(d)
+  ip <- d + seq_len(p)
+  mu_prec <- EMC2:::.emc_pooled_mu_prec(pmwgs$prior, d)
+  Qaa <- Q[ia, ia, drop = FALSE] + mu_prec
+  shear <- -solve(Qaa, Q[ia, ip, drop = FALSE])
+  M <- rbind(shear, diag(p))
+  curv <- diag(1 / as.numeric(st$prior_var), p) + crossprod(M, Q %*% M) +
+    crossprod(shear, mu_prec %*% shear)
+  list(shear = shear, cov = solve((curv + t(curv)) / 2))
+}
+
 test_that("sampled_pars leaves pooled coefficients out unless asked", {
   des <- pooled_design()
   expect_equal(names(sampled_pars(des)), c("v", "v_lMTRUE", "B", "A"))
@@ -53,6 +101,33 @@ test_that("prior() gives pooled coefficients their own normal prior", {
   expect_equal(attr(pr2, "pooled"), list(mean = c(t0 = log(.3)), var = c(t0 = 4)))
   expect_equal(attr(prior(des), "pooled"), list(mean = c(t0 = 0), var = c(t0 = 1)))
   expect_error(prior(des, type = "single"), "hierarchical type")
+})
+
+test_that("reduced pooled curvature matches the full reference on diagonal alpha curvature", {
+  precision <- rbind(c(5, 0, 1.2, 0.4),
+                     c(0, 4, -0.7, 0.8),
+                     c(1.2, -0.7, 3, 0.5),
+                     c(0.4, 0.8, 0.5, 2.5))
+  alpha <- matrix(c(0.3, -0.5), ncol = 1,
+                  dimnames = list(c("a", "b"), "subject1"))
+  st <- list(value = c(phi1 = 0.2, phi2 = -0.3),
+             prior_var = c(phi1 = 2, phi2 = 1.5), n_adapt = 1L, log_eps = 0)
+  pmwgs <- list(par_names = c("a", "b"),
+                prior = list(theta_mu_invar = diag(c(0.4, 0.6))))
+  score <- function(rows) {
+    x <- rows[[1L]]
+    matrix(-0.5 * rowSums((x %*% precision) * x), ncol = 1L)
+  }
+  reference <- pooled_full_curvature_reference(pmwgs, st, alpha, score)
+  reduced <- EMC2:::.emc_pooled_curvature(pmwgs, st, alpha, score)
+  expect_equal(reduced$shear, reference$shear, tolerance = 1e-6)
+  expect_equal(reduced$cov, reference$cov, tolerance = 1e-6)
+
+  x0 <- c(a = 0.3, b = -0.5, phi1 = 0.2, phi2 = -0.3)
+  rows <- EMC2:::.emc_pooled_reduced_fd_rows(x0, rep(1e-3, 4L), 2L, 2L)
+  expect_equal(nrow(rows), 1L + 2L * length(x0) + 2L * 2L + 4L)
+  rows_one_pool <- EMC2:::.emc_pooled_reduced_fd_rows(x0[1:3], rep(1e-3, 3L), 2L, 1L)
+  expect_equal(nrow(rows_one_pool), 1L + 2L * 3L + 2L)
 })
 
 test_that("the likelihood boundary appends pooled values only when missing", {

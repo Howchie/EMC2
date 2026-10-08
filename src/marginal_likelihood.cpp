@@ -64,6 +64,32 @@ static NumericMatrix marginal_eval_nodes(
   NumericMatrix out(np, m);
   if (np == 0 || m == 0) return out;
   CharacterVector p_names = colnames(particle_matrix);
+
+  // When there is no trend runtime, evaluate one particle's node block at a
+  // time. Within that block every coordinate except t0 is identical, so
+  // calc_ll_oo's invariant-design path can map and transform those parameters
+  // once instead of once per quadrature node. The ordinary multi-particle
+  // layout cannot express this blockwise invariance with its single varying
+  // mask. Trends currently write into mapped parameter columns and disable
+  // that optimization, so keep their existing batched path below.
+  if (trend.isNull() && m > 1) {
+    NumericMatrix pm(m, n_par);
+    colnames(pm) = p_names;
+    LogicalVector varying(n_par, false);
+    varying[t0col] = true;
+    for (int i = 0; i < np; ++i) {
+      for (int k = 0; k < m; ++k) {
+        for (int j = 0; j < n_par; ++j)
+          pm(k, j) = (j == t0col) ? X(i, k) : particle_matrix(i, j);
+      }
+      NumericVector ll = calc_ll_oo(pm, data, constants, designs, type, bounds,
+                                    transforms, pretransforms, p_types, min_ll,
+                                    trend, R_NilValue, varying);
+      for (int k = 0; k < m; ++k) out(i, k) = ll[k];
+    }
+    return out;
+  }
+
   // Cap the rows per call so a wide grid on an uncompressed data set cannot
   // blow the expanded parameter matrix up.
   const int max_rows = 4096;
