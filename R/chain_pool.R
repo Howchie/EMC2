@@ -1187,7 +1187,8 @@
 # subjects x rows matrix. Replies keep subject order; missing replies are
 # recomputed on the master before the decision, so transport failure cannot
 # change it. Worker CPU accumulates in .emc_pool_state$subject_ll_cpu.
-.emc_wpool_subject_ll <- function(pool, rows, ctx, part = NULL) {
+# `source` names the move whose likelihood failures are recorded.
+.emc_wpool_subject_ll <- function(pool, rows, ctx, part = NULL, source) {
   n <- length(rows)
   if (is.null(pool) || !isTRUE(pool$alive)) {
     part <- list(seq_len(n))
@@ -1240,9 +1241,9 @@
     res <- replies[[w]]
     if (is.null(res)) res <- .emc_wpool_compute(msgs[[w]], ctx)
     for (e in res$failures) {
-      cls <- .emc_reject_record(e, "ensemble")
+      cls <- .emc_reject_record(e, source)
       if (identical(.emc_failure_action(cls), "abort"))
-        .emc_failure_abort(cls, "ensemble", e)
+        .emc_failure_abort(cls, source, e)
     }
     ll[part[[w]], ] <- do.call(rbind, res$ll)
   }

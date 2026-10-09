@@ -271,14 +271,14 @@
                                              r_cores = 1L)),
     error = function(e) {
       cls <- .emc_classify_failure(e)
-      stop(errorCondition(paste("Ensemble pool likelihood evaluation failed:",
+      stop(errorCondition(paste("Subject likelihood evaluation failed:",
         conditionMessage(e)), class = c("emc_ensemble_failure", "emc_failure"),
         emc_class = cls, emc_source = "ensemble", emc_cause = e))
     })
   if (length(ll) != nrow(props) || anyNA(ll) || any(ll == Inf)) {
     cls <- if (length(ll) != nrow(props)) "programming" else "numerical"
     stop(errorCondition(
-      "Invalid ensemble pool likelihood: expected finite values or -Inf",
+      "Invalid subject likelihood: expected finite values or -Inf",
       class = c("emc_ensemble_failure", "emc_failure"),
       emc_class = cls, emc_source = "ensemble"))
   }

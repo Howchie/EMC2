@@ -457,28 +457,32 @@ test_that("missing worker replies recompute candidates before the MH decision", 
     .emc_wpool_degraded = function(...) NULL,
     .package = "EMC2")
   set.seed(19); seed <- .Random.seed
-  out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L))
+  out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L), source = "shear")
   expect_identical(out$ll, rep(-4, 3))
   expect_false(out$pool$alive)
   expect_identical(.Random.seed, seed)
 })
 
-test_that("subject likelihood failures are recorded on the master", {
+test_that("subject likelihood failures are recorded under the calling move", {
+  EMC2:::.emc_reject_reset("collapsed")
   EMC2:::.emc_reject_reset("ensemble")
   # The warning is once per process; another test may have raised it.
   assign("announced", character(), envir = EMC2:::.emc_profile_state)
   withr::local_options(list(emc2.failure_policy = "silent"))
   local_mocked_bindings(calc_ll_manager = function(...) NaN, .package = "EMC2")
   ctx <- list(data = list(NULL, NULL), model = NULL)
-  out <- EMC2:::.emc_wpool_subject_ll(NULL, list(matrix(0, 1), matrix(1, 1)), ctx)
+  out <- EMC2:::.emc_wpool_subject_ll(NULL, list(matrix(0, 1), matrix(1, 1)), ctx,
+                                      source = "collapsed")
   expect_identical(out$ll, c(-Inf, -Inf))
-  expect_equal(EMC2:::.emc_reject_counts("ensemble")[["numerical"]], 2L)
+  expect_equal(EMC2:::.emc_reject_counts("collapsed")[["numerical"]], 2L)
+  expect_equal(sum(EMC2:::.emc_reject_counts("ensemble")), 0L)
   withr::local_options(list(emc2.failure_policy = "strict"))
   local_mocked_bindings(calc_ll_manager = function(...) stop("broken evaluator"),
                         .package = "EMC2")
   expect_warning(expect_error(EMC2:::.emc_wpool_subject_ll(NULL, list(matrix(0, 1)),
-                                          list(data = list(NULL), model = NULL)),
-               "stopped on"), "ensemble update failed")
+                                          list(data = list(NULL), model = NULL),
+                                          source = "shear"),
+               "stopped on"), "shear update failed")
 })
 
 test_that("subject likelihood partitions cannot omit or duplicate subjects", {
@@ -486,7 +490,7 @@ test_that("subject likelihood partitions cannot omit or duplicate subjects", {
   rows <- list(matrix(0, 1), matrix(0, 1))
   pool <- list(alive = TRUE, n = 2L)
   for (part in list(list(1L, integer()), list(1L, 1L), list(1:2)))
-    expect_error(EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, part),
+    expect_error(EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, part, source = "shear"),
                  "cover each subject exactly once")
 })
 
@@ -497,14 +501,14 @@ test_that("subject likelihood workers preserve results across model families", {
     fx <- audit_fixture(model, n_trials = 100L, n_particles = 3L)
     ctx <- list(data = rep(list(fx$dadm), 3), model = fx$model)
     rows <- lapply(seq_len(3), function(j) fx$prop[j, , drop = FALSE])
-    serial <- EMC2:::.emc_wpool_subject_ll(NULL, rows, ctx)$ll
+    serial <- EMC2:::.emc_wpool_subject_ll(NULL, rows, ctx, source = "shear")$ll
     expect_true(all(is.finite(serial)))
     pool <- EMC2:::.emc_wpool_start(2L, ctx)
     skip_if(is.null(pool), "could not start a pool here")
     tryCatch({
       for (k in seq_len(3)) {
         set.seed(21); seed <- .Random.seed
-        out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L))
+        out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, list(c(3L, 1L), 2L), source = "shear")
         expect_identical(out$ll, serial)
         expect_identical(.Random.seed, seed)
         expect_true(out$pool$alive)
@@ -517,7 +521,10 @@ test_that("subject likelihood workers preserve results across model families", {
 # subject with HMC an HMC rate and a particle rate of one half, whatever the
 # measurements say.
 force_allocation <- function(env = parent.frame()) {
-  local_mocked_bindings(.emc_alloc_solve = function(units, C_rest, ..., joint = NULL) {
+  local_mocked_bindings(.emc_alloc_solve_units = function(u) {
+    units <- u$units
+    joint <- u$joint
+    C_rest <- u$C_rest
     hmc <- vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
                   logical(1))
     x <- vapply(units, function(u) if (identical(u$kind, "shear")) 1 else 0, numeric(1))
@@ -616,4 +623,35 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   }
   # A log group sd always matches itself.
   expect_equal(again$log_step[p + seq_len(p)], rep(log(1.7), p))
+  # Production blocks pool their rounds; the allocation reads the pool, while
+  # step scales follow the last block. A log group sd's record carries over
+  # unscaled.
+  sd_k <- p + seq_len(p)
+  rebuild <- function(ch, stage, n, moved, E) {
+    pl <- ch$shear$plan
+    pl$block <- list(E = rep(E, 2 * p), n = rep(n, 2 * p), moved = rep(moved, 2 * p))
+    ch$shear$plan <- pl
+    EMC2:::.emc_shear_set_plan(ch, seq_len(ch$samples$idx), stage)
+  }
+  ch$shear$plan <- again
+  ch <- rebuild(ch, "sample", 12L, 0L, 1)
+  expect_equal(ch$shear$plan$last$n[sd_k], rep(12L, p))
+  expect_equal(ch$shear$plan$pool$n[sd_k], integer(p))
+  ch <- rebuild(ch, "sample", 10L, 10L, 2)
+  step <- ch$shear$plan$log_step[sd_k]
+  ch <- rebuild(ch, "sample", 30L, 15L, 3)
+  pl <- ch$shear$plan
+  expect_equal(pl$last$n[sd_k], rep(40L, p))
+  expect_equal(pl$last$E[sd_k], rep(5, p))
+  expect_equal(pl$last$moved[sd_k], rep(25L, p))
+  shift <- max(-log(2), min(log(2), 2 * (0.5 - EMC2:::.EMC_SHEAR_MOVE_TARGET)))
+  expect_equal(pl$log_step[sd_k],
+               pmin(EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[2],
+                    pmax(EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[1], step + shift)))
+  # Outside production the last block alone measures the rounds.
+  ch <- rebuild(ch, "burn", 7L, 1L, 4)
+  expect_equal(ch$shear$plan$last$n[sd_k], rep(7L, p))
+  expect_equal(ch$shear$plan$pool$n[sd_k], integer(p))
+  ch <- rebuild(ch, "burn", 2L, 1L, 1)
+  expect_equal(ch$shear$plan$last$n[sd_k], rep(2L, p))
 })

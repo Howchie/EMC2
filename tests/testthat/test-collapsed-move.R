@@ -300,8 +300,8 @@ test_that("the allocation buys collapsed moves only where they pay", {
   sol <- EMC2:::.emc_alloc_solve(units, 1, joint = cheap)
   expect_gt(sol$joint, 0)
   expect_lt(sol$tau, sol$tau0)
-  reached <- max(0.95 * EMC2:::.emc_alloc_shear_factor(0.3, sol$joint),
-                 0.9 * EMC2:::.emc_alloc_shear_factor(0.4, sol$joint))
+  reached <- max(0.95 * EMC2:::.emc_alloc_factor(0.3, sol$joint),
+                 0.9 * EMC2:::.emc_alloc_factor(0.4, sol$joint))
   expect_lte(reached, sol$rho + 1e-12)
   # The same move at a cost that outweighs its gain, or with no effect.
   expect_identical(EMC2:::.emc_alloc_solve(units, 1, joint = replace(cheap, "cost", list(50)))$joint, 0)
@@ -322,17 +322,54 @@ test_that("the allocation buys collapsed moves only where they pay", {
   # Caps between grid steps, at either end of the eighths.
   expect_identical(utils::tail(EMC2:::.emc_alloc_joint_grid(4.25), 2), c(4, 4.25))
   expect_identical(EMC2:::.emc_alloc_joint_grid(0.1), 0.1)
-  # The cap: exploration until measured, then twice the measured rate.
+  # The cap: the shared round cap until measured, then twice the measured
+  # rate where that is larger.
   ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = 0.99, g_fac = NA_real_,
              g_measured = FALSE, C_rest = 1, c_round = NA_real_, coll = TRUE,
              c_fac = 0.9, c_measured = FALSE, c_coll = 0.02, c_rate = 0,
              W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
   cap_of <- function(...) EMC2:::.emc_alloc_units(modifyList(ms, list(...)), NULL,
                                                   FALSE, FALSE)$joint$cap
-  expect_identical(cap_of(), EMC2:::.EMC_ALLOC_EXPLORE_ROUNDS)
+  expect_identical(cap_of(), EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   expect_identical(cap_of(c_measured = TRUE, c_rate = 0.25), EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   expect_identical(cap_of(c_measured = TRUE, c_rate = 3.9), 7.8)
   # Costs are wall time on the cores the chain holds.
   expect_equal(EMC2:::.emc_reserved_cost(0.2, 5), 1)
   expect_equal(EMC2:::.emc_reserved_cost(0.2, 0), 0.2)
+})
+
+test_that("production blocks pool the collapsed move's measurements", {
+  f <- collapsed_fixture("diagonal-gamma")
+  p <- f$sampler$n_pars
+  st <- EMC2:::.emc_collapsed_from_phi(f$phi, f$ctx$chart)
+  chain <- f$sampler
+  chain$samples <- list(idx = 1L, theta_mu = matrix(st$mu, p),
+                        theta_var = array(st$V, c(p, p, 1)))
+  chain$rng <- list()
+  C <- diag(0.3, f$ctx$chart$dim)
+  block <- function(n, scale) list(E = diag(scale, 2 * p), n = n, acc = n / 2, moved = n)
+  rebuild <- function(chain, stage, blk) {
+    chain$collapsed$plan$block <- blk
+    EMC2:::.emc_collapsed_set_plan(chain, C, stage)
+  }
+  chain <- EMC2:::.emc_collapsed_set_plan(chain, C, "adapt")
+  # The first production plan measures the adapt block alone and pools
+  # nothing from it.
+  chain <- rebuild(chain, "sample", block(8L, 1))
+  expect_identical(chain$collapsed$plan$last$n, 8L)
+  expect_identical(chain$collapsed$plan$pool$n, 0L)
+  # Production blocks then add up, a thin one included.
+  chain <- rebuild(chain, "sample", block(20L, 2))
+  chain <- rebuild(chain, "sample", block(3L, 3))
+  last <- chain$collapsed$plan$last
+  expect_identical(last$n, 23L)
+  expect_equal(last$E, diag(5, 2 * p))
+  expect_equal(last$acc, 11.5)
+  # Outside production only the block just run measures the move, so a thin
+  # one leaves the rebuilt kernel unmeasured.
+  chain <- rebuild(chain, "burn", block(6L, 1))
+  expect_identical(chain$collapsed$plan$last$n, 6L)
+  expect_identical(chain$collapsed$plan$pool$n, 0L)
+  chain <- rebuild(chain, "burn", block(3L, 3))
+  expect_identical(chain$collapsed$plan$last$n, 0L)
 })

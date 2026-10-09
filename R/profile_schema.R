@@ -190,6 +190,8 @@
     reject_fields("particle"),
     reject_fields("gibbs"),
     reject_fields("ensemble"),
+    reject_fields("shear"),
+    reject_fields("collapsed"),
     reject_fields("pooled")
   )
   names(fields) <- vapply(fields, `[[`, character(1), "name")

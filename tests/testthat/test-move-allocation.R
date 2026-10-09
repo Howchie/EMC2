@@ -5,7 +5,7 @@ local_rng_guard()
 alloc_unit_rho <- function(u, x) {
   switch(u$kind,
     fixed = max(u$rho),
-    shear = u$rho * EMC2:::.emc_alloc_shear_factor(u$g, x),
+    shear = u$rho * EMC2:::.emc_alloc_factor(u$g, x, if (is.null(u$a)) u$g else u$a),
     hmc = max(u$rho * (1 - x + x * u$h)))
 }
 
@@ -13,8 +13,11 @@ test_that("the allocation is as good as a dense grid over rounds and rates", {
   local_test_rng(7)
   tau <- function(r) (1 + r) / (1 - r)
   for (trial in 1:30) {
+    g <- stats::runif(1, 0.05, 0.95)
+    # Half the trials saturate: a below g.
+    a <- if (trial %% 2 == 0) stats::runif(1, 0, g) else g
     units <- list(
-      list(kind = "shear", rho = stats::runif(1, 0, 0.99), g = stats::runif(1, 0.05, 0.95),
+      list(kind = "shear", rho = stats::runif(1, 0, 0.99), g = g, a = a,
            cost = stats::runif(1, 0.02, 0.3)),
       list(kind = "hmc", rho = stats::runif(2, 0, 0.995), h = stats::runif(2, 0, 0.9),
            cost = stats::runif(1, 0.02, 0.5)),
@@ -70,10 +73,66 @@ test_that("nothing is spent below a floor the moves cannot reach", {
 })
 
 test_that("expected rounds compose the measured round factor", {
-  factor <- EMC2:::.emc_alloc_shear_factor
+  factor <- EMC2:::.emc_alloc_factor
   expect_equal(factor(c(0.1, 0.5, 0.9), 1), c(0.1, 0.5, 0.9))
   expect_equal(factor(0.9, 0), 1)
   expect_equal(factor(0.2, 2.5), 0.2^2 * (0.5 + 0.5 * 0.2))
+  # Saturating moves: one move is g, many approach 1 - c, c = (1 - g) / (1 - a).
+  expect_equal(factor(0.8, 1, 0.5), 0.8)
+  expect_equal(factor(0.8, 2, 0.5), 1 - 0.4 * (1 - 0.25))
+  expect_equal(factor(0.8, 200, 0.5), 0.6)
+  expect_equal(factor(0.8, 3, 0), 0.8)
+  # The inverse gives the least expected moves reaching a target, and Inf
+  # past the floor.
+  inv <- EMC2:::.emc_alloc_factor_inverse
+  local_test_rng(4)
+  for (trial in 1:200) {
+    g <- stats::runif(1, 0.05, 0.98)
+    a <- if (trial %% 2 == 0) stats::runif(1, 0, g) else g
+    t <- stats::runif(1, 0.01, 0.99)
+    x <- inv(g, a, t)
+    floor_t <- if (a >= g) 0 else 1 - (1 - g) / (1 - a)
+    if (t <= floor_t) {
+      expect_identical(x, Inf)
+    } else {
+      expect_equal(factor(g, x, a), t, tolerance = 1e-9)
+      if (x > 1e-6) expect_gt(factor(g, x - 1e-6, a), t)
+    }
+  }
+})
+
+test_that("the moves' correlation within their conditional is recovered from net jumps", {
+  local_test_rng(9)
+  # Moves as an autoregression with correlation a on a share c of a unit
+  # variance; iterations run two or three of them.
+  sim <- function(a, c, ks, n = 20000) {
+    m1 <- 0; nm <- 0; net <- 0; K <- matrix(0L, 1, max(ks))
+    for (i in seq_len(n)) {
+      k <- ks[(i %% length(ks)) + 1L]
+      x0 <- x <- stats::rnorm(1, 0, sqrt(c))
+      for (j in seq_len(k)) {
+        y <- a * x + sqrt(c * (1 - a^2)) * stats::rnorm(1)
+        m1 <- m1 + (y - x)^2; nm <- nm + 1; x <- y
+      }
+      net <- net + (x - x0)^2
+      K[1, k] <- K[1, k] + 1L
+    }
+    g <- 1 - (m1 / nm) / 2
+    list(g = g, a = EMC2:::.emc_alloc_saturation(g, (net / n) / 2, K))
+  }
+  for (case in list(c(a = 0.3, c = 0.4), c(a = 0.7, c = 0.5), c(a = 0, c = 0.2))) {
+    est <- sim(case[["a"]], case[["c"]], 2:3)
+    expect_equal(est$g, 1 - case[["c"]] * (1 - case[["a"]]), tolerance = 0.02)
+    expect_lt(abs(est$a - case[["a"]]), 0.06)
+  }
+  # The whole variance (c = 1): geometric.
+  est <- sim(0.6, 1, 2:3)
+  expect_lt(abs(est$a - est$g), 0.06)
+  # One move per iteration does not identify a: geometric.
+  expect_identical(EMC2:::.emc_alloc_saturation(0.7, 0.2, matrix(c(50L, 0L), 1)), 0.7)
+  # Per-coordinate rows, and a coordinate without iterations.
+  K <- rbind(c(0L, 10L), c(0L, 0L))
+  expect_identical(EMC2:::.emc_alloc_saturation(c(0.8, 0.8), c(0.2, 0.2), K)[2], 0.8)
 })
 
 test_that("the rest of the iteration is recorded against the previous final state", {
@@ -184,12 +243,14 @@ test_that("the particle step stands down only for a cheaper, better HMC rate", {
   expect_identical(sol$q[2], 1)
 })
 
-test_that("particle steps are recorded with their share of the cost", {
+test_that("particle steps are recorded at their marginal (worker CPU) cost", {
   p <- 2; n <- 3
   s <- list(n_pars = p, n_subjects = n)
   before <- matrix(0, p, n)
   after <- matrix(c(1, 1, 0, 0, 2, 0), p)
-  s <- EMC2:::.emc_alloc_record_particle(s, before, after, c(TRUE, FALSE, TRUE), 3,
+  # The round's wall cost (6) beyond the workers' CPU stays in the rest of
+  # the iteration.
+  s <- EMC2:::.emc_alloc_record_particle(s, before, after, c(TRUE, FALSE, TRUE), 6,
                                          c(1, 5, 2))
   w <- s$alloc$window
   expect_identical(w$nP, c(1L, 0L, 1L))
@@ -199,4 +260,113 @@ test_that("particle steps are recorded with their share of the cost", {
   # Without worker times the cost is shared equally.
   s <- EMC2:::.emc_alloc_record_particle(s, before, after, c(TRUE, TRUE, FALSE), 2, NULL)
   expect_equal(s$alloc$window$cpu_part, c(2, 1, 2))
+})
+
+test_that("HMC transitions cost their worker CPU and the round a fixed cost", {
+  s <- list(n_pars = 2, n_subjects = 3)
+  tasks <- list(list(cpu = 1.5, work = 1), NULL, list(cpu = 2.5, work = 2))
+  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, 0, 0L, tasks, hmc_round = 7)
+  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, 0, 0L, list(NULL, NULL, NULL), hmc_round = 0)
+  w <- s$alloc$window
+  expect_equal(w$cpu_hmc, c(1, 0, 2))
+  expect_identical(w$hmc_att, c(1L, 0L, 1L))
+  expect_identical(w$hmc_rounds, 1L)
+  expect_equal(c(w$hmc_round_cost, w$hmc_round_work), c(7, 3))
+})
+
+test_that("a plan pays the HMC round's fixed cost only if it uses HMC", {
+  fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
+  subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
+               h = c(0.5, 0.5), c_h = 0.2)
+  u <- list(units = list(fixed, subj, subj), C_rest = 1, joint = NULL)
+  # Cheap and better per transition: HMC replaces the particle steps.
+  sol <- EMC2:::.emc_alloc_solve_units(c(u, hmc_fixed = 0.1))
+  expect_true(all(sol$x[2:3] > 0))
+  expect_true(all(sol$q[2:3] < 1))
+  # A round costing more than the particle steps it would save is not run.
+  sol <- EMC2:::.emc_alloc_solve_units(c(u, hmc_fixed = 50))
+  expect_equal(sol$x[2:3], c(0, 0))
+  expect_equal(sol$q[2:3], c(1, 1))
+  # Either way the reference is the iteration without moves or HMC.
+  expect_equal(sol$objective0, EMC2:::.emc_alloc_tau(0.95 * 0.6) * 3)
+})
+
+test_that("production measurements use every production draw and pool the stage's jumps", {
+  local_test_rng(5)
+  p <- 1; n <- 1; burn <- 100; m <- 400; w_n <- 99L
+  chain <- function(centre) {
+    a <- c(stats::rnorm(burn, centre + 5), centre + stats::rnorm(m))
+    k <- burn + m
+    list(n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = "x",
+         lik_laplace = list(NULL),
+         samples = list(idx = k, stage = rep(c("burn", "sample"), c(burn, m)),
+                        theta_mu = matrix(a, 1), theta_var = array(1, c(1, 1, k)),
+                        alpha = array(a, c(1, 1, k))),
+         alloc = list(stage = "sample", pool = list(G = diag(c(30, 0)), nG = 50L),
+                      window = list(n = w_n, nG = w_n, nA = w_n,
+                                    G = diag(c(20, 0)), A = list(matrix(20)),
+                                    cpu_rest = 1, cpu_shear = 0, rounds = 0L,
+                                    cpu_hmc = 0, hmc_att = 0L)))
+  }
+  emc <- list(chain(0), chain(0.5))
+  prod <- EMC2:::.emc_alloc_measure(emc, 1, NULL, diag(1), "sample")
+  x <- c(emc[[1]]$samples$theta_mu[burn + seq_len(m)],
+         emc[[2]]$samples$theta_mu[burn + seq_len(m)])
+  expect_equal(prod$g_var[1], stats::var(x))
+  expect_identical(prod$pairs[["group"]], w_n + 50L)
+  expect_equal(prod$pool$G, diag(c(50, 0)))
+  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho_lo(50 / (w_n + 50), stats::var(x), w_n + 50))
+  # The first production rebuild measures the window alone and starts the pool.
+  first <- emc
+  first[[1]]$alloc$stage <- "adapt"
+  m1 <- EMC2:::.emc_alloc_measure(first, 1, NULL, diag(1), "sample")
+  expect_identical(m1$pairs[["group"]], w_n)
+  expect_null(m1$pool)
+  # Outside production: the window's draws, the window's jumps.
+  b <- EMC2:::.emc_alloc_measure(emc, 1, NULL, diag(1), "burn")
+  k <- EMC2:::.emc_alloc_draws(emc[[1]], w_n)
+  expect_equal(b$g_var[1], stats::var(c(emc[[1]]$samples$theta_mu[k],
+                                        emc[[2]]$samples$theta_mu[k])))
+  expect_identical(b$pairs[["group"]], w_n)
+})
+
+test_that("an unmeasured shear coordinate counts at its kind's measured factor", {
+  p <- 2; n <- 1; k <- 50
+  a <- matrix(stats::rnorm(p * k), p)
+  ch <- list(n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = c("x", "y"),
+             lik_laplace = list(NULL),
+             samples = list(idx = k, theta_mu = a, theta_var = array(diag(2), c(p, p, k)),
+                            alpha = array(a, c(p, 1, k))),
+             shear = list(plan = list(dirs = diag(p),
+                                      last = list(E = c(10, 0, 0, 0), n = c(10L, 0L, 0L, 0L),
+                                                  moved = integer(4)))),
+             alloc = list(window = NULL))
+  withr::local_options(list(emc2.shear_move = TRUE))
+  local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  g1 <- 1 - 1 / (2 * ms$g_var[1])
+  expect_equal(ms$g_fac[1], g1)
+  # The other mean direction borrows the measured one; the log sds, with no
+  # measured round of their own, borrow it too.
+  expect_equal(ms$g_fac[2:4], rep(g1, 3))
+  expect_identical(ms$g_measured, c(TRUE, FALSE, FALSE, FALSE))
+  # Without any measured round, the prior factor.
+  ch$shear$plan$last$n[] <- 0L
+  ms0 <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  expect_equal(ms0$g_fac, rep(EMC2:::.EMC_ALLOC_SHEAR_PRIOR_G, 4))
+})
+
+test_that("an unmeasured shear coordinate counts at the prior factor, uncapped", {
+  ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.976, 0.6), g_fac = c(0.5, 0.9),
+             g_measured = c(FALSE, TRUE), C_rest = 1, c_round = 0.05, coll = TRUE,
+             c_fac = c(0.965, 0.5), c_measured = TRUE, c_coll = 0.1, c_rate = 1,
+             W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
+  u <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE)
+  expect_null(u$units[[1]]$cap)
+  expect_identical(u$units[[1]]$g, 0.5)
+  # The slowest coordinate's shear is unmeasured: the plan leans on its
+  # prior factor rather than conceding to a floor at the guess.
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  expect_gt(sol$x[1], 0.25)
+  expect_lt(sol$tau, EMC2:::.emc_alloc_tau(0.976 * EMC2:::.emc_alloc_factor(0.5, 0.25)))
 })

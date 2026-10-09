@@ -170,7 +170,12 @@
   base <- c(rep(0, p), rep(-0.5 * log(2 * n), p))
   plan$log_step <- base + log(.EMC_SHEAR_STEP0)
   plan$rounds <- numeric(2L * p)
-  plan$last <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
+  plan$stage <- stage
+  zero <- .emc_shear_record(NULL, p)
+  recent <- plan$pool <- zero
+  # Production blocks run settled kernels on a stationary chain, so their
+  # rounds pool over the sample stage (from its first block on).
+  pooled <- identical(stage, "sample") && identical(old$stage, "sample")
   if (is.list(old) && is.matrix(old$dirs) && all(dim(old$dirs) == p)) {
     scale <- c(rep(NA_real_, p), rep(1, p))
     match <- c(rep(NA_integer_, p), p + seq_len(p))
@@ -187,25 +192,53 @@
     got <- which(!is.na(match))
     blk <- old$block
     plan$log_step[got] <- old$log_step[match[got]] + log(scale[got])
-    if (!is.null(blk)) {
-      plan$last$E[got] <- blk$E[match[got]] * scale[got]^2
-      plan$last$n[got] <- blk$n[match[got]]
-      plan$last$moved[got] <- blk$moved[match[got]]
+    carry <- function(rec) {
+      out <- zero
+      if (is.null(rec)) return(out)
+      rec <- .emc_shear_record(rec, p)
+      out$E[got] <- rec$E[match[got]] * scale[got]^2
+      out$n[got] <- rec$n[match[got]]
+      out$moved[got] <- rec$moved[match[got]]
+      out$N[got] <- rec$N[match[got]] * scale[got]^2
+      out$K <- matrix(0L, 2L * p, ncol(rec$K))
+      out$K[got, ] <- rec$K[match[got], ]
+      out
+    }
+    recent <- carry(blk)
+    if (pooled) {
+      prev <- carry(old$pool)
+      plan$pool <- list(E = prev$E + recent$E, n = prev$n + recent$n,
+                        moved = prev$moved + recent$moved, N = prev$N + recent$N,
+                        K = .emc_alloc_khist_sum(prev$K, recent$K))
     }
   }
+  # The allocation measures a coordinate's rounds from the pooled production
+  # blocks, or else the last block alone. Step scales follow the last block.
+  plan$last <- if (pooled) plan$pool else recent
   # Discarded stages adapt the scales round by round; production only here.
-  if (identical(stage, "sample")) plan <- .emc_shear_tune_steps(plan)
-  plan$block <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
+  if (identical(stage, "sample")) plan <- .emc_shear_tune_steps(plan, recent)
+  plan$block <- zero
   st$plan <- plan
   chain$shear <- st
   chain
 }
 
+# A block's round record: per coordinate the selection-weighted squared
+# moves E over n rounds (moved of them moving), and the net squared move N of
+# its rounds per iteration with K the iterations' round counts. Fills in the
+# net-move fields a record made without them lacks.
+.emc_shear_record <- function(rec, p) {
+  if (is.null(rec))
+    rec <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
+  if (is.null(rec$N)) rec$N <- numeric(2L * p)
+  if (is.null(rec$K)) rec$K <- matrix(0L, 2L * p, 1L)
+  rec
+}
+
 # A production rebuild moves each step scale towards the target share of
-# moving rounds, from the last block's rounds (rounds within a block never
-# change it).
-.emc_shear_tune_steps <- function(plan) {
-  lst <- plan$last
+# moving rounds, from the last block's rounds `lst` (rounds within a block
+# never change it).
+.emc_shear_tune_steps <- function(plan, lst) {
   ok <- lst$n >= 10L
   if (any(ok)) {
     rate <- lst$moved[ok] / lst$n[ok]
@@ -408,7 +441,8 @@
     rows <- lapply(seq_len(n), function(s)
       matrix(vapply(cand, function(a) a[, s], numeric(p)), length(ok), byrow = TRUE,
              dimnames = list(NULL, pn)))
-    evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part)
+    evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
+                                      source = "shear")
     x$wpool <- evaluated$pool
     x$rounds <- x$rounds + 1L
     ll_new <- matrix(evaluated$ll, n, length(ok))
@@ -421,6 +455,7 @@
   j <- sample.int(length(w), 1L, prob = w) - 1L
   x$E <- sum(w[-1L] * t^2)
   x$moved <- j > 0L
+  x$t <- if (x$moved) t[j] else 0
   if (x$moved) {
     if (mean_step) {
       x$cur <- .emc_shear_shift_state(x$cur, t[j] * d, sampler$prior)
@@ -475,10 +510,12 @@
             wpool = wpool, wpool_part = wpool_part)
   adapt <- stage != "sample"
   any_moved <- FALSE
-  blk <- plan$block
+  blk <- .emc_shear_record(plan$block, p)
+  net <- numeric(2L * p)
   for (k in take[sample.int(length(take))]) {
     x <- .emc_shear_round(x, .emc_shear_coord_dir(plan, k), exp(plan$log_step[k]),
                           sampler, ctx)
+    net[k] <- net[k] + x$t
     blk$E[k] <- blk$E[k] + x$E
     blk$n[k] <- blk$n[k] + 1L
     blk$moved[k] <- blk$moved[k] + as.integer(x$moved)
@@ -488,6 +525,12 @@
     }
     any_moved <- any_moved || x$moved
   }
+  # Each coordinate's net move over its rounds in this iteration, by how many
+  # it had (the rounds' saturation, R/move_allocation.R).
+  ran <- which(n_rounds > 0L)
+  blk$N[ran] <- blk$N[ran] + net[ran]^2
+  for (kk in unique(n_rounds[ran]))
+    blk$K <- .emc_alloc_khist_add(blk$K, ran[n_rounds[ran] == kk], kk)
   plan$block <- blk
   st$plan <- plan
   st$rounds <- st$rounds + x$rounds

@@ -833,6 +833,8 @@ run_stage <- function(pmwgs,
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
   gibbs_rejects <- .emc_reject_counts("gibbs")
   ensemble_rejects <- .emc_reject_counts("ensemble")
+  shear_rejects <- .emc_reject_counts("shear")
+  collapsed_rejects <- .emc_reject_counts("collapsed")
   pooled_rejects <- .emc_reject_counts("pooled")
   stage_rejects <- list(
     particle = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
@@ -841,6 +843,10 @@ run_stage <- function(pmwgs,
                             .EMC_REJECT_CLASSES),
     ensemble = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                                  .EMC_REJECT_CLASSES),
+    shear = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                            .EMC_REJECT_CLASSES),
+    collapsed = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                                .EMC_REJECT_CLASSES),
     pooled = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                              .EMC_REJECT_CLASSES))
   mem_every <- max(1L, as.integer(
@@ -1091,6 +1097,12 @@ run_stage <- function(pmwgs,
     ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
     ensemble_rejects <- .emc_reject_counts("ensemble")
     stage_rejects$ensemble <- stage_rejects$ensemble + ensemble_delta
+    shear_delta <- .emc_reject_delta(shear_rejects, "shear")
+    shear_rejects <- .emc_reject_counts("shear")
+    stage_rejects$shear <- stage_rejects$shear + shear_delta
+    collapsed_delta <- .emc_reject_delta(collapsed_rejects, "collapsed")
+    collapsed_rejects <- .emc_reject_counts("collapsed")
+    stage_rejects$collapsed <- stage_rejects$collapsed + collapsed_delta
     pmwgs <- ens$sampler
     pars <- ens$pars
     proposals <- ens$proposals
@@ -1135,8 +1147,10 @@ run_stage <- function(pmwgs,
       hmc_el <- proc.time()[["elapsed"]] - hmc_el0
       attempted <- !vapply(hmc_tasks, is.null, logical(1))
       if (any(attempted)) {
-        for (s in which(attempted))
+        for (s in which(attempted)) {
+          hmc_tasks[[s]]$work <- hmc_tasks[[s]]$cpu
           hmc_tasks[[s]]$cpu <- hmc_tasks[[s]]$cpu + hmc_master / sum(attempted)
+        }
         # The round's wall time on the chain's cores, shared by CPU.
         if (alloc_on) {
           cpu_s <- vapply(hmc_tasks[attempted], function(x) x$cpu, numeric(1))
@@ -1162,7 +1176,8 @@ run_stage <- function(pmwgs,
       rest_cpu <- .emc_reserved_cost(proc.time()[["elapsed"]] - el_iter - shear_el - coll_el -
                                        hmc_el, cores_it)
       pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, shear_cpu, shear_rounds, hmc_tasks,
-                                      coll_cpu, coll_moves)
+                                      coll_cpu, coll_moves,
+                                      hmc_round = .emc_reserved_cost(hmc_el, cores_it))
     }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
@@ -1238,6 +1253,8 @@ run_stage <- function(pmwgs,
         .emc_reject_row_fields(pp$rejects, "particle"),
         .emc_reject_row_fields(gibbs_delta, "gibbs"),
         .emc_reject_row_fields(ensemble_delta, "ensemble"),
+        .emc_reject_row_fields(shear_delta, "shear"),
+        .emc_reject_row_fields(collapsed_delta, "collapsed"),
         .emc_reject_row_fields(pooled_delta, "pooled")))
     }
   }

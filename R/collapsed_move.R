@@ -291,15 +291,36 @@
   eps0 <- if (is.list(old) && is.finite(old$eps)) old$eps else 0.5 * ctx$chart$dim^(-0.25)
   eps <- .emc_collapsed_tune_eps(phi, C, eps0, ctx)
   chain$rng$gibbs <- get(".Random.seed", envir = globalenv())
-  zero <- list(E = matrix(0, 2L * p, 2L * p), n = 0L, acc = 0, moved = 0L)
-  # The fits, mass and step size change at every rebuild, so only the block
-  # just run measures the move; without enough moves in it the new plan is
-  # unmeasured and the allocation explores it.
-  last <- if (is.list(old$block) && old$block$n >= 5L) old$block else zero
-  st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim,
-                  last = last, block = zero)
+  zero <- .emc_collapsed_record(NULL, p)
+  # Outside production the fits, mass and step size change at every rebuild,
+  # so only the block just run measures the move. Production blocks run
+  # settled kernels on a stationary chain, so their moves pool over the sample
+  # stage. Without enough moves the new plan is unmeasured.
+  blk <- .emc_collapsed_record(if (is.list(old$block)) old$block, p)
+  pooled <- identical(stage, "sample") && identical(old$stage, "sample")
+  pool <- if (pooled) {
+    prev <- .emc_collapsed_record(if (is.list(old$pool)) old$pool, p)
+    list(E = prev$E + blk$E, n = prev$n + blk$n, acc = prev$acc + blk$acc,
+         moved = prev$moved + blk$moved, N = prev$N + blk$N,
+         K = .emc_alloc_khist_sum(prev$K, blk$K))
+  } else zero
+  last <- if (pooled) pool else blk
+  if (last$n < 5L) last <- zero
+  st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim, stage = stage,
+                  last = last, pool = pool, block = zero)
   chain$collapsed <- st
   chain
+}
+
+# A block's move record: the acceptance-weighted squared jumps E of its n
+# moves (acceptance sum acc, moved of them moving), and the crossproduct N of
+# each iteration's net jump over its moves with K the iterations' move counts
+# (one row). Fills in the net-jump fields a record made without them lacks.
+.emc_collapsed_record <- function(rec, p) {
+  if (is.null(rec)) rec <- list(E = matrix(0, 2L * p, 2L * p), n = 0L, acc = 0, moved = 0L)
+  if (is.null(rec$N)) rec$N <- matrix(0, 2L * p, 2L * p)
+  if (is.null(rec$K)) rec$K <- matrix(0L, 1L, 1L)
+  rec
 }
 
 # Dual averaging (Hoffman & Gelman 2014) of the step size towards the target
@@ -349,7 +370,8 @@
   pn <- sampler$par_names
   rows <- lapply(seq_len(n), function(s)
     matrix(alpha_new[, s], 1L, dimnames = list(NULL, pn)))
-  evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part)
+  evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
+                                    source = "collapsed")
   x$wpool <- evaluated$pool
   x$rounds <- x$rounds + 1L
   ll_new <- as.numeric(evaluated$ll)
@@ -393,7 +415,7 @@
             wpool_part = wpool_part)
   any_moved <- FALSE
   if (!is.null(cur) && is.finite(cur$lp)) {
-    blk <- plan$block
+    blk <- .emc_collapsed_record(plan$block, p)
     for (k in seq_len(n_rounds)) {
       x$moved <- FALSE
       x <- .emc_collapsed_round(x, plan, sampler, ctx)
@@ -402,6 +424,13 @@
       blk$acc <- blk$acc + x$acc
       blk$moved <- blk$moved + as.integer(x$moved)
       any_moved <- any_moved || x$moved
+    }
+    # The net jump over this iteration's moves (their saturation,
+    # R/move_allocation.R).
+    d <- c(x$cur$mu - cur$mu, .emc_alloc_lsd(x$cur$V) - .emc_alloc_lsd(cur$V))
+    if (n_rounds > 0L && all(is.finite(d))) {
+      blk$N <- blk$N + tcrossprod(d)
+      blk$K <- .emc_alloc_khist_add(blk$K, 1L, n_rounds)
     }
     plan$block <- blk
     st$plan <- plan
