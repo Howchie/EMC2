@@ -210,6 +210,47 @@ marginal_ll_from_grid <- function(log_terms) {
   list(x = x, ll = ll[j])
 }
 
+# The particle step targets an approximate joint density
+#   pi~(x_o, x_k) = Q(x_o) N(x_o | group) g(x_k | x_o),
+# where Q is the quadrature's marginal likelihood and g the reconstruction
+# density: the grid's Laplace fit, or the conditional group prior where the
+# grid has none. Each conditional-IS step moves x_o reversibly for pi~ and
+# draws x_k from g, and a second accept/reject on
+#   r = pi / pi~ = L(x_o, x_k) N(x_k | x_o, group) / (Q(x_o) g(x_k | x_o))
+# makes the step reversible for the exact posterior (delayed acceptance).
+.marginal_g <- function(m, cond_sd, mode, sd) {
+  if (length(mode) == 1L && length(sd) == 1L && is.finite(mode) &&
+      is.finite(sd) && sd > 0) list(mean = mode, sd = sd)
+  else list(mean = m, sd = cond_sd)
+}
+
+.marginal_log_ratio <- function(ll, t, m, cond_sd, q, g) {
+  ll + stats::dnorm(t, m, cond_sd, log = TRUE) - q -
+    stats::dnorm(t, g$mean, g$sd, log = TRUE)
+}
+
+# One delayed-acceptance decision for the particle selected in a step.
+# `proposals` holds the step's full vectors with the reference in row 1,
+# `j` the selected row, `grid` and `q` the step's quadrature and marginal
+# log-likelihoods, and (t_cur, ll_cur) the current marginalised value and
+# complete log-likelihood. Returns whether to move, with the new value and
+# complete log-likelihood.
+.marginal_delayed_accept <- function(proposals, j, grid, q, cond, t_cur,
+                                     ll_cur, data, model) {
+  k <- cond$k
+  m <- .marginal_cond_mean(cond, proposals[c(1L, j), , drop = FALSE])
+  g_cur <- .marginal_g(m[1L], cond$sd, grid$mode[1L], grid$sd[1L])
+  g_new <- .marginal_g(m[2L], cond$sd, grid$mode[j], grid$sd[j])
+  t_new <- stats::rnorm(1L, g_new$mean, g_new$sd)
+  row <- proposals[j, , drop = FALSE]
+  row[, k] <- t_new
+  ll_new <- as.numeric(calc_ll_manager(row, dadm = data, model))
+  log_a <- .marginal_log_ratio(ll_new, t_new, m[2L], cond$sd, q[j], g_new) -
+    .marginal_log_ratio(ll_cur, t_cur, m[1L], cond$sd, q[1L], g_cur)
+  list(accept = !is.na(log_a) && log(stats::runif(1L)) < log_a,
+       t = t_new, ll = ll_new)
+}
+
 pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
                   nuisance = NULL, nuisance_non_hyper = NULL, marginalise = NULL, ...) {
   if(is.data.frame(dadm)) dadm <- list(dadm)
@@ -1557,7 +1598,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   group_mu <- group_pars$mu
   group_var <- group_pars$var
   subj_mu <- if (direct_state) current_alpha else parameters$alpha[,s]
-  marg_row <- NULL
   marg_cond <- NULL
   marg_pred <- NULL
   marginal_idx <- rep(FALSE, length(subj_mu))
@@ -1569,9 +1609,12 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     marginal_idx <- .marginal_par_idx(names(subj_mu), marginalise)
     # The particles see the other parameters' marginal group prior and the
     # likelihood with the marginalised parameter integrated against its
-    # conditional group prior; it is redrawn from its conditional posterior
-    # once the rest of the vector is final.
+    # conditional group prior; each step's selection is then accepted or
+    # rejected jointly with a fresh value of the marginalised parameter
+    # (.marginal_delayed_accept).
     marg_cond <- .marginal_conditional(group_mu, group_var, marginal_idx)
+    t_cur <- subj_mu[[which(marginal_idx)]]
+    ll_cur <- prev_ll
     # The subject's posterior regression of the marginalised parameter on the
     # others predicts where each particle's integrand peaks.
     marg_pred <- if (!is.null(chains_mu) && !is.null(chains_var))
@@ -1798,6 +1841,17 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       l <- lw_total + prior_density + aux_density - lm
       weights <- exp(l - max(l))
       idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
+      if (!is.null(marginalise)) {
+        # A rejected step keeps the current state, as if the reference
+        # particle had been selected.
+        proposals[, marginal_idx] <- t_cur
+        da <- .marginal_delayed_accept(proposals, idx_ll, marg_grid, lw,
+                                       marg_cond, t_cur, ll_cur, data, model)
+        if (da$accept) {
+          t_cur <- da$t
+          ll_cur <- da$ll
+        } else idx_ll <- 1L
+      }
       # Diagnostics only: which component supplied the selected particle and
       # how far it moved the state.
       comp_of <- c(0L, rep(ks, particle_numbers[ks]))
@@ -1836,7 +1890,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       # nothing about how well the fitted proposals cover the posterior.
       if (1L %in% ks) weight_ess <- sum(weights)^2 / sum(weights^2)
       ref <- proposals[idx_ll, idx]
-      ref_ll <- lw[idx_ll]
+      ref_ll <- if (is.null(marginalise)) lw[idx_ll] else ll_cur
     }
 
     ll_shared[as.character(shared_idx)] <- ref_ll
@@ -1844,11 +1898,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # Gibbs over blocks: later blocks condition on this block's new values.
     subj_mu[idx] <- ref
     if (!is.null(marginalise)) {
-      # The last step selected the state, so its grid holds the chosen row;
-      # the next rules are placed by the peaks of every step's particles.
-      marg_row <- list(nodes = as.numeric(marg_grid$nodes[idx_ll, ]),
-                       log_terms = as.numeric(marg_grid$log_terms[idx_ll, ]),
-                       mode = marg_grid$mode[idx_ll], sd = marg_grid$sd[idx_ll])
+      subj_mu[marginal_idx] <- t_cur
+      # The next rules are placed by the peaks of every step's particles.
       marg_next <- .marginal_state(
         list(mode = unlist(lapply(marg_seen, `[[`, "mode")),
              sd = unlist(lapply(marg_seen, `[[`, "sd"))),
@@ -1873,11 +1924,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   if (!is.null(marg_cond)) {
     # The stored log-likelihood is the complete vector's, like every other
     # stored alpha.
-    out <- .marginal_draw(proposal_out, marg_cond, marg_row$nodes,
-                          marg_row$log_terms, marg_row$mode, marg_row$sd,
-                          data, model)
-    proposal_out <- out$x
-    ll_out <- out$ll
+    proposal_out[marginal_idx] <- t_cur
+    ll_out <- ll_cur
   }
   return(list(proposal = proposal_out, ll = ll_out, pm_settings = pm_settings))
 }

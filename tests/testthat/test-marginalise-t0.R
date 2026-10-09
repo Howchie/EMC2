@@ -1,7 +1,8 @@
 local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Regression tests for design(marginalise = "t0"): the shared subject-level t0
-# is integrated out of the particle step against its conditional group prior
-# and redrawn into the stored alpha from its conditional posterior. These guard the two defects found in review:
+# is integrated out of the particle step against its conditional group prior,
+# and each step's selection is accepted jointly with a fresh t0 against the
+# exact posterior (delayed acceptance). These guard the two defects found in review:
 #   (1) a broken marginalised index that froze the whole chain, and
 #   (2) accidental integration leaking into downstream (predict/make_data/IC).
 
@@ -174,7 +175,7 @@ test_that("the marginalise chain mixes (no freeze) and estimates t0's group leve
   expect_true(all(is.finite(samples$subj_ll[, it])))
 })
 
-test_that("the t0 draw follows its conditional posterior", {
+test_that("the start point's t0 draw follows its conditional posterior", {
   # Given the other parameters, t0 has density proportional to
   # L(y | x, t0) N(t0 | conditional group prior). Compare the draws with that
   # density on a fine grid.
@@ -211,6 +212,77 @@ test_that("the t0 draw follows its conditional posterior", {
   expect_equal(sd(draws), sdv, tolerance = 0.1)
   # Continuous, not confined to the quadrature nodes.
   expect_gt(length(unique(draws)), 100)
+})
+
+test_that("delayed acceptance makes the particle step exact for any quadrature", {
+  # Rows of X stand for particles. Two-particle conditional IS on them (the
+  # reference plus a uniform draw) is reversible for the approximate target,
+  # here deliberately wrong in both the marginal likelihood and the
+  # reconstruction density; delayed acceptance must still recover the exact
+  # joint of (row, t0).
+  mm <- make_marginal_emc()
+  s1 <- mm$emc[[1]]
+  d1 <- s1$data[[1]]
+  pn <- s1$par_names
+  V <- diag(psd[pn]^2)
+  dimnames(V) <- list(pn, pn)
+  V["t0", "v"] <- V["v", "t0"] <- 0.3 * psd[["t0"]] * psd[["v"]]
+  cond <- EMC2:::.marginal_conditional(pmean[pn], V,
+                                       EMC2:::.marginal_par_idx(pn, s1$marginalise))
+  X <- matrix(pmean[pn], 3, length(pn), byrow = TRUE, dimnames = list(NULL, pn))
+  X[, "v"] <- X[, "v"] + c(-0.1, 0, 0.15)
+  spec <- EMC2:::.marginal_batch_spec(s1$marginalise, cond, X)
+  grid <- EMC2:::compute_marginal_grid(X, d1, s1$model, spec)
+  m <- EMC2:::.marginal_cond_mean(cond, X)
+  # Exact joint on a fine t0 grid per row.
+  exact <- lapply(1:3, function(r) {
+    g <- seq(grid$mode[r] - 10 * grid$sd[r], grid$mode[r] + 10 * grid$sd[r],
+             length.out = 2001)
+    P <- X[rep(r, length(g)), , drop = FALSE]
+    P[, "t0"] <- g
+    lp <- EMC2:::calc_ll_manager(P, d1, s1$model) +
+      dnorm(g, m[r], cond$sd, log = TRUE)
+    mx <- max(lp)
+    w <- exp(lp - mx)
+    list(log_mass = mx + log(sum(w) * diff(g[1:2])),
+         mean = sum(w * g) / sum(w),
+         sd = sqrt(sum(w * g^2) / sum(w) - (sum(w * g) / sum(w))^2))
+  })
+  # A prior over rows that makes the exact row probabilities equal.
+  log_prior <- -vapply(exact, `[[`, 0, "log_mass")
+  q_bad <- EMC2:::marginal_ll_from_grid(grid) + c(0.7, 0, -0.5)
+  g_bad <- list(mode = grid$mode + 0.5 * grid$sd, sd = 1.3 * grid$sd)
+  set.seed(11)
+  r <- 2L
+  t <- exact[[2]]$mean
+  ll <- EMC2:::calc_ll_manager(`[<-`(X[2, , drop = FALSE], , "t0", t), d1, s1$model)
+  n <- 4000
+  rows <- integer(n)
+  z <- numeric(n)
+  for (it in seq_len(n)) {
+    pair <- c(r, sample.int(3L, 1L))
+    w <- exp(log_prior[pair] + q_bad[pair])
+    j <- sample.int(2L, 1L, prob = w)
+    P <- X[pair, , drop = FALSE]
+    P[, "t0"] <- t
+    da <- EMC2:::.marginal_delayed_accept(
+      P, j, list(mode = g_bad$mode[pair], sd = g_bad$sd[pair]), q_bad[pair],
+      cond, t, ll, d1, s1$model)
+    if (da$accept) {
+      r <- pair[j]
+      t <- da$t
+      ll <- da$ll
+    }
+    rows[it] <- r
+    z[it] <- (t - exact[[r]]$mean) / exact[[r]]$sd
+  }
+  # Without the correction the rows would follow exp(q_bad) (about
+  # 0.55/0.27/0.17) and t0 would sit half an SD high.
+  expect_lt(max(abs(as.numeric(table(factor(rows, 1:3))) / n - 1 / 3)), 0.05)
+  expect_lt(abs(mean(z)), 0.12)
+  expect_equal(sd(z), 1, tolerance = 0.1)
+  expect_equal(ll, EMC2:::calc_ll_manager(`[<-`(X[r, , drop = FALSE], , "t0", t),
+                                          d1, s1$model))
 })
 
 test_that("marginalise supports single-subject alpha-only samplers", {
