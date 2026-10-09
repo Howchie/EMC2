@@ -198,8 +198,7 @@ run_emc <- function(emc, stage, stop_criteria,
     }
     if (stage == "burn" && block_no == 1L &&
         chain_n(emc)[1L, "burn"] == 0L && get_last_stage(emc) == "preburn") {
-      emc <- .emc_burn_mode_start(
-        emc, cores_per_chain * cores_for_chains, verbose = verbose)
+      emc <- .emc_burn_mode_start(emc, cores_per_chain * cores_for_chains)
       # The mode starts are deliberately near one another. Give the group
       # hierarchy and subject proposals time to settle before using R-hat.
       if (is.null(stop_criteria$iter) &&
@@ -209,8 +208,7 @@ run_emc <- function(emc, stage, stop_criteria,
       }
     } else if (stage %in% c("burn", "adapt") ||
                (stage == "sample" && is.null(emc[[1L]]$sample_proposals_next))) {
-      emc <- .emc_laplace_refresh(emc, cores_per_chain * cores_for_chains,
-                                  verbose = verbose)
+      emc <- .emc_laplace_refresh(emc, cores_per_chain * cores_for_chains)
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
     prop_started <- proc.time()[["elapsed"]]

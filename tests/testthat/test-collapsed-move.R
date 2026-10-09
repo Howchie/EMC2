@@ -243,12 +243,17 @@ test_that("the collapsed move keeps the joint distribution with a full covarianc
       local_mocked_bindings(.emc_collapsed_log_lhat = function(alpha, fits)
         numeric(ncol(alpha)), .package = "EMC2")
     }
+    # The move draws from its own stream, as in the sampler; sharing the
+    # test's stream would replay the draws of a and y as its momenta.
+    set.seed(33)
+    gibbs <- .Random.seed
     set.seed(32)
     mu <- rnorm(p, 0, 1); V <- draw_V()
     a <- mu + t(chol(V)) %*% matrix(rnorm(p * n), p)
     y <- a + sqrt(S) * matrix(rnorm(p * n), p)
     sampler <- c(base, list(collapsed = list(plan = collapsed_plan(p, ctx_dim, 1, eps = 0.35,
                                                                    scale = 0.8))))
+    sampler$rng$gibbs <- gibbs
     out <- matrix(NA_real_, M, 2 * p + 1)
     for (t in seq_len(M)) {
       sampler$data <- lapply(seq_len(n), function(s) y[, s])
@@ -256,9 +261,11 @@ test_that("the collapsed move keeps the joint distribution with a full covarianc
         list(prec = 3 * Si, lin = drop(3 * Si %*% (y[, s] - 0.4)), check = ok_check))
       al <- matrix(a, p, dimnames = list(pn, NULL))
       ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / S), 0)
+      own <- .Random.seed
       res <- EMC2:::.emc_collapsed_move(sampler, list(tmu = setNames(mu, pn), tvar = V,
                                                       tvinv = solve(V), a_half = setNames(rep(1, p), pn)),
                                         rbind(al, ll), "sample")
+      assign(".Random.seed", own, envir = globalenv())
       sampler <- res$sampler
       mu <- as.numeric(res$pars$tmu); V <- unname(as.matrix(res$pars$tvar))
       Q <- solve(V) + Si

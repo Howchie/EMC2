@@ -545,7 +545,7 @@
   out
 }
 
-.emc_burn_mode_start <- function(emc, n_cores, verbose = FALSE) {
+.emc_burn_mode_start <- function(emc, n_cores) {
   if (!isTRUE(getOption("emc2.burn_mode_start", TRUE))) return(emc)
   if (any(emc[[1L]]$nuisance)) return(emc)
   # Subject modes are conditional on each chain's current pooled values.
@@ -572,7 +572,6 @@
   # 3. Re-optimise from the better mode under the chain's own group state; keep
   # it only if it still wins by the same margin.
   todo <- which(!is.na(switch_from))
-  n_shared <- 0L
   if (length(todo)) {
     redo <- .emc_with_preserved_rng(auto_mclapply(todo, function(k) {
       src <- results[[which(jobs$chain == switch_from[k] &
@@ -589,7 +588,6 @@
       if (mass(k, new) > mass(k, results[[k]]) + .emc_mode_share_gap) {
         new$shared_from <- switch_from[k]
         results[[k]] <- new
-        n_shared <- n_shared + 1L
       }
     }
   }
@@ -675,29 +673,6 @@
     emc[[j]]$burn_mode_mu[s] <- list(result$proposal_mode)
     emc[[j]] <- .emc_store_lik(emc[[j]], s, result$lik)
   }
-  stats <- lapply(emc, `[[`, "burn_mode_stats")
-  n_hessian <- sum(vapply(stats, function(x) sum(x$hessian), integer(1)))
-  n_converged <- sum(vapply(stats, function(x) sum(x$converged), integer(1)))
-  reasons <- table(unlist(lapply(stats, `[[`, "reason")))
-  failures <- reasons[names(reasons) != "ok"]
-  # Poor among subjects that got a Hessian, whether or not the check itself
-  # succeeded.
-  has_h <- unlist(lapply(stats, `[[`, "hessian"))
-  poor <- unlist(lapply(stats, .emc_laplace_poor))[has_h]
-  k <- poor
-  if (verbose || n_hessian < nrow(jobs) || n_shared) {
-    message("Burn mode starts: ", n_hessian, "/", nrow(jobs),
-            " Hessians; ", n_converged, "/", nrow(jobs), " BFGS converged",
-            if (n_hessian < nrow(jobs))
-              paste0("; failures: ", paste(names(failures), failures,
-                                           collapse = ", ")) else "",
-            if (length(k)) paste0("; Laplace poor (Pareto k > 0.7, over half",
-                                  " its mass outside the support, or no usable",
-                                  " check) for ", sum(poor), "/",
-                                  length(k)) else "",
-            if (n_shared) paste0("; ", n_shared, " chain modes replaced by",
-                                 " a better one from another chain") else "")
-  }
   emc
 }
 
@@ -755,7 +730,7 @@
 # find every chain's conditional mode for each subject under that chain's
 # current group state and store the Laplace covariance (and mode). The chain
 # state is not moved. create_chain_proposals() consumes these once.
-.emc_laplace_refresh <- function(emc, n_cores, verbose = FALSE) {
+.emc_laplace_refresh <- function(emc, n_cores) {
   if (!isTRUE(getOption("emc2.laplace_refresh", TRUE))) return(emc)
   if (any(emc[[1L]]$nuisance)) return(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
@@ -788,7 +763,6 @@
         list(result = r, seed = get(".Random.seed", envir = globalenv()))
       })
     }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
-  n_ok <- 0L
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
     result <- if (is.list(job_result)) job_result$result else NULL
@@ -821,9 +795,6 @@
     ms$outside[s] <- chk[[2]]
     ms$laplace_status[s] <- chk[[3]]
     emc[[j]]$burn_mode_stats <- ms
-    if (usable) n_ok <- n_ok + 1L
   }
-  if (verbose || n_ok < nrow(jobs))
-    message("Laplace refresh: ", n_ok, "/", nrow(jobs), " covariances")
   emc
 }
