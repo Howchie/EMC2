@@ -171,8 +171,12 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' bound. See Details. This is a sampling/efficiency feature and does not change
 #' the model's likelihood.
 #' @param TC Optional list of truncation/censoring settings (`LT`, `LC`, `UC`,
-#'   `UT`, `pContaminant`, ..., as for \code{\link{make_missing}}), used for
-#'   simulation and, via the bound columns, for the likelihood. It also takes
+#'   `UT`, `pContaminant`, `guess_exclude`, ..., as for
+#'   \code{\link{make_missing}}), used for
+#'   simulation and, via the bound columns, for the likelihood. `guess_exclude`
+#'   names response levels that `pGuess` cannot produce; `nogo` and `time` are
+#'   always excluded. By default, guesses are uniform over all other response
+#'   levels. It also takes
 #'   `filter_defective`: `FALSE` (default) keeps a defective model's
 #'   never-finish outcome (`rt = Inf`) in the retained sample space, so the
 #'   truncation normaliser is `P(LT <= RT <= UT) + P(RT = Inf)`, and the model's
@@ -767,12 +771,29 @@ design_model_custom_ll <- function(data, design, model){
 }
 
 
+.resolve_guess_response_set <- function(response_levels, guess_exclude = NULL) {
+  if (is.null(guess_exclude)) guess_exclude <- character(0)
+  if (!is.character(guess_exclude) || anyNA(guess_exclude) || any(!nzchar(guess_exclude)))
+    stop("guess_exclude must be a character vector of response levels")
+  if (anyDuplicated(guess_exclude))
+    stop("guess_exclude must not contain duplicate response levels")
+  unknown <- setdiff(guess_exclude, c(response_levels, "nogo", "time"))
+  if (length(unknown))
+    stop("guess_exclude contains response levels not present in R: ",
+         paste(unknown, collapse = ", "))
+
+  overt_levels <- response_levels[!(response_levels %in% c("nogo", "time"))]
+  guess_levels <- overt_levels[!(overt_levels %in% guess_exclude)]
+  if (!length(guess_levels) && length(overt_levels))
+    stop("guess_exclude must leave at least one overt response level eligible for pGuess")
+  list(levels = guess_levels, codes = match(guess_levels, response_levels))
+}
+
 #' Resolve the uniform-guess window for `pGuess`
 #'
 #' `pGuess` mixes a uniform "guess" density into observed RTs (Ratcliff &
 #' Tuerlinckx, 2002; HDDM's `w_outlier`).  That density needs a window, and
-#' EMC2 resolves ONE scalar window per dadm rather than a per-row column -- the
-#' guess kernel is a single double the C++ side reads once per likelihood call.
+#' EMC2 resolves one scalar RT window and one eligible response set per dadm.
 #'
 #' Resolution order:
 #' \enumerate{
@@ -799,11 +820,12 @@ design_model_custom_ll <- function(data, design, model){
 #' @param dadm A design-augmented data model (or any data frame carrying the
 #'   `LT`/`LC`/`UT`/`UC` bounds as columns).
 #' @param TC Optional truncation/censoring list; `TC$guess_window` or
-#'   `TC$w_outlier` override the derived window.
+#'   `TC$w_outlier` override the derived window. `TC$guess_exclude` names
+#'   response levels that the guess component cannot produce.
 #' @param verbose Whether to report the resolved window and the implied HDDM
 #'   `w_outlier`.
-#' @return A list with `window` (length-2 numeric) and `n_resp`, or `NULL` when
-#'   no proper window exists.
+#' @return A list with `window` (length-2 numeric), `n_resp`, eligible response
+#'   `levels`, and their factor `codes`, or `NULL` when no proper window exists.
 #' @keywords internal
 resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
   bound <- function(nm, default) {
@@ -815,7 +837,8 @@ resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
   # nor a timeout; those pseudo-levels do not count towards the response set.
   resp_levels <- levels(dadm$R)
   if (is.null(resp_levels)) resp_levels <- levels(dadm$lR)
-  n_resp <- sum(!(resp_levels %in% c("nogo", "time")))
+  response_set <- .resolve_guess_response_set(resp_levels, TC$guess_exclude)
+  n_resp <- length(response_set$levels)
   if (n_resp < 1) return(NULL)
 
   win <- TC$guess_window
@@ -885,7 +908,8 @@ resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
     message("Guess window: [", signif(LG, 4), ", ", signif(UG, 4), "] over ",
             n_resp, " responses (implied HDDM w_outlier = ",
             signif(1 / (n_resp * (UG - LG)), 4), ")")
-  list(window = c(LG, UG), n_resp = n_resp)
+  list(window = c(LG, UG), n_resp = n_resp,
+       levels = response_set$levels, codes = response_set$codes)
 }
 
 
@@ -1426,6 +1450,8 @@ design_model <- function(data,design,model=NULL,
     if (!is.null(gw)) {
       attr(dadm,"guess_window") <- gw$window
       attr(dadm,"guess_n_resp") <- gw$n_resp
+      attr(dadm,"guess_response_levels") <- gw$levels
+      attr(dadm,"guess_response_codes") <- gw$codes
     }
   }
   dadm

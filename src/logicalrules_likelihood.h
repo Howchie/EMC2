@@ -39,6 +39,7 @@ struct LogicalRulesSharedState {
   std::vector<int> cond_code;
   // Response code: 0=missing, 1=yes, 2=no/nogo, 3=NN, 4=AN, 5=NB, 6=AB
   std::vector<int> resp_code;
+  std::vector<int> response_factor_code;
   std::vector<double> rt_unique;
   std::vector<double> LT_unique;
   std::vector<double> UT_unique;

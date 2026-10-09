@@ -98,8 +98,12 @@ see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
 the likelihood landscape that cannot reasonable be achieved with \code{transform}}
 
 \item{TC}{Optional list of truncation/censoring settings (\code{LT}, \code{LC}, \code{UC},
-\code{UT}, \code{pContaminant}, ..., as for \code{\link{make_missing}}), used for
-simulation and, via the bound columns, for the likelihood. It also takes
+\code{UT}, \code{pContaminant}, \code{guess_exclude}, ..., as for
+\code{\link{make_missing}}), used for
+simulation and, via the bound columns, for the likelihood. \code{guess_exclude}
+names response levels that \code{pGuess} cannot produce; \code{nogo} and \code{time} are
+always excluded. By default, guesses are uniform over all other response
+levels. It also takes
 \code{filter_defective}: \code{FALSE} (default) keeps a defective model's
 never-finish outcome (\code{rt = Inf}) in the retained sample space, so the
 truncation normaliser is \verb{P(LT <= RT <= UT) + P(RT = Inf)}, and the model's

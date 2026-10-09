@@ -1343,6 +1343,7 @@ make_emc <- function(data,design,model=NULL,
                     use_data = TRUE,
                     prior_list = NULL, group_design = NULL,
                     par_groups=NULL, ...){
+  type_was_missing <- missing(type)
   design <- .restore_custom_kernel_design(design, quiet = TRUE)
   n_factors <- NULL
   nuisance <- NULL
@@ -1356,8 +1357,9 @@ make_emc <- function(data,design,model=NULL,
   if(!is.null(prior_list) & !is.null(prior_list$theta_mu_mean)){
     prior_list <- list(prior_list)
   }
-  if(!is.null(prior_list)){
-    type <- attr(prior_list[[1]], "type")
+  if(!is.null(prior_list) && type_was_missing){
+    type <- attr(prior_list[[1]], "sampler_type")
+    if (is.null(type)) type <- attr(prior_list[[1]], "type")
   }
   if(!is.null(group_design) && !type %in% c("standard", "diagonal", "blocked")){
     stop("group_design can only be used with standard, blocked or diagonal type")

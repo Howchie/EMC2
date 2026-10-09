@@ -22,7 +22,8 @@ make_missing(
   verbose = FALSE,
   rt_resolution = 1/60,
   digits = 2,
-  filter_defective = FALSE
+  filter_defective = FALSE,
+  guess_exclude = NULL
 )
 }
 \arguments{
@@ -54,12 +55,17 @@ make_missing(
 \item{pGuess}{Probability of a uniform \emph{guess} contaminant, drawn among the
 trials the omission did not take, so \code{P(guess) = (1 - pContaminant) * pGuess}.
 A guess replaces \code{rt} with a draw from \code{guess_window} and \code{R} with a uniform
-draw over the overt response levels.  Default 0.}
+draw over the overt response levels after \code{guess_exclude} is applied. Default 0.}
 
 \item{guess_window}{Length-2 numeric \code{c(lower, upper)} for the guess RT.
 Defaults to the effective truncation/censoring window, widened to
 \code{max(5, floor(max(rt)) + 1)} when it has no finite upper edge -- the same rule
 the likelihood uses (see \code{resolve_guess_window}).}
+
+\item{guess_exclude}{Character vector of response levels that \code{pGuess} cannot
+produce. \code{nogo} and \code{time} are always excluded. Defaults to no additional
+exclusions. The same setting can be supplied as \code{TC$guess_exclude} to
+\code{design()} and \code{make_data()}.}
 
 \item{verbose}{Logical. Default FALSE, if TRUE report effects of filtering.}
 

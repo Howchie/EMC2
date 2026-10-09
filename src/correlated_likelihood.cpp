@@ -817,7 +817,8 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
                         ? cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
     const GuessKernel guess = s.rt_resolution > 0.0 && R_FINITE(rt) ?
       rt_bin_guess(s.guess, rt_bin(rt, s.rt_resolution, LT, UT, LC, UC)) : s.guess;
-    log_value = mix_contaminants_rt(log_value, pC, pG, guess, rt, known);
+    log_value = mix_contaminants_rt(log_value, pC, pG, guess, rt, known,
+                                   guess.response_is_eligible(response_code));
   }
   out.log_likelihood = (!R_FINITE(log_value) || log_value < min_ll)
     ? min_ll : log_value;
@@ -2114,8 +2115,10 @@ double c_log_likelihood_corr_drift(
     const GuessKernel guess = cshared.rt_resolution > 0.0 ?
       rt_bin_guess(cshared.guess, rt_bin(rt_j, cshared.rt_resolution,
         cshared.LT[start], cshared.UT[start], cshared.LC[start], cshared.UC[start])) : cshared.guess;
+    const double log_g = guess_log_density_for_response(guess, response[start]);
+    if (log_g == R_NegInf) return value;
     return log_sum_exp(value,
-                       std::log(pG) + log1m(pC) + guess.log_g);
+                       std::log(pG) + log1m(pC) + log_g);
   };
 
   double total_ll = 0.0;
@@ -2590,7 +2593,8 @@ static double rdmswtn_corr_trial_loglik(
                         ? s.cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
     const GuessKernel guess = s.rt_resolution > 0.0 && R_FINITE(rt) ?
       rt_bin_guess(s.guess, rt_bin(rt, s.rt_resolution, LT, UT, LC, UC)) : s.guess;
-    value = mix_contaminants_rt(value, pC, pG, guess, rt, known);
+    value = mix_contaminants_rt(value, pC, pG, guess, rt, known,
+                                guess.response_is_eligible(response[start]));
   }
   return (!R_FINITE(value) || value < min_ll) ? min_ll : value;
 }

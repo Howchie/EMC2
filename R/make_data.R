@@ -84,11 +84,16 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' @param pGuess Probability of a uniform *guess* contaminant, drawn among the
 #' trials the omission did not take, so `P(guess) = (1 - pContaminant) * pGuess`.
 #' A guess replaces `rt` with a draw from `guess_window` and `R` with a uniform
-#' draw over the overt response levels.  Default 0.
+#' draw over the overt response levels. `guess_exclude` removes selected levels
+#' from that response set. Default 0.
 #' @param guess_window Length-2 numeric `c(lower, upper)` for the guess RT.
 #' Defaults to the effective truncation/censoring window, widened to
 #' `max(5, floor(max(rt)) + 1)` when it has no finite upper edge -- the same rule
 #' the likelihood uses (see `resolve_guess_window`).
+#' @param guess_exclude Character vector of response levels that `pGuess` cannot
+#'   produce. `nogo` and `time` are always excluded. Defaults to no additional
+#'   exclusions. The same setting can be supplied as `TC$guess_exclude` to
+#'   `design()` and `make_data()`.
 #' @param no_truncate Logical, default FALSE, for TRUE don't apply truncation to row (except if GO/NOGO).
 #' @param no_censor Logical, default FALSE, for TRUE don't apply censor to row (except if GO/NOGO).
 #' @param verbose Logical. Default FALSE, if TRUE report effects of filtering.
@@ -123,7 +128,8 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   LCresponse = NULL, UCresponse = NULL,LCdirection = NULL, UCdirection = NULL,
   no_truncate=FALSE,no_censor=FALSE,
   pContaminant=NULL,pGuess=NULL,guess_window=NULL,
-  verbose=FALSE,rt_resolution=1/60,digits = 2, filter_defective = FALSE)
+  verbose=FALSE,rt_resolution=1/60,digits = 2, filter_defective = FALSE,
+  guess_exclude=NULL)
 {
 
   if (!is.logical(filter_defective) || length(filter_defective) != 1L ||
@@ -207,7 +213,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
     gw <- .resolve_sim_guess_window(data, guess_window)
     # A guess is an overt response: never withheld, never a timeout.
     resp_levels <- levels(data$R)
-    guess_levels <- resp_levels[!(resp_levels %in% c("nogo","time"))]
+    guess_levels <- .resolve_guess_response_set(resp_levels, guess_exclude)$levels
     if (length(guess_levels) == 0L)
       stop("pGuess needs at least one overt response level (excluding nogo/time)")
     guess <- rbinom(nrow(data), 1, pGuess) == 1
@@ -350,7 +356,7 @@ check_missing <- function(TC,data=NULL,design=NULL) {
     TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
       no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
       LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,pGuess=NULL,guess_window=NULL,rt_resolution=NULL
+      pContaminant=NULL,pGuess=NULL,guess_window=NULL,guess_exclude=NULL,rt_resolution=NULL
     )
     if (!is.null(data)) {
       for (i in c("LT","LC","UC","UT")) {
@@ -364,7 +370,7 @@ check_missing <- function(TC,data=NULL,design=NULL) {
     TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
       no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
       LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,pGuess=NULL,guess_window=NULL,rt_resolution=NULL
+      pContaminant=NULL,pGuess=NULL,guess_window=NULL,guess_exclude=NULL,rt_resolution=NULL
     )
   }
   TC
@@ -396,7 +402,9 @@ check_missing <- function(TC,data=NULL,design=NULL) {
 #' @param functions List of functions to create factors used in data generation.
 #' @param return_functions Logical, should factors created by functions be returned, default FALSE.
 #' @param TC List of truncation/censoring arguments passed to \code{make_missing}
-#'   (e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.
+#'   (e.g. \code{list(LT=0.1, UC=2)}). It can include `guess_exclude` to keep
+#'   selected response levels out of `pGuess`. NULL means no truncation or
+#'   censoring is applied.
 #' @param filter_defective Logical. If `TRUE`, intrinsically defective
 #'   omissions are removed when `UT` is finite, as ordinary responses outside
 #'   the truncation window would be. The default `NULL` takes
@@ -459,6 +467,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # Run this after the emc block so fitted settings are available.
   # Otherwise check_missing() would silently fall back to no-censoring defaults.
   TC <- check_missing(TC,design=design,data=data)
+  if (is.null(TC$guess_exclude))
+    TC$guess_exclude <- design$TC$guess_exclude
   # One declaration governs simulation and the likelihood (design_model()).
   if (is.null(filter_defective))
     filter_defective <- isTRUE(if (!is.null(TC$filter_defective))
@@ -640,6 +650,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     tc_nondefault <- !identical(TC$LT, 0) || !identical(TC$LC, 0) ||
       !identical(TC$UT, Inf) || !identical(TC$UC, Inf) ||
       !is.null(TC$pContaminant) || !is.null(TC$pGuess) ||
+      !is.null(TC$guess_exclude) ||
       isTRUE(TC$no_truncate) || isTRUE(TC$no_censor) ||
       !is.null(TC$rt_resolution)
     if (tc_nondefault) {
@@ -649,7 +660,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
         LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
         LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
         pContaminant = TC$pContaminant, pGuess = TC$pGuess,
-        guess_window = TC$guess_window, no_truncate = TC$no_truncate,
+        guess_window = TC$guess_window, guess_exclude = TC$guess_exclude,
+        no_truncate = TC$no_truncate,
         no_censor = TC$no_censor, verbose = TC$verbose,
         rt_resolution = TC$rt_resolution, digits = TC$digits,
         filter_defective = filter_defective)
@@ -764,6 +776,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
     LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
     pContaminant=TC$pContaminant,pGuess=TC$pGuess,guess_window=TC$guess_window,
+    guess_exclude=TC$guess_exclude,
     no_truncate=TC$no_truncate,no_censor=TC$no_censor,
     verbose=TC$verbose,rt_resolution=TC$rt_resolution,digits=TC$digits,
     filter_defective=filter_defective)

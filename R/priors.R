@@ -44,9 +44,11 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
                       do_ask = NULL, fill_default = TRUE, ...){
   design <- .restore_custom_kernel_design(design, quiet = TRUE)
   if(!is.null(update) && is.null(type)){
-    type <- attr(update, "type")
+    type <- attr(update, "sampler_type")
+    if (is.null(type)) type <- attr(update, "type")
   }
   if(is.null(type)) type <- 'standard'
+  sampler_type <- type
   if(type %in% c("diagonal", "blocked")) type <- "standard"
   args <- list(...)
   args$group_design <- group_design
@@ -88,6 +90,7 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
   }
   prior <- get_objects(design = design, type = type, prior = input, ...)$prior
   attr(prior, "pooled") <- .pooled_prior(design, type, update, args)
+  attr(prior, "sampler_type") <- sampler_type
   if("Ffactors" %in% names(design)){
     design <- list(design)
   }

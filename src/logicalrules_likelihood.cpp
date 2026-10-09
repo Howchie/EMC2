@@ -80,10 +80,29 @@ LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& d
   Rcpp::CharacterVector resp_chr;
   Rcpp::CharacterVector rule_chr;
 
+  Rcpp::IntegerVector guess_response_codes;
+  Rcpp::CharacterVector guess_response_levels;
+  Rcpp::RObject guess_codes_obj = dadm.attr("guess_response_codes");
+  Rcpp::RObject guess_levels_obj = dadm.attr("guess_response_levels");
+  if (!guess_codes_obj.isNULL())
+    guess_response_codes = Rcpp::IntegerVector(guess_codes_obj);
+  if (!guess_levels_obj.isNULL())
+    guess_response_levels = Rcpp::CharacterVector(guess_levels_obj);
+
   auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
     for (int i = 0; i < levels.size(); ++i) {
       if (Rcpp::as<std::string>(levels[i]) == target) return i + 1;
     }
+    return -1;
+  };
+
+  auto guess_code_for_label = [&](const std::string& label) -> int {
+    if (guess_response_codes.size() == 0 || guess_response_levels.size() == 0)
+      return 1;
+    const R_xlen_t n = std::min(guess_response_codes.size(), guess_response_levels.size());
+    for (R_xlen_t i = 0; i < n; ++i)
+      if (Rcpp::as<std::string>(guess_response_levels[i]) == label)
+        return guess_response_codes[i];
     return -1;
   };
 
@@ -162,6 +181,7 @@ LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& d
   out.rule_code.assign(out.n_unique_trials, 0);
   out.cond_code.assign(out.n_unique_trials, 0);
   out.resp_code.assign(out.n_unique_trials, 0);
+  out.response_factor_code.assign(out.n_unique_trials, NA_INTEGER);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
   out.LT_unique.assign(out.n_unique_trials, 0.0);
   out.UT_unique.assign(out.n_unique_trials, R_PosInf);
@@ -202,19 +222,24 @@ LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& d
     out.rule_code[static_cast<size_t>(j)] = rcode;
 
     int resp = 0;
+    int response_factor_code = NA_INTEGER;
     if (resp_is_factor) {
       const int rc = resp_code[start];
       if (rc == NA_INTEGER) resp = 0;
-      else if (rc == codeYes) resp = 1;
-      else if (rc == codeNo) resp = 2;
-      else if (rc == codeNN) resp = 3;
-      else if (rc == codeAN) resp = 4;
-      else if (rc == codeNB) resp = 5;
-      else if (rc == codeAB) resp = 6;
+      else {
+        response_factor_code = rc;
+        if (rc == codeYes) resp = 1;
+        else if (rc == codeNo) resp = 2;
+        else if (rc == codeNN) resp = 3;
+        else if (rc == codeAN) resp = 4;
+        else if (rc == codeNB) resp = 5;
+        else if (rc == codeAB) resp = 6;
+      }
     } else {
       if (resp_chr[start] == NA_STRING) resp = 0;
       else {
         const std::string rv = Rcpp::as<std::string>(resp_chr[start]);
+        response_factor_code = guess_code_for_label(rv);
         if (rv == "yes") resp = 1;
         else if (rv == "no" || rv == "nogo") resp = 2;
         else if (rv == "NN") resp = 3;
@@ -227,6 +252,7 @@ LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& d
       Rcpp::stop("LogicalRules likelihood: response must be yes/no/NN/AN/NB/AB on each unique trial.");
     }
     out.resp_code[static_cast<size_t>(j)] = resp;
+    out.response_factor_code[static_cast<size_t>(j)] = response_factor_code;
 
     // Stimulus condition codes are mandatory for the detection rules and for
     // the capacity model (which needs to identify the redundant-target AB
@@ -2025,7 +2051,8 @@ double c_log_likelihood_logicalrules(
         const GuessKernel trial_guess = finite_bin[sj]
           ? rt_bin_guess(gk, shared.rt_bins.bins[sj]) : gk;
         result[sj] = mix_contaminants_rt(result[sj], pC, pG, trial_guess,
-          shared.rt_unique[sj], shared.resp_code[sj] != 0);
+          shared.rt_unique[sj], shared.resp_code[sj] != 0,
+          trial_guess.response_is_eligible(shared.response_factor_code[sj]));
       }
 
       const int n_out = expand.length() > 0 ? expand.length() : n_unique_trials;
@@ -2958,7 +2985,9 @@ double c_log_likelihood_logicalrules(
       // resp_code 0 is a missing response; every other code names a response.
       ll_unique[sj] = mix_contaminants_rt(ll_unique[sj], pC, pG, gk,
                                           shared.rt_unique[sj],
-                                          shared.resp_code[sj] != 0);
+                                          shared.resp_code[sj] != 0,
+                                          gk.response_is_eligible(
+                                            shared.response_factor_code[sj]));
     }
   }
 

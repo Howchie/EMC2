@@ -335,3 +335,414 @@ test_that("pGuess is refused when the model has no compiled likelihood", {
            matchfun = function(d) d$S == d$lR,
            formula = list(m ~ lM, s ~ 1, t0 ~ 1), model = fake))))
 })
+
+
+test_that("guess_exclude validation rejects bad inputs", {
+  d <- data.frame(subjects = factor(1), rt = c(0.5, 1.2),
+                  R = factor(c("a", "b"), levels = c("a", "b", "c")),
+                  LT = 0, UT = Inf, LC = 0, UC = Inf)
+
+  # Non-character
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = 123)),
+               "character vector")
+  expect_error(make_missing(d, pGuess = 0.2, guess_exclude = 123),
+               "character vector")
+
+  # NAs or empty strings
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = c("a", NA))),
+               "character vector")
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = c("a", ""))),
+               "character vector")
+
+  # Duplicates
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = c("a", "a"))),
+               "duplicate")
+
+  # Unknown response levels (nogo and time are allowed)
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = "unknown")),
+               "not present in R")
+  expect_no_error(EMC2:::resolve_guess_window(d, list(guess_exclude = "nogo")))
+
+  # Excluding all overt response levels
+  expect_error(EMC2:::resolve_guess_window(d, list(guess_exclude = c("a", "b", "c"))),
+               "at least one overt response level eligible")
+})
+
+
+test_that("guess_exclude removes excluded levels during simulation", {
+  set.seed(42)
+  n <- 500
+  d <- data.frame(subjects = factor(1),
+                  R = factor(sample(c("a", "b", "c"), n, replace = TRUE),
+                             levels = c("a", "b", "c")),
+                  rt = runif(n, 0.4, 0.8), LT = 0, UT = Inf, LC = 0, UC = Inf)
+
+  # pGuess = 1 with "b" excluded: all trials are guesses, but "b" is never produced
+  out <- make_missing(d, pGuess = 1.0, guess_exclude = "b",
+                      guess_window = c(2, 4), rt_resolution = NULL)
+  expect_true(all(out$rt >= 2 & out$rt <= 4))
+  expect_false(any(out$R == "b"))
+  expect_true(all(out$R %in% c("a", "c")))
+  # Distribution across remaining levels should be roughly equal (uniform)
+  prop_a <- mean(out$R == "a")
+  expect_gt(prop_a, 0.4)
+  expect_lt(prop_a, 0.6)
+
+  # make_data also inherits and respects TC$guess_exclude
+  matchfun <- function(d) d$S == d$lR
+  des <- design(factors = list(subjects = 1, S = c("left", "right")),
+                Rlevels = c("left", "right"), matchfun = matchfun,
+                formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
+                model = RDM, constants = c(s = log(1)),
+                TC = list(guess_exclude = "right", guess_window = c(2, 4)))
+  p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(0.999))
+  sim_dat <- make_data(p, des, n_trials = 200)
+  slow_guesses <- sim_dat[sim_dat$rt >= 2 & sim_dat$rt <= 4, ]
+  expect_gt(nrow(slow_guesses), 150)
+  expect_true(all(slow_guesses$R == "left"))
+})
+
+
+test_that("guess_exclude modifies guess density and sets floor only on eligible responses in DDM", {
+  des <- design(factors = list(subjects = 1, S = c("left", "right")),
+                Rlevels = c("left", "right"),
+                formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
+                model = DDM, constants = c(s = log(1)),
+                TC = list(guess_window = c(0, 5), guess_exclude = "right"))
+  dat <- data.frame(subjects = factor(1), S = factor("left", levels = c("left", "right")),
+                    R = factor(c("left", "right"), levels = c("left", "right")),
+                    rt = c(0.4, 0.4), LT = 0, UT = Inf, LC = 0, UC = Inf)
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+
+  # With 'right' excluded, n_resp is 1, so guess density for 'left' is 1 / (1 * 5) = 0.2
+  expect_identical(attr(dadm, "guess_n_resp"), 1L)
+  expect_identical(attr(dadm, "guess_response_levels"), "left")
+  expect_identical(attr(dadm, "guess_response_codes"), 1L)
+
+  base <- c(v = 1, a = log(1), t0 = log(0.2), Z = qnorm(0.5))
+  pG <- 0.4
+  ll_proc <- trial_lls(dadm, model, c(base, pGuess = qnorm(0)))
+  ll_mix  <- trial_lls(dadm, model, c(base, pGuess = qnorm(pG)))
+
+  # Eligible trial ('left'): mixture with g = 0.2
+  expect_equal(exp(ll_mix[1]),
+               (1 - pG) * exp(ll_proc[1]) + pG * 0.2,
+               tolerance = 1e-6)
+
+  # Ineligible trial ('right'): no guess component, downweighted by (1 - pG)
+  expect_equal(exp(ll_mix[2]),
+               (1 - pG) * exp(ll_proc[2]),
+               tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude works in race models across fast and slow paths", {
+  matchfun <- function(d) d$S == d$lR
+  des <- design(factors = list(subjects = 1, S = c("r1", "r2", "r3")),
+                Rlevels = c("r1", "r2", "r3"), matchfun = matchfun,
+                formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
+                model = RDM, constants = c(s = log(1)),
+                TC = list(guess_window = c(0, 10), guess_exclude = "r2"))
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("r1", levels = c("r1", "r2", "r3")),
+    R = factor(c("r1", "r2", "r3"), levels = c("r1", "r2", "r3")),
+    rt = c(0.5, 0.5, 0.5), LT = 0, UT = Inf, LC = 0, UC = Inf)
+
+  dadm_fast <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm_fast, "model")()
+  expect_identical(attr(dadm_fast, "guess_n_resp"), 2L)
+  expect_equal(sort(attr(dadm_fast, "guess_response_levels")), c("r1", "r3"))
+
+  pG <- 0.3
+  p_base <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2))
+  p_0 <- c(p_base, pGuess = qnorm(0))
+  p_mix <- c(p_base, pGuess = qnorm(pG))
+
+  ll_proc <- trial_lls(dadm_fast, model, p_0)
+  ll_mix  <- trial_lls(dadm_fast, model, p_mix)
+
+  # Eligible trials ('r1', 'r3'): g = 1 / (2 * 10) = 0.05
+  expect_equal(exp(ll_mix[1]), (1 - pG) * exp(ll_proc[1]) + pG * 0.05, tolerance = 1e-6)
+  expect_equal(exp(ll_mix[3]), (1 - pG) * exp(ll_proc[3]) + pG * 0.05, tolerance = 1e-6)
+
+  # Ineligible trial ('r2'): g = 0
+  expect_equal(exp(ll_mix[2]), (1 - pG) * exp(ll_proc[2]), tolerance = 1e-6)
+
+  # Also test slow path (with truncation LT > 0)
+  dat$LT <- 0.1
+  dadm_slow <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  ll_slow_proc <- trial_lls(dadm_slow, model, p_0)
+  ll_slow_mix  <- trial_lls(dadm_slow, model, p_mix)
+  expect_equal(exp(ll_slow_mix[1]), (1 - pG) * exp(ll_slow_proc[1]) + pG * 0.05, tolerance = 1e-6)
+  expect_equal(exp(ll_slow_mix[2]), (1 - pG) * exp(ll_slow_proc[2]), tolerance = 1e-6)
+  expect_equal(exp(ll_slow_mix[3]), (1 - pG) * exp(ll_slow_proc[3]) + pG * 0.05, tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude preserves propriety: total mass across responses integrates to 1", {
+  matchfun <- function(d) d$S == d$lR
+  des <- design(factors = list(subjects = 1, S = c("a", "b")),
+                Rlevels = c("a", "b"), matchfun = matchfun,
+                formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
+                model = RDM, constants = c(s = log(1)),
+                TC = list(guess_window = c(0, 10), guess_exclude = "b"))
+  pG <- 0.35
+  p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(pG))
+
+  grid <- seq(0, 10, length.out = 201)
+  dat <- do.call(rbind, lapply(c("a", "b"), function(r) data.frame(
+    subjects = factor(1), S = factor("a", levels = c("a", "b")),
+    R = factor(r, levels = c("a", "b")), rt = grid,
+    LT = 0, UT = Inf, LC = 0, UC = Inf)))
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+
+  dens <- exp(trial_lls(dadm, model, p))
+  mass <- sum(vapply(split(dens, rep(1:2, each = length(grid))), function(d)
+    sum(diff(grid) * (utils::head(d, -1) + utils::tail(d, -1)) / 2), numeric(1)))
+  expect_equal(mass, 1, tolerance = 5e-3)
+})
+
+
+test_that("guess_exclude works in LogicalRules", {
+  matchfun <- function(d) d$lR %in% c("A", "B", "n_A", "n_B")
+  template <- data.frame(
+    subjects = factor(1), S = factor("AB", levels = "AB"),
+    LogicalRule = factor("OR", levels = "OR"),
+    R = factor("yes", levels = c("yes", "no")),
+    rt = 0.5, LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  des <- design(
+    data = template,
+    Rlevels = c("yes", "no"),
+    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
+                                     levels = c("A", "B", "n_A", "n_B")),
+    matchfun = matchfun,
+    model = LogicalRulesRDMSWTN,
+    formula = list(v ~ 0 + GoA + GoB + NegA + NegB,
+                   B ~ 0 + GoA + GoB + NegA + NegB,
+                   t0 ~ 1, A ~ 1, s ~ 1, pGuess ~ 1),
+    constants = c(s = 0, mG = 0, mK = 0, sv = 0),
+    functions = list(
+      GoA = function(d) ifelse(d$lR == "A", 1, 0),
+      GoB = function(d) ifelse(d$lR == "B", 1, 0),
+      NegA = function(d) ifelse(d$lR == "n_A", 1, 0),
+      NegB = function(d) ifelse(d$lR == "n_B", 1, 0)
+    ),
+    TC = list(guess_window = c(0, 10), guess_exclude = "no")
+  )
+  dat <- data.frame(
+    subjects = factor(c(1, 1)), S = factor(c("AB", "AB"), levels = "AB"),
+    LogicalRule = factor(c("OR", "OR"), levels = "OR"),
+    R = factor(c("yes", "no"), levels = c("yes", "no")),
+    rt = c(0.5, 0.5), LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+  expect_identical(attr(dadm, "guess_n_resp"), 1L)
+  expect_identical(attr(dadm, "guess_response_levels"), "yes")
+
+  p <- sampled_pars(des); p[] <- 0
+  vals <- c(v_GoA = 1.6, v_GoB = 1.1, v_NegA = 0.95, v_NegB = 1.25,
+            B_GoA = log(0.75), B_GoB = log(0.95), B_NegA = log(0.85), B_NegB = log(0.70),
+            t0 = log(0.2), A = log(0.3))
+  for (nm in names(vals)) if (nm %in% names(p)) p[[nm]] <- vals[[nm]]
+  pG <- 0.25
+  ll_proc <- trial_lls(dadm, model, c(p, pGuess = qnorm(0)))
+  ll_mix  <- trial_lls(dadm, model, c(p, pGuess = qnorm(pG)))
+
+  # Eligible trial ('yes'): guess density = 1 / (1 * 10) = 0.1
+  expect_equal(exp(ll_mix[1]), (1 - pG) * exp(ll_proc[1]) + pG * 0.1, tolerance = 1e-6)
+  # Ineligible trial ('no'): no guess density
+  expect_equal(exp(ll_mix[2]), (1 - pG) * exp(ll_proc[2]), tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude works in BAwLcorr", {
+  matchfun <- function(d) d$S == d$lR
+  dat <- data.frame(
+    subjects = factor(rep(1, 2)),
+    S = factor(c("left", "left"), levels = c("left", "right")),
+    R = factor(c("left", "right"), levels = c("left", "right")),
+    rt = c(0.5, 0.5), LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  m_corr <- function() BAwL(correlated = TRUE)
+  des <- design(
+    data = dat, Rlevels = c("left", "right"), matchfun = matchfun,
+    formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1, rho ~ 1, pGuess ~ 1),
+    constants = c(sv = log(1), k = log(0), mG = 0, mK = 0), model = m_corr,
+    TC = list(guess_window = c(0, 10), guess_exclude = "right")
+  )
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+  expect_identical(attr(dadm, "guess_n_resp"), 1L)
+  expect_identical(attr(dadm, "guess_response_levels"), "left")
+
+  p_base <- sampled_pars(des); p_base[] <- 0
+  p_base["v_lRleft"] <- log(1.5); p_base["v_lRright"] <- log(1.0)
+  p_base["B"] <- log(1); p_base["A"] <- log(0.2); p_base["t0"] <- log(0.15)
+  p_base["rho"] <- qnorm((0.5 + 1) / 2)
+
+  pG <- 0.3
+  p_0 <- c(p_base, pGuess = qnorm(0))
+  p_mix <- c(p_base, pGuess = qnorm(pG))
+
+  ll_proc <- trial_lls(dadm, model, p_0)
+  ll_mix  <- trial_lls(dadm, model, p_mix)
+
+  # Eligible ('left'): g = 1 / (1 * 10) = 0.1
+  expect_equal(exp(ll_mix[1]), (1 - pG) * exp(ll_proc[1]) + pG * 0.1, tolerance = 1e-6)
+  # Ineligible ('right'): g = 0
+  expect_equal(exp(ll_mix[2]), (1 - pG) * exp(ll_proc[2]), tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude is respected in the BAwLcorr quadrature fallback", {
+  matchfun <- function(d) d$S == d$lR
+  response_levels <- c("a", "b", "pm")
+  dat <- data.frame(
+    subjects = factor(rep(1, 3)),
+    S = factor(rep("a", 3), levels = response_levels),
+    R = factor(response_levels, levels = response_levels),
+    rt = c(0.5, 0.6, 0.7), LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  m_corr <- function() BAwL(correlated = TRUE)
+  des <- design(
+    data = dat, Rlevels = response_levels, matchfun = matchfun,
+    formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1,
+                   rho ~ 1, pGuess ~ 1),
+    constants = c(sv = log(1), k = 0, mG = 0, mK = 0), model = m_corr,
+    TC = list(guess_window = c(0, 10), guess_exclude = "pm")
+  )
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+  p_base <- sampled_pars(des); p_base[] <- 0
+  p_base[grep("^v_", names(p_base))] <- log(1.2)
+  p_base["B"] <- log(1); p_base["A"] <- log(0.2); p_base["t0"] <- log(0.15)
+  p_base["rho"] <- qnorm(0.9)
+
+  # Three loaded racers use the shared-factor quadrature fallback.
+  old <- Sys.getenv("EMC2_BAWLCORR_COUNTERS", unset = NA_character_)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_COUNTERS")
+    else Sys.setenv(EMC2_BAWLCORR_COUNTERS = old)
+  }, add = TRUE)
+  Sys.setenv(EMC2_BAWLCORR_COUNTERS = "1")
+  EMC2:::bawl_corr_counters_reset()
+  total_ll(dadm, model, c(p_base, pGuess = qnorm(0)))
+  expect_gt(EMC2:::bawl_corr_counter_values()[["gh_no_clock_trials"]], 0)
+
+  pG <- 0.3
+  ll_proc <- trial_lls(dadm, model, c(p_base, pGuess = qnorm(0)))
+  ll_mix <- trial_lls(dadm, model, c(p_base, pGuess = qnorm(pG)))
+  # a and b are eligible (g = 1 / (2 * 10)); pm has no guess component.
+  expect_equal(exp(ll_mix[1]), (1 - pG) * exp(ll_proc[1]) + pG * 0.05,
+               tolerance = 1e-6)
+  expect_equal(exp(ll_mix[2]), (1 - pG) * exp(ll_proc[2]) + pG * 0.05,
+               tolerance = 1e-6)
+  expect_equal(exp(ll_mix[3]), (1 - pG) * exp(ll_proc[3]),
+               tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude works in RDMSWTNcorr", {
+  dat <- data.frame(
+    subjects = factor(rep(1, 2)),
+    R = factor(c("a", "b"), levels = c("a", "b")),
+    rt = c(0.7, 0.8),
+    LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  des <- design(
+    data = dat, Rlevels = c("a", "b"),
+    formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1,
+                   mG ~ 1, mK ~ 1, rho ~ 1, pGuess ~ 1),
+    constants = c(s = 0, mG = 0, mK = 0),
+    model = RDMSWTNcorr,
+    TC = list(guess_window = c(0, 10), guess_exclude = "b")
+  )
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  model <- attr(dadm, "model")()
+  expect_identical(attr(dadm, "guess_n_resp"), 1L)
+  expect_identical(attr(dadm, "guess_response_levels"), "a")
+
+  p <- sampled_pars(des); p[] <- 0
+  p["v_lRa"] <- log(1.2); p["v_lRb"] <- log(0.8)
+  p["B"] <- log(1); p["A"] <- log(0.2); p["t0"] <- log(0.1); p["sv"] <- log(0.4)
+  p["rho"] <- qnorm((0.5 + 1) / 2)
+
+  pG <- 0.25
+  ll_proc <- trial_lls(dadm, model, c(p, pGuess = qnorm(0)))
+  ll_mix  <- trial_lls(dadm, model, c(p, pGuess = qnorm(pG)))
+
+  # Eligible trial ('a'): g = 1 / (1 * 10) = 0.1
+  expect_equal(exp(ll_mix[1]), (1 - pG) * exp(ll_proc[1]) + pG * 0.1, tolerance = 1e-6)
+  # Ineligible trial ('b'): g = 0
+  expect_equal(exp(ll_mix[2]), (1 - pG) * exp(ll_proc[2]), tolerance = 1e-6)
+})
+
+
+test_that("guess_exclude applies 1/W guess density to missing responses (R = NA)", {
+  # 1. Race model (RDM)
+  des_race <- design(
+    factors = list(subjects = 1, S = c("s1", "s2")),
+    Rlevels = c("r1", "r2", "r3"),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
+    model = RDM,
+    constants = c(s = log(1)),
+    TC = list(guess_window = c(0, 10), guess_exclude = "r2")
+  )
+  dat_race <- data.frame(
+    subjects = factor(rep(1, 3)),
+    S = factor(rep("s1", 3), levels = c("s1", "s2")),
+    R = factor(c("r1", "r2", NA), levels = c("r1", "r2", "r3")),
+    rt = c(0.5, 0.5, 0.5),
+    LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  dadm_race <- EMC2:::design_model(dat_race, des_race, compress = FALSE, rt_resolution = NULL)
+  model_race <- attr(dadm_race, "model")()
+
+  pG <- 0.3
+  p_base <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2))
+  ll_proc_race <- trial_lls(dadm_race, model_race, c(p_base, pGuess = qnorm(0)))
+  ll_mix_race  <- trial_lls(dadm_race, model_race, c(p_base, pGuess = qnorm(pG)))
+
+  # r1 is eligible (g = 1 / (2 * 10) = 0.05)
+  expect_equal(exp(ll_mix_race[1]), (1 - pG) * exp(ll_proc_race[1]) + pG * 0.05, tolerance = 1e-6)
+  # r2 is excluded (g = 0)
+  expect_equal(exp(ll_mix_race[2]), (1 - pG) * exp(ll_proc_race[2]), tolerance = 1e-6)
+  # R = NA takes marginal 1/W = 1/10 = 0.10
+  expect_equal(exp(ll_mix_race[3]), (1 - pG) * exp(ll_proc_race[3]) + pG * 0.10, tolerance = 1e-6)
+
+  # 2. DDM
+  des_ddm <- design(
+    factors = list(subjects = 1, S = c("left", "right")),
+    Rlevels = c("left", "right"),
+    formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
+    model = DDM,
+    constants = c(s = log(1)),
+    TC = list(guess_window = c(0, 5), guess_exclude = "right")
+  )
+  dat_ddm <- data.frame(
+    subjects = factor(rep(1, 3)),
+    S = factor(rep("left", 3), levels = c("left", "right")),
+    R = factor(c("left", "right", NA), levels = c("left", "right")),
+    rt = c(0.4, 0.4, 0.4),
+    LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  dadm_ddm <- EMC2:::design_model(dat_ddm, des_ddm, compress = FALSE, rt_resolution = NULL)
+  model_ddm <- attr(dadm_ddm, "model")()
+
+  p_ddm_base <- c(v = 1, a = log(1), t0 = log(0.2), Z = qnorm(0.5))
+  pG_ddm <- 0.2
+  ll_proc_ddm <- trial_lls(dadm_ddm, model_ddm, c(p_ddm_base, pGuess = qnorm(0)))
+  ll_mix_ddm  <- trial_lls(dadm_ddm, model_ddm, c(p_ddm_base, pGuess = qnorm(pG_ddm)))
+
+  # left is eligible (g = 1 / (1 * 5) = 0.2)
+  expect_equal(exp(ll_mix_ddm[1]), (1 - pG_ddm) * exp(ll_proc_ddm[1]) + pG_ddm * 0.2, tolerance = 1e-6)
+  # right is excluded (g = 0)
+  expect_equal(exp(ll_mix_ddm[2]), (1 - pG_ddm) * exp(ll_proc_ddm[2]), tolerance = 1e-6)
+  # R = NA takes marginal 1/W = 1/5 = 0.2
+  expect_equal(exp(ll_mix_ddm[3]), (1 - pG_ddm) * exp(ll_proc_ddm[3]) + pG_ddm * 0.2, tolerance = 1e-6)
+})

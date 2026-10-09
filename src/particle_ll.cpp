@@ -1169,7 +1169,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     std::vector<int> loser_int_buf;
     std::vector<int> isok_int_fp;
     NumericVector rts_fp_hold;
+    IntegerVector R_fp_hold;
     const double* rt_ptr = nullptr;
+    const int* R_idxs_dadm = nullptr;
     const int* expand_ptr = expand.begin();
     const int n_exp = expand.length();
 
@@ -1222,6 +1224,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       rts_fp_hold = data["rt"];
       rt_ptr = rts_fp_hold.begin();
+      R_fp_hold = data["R"];
+      R_idxs_dadm = R_fp_hold.begin();
 
       // Resolve keep_names[j] -> base column pointer once; kernels index the
       // leading columns positionally, so a missing required column is fatal.
@@ -1455,9 +1459,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
             const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                 ? pars_cols[fast_pg_col][base] : 0.0;
-            double log_guess = fast_guess.log_g;
-            if (pG > 0.0 && rt_bins.active())
-              log_guess = rt_bin_guess(fast_guess, rt_bins.bins[j]).log_g;
+            const GuessKernel trial_guess = pG > 0.0 && rt_bins.active()
+              ? rt_bin_guess(fast_guess, rt_bins.bins[j]) : fast_guess;
+            const double log_guess = guess_log_density_for_response(
+              trial_guess, R_idxs_dadm[base]);
             if (pC != 0.0 || pG != 0.0)
               s = mix_contaminants(s, pC, pG, log_guess, false);
           }
@@ -1481,9 +1486,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
               const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                   ? pars_cols[fast_pg_col][base] : 0.0;
-              double log_guess = fast_guess.log_g;
-              if (pG > 0.0 && rt_bins.active())
-                log_guess = rt_bin_guess(fast_guess, rt_bins.bins[j]).log_g;
+              const GuessKernel trial_guess = pG > 0.0 && rt_bins.active()
+                ? rt_bin_guess(fast_guess, rt_bins.bins[j]) : fast_guess;
+              const double log_guess = guess_log_density_for_response(
+                trial_guess, R_idxs_dadm[base]);
               if (pC != 0.0 || pG != 0.0)
                 s = mix_contaminants(s, pC, pG, log_guess, false);
             }
@@ -3328,7 +3334,8 @@ apply_trial_trunc:
       rt_bin_guess(guess, rt_bins.bins[j]) : guess;
     ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC, pG,
                                        trial_guess, rt_j,
-                                       R_idxs_dadm[j * n_lR] != NA_INTEGER);
+                                       R_idxs_dadm[j * n_lR] != NA_INTEGER,
+                                       trial_guess.response_is_eligible(R_idxs_dadm[j * n_lR]));
   };
   const bool use_mix = use_pC || use_pG;
   double total_ll = 0;

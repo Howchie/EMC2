@@ -377,7 +377,8 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
       R_FINITE(rt_ptr[i]) && static_cast<size_t>(i) < shared->rt_bins.bins.size()
         ? rt_bin_guess(gk, shared->rt_bins.bins[static_cast<size_t>(i)]) : gk;
     return mix_contaminants_rt(ll, pC, pG, trial_guess, rt_ptr[i],
-                               R_ptr[i] != NA_INTEGER);
+                               R_ptr[i] != NA_INTEGER,
+                               trial_guess.response_is_eligible(R_ptr[i]));
   };
 
   // 1. Fast Path: All RTs finite, no truncation, no censoring

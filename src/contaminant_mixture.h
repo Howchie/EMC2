@@ -26,7 +26,10 @@
 // comment about exactly that failure mode.
 
 #include <Rcpp.h>
+#include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 #include "composite_functions.h" // log1m, log_sum_exp
 
 // The uniform guess kernel, resolved once per dadm rather than per trial.
@@ -38,21 +41,28 @@
 // this file: there is no guess term in any censored branch.
 struct GuessKernel {
   int    pg_col     = -1;         // pGuess column in the ParamTable, -1 when absent
-  double log_g      = R_NegInf;   // -log(n_resp * (UG - LG)): guess density for a known R
+  double log_g      = R_NegInf;   // -log(n_resp * (UG - LG)): eligible known R
   double log_g_any  = R_NegInf;   // -log(UG - LG): R marginalised out (n_resp skipped)
   double LG         = 0.0;
   double UG         = R_PosInf;
+  std::shared_ptr<const std::vector<unsigned char>> response_eligible_by_code;
 
   bool active() const { return pg_col >= 0 && log_g > R_NegInf; }
+  bool response_is_eligible(int response_code) const {
+    if (!response_eligible_by_code) return true;
+    return response_code > 0 &&
+      static_cast<size_t>(response_code) < response_eligible_by_code->size() &&
+      (*response_eligible_by_code)[static_cast<size_t>(response_code)] != 0;
+  }
 };
 
-// Read attr(dadm, "guess_window") / attr(dadm, "guess_n_resp") and turn them
-// into the two log densities.  `pg_col` is filled in separately by whichever
-// column walk the caller already performs for pContaminant.
+// Read the guess window, eligible response count, and response-code mask from
+// dadm. `pg_col` is filled in by the caller's nuisance-column walk.
 inline GuessKernel resolve_guess_kernel(const Rcpp::DataFrame& dadm) {
   GuessKernel g;
   Rcpp::RObject win_obj = dadm.attr("guess_window");
   Rcpp::RObject nr_obj  = dadm.attr("guess_n_resp");
+  Rcpp::RObject codes_obj = dadm.attr("guess_response_codes");
   if (win_obj.isNULL() || nr_obj.isNULL()) return g;
   Rcpp::NumericVector win(win_obj);
   if (win.size() != 2) return g;
@@ -63,6 +73,18 @@ inline GuessKernel resolve_guess_kernel(const Rcpp::DataFrame& dadm) {
   g.UG        = UG;
   g.log_g_any = -std::log(UG - LG);
   g.log_g     = g.log_g_any - std::log(n_resp);
+  if (!codes_obj.isNULL()) {
+    Rcpp::IntegerVector codes(codes_obj);
+    int max_code = 0;
+    for (int i = 0; i < codes.size(); ++i)
+      if (codes[i] != NA_INTEGER && codes[i] > max_code) max_code = codes[i];
+    auto eligible = std::make_shared<std::vector<unsigned char>>(
+      static_cast<size_t>(max_code) + 1, 0);
+    for (int i = 0; i < codes.size(); ++i)
+      if (codes[i] != NA_INTEGER && codes[i] > 0)
+        (*eligible)[static_cast<size_t>(codes[i])] = 1;
+    g.response_eligible_by_code = eligible;
+  }
   return g;
 }
 
@@ -100,14 +122,21 @@ inline double mix_contaminants(double ll_proc, double pC, double pG,
   return v;
 }
 
-// Convenience wrapper for the common case where the caller has rt and knows
-// whether R is observed.  Picks log_g / log_g_any / -Inf per decision 6:
-// an unknown R with a finite rt takes the window density *without* the n_resp
-// division, so the density still integrates to 1 over that trial's support.
+inline double guess_log_density_for_response(const GuessKernel& g,
+                                             int response_code) {
+  if (response_code == NA_INTEGER) return g.log_g_any;
+  return g.response_is_eligible(response_code) ? g.log_g : R_NegInf;
+}
+
+// An unknown response with finite rt uses the response-marginal density. A
+// known but ineligible response has no guess component.
 inline double mix_contaminants_rt(double ll_proc, double pC, double pG,
-                                  const GuessKernel& g, double rt, bool R_known) {
+                                  const GuessKernel& g, double rt, bool R_known,
+                                  bool response_eligible = true) {
   double log_g = R_NegInf;
-  if (g.active() && R_FINITE(rt) && rt > 0.0) log_g = R_known ? g.log_g : g.log_g_any;
+  if (g.active() && R_FINITE(rt) && rt > 0.0) {
+    log_g = !R_known ? g.log_g_any : (response_eligible ? g.log_g : R_NegInf);
+  }
   return mix_contaminants(ll_proc, pC, pG, log_g, rt == R_PosInf);
 }
 

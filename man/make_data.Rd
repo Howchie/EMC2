@@ -41,7 +41,9 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 \item{return_functions}{Logical, should factors created by functions be returned, default FALSE.}
 
 \item{TC}{List of truncation/censoring arguments passed to \code{make_missing}
-(e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.}
+(e.g. \code{list(LT=0.1, UC=2)}). It can include \code{guess_exclude} to keep
+selected response levels out of \code{pGuess}. NULL means no truncation or
+censoring is applied.}
 
 \item{filter_defective}{Logical. If \code{TRUE}, intrinsically defective
 omissions are removed when \code{UT} is finite, as ordinary responses outside
