@@ -384,6 +384,7 @@
       moved[[moved_idx[i]]]$rho <- moved[[moved_idx[i]]]$rho * fac[i]
     moved
   })
+  if (is.null(movable)) movable <- .emc_alloc_movable(units, max_rounds, joint)
   ranges <- lapply(cand, .emc_alloc_range, max_rounds = max_rounds, movable = movable)
   r0 <- ranges[[1L]]
   c_p0 <- sum(vapply(units, function(u)
@@ -448,6 +449,17 @@
        hi = if (any(movable)) max(levels[movable], 0) else 0,
        lo = if (any(movable)) max(best_rho[movable], 0) else 0,
        hi_all = max(levels, 0))
+}
+
+# Which units a move can lower: by their own moves, or by the joint move.
+.emc_alloc_movable <- function(units, max_rounds, joint = NULL) {
+  movable <- .emc_alloc_range(units, max_rounds)$movable
+  if (!is.null(joint)) {
+    idx <- as.integer(joint$idx)
+    g <- rep_len(joint$g, length(idx))
+    movable[idx] <- movable[idx] | (is.finite(g) & g < 1 - 1e-9)
+  }
+  movable
 }
 
 # An unmovable unit's allocation at every target: nothing bought, its
@@ -825,7 +837,7 @@
     if (identical(x$kind, "subject")) x$h <- NULL
     x
   })
-  movable <- .emc_alloc_range(u$units, .EMC_ALLOC_MAX_ROUNDS)$movable
+  movable <- .emc_alloc_movable(u$units, .EMC_ALLOC_MAX_ROUNDS, u$joint)
   without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable)
   has_h <- any(vapply(u$units, function(x) !is.null(x$h) || identical(x$kind, "hmc"),
                       logical(1)))
