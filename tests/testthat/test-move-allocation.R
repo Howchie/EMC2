@@ -26,13 +26,13 @@ test_that("the allocation is as good as a dense grid over rounds and rates", {
     xs <- seq(0, 4, by = 0.02); rs <- seq(0, 1, by = 0.01)
     best <- Inf
     for (x in xs) for (r in rs) {
-      rho <- max(alloc_unit_rho(units[[1]], x), alloc_unit_rho(units[[2]], r),
-                 alloc_unit_rho(units[[3]], 0))
+      # The fixed coordinate counts for nothing: no move lowers it.
+      rho <- max(alloc_unit_rho(units[[1]], x), alloc_unit_rho(units[[2]], r))
       best <- min(best, tau(rho) * (C + x * units[[1]]$cost + r * units[[2]]$cost))
     }
     sol <- EMC2:::.emc_alloc_solve(units, C)
-    rho_sol <- max(vapply(seq_along(units), function(k)
-      alloc_unit_rho(units[[k]], sol$x[k]), numeric(1)))
+    rho_sol <- max(vapply(1:2, function(k) alloc_unit_rho(units[[k]], sol$x[k]), numeric(1)))
+    expect_equal(sol$tau0_all, tau(max(vapply(units, alloc_unit_rho, 0, x = 0))))
     # The solver's own accounting is honest.
     expect_lte(rho_sol, sol$rho + 1e-9)
     expect_equal(sol$cost, C + sum(sol$x * vapply(units, `[[`, 0, "cost")))
@@ -46,14 +46,26 @@ test_that("the allocation is as good as a dense grid over rounds and rates", {
   }
 })
 
-test_that("nothing is spent below a floor the moves cannot reach", {
+test_that("a coordinate no move can lower does not bound the others", {
   solve <- EMC2:::.emc_alloc_solve
   # Every coordinate fixed: nothing to buy.
   expect_equal(solve(list(list(kind = "fixed", rho = 0.9, cost = 0)), 1)$x, 0)
-  # A slow group coordinate no shear can reach bounds the subjects' HMC.
+  # A slow group coordinate no shear can reach does not stop the subjects'
+  # HMC: the allocation is over what the moves can reach.
   sol <- solve(list(list(kind = "fixed", rho = 0.99, cost = 0),
                     list(kind = "hmc", rho = c(0.9, 0.5), h = c(0.1, 0.1), cost = 0.01)), 1)
-  expect_equal(sol$x, c(0, 0))
+  expect_equal(sol$x[1], 0)
+  expect_gt(sol$x[2], 0)
+  expect_equal(sol$tau0, EMC2:::.emc_alloc_tau(0.9))
+  # A subject whose particle step and HMC do not move it (a drifting chain
+  # reads every jump as nothing against the pooled variance) does not veto
+  # the rounds that move the group.
+  stuck <- list(kind = "subject", rho = c(0.9999, 0.999), p = c(1, 1), c_p = 0.1,
+                h = c(1, 1), c_h = 0.1)
+  sol <- solve(list(list(kind = "shear", rho = 0.95, g = 0.4, cost = 0.05), stuck), 1)
+  expect_gt(sol$x[1], 0)
+  expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
+  expect_equal(sol$cost, 1 + sol$x[1] * 0.05 + 0.1)
   # A stuck subject with an effective, cheap HMC gets a rate.
   sol <- solve(list(list(kind = "fixed", rho = 0.3, cost = 0),
                     list(kind = "hmc", rho = c(0.995, 0.2), h = c(0.2, 0.5), cost = 0.05)), 1)
@@ -67,7 +79,7 @@ test_that("nothing is spent below a floor the moves cannot reach", {
   expect_gt(sol$x[1], 0)
   expect_lte(sol$x[1], EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   # A small predicted gain is not worth moves.
-  sol <- solve(list(list(kind = "shear", rho = 0.25, g = 0.3, cost = 0.2),
+  sol <- solve(list(list(kind = "shear", rho = 0.25, g = 0.8, cost = 0.2),
                     list(kind = "fixed", rho = 0.2, cost = 0)), 1)
   expect_equal(sol$x, c(0, 0))
 })
@@ -202,8 +214,7 @@ test_that("particle and HMC rates are as good as a dense grid over both", {
     for (q in qs) for (r in seq(0, 1, by = 0.005)) {
       rho_s <- alloc_subject_rho(subj, q, r)
       if (any(rho_s > level + 1e-12)) next
-      rho <- max(rho_s, units[[2]]$rho)
-      best <- min(best, tau(rho) * (C + q * subj$c_p + r * subj$c_h))
+      best <- min(best, tau(max(rho_s)) * (C + q * subj$c_p + r * subj$c_h))
     }
     sol <- EMC2:::.emc_alloc_solve(units, C)
     q <- sol$q[1]; r <- sol$x[1]
@@ -211,7 +222,7 @@ test_that("particle and HMC rates are as good as a dense grid over both", {
     # No coordinate ends slower than under its particle step alone, and the
     # solver's accounting is honest.
     expect_true(all(rho_s <= level + 1e-9))
-    expect_lte(max(rho_s, units[[2]]$rho), sol$rho + 1e-9)
+    expect_lte(max(rho_s), sol$rho + 1e-9)
     expect_equal(sol$cost, C + q * subj$c_p + r * subj$c_h)
     expect_true(q %in% qs)
     if (best < 0.88 * sol$objective0) {
@@ -230,7 +241,10 @@ test_that("the particle step stands down only for a cheaper, better HMC rate", {
   # Its zero allocation runs every particle step and prices it.
   sol <- solve(list(fixed, replace(subj, "h", list(NULL))), 1)
   expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
-  expect_equal(sol$objective0, EMC2:::.emc_alloc_tau(0.95 * 0.6) * 2)
+  expect_equal(sol$cost, 2)
+  # Without HMC nothing can be lowered: the target is empty, the slowest
+  # coordinate still reported.
+  expect_equal(sol$tau0_all, EMC2:::.emc_alloc_tau(0.95 * 0.6))
   # HMC that moves the subject more for less replaces it.
   sol <- solve(list(fixed, subj), 1)
   expect_lt(sol$q[2], 1)
@@ -246,7 +260,8 @@ test_that("the particle step stands down only for a cheaper, better HMC rate", {
 test_that("under the refresh floor the cheaper kernel refreshes every subject", {
   local_test_rng(12)
   solve <- EMC2:::.emc_alloc_solve
-  fixed <- list(kind = "fixed", rho = 0.8, cost = 0)
+  # A group coordinate the rounds barely move: a floor near 0.8.
+  fixed <- list(kind = "shear", rho = 0.8, g = 0.999, cost = 0)
   # HMC moves one coordinate less than the particle step but costs half.
   subj <- list(kind = "subject", rho = c(0.9, 0.8), p = c(0.5, 0.3), c_p = 1,
                h = c(0.4, 0.5), c_h = 0.5)

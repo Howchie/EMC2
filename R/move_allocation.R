@@ -55,9 +55,11 @@
 # With tau = (1 + rho) / (1 - rho), the
 # allocation minimises
 #   max over coordinates of tau * (C_rest + sum_k x_k c_round + sum_s r_s c_s)
-# over expected rounds x_k and rates r_s (.emc_alloc_solve). Coordinates the
-# moves cannot reach (no shear, no usable fit) keep their rest-of-iteration
-# rho and act as a floor: nothing is spent below the slowest of them. A
+# over expected rounds x_k and rates r_s (.emc_alloc_solve). Coordinates no
+# move can lower (no shear, no usable fit, a subject whose steps do not move
+# it) keep their rest-of-iteration rho and do not bound the target: the
+# allocation is over the coordinates the moves can reach. A coordinate a
+# move can lower only so far is a floor at that level. A
 # collapsed move moves every group coordinate at once: x_c expected moves
 # multiply coordinate k's rho by its factor at x_c, so the solver takes the
 # best of a grid over x_c, each with the per-unit allocation on the reduced
@@ -364,8 +366,11 @@
 # unallocated maximum, plus every unit's own level under every candidate
 # collapsed rate. The units the collapsed move does not touch are priced once
 # on that grid; only the group units are re-priced per candidate rate.
+# movable: which units count towards the target (default: those a move can
+# lower), given so that solves of the same problem with and without a kernel
+# are judged on the same coordinates.
 .emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
-                             joint = NULL) {
+                             joint = NULL, movable = NULL) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
   refresh <- identical(getOption("emc2.alloc_subject_floor", "particle"), "refresh")
@@ -379,7 +384,7 @@
       moved[[moved_idx[i]]]$rho <- moved[[moved_idx[i]]]$rho * fac[i]
     moved
   })
-  ranges <- lapply(cand, .emc_alloc_range, max_rounds = max_rounds)
+  ranges <- lapply(cand, .emc_alloc_range, max_rounds = max_rounds, movable = movable)
   r0 <- ranges[[1L]]
   c_p0 <- sum(vapply(units, function(u)
     if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
@@ -396,13 +401,15 @@
     targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), lv)))
     tau_t <- .emc_alloc_tau(targets)
     still <- setdiff(seq_len(n_u), moved_idx)
+    need_of <- function(us, movable) lapply(seq_along(us), function(i)
+      if (movable[i]) .emc_alloc_unit_need(us[[i]], rs = targets, max_rounds = max_rounds,
+                                           refresh = refresh)
+      else .emc_alloc_unit_still(us[[i]], length(targets)))
     need <- vector("list", n_u)
-    need[still] <- lapply(units[still], .emc_alloc_unit_need, rs = targets,
-                          max_rounds = max_rounds, refresh = refresh)
+    need[still] <- need_of(units[still], r0$movable[still])
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
     for (c in seq_along(xcs)) {
-      nm <- lapply(cand[[c]][moved_idx], .emc_alloc_unit_need, rs = targets,
-                   max_rounds = max_rounds, refresh = refresh)
+      nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx])
       cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) +
         Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets)))
       obj <- tau_t * cost
@@ -420,18 +427,34 @@
   if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) best <- zero
   best$objective0 <- zero$objective
   best$tau0 <- zero$tau
+  # The slowest coordinate of all, moved or not.
+  best$tau0_all <- .emc_alloc_tau(r0$hi_all)
   best
 }
 
-# The unallocated rho of each unit, and the least rho* every unit can reach.
-.emc_alloc_range <- function(units, max_rounds) {
+# The unallocated rho of each unit, the least rho* it can reach, and whether
+# any move lowers it at all; the range of targets is over the units that
+# can be moved.
+.emc_alloc_range <- function(units, max_rounds, movable = NULL) {
   levels <- vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1))
   best_rho <- vapply(units, function(u) switch(u$kind,
     fixed = max(u$rho),
     shear = u$rho * .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap,
                                       if (is.null(u$a)) u$g else u$a),
     subject = max(.emc_alloc_level(u) * if (is.null(u$h)) 1 else u$h)), numeric(1))
-  list(levels = levels, hi = max(levels, 0), lo = max(best_rho, 0))
+  if (is.null(movable) || length(movable) != length(units))
+    movable <- best_rho < levels - 1e-9
+  list(levels = levels, best = best_rho, movable = movable,
+       hi = if (any(movable)) max(levels[movable], 0) else 0,
+       lo = if (any(movable)) max(best_rho[movable], 0) else 0,
+       hi_all = max(levels, 0))
+}
+
+# An unmovable unit's allocation at every target: nothing bought, its
+# particle step (if priced) running.
+.emc_alloc_unit_still <- function(u, n_t) {
+  c_p <- if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0
+  list(x = numeric(n_t), q = rep(1, n_t), cost = rep(c_p, n_t))
 }
 
 .emc_alloc_as_subject <- function(u) {
@@ -802,18 +825,21 @@
     if (identical(x$kind, "subject")) x$h <- NULL
     x
   })
-  without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint)
+  movable <- .emc_alloc_range(u$units, .EMC_ALLOC_MAX_ROUNDS)$movable
+  without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable)
   has_h <- any(vapply(u$units, function(x) !is.null(x$h) || identical(x$kind, "hmc"),
                       logical(1)))
   if (!has_h) return(without)
-  with <- .emc_alloc_solve(u$units, u$C_rest + u$hmc_fixed, joint = u$joint)
+  with <- .emc_alloc_solve(u$units, u$C_rest + u$hmc_fixed, joint = u$joint,
+                           movable = movable)
   with$regime <- 0
   # Subject HMC for the group's sake: regimes with every subject at a rate,
   # priced with the group autocorrelations they imply.
   if (isTRUE(getOption("emc2.alloc_hmc_regimes", TRUE))) for (r in .EMC_ALLOC_HMC_REGIMES) {
     reg <- .emc_alloc_regime(u, r)
     if (is.null(reg)) break
-    cand <- .emc_alloc_solve(reg$units, u$C_rest + u$hmc_fixed + reg$cost, joint = u$joint)
+    cand <- .emc_alloc_solve(reg$units, u$C_rest + u$hmc_fixed + reg$cost, joint = u$joint,
+                             movable = movable)
     if (isTRUE(cand$objective < with$objective)) {
       cand$regime <- r
       with <- cand
@@ -925,7 +951,8 @@
       transitions = if (is.null(ch$sample_transitions)) NA_integer_ else
         as.integer(ch$sample_transitions),
       stored = m$stored, pairs = m$pairs, C_rest = u$C_rest, c_round = u$c_round,
-      c_hmc = m$c_hmc, c_part = m$c_part, hmc_fixed = u$hmc_fixed, tau = sol$tau, tau0 = sol$tau0, cost = sol$cost,
+      c_hmc = m$c_hmc, c_part = m$c_part, hmc_fixed = u$hmc_fixed, tau = sol$tau, tau0 = sol$tau0,
+      tau0_all = sol$tau0_all, cost = sol$cost,
       regime = regime, r_bar = m$r_bar,
       objective = sol$objective, objective0 = sol$objective0,
       group_rho = m$g_rho, group_g = m$g_fac, group_a = m$g_sat,
