@@ -75,7 +75,10 @@
 # mixing depends on how the subjects move, which the units do not model, so
 # no coordinate may end slower than under its particle step alone. A subject the
 # allocation would use without measured HMC moves first gets a bracketed
-# step size and pilot transitions on a private copy of its state. The
+# step size and pilot transitions on a private copy of its state. Under
+# emc2.alloc_subject_floor = "refresh" the particle step is not a floor: each
+# subject is refreshed once per iteration by the particle step or HMC
+# (q_s + r_s >= 1) and only has to meet the target. The
 # allocation changes only at rebuilds, as every adapted quantity does.
 
 .EMC_ALLOC_MAX_ROUNDS <- 4
@@ -365,6 +368,7 @@
                              joint = NULL) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
+  refresh <- identical(getOption("emc2.alloc_subject_floor", "particle"), "refresh")
   moved_idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
   xcs <- c(0, if (!is.null(joint)) .emc_alloc_joint_grid(joint$cap))
   cand <- lapply(xcs, function(xc) {
@@ -394,11 +398,11 @@
     still <- setdiff(seq_len(n_u), moved_idx)
     need <- vector("list", n_u)
     need[still] <- lapply(units[still], .emc_alloc_unit_need, rs = targets,
-                          max_rounds = max_rounds)
+                          max_rounds = max_rounds, refresh = refresh)
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
     for (c in seq_along(xcs)) {
       nm <- lapply(cand[[c]][moved_idx], .emc_alloc_unit_need, rs = targets,
-                   max_rounds = max_rounds)
+                   max_rounds = max_rounds, refresh = refresh)
       cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) +
         Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets)))
       obj <- tau_t * cost
@@ -441,8 +445,9 @@
 }
 
 # A unit's allocation for each target rho* in rs: list(x, q, cost), with
-# cost Inf where the target is out of its reach.
-.emc_alloc_unit_need <- function(u, rs, max_rounds) {
+# cost Inf where the target is out of its reach. refresh: a subject's
+# particle step is not a floor, but it is refreshed once per iteration.
+.emc_alloc_unit_need <- function(u, rs, max_rounds, refresh = FALSE) {
   n_t <- length(rs)
   if (identical(u$kind, "fixed"))
     return(list(x = numeric(n_t), q = rep(1, n_t),
@@ -462,13 +467,13 @@
   }
   # Subject: for each particle rate q, the least HMC rate r with
   # rho_i (1 - q (1 - p_i)) (1 - r (1 - h_i)) <= min(rho*, level_i) on every
-  # coordinate; then the cheapest q.
+  # coordinate (<= rho* under refresh, with r >= 1 - q); then the cheapest q.
   rho <- u$rho
   level <- .emc_alloc_level(u)
   qs <- if (is.null(u$p) || is.null(u$h)) 1 else .EMC_ALLOC_PARTICLE_RATES
-  r_need <- matrix(0, length(qs), n_t)
+  r_need <- matrix(if (refresh) 1 - qs else 0, length(qs), n_t)
   for (i in seq_along(rho)) {
-    K <- pmin(rs, level[i])
+    K <- if (refresh) rs else pmin(rs, level[i])
     base <- if (is.null(u$p)) rep(rho[i], length(qs)) else rho[i] * (1 - qs * (1 - u$p[i]))
     over <- outer(base, K * (1 + 1e-12), ">")
     if (!any(over)) next

@@ -243,6 +243,37 @@ test_that("the particle step stands down only for a cheaper, better HMC rate", {
   expect_identical(sol$q[2], 1)
 })
 
+test_that("under the refresh floor the cheaper kernel refreshes every subject", {
+  local_test_rng(12)
+  solve <- EMC2:::.emc_alloc_solve
+  fixed <- list(kind = "fixed", rho = 0.8, cost = 0)
+  # HMC moves one coordinate less than the particle step but costs half.
+  subj <- list(kind = "subject", rho = c(0.9, 0.8), p = c(0.5, 0.3), c_p = 1,
+               h = c(0.4, 0.5), c_h = 0.5)
+  sol <- solve(list(fixed, subj), 1)
+  expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
+  withr::local_options(emc2.alloc_subject_floor = "refresh")
+  sol <- solve(list(fixed, subj), 1)
+  expect_identical(c(sol$q[2], sol$x[2]), c(0, 1))
+  expect_equal(sol$cost, 1 + subj$c_h)
+  # Every subject is refreshed (q + r >= 1) and meets the target; HMC that
+  # costs more than the particle step never replaces it.
+  dear <- replace(subj, "c_h", list(1.5))
+  sol <- solve(list(fixed, dear), 1)
+  expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
+  for (trial in 1:20) {
+    s <- list(kind = "subject", rho = stats::runif(2, 0.5, 1),
+              p = stats::runif(2, 0.1, 0.9), c_p = stats::runif(1, 0.05, 0.5),
+              h = stats::runif(2, 0, 0.9), c_h = stats::runif(1, 0.02, 0.5))
+    units <- list(s, list(kind = "fixed", rho = stats::runif(1, 0, 0.9), cost = 0))
+    sol <- solve(units, 1)
+    q <- sol$q[1]; r <- sol$x[1]
+    expect_gte(q + r, 1 - 1e-9)
+    expect_true(all(alloc_subject_rho(s, q, r) <= sol$rho + 1e-9))
+    expect_equal(sol$cost, 1 + q * s$c_p + r * s$c_h)
+  }
+})
+
 test_that("particle steps are recorded at their marginal (worker CPU) cost", {
   p <- 2; n <- 3
   s <- list(n_pars = p, n_subjects = n)
