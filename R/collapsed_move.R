@@ -159,13 +159,53 @@
   out
 }
 
+# A fitted quadratic can have flat curvature after its negative eigenvalues
+# are projected away. A nonzero linear coefficient in that null space makes
+# its Gaussian integral unbounded as the group variance grows. Remove those
+# unsupported slopes in empirical fits and in older/mode-based fits.
+.emc_collapsed_safe_fit <- function(fit) {
+  if (is.null(fit)) return(NULL)
+  H <- fit$prec
+  lin <- fit$lin
+  if (!is.matrix(H) || nrow(H) != ncol(H) || length(lin) != nrow(H) ||
+      any(!is.finite(H)) || any(!is.finite(lin))) return(NULL)
+  if (isTRUE(fit$.emc_collapsed_safe)) return(fit)
+  H <- (H + t(H)) / 2
+  e <- tryCatch(eigen(H, symmetric = TRUE), error = function(e) NULL)
+  if (is.null(e) || any(!is.finite(e$values))) return(NULL)
+  tol <- max(abs(e$values), .Machine$double.xmin) * 1e-10
+  keep <- which(e$values > tol)
+  U <- e$vectors[, keep, drop = FALSE]
+  H <- e$vectors %*% (pmax(e$values, 0) * t(e$vectors))
+  if (ncol(U)) {
+    lin <- drop(U %*% crossprod(U, lin))
+    if (is.matrix(fit$cross) && nrow(fit$cross) == nrow(H) &&
+        all(is.finite(fit$cross)))
+      fit$cross <- U %*% crossprod(U, fit$cross)
+  } else {
+    lin[] <- 0
+    if (is.matrix(fit$cross) && nrow(fit$cross) == nrow(H))
+      fit$cross[,] <- 0
+  }
+  fit$prec <- (H + t(H)) / 2
+  fit$lin <- lin
+  fit$.emc_collapsed_safe <- TRUE
+  fit
+}
+
 .emc_collapsed_context <- function(sampler) {
   spec <- .emc_shear_v_spec(sampler)
   fits <- sampler$collapsed$fits
-  if (length(fits) != sampler$n_subjects) fits <- .emc_shear_fits(sampler)
+  cacheable <- length(fits) == sampler$n_subjects
+  if (!cacheable) fits <- .emc_shear_fits(sampler)
+  fits <- lapply(fits, .emc_collapsed_safe_fit)
+  base_fits <- fits
   fits <- .emc_collapsed_condition(fits, sampler$pooled$value)
+  fits <- lapply(fits, .emc_collapsed_safe_fit)
   chart <- .emc_collapsed_chart(spec, sampler$n_pars)
-  list(fits = fits, spec = spec, prior = sampler$prior, chart = chart,
+  list(fits = fits, base_fits = base_fits, cacheable = cacheable,
+       spec = spec, prior = sampler$prior, chart = chart,
+       walls = .emc_shear_walls_of(sampler),
        cpp = .emc_collapsed_cpp_model(chart, fits, sampler$prior, spec))
 }
 
@@ -198,6 +238,16 @@
   eb <- eigen(B, symmetric = TRUE)
   Bp <- eb$vectors %*% (pmax(eb$values, 0) * t(eb$vectors))
   g <- qr.coef(qr(cbind(1, Z)), y + 0.5 * rowSums((Z %*% Bp) * Z))[-1L]
+  # PSD projection can create flat directions. Refitting an unconstrained
+  # linear term after that projection gives those directions arbitrary slopes.
+  tol <- max(abs(eb$values), .Machine$double.xmin) * 1e-10
+  keep <- which(eb$values > tol)
+  if (length(keep)) {
+    U <- eb$vectors[, keep, drop = FALSE]
+    g <- drop(U %*% crossprod(U, g))
+  } else {
+    g[] <- 0
+  }
   H <- t(W) %*% Bp %*% W
   H <- (H + t(H)) / 2
   lin <- drop(H %*% abar + t(W) %*% g)
@@ -235,7 +285,8 @@
 .emc_collapsed_condition <- function(fits, value) {
   lapply(fits, function(f) {
     if (is.null(f$cross) || is.null(value)) return(f)
-    list(prec = f$prec, lin = f$lin - drop(f$cross %*% as.numeric(value)))
+    list(prec = f$prec, lin = f$lin - drop(f$cross %*% as.numeric(value)),
+         .emc_collapsed_safe = isTRUE(f$.emc_collapsed_safe))
   })
 }
 
@@ -292,10 +343,12 @@
   eps <- .emc_collapsed_tune_eps(phi, C, eps0, ctx)
   chain$rng$gibbs <- get(".Random.seed", envir = globalenv())
   zero <- .emc_collapsed_record(NULL, p)
-  # Outside production the fits, mass and step size change at every rebuild,
-  # so only the block just run measures the move. Production blocks run
-  # settled kernels on a stationary chain, so their moves pool over the sample
-  # stage. Without enough moves the new plan is unmeasured.
+  # Outside production, do not pool movement across nonempty blocks because
+  # the fits, mass and step size change at every rebuild. If the allocator
+  # selected too few moves to measure the new block, retain the last measured
+  # block within this stage instead of reverting to an optimistic prior.
+  # Production blocks run settled kernels on a stationary chain, so their
+  # measurements pool over the sample stage.
   blk <- .emc_collapsed_record(if (is.list(old$block)) old$block, p)
   pooled <- identical(stage, "sample") && identical(old$stage, "sample")
   pool <- if (pooled) {
@@ -305,7 +358,11 @@
          K = .emc_alloc_khist_sum(prev$K, blk$K))
   } else zero
   last <- if (pooled) pool else blk
-  if (last$n < 5L) last <- zero
+  if (last$n < 5L) {
+    previous <- if (!pooled && identical(stage, old$stage))
+      .emc_collapsed_record(old$last, p) else zero
+    last <- if (previous$n >= 5L) previous else zero
+  }
   st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim, stage = stage,
                   last = last, pool = pool, block = zero)
   chain$collapsed <- st
@@ -349,11 +406,10 @@
   x$acc <- 0
   x$jump <- numeric(2L * p)
   cur <- x$cur
-  r <- vapply(seq_len(n), function(s) {
+  r <- matrix(vapply(seq_len(n), function(s) {
     f <- cur$frames[[s]]
     drop(f$R %*% (x$alpha[, s] - f$m))
-  }, numeric(p))
-  r <- matrix(r, p)
+  }, numeric(p)), p)
   phi0 <- .emc_collapsed_to_phi(cur$mu, cur$V, ctx$chart)
   inner <- collapsed_trajectories_cpp(phi0, plan$C, plan$eps, .EMC_COLLAPSED_INNER,
                                       .EMC_COLLAPSED_LENGTH, ctx$cpp)
@@ -363,10 +419,24 @@
   st <- .emc_collapsed_from_phi(phi, ctx$chart)
   new <- .emc_shear_state(st$mu, st$V, ctx$fits, sampler$prior, ctx$spec)
   if (is.null(new) || !is.finite(new$lp)) return(x)
+  walls <- ctx$walls
+  # Subjects with a transport wall take the wall-aware map; the exact
+  # correction then carries the map's Jacobian in place of the plain one and
+  # the change of their whitened coordinate (see .emc_shear_wall_map).
+  jac <- numeric(n)
   alpha_new <- matrix(vapply(seq_len(n), function(s) {
-    f <- new$frames[[s]]
-    f$m + drop(backsolve(f$R, r[, s]))
+    f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
+    if (!is.null(walls) && walls$has[s]) {
+      wm <- .emc_shear_wall_map(x$alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
+      if (!is.null(wm)) {
+        r1 <- drop(f1$R %*% (wm$a - f1$m))
+        jac[s] <<- wm$log_jac - (f0$logdet - f1$logdet) - 0.5 * (sum(r1^2) - sum(r[, s]^2))
+        return(wm$a)
+      }
+    }
+    f1$m + drop(backsolve(f1$R, r[, s]))
   }, numeric(p)), p)
+  if (any(!is.finite(alpha_new))) return(x)
   pn <- sampler$par_names
   rows <- lapply(seq_len(n), function(s)
     matrix(alpha_new[, s], 1L, dimnames = list(NULL, pn)))
@@ -375,8 +445,9 @@
   x$wpool <- evaluated$pool
   x$rounds <- x$rounds + 1L
   ll_new <- as.numeric(evaluated$ll)
-  la <- sum(ll_new - .emc_collapsed_log_lhat(alpha_new, ctx$fits)) -
-    sum(x$ll - .emc_collapsed_log_lhat(x$alpha, ctx$fits))
+  lhat_new <- .emc_collapsed_log_lhat(alpha_new, ctx$fits)
+  lhat_old <- .emc_collapsed_log_lhat(x$alpha, ctx$fits)
+  la <- sum(ll_new - lhat_new) - sum(x$ll - lhat_old) + sum(jac)
   acc <- if (is.finite(la) && all(is.finite(ll_new))) min(1, exp(la)) else 0
   x$acc <- acc
   x$jump <- c(new$mu - cur$mu, .emc_alloc_lsd(new$V) - .emc_alloc_lsd(cur$V))
@@ -398,7 +469,9 @@
   plan <- st$plan
   p <- sampler$n_pars
   if (!is.list(plan) || !is.matrix(plan$C) || !isTRUE(plan$rounds > 0)) return(keep)
-  if (is.null(st$iterations)) st$iterations <- st$rounds <- st$accepted <- 0
+  if (is.null(st$iterations)) st$iterations <- 0L
+  if (is.null(st$rounds)) st$rounds <- 0L
+  if (is.null(st$accepted)) st$accepted <- 0L
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
   # The allocated expected moves: the whole part, plus one more with the
@@ -406,11 +479,22 @@
   whole <- floor(plan$rounds)
   n_rounds <- whole + (stats::runif(1L) < plan$rounds - whole)
   st$iterations <- st$iterations + 1L
+  if (n_rounds == 0L) {
+    sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
+    sampler$collapsed <- st
+    keep$sampler <- sampler
+    return(keep)
+  }
+  alpha_start <- matrix(proposals[seq_len(p), ], p)
   ctx <- .emc_collapsed_context(sampler)
+  # The base fits change at proposal rebuilds, but pooled conditioning changes
+  # every iteration. Cache only the sanitized base fits and recondition them
+  # against the current pooled values in each context.
+  if (isTRUE(ctx$cacheable)) st$fits <- ctx$base_fits
   cur <- if (n_rounds > 0L && plan$dim == ctx$chart$dim)
     .emc_shear_state(as.numeric(pars$tmu), as.matrix(pars$tvar), ctx$fits,
                      sampler$prior, ctx$spec)
-  x <- list(cur = cur, alpha = matrix(proposals[seq_len(p), ], p),
+  x <- list(cur = cur, alpha = alpha_start,
             ll = proposals[p + 1L, ], rounds = 0L, wpool = wpool,
             wpool_part = wpool_part)
   any_moved <- FALSE

@@ -84,7 +84,8 @@ CollapsedModel unpack(const Rcpp::List& m) {
   out.ll.assign(p * n, 0.0);
   for (arma::uword s = 0; s < n; ++s)
     for (arma::uword i = 0; i < p; ++i) {
-      for (arma::uword j = 0; j <= i; ++j) out.Hl[(i * p + j) * n + s] = out.H(i, j, s);
+      for (arma::uword j = 0; j <= i; ++j)
+        out.Hl[(i * p + j) * n + s] = out.H(i, j, s);
       out.ll[i * n + s] = out.lin(i, s);
     }
   return out;

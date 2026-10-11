@@ -370,3 +370,37 @@ test_that("an unmeasured shear coordinate counts at the prior factor, uncapped",
   expect_gt(sol$x[1], 0.25)
   expect_lt(sol$tau, EMC2:::.emc_alloc_tau(0.976 * EMC2:::.emc_alloc_factor(0.5, 0.25)))
 })
+
+test_that("collapsed round allocations remain specific to each chain", {
+  local_mocked_bindings(
+    .emc_alloc_wanted = function(sampler) TRUE,
+    .emc_prepare_chain_rng = function(emc) emc,
+    .emc_hmc_options = function() list(enabled = FALSE),
+    .emc_alloc_draws = function(ch, n) 1L,
+    .emc_alloc_measure = function(emc, j, ...) {
+      list(chain_id = j, shear = FALSE, g_rho = numeric(), g_fac = numeric(),
+           g_sat = numeric(), coll = TRUE, c_fac = 0.5, c_sat = 0.5,
+           c_coll = 0.1, c_rate = 1, s_rho = matrix(0.5, 1L, 1L),
+           s_var = matrix(1, 1L, 1L), p_fac = matrix(1, 1L, 1L),
+           c_part = 0.1, c_hmc = NA_real_, stored = 0L, pairs = 0L,
+           C_rest = 1, c_round = 0.1, pool = NULL, W = list(diag(1)))
+    },
+    .emc_alloc_units = function(ms, ...) {
+      list(chain_id = ms$chain_id, units = list(list(h = NULL)), C_rest = 1,
+           c_round = 0.1, joint = list(cost = 0.1), hmc_fixed = 0)
+    },
+    .emc_alloc_solve_units = function(u) {
+      list(x = 0, joint = c(1.125, 0)[u$chain_id], tau = 1, tau0 = 1,
+           cost = 1, objective = 1, objective0 = 1)
+    },
+    .package = "EMC2")
+
+  chain <- function() list(
+    n_pars = 1L, n_subjects = 1L,
+    samples = list(theta_var = array(1, c(1L, 1L, 1L))),
+    collapsed = list(plan = list(rounds = 0, eps = 0.4)),
+    alloc = list(window = NULL, history = list()))
+  out <- EMC2:::.emc_alloc_rebuild(list(chain(), chain()), "sample", 1L, 10L)
+  expect_equal(vapply(out, function(ch) ch$collapsed$plan$rounds, numeric(1)),
+               c(1.125, 0))
+})

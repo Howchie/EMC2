@@ -814,6 +814,10 @@ emc_copy_sample_prefix <- function(target, source) {
     invisible(.Call(`_EMC2_emc_copy_sample_prefix`, target, source))
 }
 
+emc_shear_frames_cpp <- function(prec, lin, Vi, Vi_mu) {
+    .Call(`_EMC2_emc_shear_frames_cpp`, prec, lin, Vi, Vi_mu)
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }

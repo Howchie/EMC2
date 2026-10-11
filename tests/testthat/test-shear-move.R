@@ -171,6 +171,231 @@ test_that("mean-step candidates on the line match the full map", {
   }
 })
 
+# Transport walls for the fixture: subject 1 along the unblocked parameter,
+# subject 3 along a mixed direction, each half-space holding at the current
+# state by the given margin.
+shear_walls <- function(f, margin = c(0.4, 0.05)) {
+  p <- nrow(f$alpha); n <- ncol(f$alpha)
+  U <- matrix(0, p, n); b <- rep(NA_real_, n); Uperp <- vector("list", n)
+  has <- c(TRUE, FALSE, TRUE, FALSE)
+  U[, 1] <- c(0, 0, 1); U[, 3] <- c(1, 1, 0) / sqrt(2)
+  for (s in which(has)) {
+    b[s] <- sum(U[, s] * f$alpha[, s]) - margin[match(s, which(has))]
+    Uperp[[s]] <- qr.Q(qr(cbind(U[, s], diag(p))))[, -1L, drop = FALSE]
+  }
+  list(U = U, b = b, Uperp = Uperp, has = has)
+}
+
+test_that("the wall map keeps its half-space, inverts, composes and has the stated Jacobian", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu); n <- ncol(f$alpha)
+    fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+    walls <- shear_walls(f)
+    state <- function(mu, V) EMC2:::.emc_shear_state(mu, V, fits, prior, spec)
+    propose <- function(cur, u, alpha, w = walls)
+      EMC2:::.emc_shear_propose(cur, u, alpha, fits, prior, spec, walls = w)
+    cur <- state(f$mu, f$V)
+    plain <- propose(cur, f$u, f$alpha, NULL)
+    fwd <- propose(cur, f$u, f$alpha)
+    expect_equal(fwd$state$mu, plain$state$mu)
+    expect_equal(fwd$state$V, plain$state$V)
+    expect_equal(fwd$alpha[, !walls$has], plain$alpha[, !walls$has])
+    expect_false(isTRUE(all.equal(fwd$alpha[, walls$has], plain$alpha[, walls$has])))
+
+    # Along the orbit the walled subjects stay in their half-space where the
+    # plain map leaves it.
+    inside <- function(a) vapply(which(walls$has), function(s)
+      sum(walls$U[, s] * a[, s]) >= walls$b[s], logical(1))
+    plain_out <- FALSE
+    for (k in seq(-6, 6, by = 1.5)) {
+      expect_true(all(inside(propose(cur, k * f$u, f$alpha)$alpha)))
+      plain_out <- plain_out || !all(inside(propose(cur, k * f$u, f$alpha, NULL)$alpha))
+    }
+    expect_true(plain_out)
+
+    back <- propose(fwd$state, -f$u, fwd$alpha)
+    expect_equal(back$alpha, f$alpha, tolerance = 1e-9)
+    expect_equal(back$log_jac, -fwd$log_jac, tolerance = 1e-9)
+    v <- c(-0.1, 0.25, 0.05, -0.2, 0.1, 0.3)
+    two <- propose(fwd$state, v, fwd$alpha)
+    one <- propose(cur, f$u + v, f$alpha)
+    expect_equal(two$alpha, one$alpha, tolerance = 1e-9)
+    expect_equal(fwd$log_jac + two$log_jac, one$log_jac, tolerance = 1e-9)
+
+    free <- which(upper.tri(f$V, diag = TRUE) & f$V != 0, arr.ind = TRUE)
+    pack <- function(mu, V, alpha) c(mu, V[free], alpha)
+    unpack <- function(x) {
+      V <- matrix(0, p, p); V[free] <- x[p + seq_len(nrow(free))]
+      V[free[, 2:1, drop = FALSE]] <- x[p + seq_len(nrow(free))]
+      list(mu = x[seq_len(p)], V = V, alpha = matrix(x[-seq_len(p + nrow(free))], p))
+    }
+    map <- function(x, u) {
+      s <- unpack(x)
+      out <- propose(state(s$mu, s$V), u, s$alpha)
+      pack(out$state$mu, out$state$V, out$alpha)
+    }
+    x0 <- pack(f$mu, f$V, f$alpha)
+    h <- 1e-6
+    log_det <- function(u) {
+      J <- vapply(seq_along(x0), function(i) {
+        e <- replace(numeric(length(x0)), i, h)
+        (map(x0 + e, u) - map(x0 - e, u)) / (2 * h)
+      }, numeric(length(x0)))
+      as.numeric(determinant(J)$modulus)
+    }
+    expect_equal(log_det(f$u), fwd$log_jac, tolerance = 1e-5)
+    u_mu <- replace(f$u, p + seq_len(p), 0)
+    expect_equal(log_det(u_mu), propose(cur, u_mu, f$alpha)$log_jac, tolerance = 1e-5)
+    plain_mu <- propose(cur, u_mu, f$alpha, NULL)
+
+    # A wall far below the state leaves an affine frame map: the plain
+    # Jacobian, whitened residuals preserved, and for a mean step the plain
+    # map itself.
+    far <- walls; far$b[] <- -1e3
+    far_map <- propose(cur, f$u, f$alpha, far)
+    expect_equal(far_map$log_jac, plain$log_jac, tolerance = 1e-10)
+    a2 <- f$alpha + 0.3
+    mid <- propose(cur, f$u, (f$alpha + a2) / 2, far)$alpha
+    expect_equal(mid, (far_map$alpha + propose(cur, f$u, a2, far)$alpha) / 2, tolerance = 1e-10)
+    for (s in which(walls$has)) {
+      r0 <- cur$frames[[s]]$R %*% (f$alpha[, s] - cur$frames[[s]]$m)
+      r1 <- far_map$state$frames[[s]]$R %*% (far_map$alpha[, s] - far_map$state$frames[[s]]$m)
+      expect_equal(sum(r1^2), sum(r0^2), tolerance = 1e-10)
+    }
+    expect_equal(propose(cur, u_mu, f$alpha, far)$alpha, plain_mu$alpha, tolerance = 1e-10)
+  }
+})
+
+test_that("mean-step candidates on the line match the full wall map", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu)
+    fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+    walls <- shear_walls(f)
+    cur <- EMC2:::.emc_shear_state(f$mu, f$V, fits, prior, spec)
+    d <- c(0.4, -0.3, 0.2)
+    t <- c(-3, -1.3, -0.2, 0.7, 2.1, 4)
+    line <- EMC2:::.emc_shear_line(cur, d, f$alpha, t, prior)
+    wl <- EMC2:::.emc_shear_wall_line(cur, f$alpha, line$Delta, t, d, walls)
+    expect_true(all(vapply(wl$corr, function(c) all(c[, !walls$has] == 0), logical(1))))
+    for (i in seq_along(t)) {
+      full <- EMC2:::.emc_shear_propose(cur, c(t[i] * d, numeric(p)), f$alpha, fits, prior,
+                                         spec, walls = walls)
+      expect_equal(f$alpha + t[i] * line$Delta + wl$corr[[i]], full$alpha, tolerance = 1e-10)
+      expect_equal(line$delta[i] + wl$delta[i],
+                   EMC2:::.emc_shear_log_hier(full$alpha, full$state) + full$state$lp +
+                     full$log_jac - EMC2:::.emc_shear_log_hier(f$alpha, cur) - cur$lp,
+                   tolerance = 1e-8)
+    }
+  }
+})
+
+test_that("transport walls come from the model's declared bounds and the subject's closest one", {
+  dat <- droplevels(forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ])
+  des <- suppressMessages(design(data = dat, model = LBA, matchfun = function(d) d$S == d$lR,
+                                 formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1),
+                                 constants = c(sv = log(1))))
+  emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))
+  chain <- emc[[1]]
+  pn <- chain$par_names
+  p <- length(pn); n <- chain$n_subjects
+  support <- EMC2:::.emc_shear_support(chain)
+  expect_length(support, n)
+  one <- support[[1]]
+  on <- vapply(one, function(h) paste(pn[h$u != 0], collapse = "+"), "")
+  expect_setequal(on, c("A", "B", "B+B_Eneutral", "B+B_Eaccuracy", "t0"))
+  b <- setNames(vapply(one, `[[`, numeric(1), "b"), on)
+  expect_equal(b[["t0"]], log(0.05))
+  expect_equal(b[["A"]], log(1e-4))
+  expect_equal(b[["B+B_Eneutral"]], log(1e-4))
+  expect_true(all(vapply(one, function(h) all(h$u[h$u != 0] == 1), logical(1))))
+
+  # Window draws: subject 1 hugs the t0 floor, subject 2 the neutral B
+  # threshold, subject 3 sits far from every bound.
+  m <- 20
+  alpha <- array(rnorm(p * n * m, 0, 0.05), c(p, n, m), dimnames = list(pn, NULL, NULL))
+  alpha[c("B", "A"), , ] <- alpha[c("B", "A"), , ] + 0
+  alpha["t0", 1, ] <- log(0.05) + 0.1 + alpha["t0", 1, ]
+  alpha["B", 2, ] <- log(1e-4) + 0.4 + alpha["B", 2, ]
+  alpha["B_Eneutral", 2, ] <- -0.3 + alpha["B_Eneutral", 2, ]
+  chain$samples$alpha <- alpha
+  walls <- EMC2:::.emc_shear_walls(chain, seq_len(m))
+  expect_true(all(walls$has))
+  expect_equal(walls$U[, 1], as.numeric(pn == "t0"))
+  expect_equal(walls$b[1], log(0.05))
+  expect_equal(walls$U[, 2], (pn %in% c("B", "B_Eneutral")) / sqrt(2))
+  expect_equal(walls$b[2], log(1e-4) / sqrt(2))
+  for (s in seq_len(n)) {
+    expect_equal(crossprod(walls$Uperp[[s]]), diag(p - 1))
+    expect_equal(drop(crossprod(walls$Uperp[[s]], walls$U[, s])), numeric(p - 1))
+  }
+  expect_true(EMC2:::.emc_shear_walls_of(c(chain, list(shear = list(walls = walls))))$has[1])
+  expect_null(EMC2:::.emc_shear_walls_of(chain))
+})
+
+test_that("the wall transport leaves a bounded joint posterior invariant", {
+  # The diagonal hierarchy of the invariance test below with the first
+  # parameter bounded below for every subject; the sampler sees each
+  # subject's wall.
+  N <- 4000
+  h <- diag_hierarchy_draws(N, b = -0.4)
+  p <- h$p; n <- h$n; y <- h$y; Si <- h$Si
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) h$ll(proposals, dadm),
+                        .package = "EMC2")
+  withr::local_options(list(emc2.group_move = "shear"))
+  pn <- c("x1", "x2")
+  fits <- list(exact = lapply(seq_len(n), function(s)
+                 list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
+               wrong = lapply(seq_len(n), function(s)
+                 list(prec = 4 * Si, lin = drop(4 * Si %*% (y[, s] + 0.5)), check = ok_check)))
+  # Walls with exact and wrong fits, the plain map on the same target, and a
+  # broken control that drops the quantile map's Jacobian, which must fail.
+  runs <- list(list(lik = fits$exact, walls = h$walls), list(lik = fits$wrong, walls = h$walls),
+               list(lik = fits$exact, walls = NULL),
+               list(lik = fits$exact, walls = h$walls, broken = TRUE))
+  moved <- numeric(length(runs))
+  for (r in seq_along(runs)) {
+    run <- runs[[r]]
+    plan <- EMC2:::.emc_shear_plan(run$lik, h$prior, diag(exp(2 * colMeans(h$lsd))))
+    plan <- shear_ready(plan, n, 2)
+    if (isTRUE(run$broken)) {
+      qmap <- EMC2:::.emc_shear_qmap
+      local_mocked_bindings(.emc_shear_qmap = function(...) {
+        out <- qmap(...)
+        out$log_jac <- 0
+        out
+      }, .package = "EMC2")
+    }
+    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
+                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
+                    model = NULL, prior = h$prior, lik_laplace = run$lik, rng = list(),
+                    shear = list(plan = plan, walls = run$walls))
+    set.seed(5)
+    after <- t(vapply(seq_len(N), function(i) {
+      V <- diag(exp(2 * h$lsd[i, ]))
+      al <- matrix(h$a[i, , ], p, dimnames = list(pn, NULL))
+      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / h$S), 0)
+      out <- EMC2:::.emc_shear_move(sampler, list(tmu = setNames(h$mu[i, ], pn), tvar = V,
+                                                  tvinv = solve(V)),
+                                    rbind(al, ll), "sample")
+      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
+    }, numeric(2 * p + p * n)))
+    expect_true(all(after[, 2 * p + seq(1, p * n, by = p)] >= h$b))
+    moved[r] <- mean(after[, 1] != h$before[, 1])
+    se <- apply(h$before, 2, sd) / sqrt(N)
+    z_mean <- abs(colMeans(after) - colMeans(h$before)) / se
+    z_var <- abs(apply(after, 2, var) / apply(h$before, 2, var) - 1) / sqrt(2 / N)
+    if (isTRUE(run$broken)) {
+      expect_gt(max(z_mean, z_var), 6)
+    } else {
+      expect_true(all(z_mean < 4.5))
+      expect_true(all(z_var < 4.5))
+    }
+  }
+  expect_gt(moved[1], moved[3])
+})
+
 test_that("the shear covariance prior integrates a_half out of the Gibbs step's prior", {
   f <- shear_fixture("standard")
   v <- f$sampler$prior$v; A <- f$sampler$prior$A
@@ -297,6 +522,102 @@ test_that("the shear move leaves the joint posterior invariant with the group va
     z_mean <- abs(colMeans(after) - colMeans(before)) / se
     z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
     if (isTRUE(run$broken)) {
+      expect_gt(max(z_mean, z_var), 6)
+    } else {
+      expect_true(all(z_mean < 4.5))
+      expect_true(all(z_var < 4.5))
+    }
+  }
+})
+
+test_that("curved frames with arbitrary coefficients leave the joint posterior invariant", {
+  # The diagonal hierarchy above, with each subject's likelihood fit an
+  # arbitrary quadratic function of the group mean; the mean steps then take
+  # the full map and must carry its Jacobian (the broken control drops it).
+  p <- 2; n <- 5
+  S <- c(2, 1.5); m0 <- 0; P0 <- 0.5; shape <- 2; rate <- 0.3
+  set.seed(21)
+  y <- matrix(rnorm(p * n, 0.5, 1.5), p)
+  N <- 4000
+  grid_draws <- function(k) {
+    mu_g <- seq(-6, 6, length.out = 301); ls_g <- seq(-5, 2.5, length.out = 301)
+    lp <- outer(mu_g, ls_g, Vectorize(function(m, l) {
+      tau <- exp(-2 * l)
+      dnorm(m, m0, sqrt(1 / P0), log = TRUE) +
+        sum(dnorm(y[k, ], m, sqrt(S[k] + exp(2 * l)), log = TRUE)) +
+        dgamma(tau, shape, rate, log = TRUE) + log(2 * tau)
+    }))
+    w <- exp(lp - max(lp))
+    cell <- sample(length(w), N, TRUE, prob = w)
+    hm <- diff(mu_g[1:2]); hl <- diff(ls_g[1:2])
+    cbind(mu = mu_g[row(w)[cell]] + runif(N, -hm / 2, hm / 2),
+          lsd = ls_g[col(w)[cell]] + runif(N, -hl / 2, hl / 2))
+  }
+  g <- lapply(seq_len(p), grid_draws)
+  mu <- sapply(g, function(x) x[, "mu"]); lsd <- sapply(g, function(x) x[, "lsd"])
+  a <- array(NA_real_, c(N, p, n))
+  for (k in seq_len(p)) {
+    v <- exp(2 * lsd[, k])
+    post_var <- 1 / (1 / S[k] + 1 / v)
+    for (s in seq_len(n))
+      a[, k, s] <- rnorm(N, post_var * (y[k, s] / S[k] + mu[, k] / v), sqrt(post_var))
+  }
+  before <- cbind(mu, lsd, matrix(a, N))
+  Si <- diag(1 / S)
+  local_mocked_bindings(
+    calc_ll_manager = function(proposals, dadm, ...) {
+      dd <- sweep(proposals, 2, dadm)
+      -0.5 * rowSums((dd %*% Si) * dd)
+    },
+    .package = "EMC2")
+  withr::local_options(list(emc2.group_move = "shear"))
+  pn <- c("x1", "x2")
+  lik <- lapply(seq_len(n), function(s)
+    list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check))
+  prior <- list(theta_mu_mean = rep(m0, p), theta_mu_invar = diag(P0, p),
+                shape = rep(shape, p), rate = rep(rate, p))
+  plan <- EMC2:::.emc_shear_plan(lik, prior, diag(exp(2 * colMeans(lsd))))
+  plan <- shear_ready(plan, n, 2)
+  q <- seq_len(p)
+  nf <- 1 + p + p * (p + 1) / 2
+  B <- lapply(seq_len(n), function(s) {
+    quad <- s > 1
+    rows <- if (quad) nf else 1 + p
+    coef <- matrix(rnorm(rows * (p + p * p), 0, 0.3), rows)
+    coef[1, ] <- c(lik[[s]]$lin, as.vector(lik[[s]]$prec))
+    list(coef = coef, quad = quad)
+  })
+  curve <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, B = B,
+                sets = EMC2:::.emc_shear_curve_sets(B, q))
+  for (broken in c(FALSE, TRUE)) {
+    if (broken) {
+      propose <- EMC2:::.emc_shear_propose
+      local_mocked_bindings(.emc_shear_propose = function(...) {
+        out <- propose(...)
+        if (!is.null(out)) out$log_jac <- 0
+        out
+      }, .package = "EMC2")
+    }
+    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
+                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
+                    model = NULL, prior = prior, lik_laplace = lik, rng = list(),
+                    shear = list(plan = plan, curve = curve))
+    expect_false(is.null(EMC2:::.emc_shear_context(sampler)$curve))
+    set.seed(5)
+    after <- t(vapply(seq_len(N), function(i) {
+      V <- diag(exp(2 * lsd[i, ]))
+      al <- matrix(a[i, , ], p, dimnames = list(pn, NULL))
+      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / S), 0)
+      out <- EMC2:::.emc_shear_move(sampler, list(tmu = setNames(mu[i, ], pn), tvar = V,
+                                                  tvinv = solve(V)),
+                                    rbind(al, ll), "sample")
+      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
+    }, numeric(2 * p + p * n)))
+    expect_gt(mean(after[, 1] != before[, 1]), 0.1)
+    se <- apply(before, 2, sd) / sqrt(N)
+    z_mean <- abs(colMeans(after) - colMeans(before)) / se
+    z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
+    if (broken) {
       expect_gt(max(z_mean, z_var), 6)
     } else {
       expect_true(all(z_mean < 4.5))

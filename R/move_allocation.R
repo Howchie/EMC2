@@ -50,9 +50,9 @@
 # measures a move. A shear coordinate without a measurement counts at the
 # pooled factor and share of the measured rounds of its kind (mean
 # directions or log sds; either kind, then a prior factor, without any), and
-# the collapsed move at the prior factor, uncapped: a capped guess would set
-# a floor that only a measurement can lift, while a plan that leans on the
-# guess measures it in one block. With tau = (1 + rho) / (1 - rho), the
+# the collapsed move at the prior factor until its movement is measured. This
+# gives an unmeasured move one allocation window to establish its performance.
+# With tau = (1 + rho) / (1 - rho), the
 # allocation minimises
 #   max over coordinates of tau * (C_rest + sum_k x_k c_round + sum_s r_s c_s)
 # over expected rounds x_k and rates r_s (.emc_alloc_solve). Coordinates the
@@ -878,19 +878,9 @@
     h[[length(h)]]$particle_shared <- q
     emc[[j]]$alloc$history <- h
   }
-  # One collapsed rate for every chain, the largest any chain's allocation
-  # chose: its work runs in each chain's own process, and chains wait for
-  # each other at block ends.
-  coll <- vapply(seq_len(nch), function(j) isTRUE(ms[[j]]$coll), logical(1))
-  if (any(coll)) {
-    x_c <- max(vapply(emc[coll], function(ch) ch$collapsed$plan$rounds, numeric(1)))
-    for (j in which(coll)) {
-      emc[[j]]$collapsed$plan$rounds <- x_c
-      emc[[j]]$alloc$last$collapsed_shared <- x_c
-      h <- emc[[j]]$alloc$history
-      h[[length(h)]]$collapsed_shared <- x_c
-      emc[[j]]$alloc$history <- h
-    }
-  }
+  # Collapsed rounds are allocated from each chain's own measured movement
+  # and cost. Keep those rates local: chains have independent transition
+  # kernels, and raising every rate to the cross-chain maximum adds work to
+  # chains whose own allocation rejected the move.
   emc
 }

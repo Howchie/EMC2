@@ -72,6 +72,9 @@ get_stop_criteria <- function(stage, stop_criteria, type){
     if (!all(have) || !all(vapply(recorded, identical, logical(1), y = settings)))
       stop("Chains have different recorded production options; resume each fit separately.",
            call. = FALSE)
+    # Checkpoints created before an option was introduced inherit its package
+    # default, even if the caller's current session has a different option.
+    settings <- utils::modifyList(.EMC_PRODUCTION_OPTION_DEFAULTS, settings)
   } else {
     has_production <- vapply(emc, function(chain)
       isTRUE(chain$sample_transitions > 0) || any(chain$samples$stage == "sample"), logical(1))
@@ -434,7 +437,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
       stage = stage)
     emc <- .emc_check_likelihood_fits(emc, n_cores)
     # The shear plan uses only checked fits, so it is built after the checks.
-    emc <- .emc_shear_set_plans(emc, sample_window, stage)
+    emc <- .emc_shear_set_plans(emc, sample_window, stage, n_cores)
     emc <- .emc_collapsed_set_plans(emc, sample_window, stage)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){

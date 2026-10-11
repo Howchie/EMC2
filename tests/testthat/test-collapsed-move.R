@@ -63,6 +63,25 @@ test_that("the surrogate gradient matches finite differences", {
   }
 })
 
+test_that("a skipped fractional collapsed move avoids rebuilding its context", {
+  withr::local_options(list(emc2.group_move = "shear", emc2.collapsed_move = TRUE))
+  sampler <- list(type = "standard", nuisance = rep(FALSE, 4L), gd = NULL,
+                  group_designs = list(), n_subjects = 5L, n_pars = 4L,
+                  collapsed = list(iterations = 0L,
+                    plan = list(C = diag(11L), eps = 0.1, rounds = 0.25)))
+  pars <- list()
+  proposals <- matrix(0, 5L, 5L)
+  result <- withr::with_seed(1L, {
+    sampler$rng <- list(gibbs = get(".Random.seed", envir = globalenv()))
+    EMC2:::.emc_collapsed_move(sampler, pars, proposals, "sample")
+  })
+  expect_identical(result$pars, pars)
+  expect_identical(result$proposals, proposals)
+  expect_identical(result$rounds, 0L)
+  expect_equal(result$sampler$collapsed$iterations, 1L)
+  expect_false(identical(result$sampler$rng$gibbs, sampler$rng$gibbs))
+})
+
 test_that("f / phat is the likelihood over its approximation at fixed residuals", {
   # f(phi) is the joint density in the (phi, r) chart: likelihood, subject
   # prior, group prior, chart Jacobian and the frame Jacobian prod_s 1/|R_s|.
@@ -109,6 +128,65 @@ test_that("the least-squares fit recovers a quadratic log likelihood", {
   y2 <- y + 3 * A[, 1]^2
   fit2 <- EMC2:::.emc_collapsed_fit_subject(A, y2)
   expect_true(all(eigen(fit2$prec, only.values = TRUE)$values > -1e-10))
+})
+
+test_that("empirical fit removes linear slopes in flat curvature directions", {
+  set.seed(29)
+  p <- 3
+  Q <- qr.Q(qr(matrix(rnorm(p * p), p)))
+  H <- Q %*% diag(c(2, 1, 0)) %*% t(Q)
+  lin <- drop(Q %*% c(1, -0.5, 9))
+  A <- matrix(rnorm(400 * p), ncol = p)
+  y <- 1 - 0.5 * rowSums((A %*% H) * A) + drop(A %*% lin)
+
+  fit <- EMC2:::.emc_collapsed_fit_subject(A, y)
+  e <- eigen(fit$prec, symmetric = TRUE)
+  flat <- which(e$values <= max(e$values) * 1e-8)
+  expect_length(flat, 1L)
+  expect_equal(drop(crossprod(e$vectors[, flat, drop = FALSE], fit$lin)),
+               0, tolerance = 1e-7)
+  expect_gt(sqrt(sum(fit$lin^2)), 0.1)
+})
+
+test_that("safe base fits are cached while pooled conditioning is refreshed", {
+  f <- collapsed_fixture("diagonal-gamma")
+  H <- diag(c(2, 1, 0, 0))
+  fit <- list(prec = H, lin = c(1, -2, 7, 8),
+              cross = matrix(seq_len(8), nrow = 4), check = ok_check)
+  f$sampler$collapsed <- list(fits = rep(list(fit), f$sampler$n_subjects))
+  f$sampler$pooled <- list(value = c(0.5, -0.25))
+
+  first <- EMC2:::.emc_collapsed_context(f$sampler)
+  base <- first$base_fits[[1]]
+  expect_true(isTRUE(base$.emc_collapsed_safe))
+  expect_equal(base$lin, c(1, -2, 0, 0))
+  expect_equal(base$cross, matrix(c(1, 2, 0, 0, 5, 6, 0, 0), nrow = 4))
+
+  f$sampler$collapsed$fits <- first$base_fits
+  f$sampler$pooled$value <- c(1, 2)
+  second <- EMC2:::.emc_collapsed_context(f$sampler)
+  expect_identical(second$base_fits[[1]], base)
+  expect_true(isTRUE(second$fits[[1]]$.emc_collapsed_safe))
+  expect_equal(second$fits[[1]]$lin, c(-10, -16, 0, 0))
+
+  fallback <- f$sampler
+  fallback$collapsed$fits <- NULL
+  expect_false(EMC2:::.emc_collapsed_context(fallback)$cacheable)
+})
+
+test_that("safe fits project rotated cross terms into positive curvature", {
+  Q <- 0.5 * rbind(c(1, 1, 1, 1), c(1, -1, 1, -1),
+                   c(1, 1, -1, -1), c(1, -1, -1, 1))
+  U <- Q[, 1:2, drop = FALSE]
+  P <- tcrossprod(U)
+  H <- U %*% diag(c(2, 1)) %*% t(U)
+  cross <- matrix(seq_len(8), nrow = 4)
+  fit <- EMC2:::.emc_collapsed_safe_fit(list(
+    prec = H, lin = c(1, -2, 7, 8), cross = cross))
+
+  expect_equal(fit$prec, H, tolerance = 1e-12)
+  expect_equal(fit$lin, drop(P %*% c(1, -2, 7, 8)), tolerance = 1e-12)
+  expect_equal(fit$cross, P %*% cross, tolerance = 1e-12)
 })
 
 # A plan as .emc_collapsed_set_plan() leaves it.
@@ -180,7 +258,7 @@ test_that("the collapsed move leaves the joint posterior invariant (diagonal-gam
     sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
                     n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
                     model = NULL, prior = prior, lik_laplace = run$lik, rng = list(),
-                    collapsed = list(plan = collapsed_plan(p, 2 * p, 2)))
+                    collapsed = list(plan = collapsed_plan(p, 2 * p, 2), fits = run$lik))
     set.seed(5)
     after <- t(vapply(seq_len(N), function(i) {
       V <- diag(exp(2 * lsd[i, ]))
@@ -189,12 +267,71 @@ test_that("the collapsed move leaves the joint posterior invariant (diagonal-gam
       out <- EMC2:::.emc_collapsed_move(sampler, list(tmu = setNames(mu[i, ], pn), tvar = V,
                                                       tvinv = solve(V)),
                                         rbind(al, ll), "sample")
+      if (i == 1L)
+        expect_true(all(vapply(out$sampler$collapsed$fits, function(f)
+          is.null(f) || isTRUE(f$.emc_collapsed_safe), logical(1))))
       c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
     }, numeric(2 * p + p * n)))
     expect_gt(mean(after[, p + 1] != before[, p + 1]), 0.1)
     se <- apply(before, 2, sd) / sqrt(N)
     z_mean <- abs(colMeans(after) - colMeans(before)) / se
     z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
+    if (isTRUE(run$broken)) {
+      expect_gt(max(z_mean, z_var), 6)
+    } else {
+      expect_true(all(z_mean < 4.5))
+      expect_true(all(z_var < 4.5))
+    }
+  }
+})
+
+test_that("the collapsed move with transport walls leaves a bounded joint posterior invariant", {
+  # The diagonal hierarchy above with the first parameter bounded below for
+  # every subject; the move sees each subject's wall. Exact and wrong
+  # approximations, then a broken control that drops the wall map's quantile
+  # Jacobian, which must fail.
+  N <- 4000
+  h <- diag_hierarchy_draws(N, b = -0.4)
+  p <- h$p; n <- h$n; y <- h$y; Si <- h$Si
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) h$ll(proposals, dadm),
+                        .package = "EMC2")
+  withr::local_options(list(emc2.collapsed_move = TRUE))
+  pn <- c("x1", "x2")
+  fits <- list(exact = lapply(seq_len(n), function(s)
+                 list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
+               wrong = lapply(seq_len(n), function(s)
+                 list(prec = 4 * Si, lin = drop(4 * Si %*% (y[, s] + 0.5)), check = ok_check)))
+  runs <- list(list(lik = fits$exact), list(lik = fits$wrong),
+               list(lik = fits$exact, broken = TRUE))
+  for (run in runs) {
+    if (isTRUE(run$broken)) {
+      qmap <- EMC2:::.emc_shear_qmap
+      local_mocked_bindings(.emc_shear_qmap = function(...) {
+        out <- qmap(...)
+        out$log_jac <- 0
+        out
+      }, .package = "EMC2")
+    }
+    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
+                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
+                    model = NULL, prior = h$prior, lik_laplace = run$lik, rng = list(),
+                    shear = list(walls = h$walls),
+                    collapsed = list(plan = collapsed_plan(p, 2 * p, 2), fits = run$lik))
+    set.seed(5)
+    after <- t(vapply(seq_len(N), function(i) {
+      V <- diag(exp(2 * h$lsd[i, ]))
+      al <- matrix(h$a[i, , ], p, dimnames = list(pn, NULL))
+      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / h$S), 0)
+      out <- EMC2:::.emc_collapsed_move(sampler, list(tmu = setNames(h$mu[i, ], pn), tvar = V,
+                                                      tvinv = solve(V)),
+                                        rbind(al, ll), "sample")
+      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
+    }, numeric(2 * p + p * n)))
+    expect_true(all(after[, 2 * p + seq(1, p * n, by = p)] >= h$b))
+    expect_gt(mean(after[, p + 1] != h$before[, p + 1]), 0.1)
+    se <- apply(h$before, 2, sd) / sqrt(N)
+    z_mean <- abs(colMeans(after) - colMeans(h$before)) / se
+    z_var <- abs(apply(after, 2, var) / apply(h$before, 2, var) - 1) / sqrt(2 / N)
     if (isTRUE(run$broken)) {
       expect_gt(max(z_mean, z_var), 6)
     } else {
@@ -345,7 +482,7 @@ test_that("the allocation buys collapsed moves only where they pay", {
   expect_equal(EMC2:::.emc_reserved_cost(0.2, 0), 0.2)
 })
 
-test_that("production blocks pool the collapsed move's measurements", {
+test_that("collapsed plans pool production and retain same-stage measurements", {
   f <- collapsed_fixture("diagonal-gamma")
   p <- f$sampler$n_pars
   st <- EMC2:::.emc_collapsed_from_phi(f$phi, f$ctx$chart)
@@ -372,11 +509,16 @@ test_that("production blocks pool the collapsed move's measurements", {
   expect_identical(last$n, 23L)
   expect_equal(last$E, diag(5, 2 * p))
   expect_equal(last$acc, 11.5)
-  # Outside production only the block just run measures the move, so a thin
-  # one leaves the rebuilt kernel unmeasured.
+  # Outside production, nonempty blocks are not pooled. A thin or empty block
+  # in the same stage retains the last usable measurement.
   chain <- rebuild(chain, "burn", block(6L, 1))
   expect_identical(chain$collapsed$plan$last$n, 6L)
   expect_identical(chain$collapsed$plan$pool$n, 0L)
   chain <- rebuild(chain, "burn", block(3L, 3))
+  expect_identical(chain$collapsed$plan$last$n, 6L)
+  chain <- rebuild(chain, "burn", block(0L, 0))
+  expect_identical(chain$collapsed$plan$last$n, 6L)
+  # A new stage starts with its own proposal geometry and gets a fresh probe.
+  chain <- rebuild(chain, "adapt", block(0L, 0))
   expect_identical(chain$collapsed$plan$last$n, 0L)
 })

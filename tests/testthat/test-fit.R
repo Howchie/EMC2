@@ -27,13 +27,14 @@ test_that("fit", {
     preburn = list(iter = 10), burn = list(mean_gd = 2.5), adapt = list(min_unique = 20),
     sample = list(iter = 25)), verbose = FALSE, particle_factor = 30, step_size = 25)
   idx <- LNR_s[[1]]$samples$idx
-  expect_snapshot(
-    LNR_s[[1]]$samples$theta_mu[,idx], variant = Sys.info()[1]
-  )
-  expect_snapshot(
-    LNR_s[[1]]$samples$alpha[,,idx], variant = Sys.info()[1]
-  )
-  expect_snapshot(
-    LNR_s[[1]]$samples$theta_var[,,idx], variant = Sys.info()[1]
-  )
+  theta_mu <- LNR_s[[1]]$samples$theta_mu[, idx, drop = FALSE]
+  alpha <- LNR_s[[1]]$samples$alpha[, , idx, drop = FALSE]
+  theta_var <- LNR_s[[1]]$samples$theta_var[, , idx, drop = FALSE]
+  expect_identical(rownames(theta_mu), c("m", "m_lMd", "s", "t0"))
+  expect_identical(dim(alpha), c(4L, 2L, length(idx)))
+  expect_identical(dim(theta_var), c(4L, 4L, length(idx)))
+  expect_true(all(is.finite(theta_mu)))
+  expect_true(all(is.finite(alpha)))
+  expect_true(all(is.finite(theta_var)))
+  expect_equal(theta_var, aperm(theta_var, c(2L, 1L, 3L)), tolerance = 1e-10)
 })

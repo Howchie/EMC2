@@ -1,6 +1,39 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Collapsed transport surrogate:** empirical quadratic fits now remove
+    linear slopes in directions with no positive fitted curvature. Mode-based
+    and older saved fits receive the same safeguard before use. This prevents
+    the collapsed Gaussian integral from growing without bound along a flat
+    direction. Sanitized base fits are cached across iterations, with pooled
+    coefficients re-applied at the current value.
+    A fractional allocation that selects zero rounds skips collapsed-context
+    setup. Each chain keeps its own collapsed-round allocation instead of
+    inheriting the largest rate selected by another chain.
+    During burn and adaptation, a proposal rebuild with too few collapsed
+    moves to measure retains the last measured movement score within the same
+    stage. This avoids treating an empty block as fresh evidence that an
+    unmeasured move is promising; production-stage movement continues to pool
+    over the sample stage.
+
+-   **Shear transport on curved ridges and at declared bounds:** each
+    subject's likelihood approximation is now a function of the group mean,
+    refitted at the conditional mode under group states the chain visited and
+    regressed on the slow mean directions, so the shear's transported
+    subjects follow a curved ridge (threshold, start-point and
+    non-decision-time trade-offs) instead of leaving it. Subjects sitting
+    near a declared lower bound (for example `t0` in the LBA) are transported
+    with a map that keeps the bound's half-space, so candidates near the bound
+    are no longer lost to the likelihood floor; the collapsed group move uses
+    the same walls. Both maps keep the move's exact Jacobian, composition and
+    inversion. The benchmark harness gained a fixed-length continuation
+    protocol (`benchmarks/subject-hmc/continue_arm.R`) that scores arms by
+    effective sample size per CPU second on the slowest group direction from
+    a shared checkpoint over several seeds.
+
+-   **Checkpoint continuation:** production options absent from older saved
+    checkpoints inherit the package defaults when a fit is resumed.
+
 -   **`make_random_effects()` defaults:** the default spread
     (`variance_proportion`) now applies to each design cell rather than to
     each regression coefficient, so a cell reached through a contrast

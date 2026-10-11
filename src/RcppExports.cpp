@@ -3450,6 +3450,20 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// emc_shear_frames_cpp
+Rcpp::List emc_shear_frames_cpp(const arma::cube& prec, const arma::mat& lin, const arma::mat& Vi, const arma::vec& Vi_mu);
+RcppExport SEXP _EMC2_emc_shear_frames_cpp(SEXP precSEXP, SEXP linSEXP, SEXP ViSEXP, SEXP Vi_muSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::cube& >::type prec(precSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type lin(linSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Vi(ViSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type Vi_mu(Vi_muSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_frames_cpp(prec, lin, Vi, Vi_mu));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -3696,6 +3710,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_set_last_slice", (DL_FUNC) &_EMC2_emc_set_last_slice, 3},
     {"_EMC2_emc_set_particle_slice", (DL_FUNC) &_EMC2_emc_set_particle_slice, 5},
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
+    {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

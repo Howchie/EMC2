@@ -225,6 +225,10 @@ test_that("serial, static and queued HMC rounds give the same chain", {
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
+  # Keep the HMC kernel fixed across worker routes. The production allocator
+  # prices shear and collapsed moves from measured CPU time, so comparing full
+  # adaptive fits can select different move plans even with identical seeds.
+  withr::local_options(emc2.group_move = "none", emc2.collapsed_move = FALSE)
   static <- hmc_small_fit("static")
   h <- static[[1]]$subject_hmc
   expect_true(h$supported)
@@ -272,6 +276,10 @@ test_that("a split run continues exactly and an old checkpoint starts without HM
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
+  # The continuation assertion is about saved HMC state and RNG streams.
+  # Keep CPU-priced group moves off so wall-time noise cannot change the
+  # transition plan between the whole and split runs.
+  withr::local_options(emc2.group_move = "none", emc2.collapsed_move = FALSE)
   whole <- hmc_small_fit("static", stages = c(20, 50))
   half <- hmc_small_fit("static", stages = c(20, 25))
   half <- EMC2:::restore_duplicates(EMC2:::strip_duplicates(half))
