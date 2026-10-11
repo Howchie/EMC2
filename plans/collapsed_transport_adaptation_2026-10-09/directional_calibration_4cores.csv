@@ -1,0 +1,2 @@
+"status","wall_seconds","calibration_seconds","pilots","scale","mean_idx","mean_scale","acceptance","message"
+"error",2.567,NA,NA,NA,NA,NA,NA,"EMC2 stopped on a unknown failure in the collapsed update (emc2.failure_policy = ""strict""): Subject likelihood evaluation failed: empty (zero-byte) input file"

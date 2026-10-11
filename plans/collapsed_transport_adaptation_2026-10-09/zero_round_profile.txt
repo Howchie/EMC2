@@ -1,0 +1,3 @@
+identical zero-round output, RNG and counters
+previous seconds/call 0.00475 
+new seconds/call 0.00069 

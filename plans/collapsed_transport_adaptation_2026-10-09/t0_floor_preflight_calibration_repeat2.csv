@@ -1,0 +1,3 @@
+"arm","pilot_rounds","preflight_skips","exact_subject_rows","exact_eval_cpu_seconds","calibration_wall_seconds","calibration_cpu_seconds","scale","t0_mean_ratio","t0_hyper_ratio","exact_acceptance","same_calibration_and_rng"
+"exact_all",352,0,32736,27.4330000000001,30.806,30.803,0.0220970869120796,3.0950452992305,0.773761324807625,0.456701147484192,TRUE
+"floor_preflight",352,105,22971,20.36,23.753,23.751,0.0220970869120796,3.0950452992305,0.773761324807625,0.456701147484192,TRUE

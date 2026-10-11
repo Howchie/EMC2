@@ -1,0 +1,31 @@
+local rates 1.125,0,0 shared rate 1.125 scales 0.044194,0.044194,0.044194 rebuild sec 17.8 local sample sec 381.5 shared sample sec 537.9 
+
+ local collapsed acceptance 0.393,NA,NA group ESS median 79.45596 52091 ESS median 140.2292 
+# A tibble: 10 × 4
+   variable           bulk  tail  rhat
+   <chr>             <dbl> <dbl> <dbl>
+ 1 mu:A              191.  265.   1.02
+ 2 mu:B               79.5  98.0  1.05
+ 3 mu:B_lR_target    101.  406.   1.03
+ 4 mu:t0_LoadHigh    127.  150.   1.03
+ 5 mu:t0_LoadLow      80.4 286.   1.04
+ 6 52091:A           174.  144.   1.00
+ 7 52091:B            23.1  84.3  1.11
+ 8 52091:B_lR_target 236.  382.   1.01
+ 9 52091:t0_LoadHigh  21.6  47.0  1.12
+10 52091:t0_LoadLow   29.3  22.5  1.09
+
+ shared collapsed acceptance 0.393,0.464,0.445 group ESS median 59.11907 52091 ESS median 111.032 
+# A tibble: 10 × 4
+   variable           bulk  tail  rhat
+   <chr>             <dbl> <dbl> <dbl>
+ 1 mu:A              121.  241.   1.01
+ 2 mu:B               29.3 100.   1.11
+ 3 mu:B_lR_target     62.4 417.   1.05
+ 4 mu:t0_LoadHigh     56.4 119.   1.05
+ 5 mu:t0_LoadLow     106.  215.   1.03
+ 6 52091:A           189.  308.   1.01
+ 7 52091:B            15.6  87.5  1.16
+ 8 52091:B_lR_target 297.  369.   1.01
+ 9 52091:t0_LoadHigh  16.4  36.2  1.16
+10 52091:t0_LoadLow   25.1  23.4  1.13

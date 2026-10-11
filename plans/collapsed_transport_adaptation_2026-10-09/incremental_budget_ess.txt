@@ -1,0 +1,5 @@
+previous_budget rates 1.25,0,0 
+incremental_budget rates 0,0,0 
+incremental_budget_1 seconds 358 group ESS 63.95408 subject ESS 156.3699 max key Rhat 1.070134 
+incremental_budget_2 seconds 395 group ESS 54.7788 subject ESS 125.8558 max key Rhat 1.078492 
+previous_budget_2 seconds 514.1 group ESS 39.38931 subject ESS 126.1337 max key Rhat 1.143549 

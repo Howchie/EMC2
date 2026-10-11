@@ -1,0 +1,11 @@
+Tracing function ".emc_alloc_solve_units" in package "namespace:EMC2"
+[1] ".emc_alloc_solve_units"
+Untracing function ".emc_alloc_solve_units" in package
+"namespace:EMC2"
+corrected rates 1.25,0,0 
+geometric rates 1.25,0,0 
+no_collapsed rates 0,0,0 
+chain 1 scale 0.04419417 marginal cost 0.179125 setup cost 0.03175 saturating coordinates 8 of 36 
+chain 2 scale 0.04419417 marginal cost 0.252375 setup cost 0.02175 saturating coordinates 30 of 36 
+chain 3 scale 0.08838835 marginal cost 0.183 setup cost 0.02825 saturating coordinates 35 of 36 
+corrected_1 seconds 351.7 group ESS 28.01768 subject ESS 87.40564 

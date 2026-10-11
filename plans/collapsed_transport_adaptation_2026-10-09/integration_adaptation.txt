@@ -1,0 +1,36 @@
+$collapsed_rounds
+[1] 0
+
+$collapsed_scale
+[1] 0.02209709
+
+$collapsed_cost
+[1] 0.172875
+
+$collapsed_calibration
+$collapsed_calibration$search
+       scale  log_score acceptance
+1 0.04419417 -1.3032759  0.5081580
+2 0.02209709 -0.4968972  0.8258801
+3 0.08838835       -Inf  0.1425911
+4 0.01104854 -2.2840980  0.8098409
+5 0.01562500 -0.9518699  0.8251432
+6 0.03125000 -0.5971815  0.4529327
+
+$collapsed_calibration$acceptance
+[1] 0.650706
+
+$collapsed_calibration$log_score
+[1] -0.8804234
+
+$collapsed_calibration$cost
+[1] 0.172875
+
+$collapsed_calibration$pilots
+[1] 64
+
+$collapsed_calibration$elapsed
+[1] 6.718
+
+
+post-transition max likelihood error 0 

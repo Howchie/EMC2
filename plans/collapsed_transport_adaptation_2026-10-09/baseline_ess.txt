@@ -1,0 +1,15 @@
+# A tibble: 10 × 4
+   variable           bulk  tail  rhat
+   <chr>             <dbl> <dbl> <dbl>
+ 1 mu:A               54.4 476.   1.05
+ 2 mu:B               67.7 118.   1.02
+ 3 mu:B_lR_target     23.4 291.   1.09
+ 4 mu:t0_LoadHigh     84.3 266.   1.02
+ 5 mu:t0_LoadLow      84.7 150.   1.05
+ 6 52091:A            15.8  20.1  1.13
+ 7 52091:B            66.9  67.9  1.02
+ 8 52091:B_lR_target  58.8 221.   1.05
+ 9 52091:t0_LoadHigh  83.6  77.9  1.02
+10 52091:t0_LoadLow   32.1  12.2  1.07
+group mu ESS bulk median 44.81232 range 17.54548 542.6774 
+52091 alpha ESS bulk median 75.21412 range 15.84528 308.8091 

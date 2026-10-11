@@ -1,0 +1,10 @@
+Frozen LBA chain 1, same retained state and four likelihood cores:
+  preceding full calibration: 192 pilot proposals, scale 0.0625, t0 ratio
+    0.5, validation acceptance 0.2522, elapsed 9.845 s
+  zero-rate local screen: 112 pilot proposals, scale 0.040387, t0 ratio
+    0.323097, validation acceptance 0.555713, elapsed 8.099 s
+
+The local screen reduced proposal count by 42% and calibration elapsed time by
+18% in this one-chain check. This compares calibration searches on the same
+retained state; the screen starts from the preceding calibration's scale and
+ratio. It is not an ESS or full-chain comparison.

@@ -1,0 +1,5 @@
+cost multiplier 0.25 rates 0,0,0 
+cost multiplier 0.5 rates 0,0,0 
+cost multiplier 1 rates 0,0,0 
+cost multiplier 2 rates 0,0,0 
+cost multiplier 4 rates 0,0,0 

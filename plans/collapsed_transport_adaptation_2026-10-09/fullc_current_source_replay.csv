@@ -1,0 +1,2 @@
+"case","seed","chain","subjects","group_parameters","chart_dim","scale","eps","proposals","mean_expected_exact_acceptance","proposals_any_t0_below_005","proposals_any_t0_ge_observed_rt","elapsed_seconds"
+"T30",1,1,40,13,104,1,0.0740085045406774,32,0.280461052210611,0,0,1.148

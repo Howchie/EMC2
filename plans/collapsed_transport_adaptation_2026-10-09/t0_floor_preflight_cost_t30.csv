@@ -1,0 +1,3 @@
+"arm","rounds","subjects","preflight_checks","preflight_skips","exact_subject_rows","exact_eval_wall_seconds","exact_eval_cpu_seconds","full_round_wall_seconds","full_round_cpu_seconds","mean_exact_acceptance","same_rng_proposals_and_decisions"
+"exact_all",100,40,0,0,3720,0.779999999999998,0.793000000000003,1.444,1.444,0.286725181812611,TRUE
+"floor_preflight",100,40,93,0,3720,0.793000000000003,0.791999999999991,1.443,1.443,0.286725181812611,TRUE

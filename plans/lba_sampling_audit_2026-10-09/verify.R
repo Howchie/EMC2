@@ -1,0 +1,5 @@
+library(EMC2);x<-EMC2:::restore_duplicates(readRDS('/tmp/lba_sampling_audit/snapshot.rds'));x<-EMC2:::restore_custom_kernel_pointers(x,quiet=TRUE)
+ii<-c(1,100,200,250,300,400,500,600,700,800,859)
+for(j in seq_along(x)){ch<-x[[j]];a<-t(ch$samples$alpha[,14,ii]);colnames(a)<-ch$par_names;fresh<-EMC2:::calc_ll_manager(a,dadm=ch$data[[14]],model=ch$model);saved<-ch$samples$subj_ll[14,ii];cat('CHAIN',j,'max LL error',max(abs(fresh-saved)),'\n');print(cbind(draw=ii,saved,fresh,error=fresh-saved))}
+cat('LOG WINDOWS\n');logs<-Filter(function(z)z$stage=='sample',x[[1]]$convergence_log);for(i in seq_along(logs)){z<-logs[[i]];if(z$try==0)next;next_n<-if(i<length(logs))logs[[i+1]]$iter else x[[1]]$samples$idx;step_next<-if(i<length(logs))if(z$try==10)67 else 100 else 0;retained<-next_n-step_next;cat('try',z$try,'reported',z$iter,'retained',retained,'removed',z$iter-retained,'Rhats',z$gd$stats$value,'\n')}
+cat('INSTALLED VS SOURCE check_progress ',identical(body(EMC2:::check_progress),body(local({source('/data/work/EMC2_dev_oo/R/fitting.R');check_progress}))), '\n')

@@ -1,0 +1,18 @@
+adapted, chain-local initial collapsed rounds: 1.75,4,0; scales: 0.0625,0.04419,0.04419; cores/chain: 4; calibration sec: 5.01,7.061,5.169; rebuild sec: 16.9
+
+ adapted, chain-local  elapsed 415.1  sec; rounds 1.75,4,0 
+# A tibble: 10 × 4
+   variable           bulk  tail  rhat
+   <chr>             <dbl> <dbl> <dbl>
+ 1 mu:A               93.1 122.   1.03
+ 2 mu:B               79.5 185.   1.05
+ 3 mu:B_lR_target     75.3 130.   1.04
+ 4 mu:t0_LoadHigh    115.  271.   1.03
+ 5 mu:t0_LoadLow      44.0  68.2  1.04
+ 6 52091:A            33.9 105.   1.08
+ 7 52091:B            21.6  55.4  1.10
+ 8 52091:B_lR_target 187.  181.   1.01
+ 9 52091:t0_LoadHigh  14.5  22.1  1.18
+10 52091:t0_LoadLow   14.1  12.8  1.17
+group mu ESS bulk range: 21.85077 571.8243  median: 71.89132 
+52091 alpha ESS bulk range: 14.07445 203.6569  median: 94.83154 
