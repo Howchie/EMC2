@@ -1500,20 +1500,47 @@ get_custom_kernel_pointers <- function(input_data) {
   trend
 }
 
+# A model container is a closure returning its model list, built in its own
+# environment so it keeps no reference to the frame that made it: a container
+# closed over the frame of another container's rebuild retains that container,
+# and every rebuild then adds a level that is serialized with the model.
+.custom_model_container <- function(model_list) {
+  env <- new.env(parent = baseenv())
+  env$value <- model_list
+  f <- function() value
+  environment(f) <- env
+  f
+}
+
+# A container closed over a frame that holds an earlier container (its own
+# `model`) keeps that container alive, and the chain grows at every rebuild.
+.custom_model_container_nested <- function(model) {
+  en <- environment(model)
+  for (i in 1:2) {
+    if (is.null(en) || identical(en, globalenv()) || identical(en, baseenv()) ||
+        identical(en, emptyenv()) || isNamespace(en)) return(FALSE)
+    if (exists("model", envir = en, inherits = FALSE) &&
+        is.function(get("model", envir = en, inherits = FALSE))) return(TRUE)
+    en <- parent.env(en)
+  }
+  FALSE
+}
+
 .restore_custom_model_container <- function(model, quiet = FALSE, cache = NULL) {
   if (is.null(cache)) cache <- new.env(parent = emptyenv())
   if (is.function(model)) {
     model_list <- model()
-    if (!is.list(model_list) || is.null(model_list$trend)) return(model)
+    if (!is.list(model_list)) return(model)
+    nested <- .custom_model_container_nested(model)
+    if (is.null(model_list$trend))
+      return(if (nested) .custom_model_container(model_list) else model)
     needs_restore <- any(vapply(model_list$trend, function(x)
       identical(x$kernel, "custom") &&
         !.custom_kernel_pointer_valid(attr(x, "custom_ptr")), logical(1)))
-    if (!needs_restore) return(model)
-    model_list$trend <- .restore_custom_trend_list(model_list$trend, quiet, cache)
-    return(local({
-      value <- model_list
-      function() value
-    }))
+    if (!needs_restore && !nested) return(model)
+    if (needs_restore)
+      model_list$trend <- .restore_custom_trend_list(model_list$trend, quiet, cache)
+    return(.custom_model_container(model_list))
   }
   if (is.list(model)) {
     if (!is.null(model$trend)) {
@@ -1546,10 +1573,7 @@ get_custom_kernel_pointers <- function(input_data) {
     model_list <- model()
     if (!is.list(model_list) || is.null(model_list$trend)) return(model)
     model_list$trend <- .set_custom_trend_pointers(model_list$trend, ptrs)
-    return(local({
-      value <- model_list
-      function() value
-    }))
+    return(.custom_model_container(model_list))
   }
   if (is.list(model)) {
     if (!is.null(model$trend)) {
