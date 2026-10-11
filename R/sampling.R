@@ -1064,13 +1064,33 @@ run_stage <- function(pmwgs,
       shear_started <- .emc_cpu_self()
       shear_el0 <- proc.time()[["elapsed"]]
       sll_shear <- .emc_subject_ll_cpu()
-      sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
-                            ens$wpool, wpool_part)
-      ens$sampler <- sh$sampler
-      ens$pars <- sh$pars
-      ens$proposals <- sh$proposals
-      ens$wpool <- sh$wpool
-      shear_rounds <- if (is.null(sh$rounds)) 0L else sh$rounds
+      # The rounds in K parts with a subject HMC round between parts, so
+      # the subjects re-equilibrate before the next rounds (emc2.shear_interleave).
+      K <- if (is.null(hmc_plan)) 1L else
+        max(1L, as.integer(getOption("emc2.shear_interleave", 1L)))
+      rounds_all <- ens$sampler$shear$plan$rounds
+      after <- identical(getOption("emc2.shear_interleave_mode", "between"), "after")
+      for (part in seq_len(K)) {
+        if (K > 1L) ens$sampler$shear$plan$rounds <- if (after) rounds_all * (part == 1L) else rounds_all / K
+        sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
+                              ens$wpool, wpool_part)
+        ens$sampler <- sh$sampler
+        ens$pars <- sh$pars
+        ens$proposals <- sh$proposals
+        ens$wpool <- sh$wpool
+        shear_rounds <- shear_rounds + (if (is.null(sh$rounds)) 0L else sh$rounds)
+        if (part < K) {
+          hr <- .emc_hmc_round(hmc_plan, ens$proposals, ens$pars, pmwgs$type, wpool_streams,
+                               data, pmwgs$model, wpool = ens$wpool,
+                               n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
+                               par_names = par_names)
+          ens$proposals <- hr$proposals
+          wpool_streams <- hr$streams
+          hmc_plan <- hr$plan
+          if (!is.null(ens$wpool) && !is.null(hr$pool)) ens$wpool$alive <- hr$pool$alive
+        }
+      }
+      if (K > 1L) ens$sampler$shear$plan$rounds <- rounds_all
       shear_raw <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
       shear_el <- proc.time()[["elapsed"]] - shear_el0
       if (alloc_on) shear_cpu <- .emc_reserved_cost(shear_el, cores_it)
@@ -1130,7 +1150,8 @@ run_stage <- function(pmwgs,
     hmc_tasks <- NULL
     hmc_master <- hmc_el <- 0
     if (alloc_on)
-      pmwgs <- .emc_alloc_record_subjects(pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE])
+      pmwgs <- .emc_alloc_record_subjects(pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
+                                          pars$tmu)
     if (!is.null(hmc_plan)) {
       hmc_started <- .emc_cpu_self()
       hmc_el0 <- proc.time()[["elapsed"]]

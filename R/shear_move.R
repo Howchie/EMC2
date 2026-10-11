@@ -229,6 +229,7 @@
 # subject with a half-space gets one. Columns of U are the unit normals,
 # b their offsets, Uperp an orthonormal basis of each normal's complement.
 .emc_shear_walls <- function(chain, idx) {
+  if (!isTRUE(getOption("emc2.shear_walls", TRUE))) return(NULL)
   support <- .emc_shear_support(chain)
   if (is.null(support)) return(NULL)
   n <- chain$n_subjects
@@ -485,6 +486,7 @@
 # width under the block's fits; it is repeated on a rebuild cadence while
 # the rounds stay ineffective. Once an atlas exists it is kept.
 .emc_shear_curve_wanted <- function(chain, idx, n_cores) {
+  if (!isTRUE(getOption("emc2.shear_curve", TRUE))) return(list(wanted = FALSE, ran = FALSE))
   q <- .emc_shear_curve_dirs(chain, idx)
   if (!length(q)) return(list(wanted = FALSE, ran = FALSE))
   pilot <- chain$shear$pilot

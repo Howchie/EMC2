@@ -82,6 +82,9 @@
 .EMC_ALLOC_MIN_PAIRS <- 10L
 .EMC_ALLOC_SHEAR_PRIOR_G <- 0.5
 .EMC_ALLOC_MIN_GAIN <- 0.9
+# Subject-HMC rates tried for every subject at once, for the group's credit
+# (emc2.alloc_hmc_regimes switches the search off).
+.EMC_ALLOC_HMC_REGIMES <- c(0.5, 1)
 # Particle rates the solver considers, highest first so that ties keep the
 # particle step.
 .EMC_ALLOC_PARTICLE_RATES <- seq(1, 0, by = -0.125)
@@ -120,6 +123,7 @@
 .emc_alloc_empty_window <- function(n, p) {
   list(n = 0L, nG = 0L, G = matrix(0, 2L * p, 2L * p), nA = 0L,
        A = replicate(n, matrix(0, p, p), simplify = FALSE),
+       D = replicate(n, matrix(0, p, p), simplify = FALSE),
        cpu_rest = 0, cpu_shear = 0, rounds = 0L, cpu_coll = 0, coll_moves = 0L,
        cpu_hmc = numeric(n), hmc_att = integer(n),
        hmc_rounds = 0L, hmc_round_cost = 0, hmc_round_work = 0,
@@ -176,13 +180,22 @@
 }
 
 # The subjects just before the HMC round, against the previous iteration's
-# final ones.
-.emc_alloc_record_subjects <- function(sampler, alpha) {
+# final ones: their jumps, and the jumps of their deviations from the group
+# mean (what the subject kernels alone move).
+.emc_alloc_record_subjects <- function(sampler, alpha, mu = NULL) {
   idx <- sampler$samples$idx
   w <- .emc_alloc_window(sampler)
-  d <- alpha - matrix(sampler$samples$alpha[, , idx], nrow(alpha))
+  if (is.null(w$D)) w$D <- replicate(ncol(alpha), matrix(0, nrow(alpha), nrow(alpha)),
+                                     simplify = FALSE)
+  old <- matrix(sampler$samples$alpha[, , idx], nrow(alpha))
+  d <- alpha - old
   if (all(is.finite(d))) {
-    for (s in seq_len(ncol(d))) w$A[[s]] <- w$A[[s]] + tcrossprod(d[, s])
+    dd <- if (is.null(mu)) d else
+      d - (as.numeric(mu) - as.numeric(sampler$samples$theta_mu[, idx]))
+    for (s in seq_len(ncol(d))) {
+      w$A[[s]] <- w$A[[s]] + tcrossprod(d[, s])
+      w$D[[s]] <- w$D[[s]] + tcrossprod(dd[, s])
+    }
     w$nA <- w$nA + 1L
   }
   sampler$alloc$window <- w
@@ -612,13 +625,30 @@
   })
   s_rho <- matrix(0, n, p)
   s_var <- matrix(NA_real_, n, p)
+  # Deviations from the group mean: their variance and lag-1 autocorrelation
+  # under the subject kernels as run (the particle step and any HMC).
+  d_var <- matrix(NA_real_, n, p)
+  d_rho <- matrix(NA_real_, n, p)
+  has_D <- !stored && !is.null(w$D) && w$nA > 0
   for (s in seq_len(n)) {
     ax <- do.call(cbind, lapply(seq_along(emc), function(i)
       W[[s]] %*% matrix(emc[[i]]$samples$alpha[, s, vdraws[[i]]], p)))
     s_var[s, ] <- apply(ax, 1L, stats::var)
     if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho_lo(
       rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ], w$nA)
+    if (has_D) {
+      dx <- do.call(cbind, lapply(seq_along(emc), function(i)
+        W[[s]] %*% (matrix(emc[[i]]$samples$alpha[, s, vdraws[[i]]], p) -
+                      emc[[i]]$samples$theta_mu[, vdraws[[i]], drop = FALSE])))
+      d_var[s, ] <- apply(dx, 1L, stats::var)
+      d_rho[s, ] <- .emc_alloc_rho_lo(
+        rowSums((W[[s]] %*% w$D[[s]]) * W[[s]]) / w$nA, d_var[s, ], w$nA)
+    }
   }
+  # The group's lag-1 autocorrelation under perfectly re-equilibrated
+  # subjects (its floor), from the one measured under the subjects' deviation
+  # autocorrelation r_bar: rho = f + (1 - f) r_bar.
+  r_bar <- if (has_D && any(is.finite(d_rho))) mean(d_rho[is.finite(d_rho)]) else NA_real_
   # Particle steps: their own factors and cost per step, carried over from
   # the last rebuild while the window holds too few of a subject's steps.
   prev <- ch$alloc$particle
@@ -656,6 +686,9 @@
        c_rate = if (!stored && w$n > 0) w$coll_moves / w$n else 0,
        W = W, s_rho = s_rho, t_rho = t_rho, p_fac = p_fac, c_part = c_part,
        q_old = q_old, s_var = s_var, C_rest = C_rest,
+       d_var = d_var, d_rho = d_rho, r_bar = r_bar,
+       g_floor = if (is.finite(r_bar) && r_bar < 1)
+         pmin(g_rho, pmax(0, (g_rho - r_bar) / (1 - r_bar))) else g_rho,
        c_round = if (!stored && w$rounds >= 5L) w$cpu_shear / w$rounds else NA_real_,
        c_hmc = if (!stored) ifelse(w$hmc_att > 0, w$cpu_hmc / pmax(1L, w$hmc_att), NA_real_)
                else rep(NA_real_, n),
@@ -703,6 +736,12 @@
           ev$cpu > 0) ev$cpu / ev$n else 3 * C_iter / n
         u$h <- h
         u$c_h <- c_s
+        # Its factor on the deviations, for the group's credit.
+        if (!is.null(ms$d_var) && all(is.finite(ms$d_var[s, ]))) {
+          u$h_dev <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$d_var[s, ], opts$min_evidence)
+          if (is.null(u$h_dev)) u$h_dev <- h
+          u$d_rho <- ms$d_rho[s, ]
+        }
       }
     }
     if (priced) {
@@ -719,7 +758,34 @@
          cap = max(.EMC_ALLOC_MAX_ROUNDS, 2 * ms$c_rate))
   }
   list(units = units, C_rest = C_rest, c_round = c_round, joint = joint,
-       hmc_fixed = if (isTRUE(is.finite(ms$hmc_fixed))) ms$hmc_fixed else 0)
+       hmc_fixed = if (isTRUE(is.finite(ms$hmc_fixed))) ms$hmc_fixed else 0,
+       r_bar = ms$r_bar, g_floor = ms$g_floor)
+}
+
+# The units under a subject-HMC regime: every subject with a deviation
+# factor runs HMC at rate r, and the group coordinates take the lag-1
+# autocorrelation the subjects' remaining deviation autocorrelation implies,
+# rho_k' = f_k + (rho_k - f_k) r_bar' / r_bar (see .emc_alloc_measure).
+.emc_alloc_regime <- function(u, r) {
+  units <- u$units
+  n_g <- length(u$g_floor)
+  cost <- 0
+  dev <- numeric(0)
+  for (i in seq_along(units)) {
+    x <- units[[i]]
+    if (!identical(x$kind, "subject") || is.null(x$h_dev) || !all(is.finite(x$d_rho))) next
+    fac <- 1 - r * (1 - x$h)
+    units[[i]]$rho <- x$rho * fac
+    dev <- c(dev, x$d_rho * (1 - r * (1 - x$h_dev)))
+    cost <- cost + r * x$c_h
+  }
+  if (!length(dev) || !is.finite(u$r_bar) || u$r_bar <= 0) return(NULL)
+  ratio <- mean(dev) / u$r_bar
+  for (k in seq_len(n_g)) {
+    x <- units[[k]]
+    units[[k]]$rho <- u$g_floor[k] + (x$rho - u$g_floor[k]) * ratio
+  }
+  list(units = units, cost = cost)
 }
 
 # The allocation with the HMC round's fixed cost: the best plan that runs the
@@ -736,12 +802,25 @@
                       logical(1)))
   if (!has_h) return(without)
   with <- .emc_alloc_solve(u$units, u$C_rest + u$hmc_fixed, joint = u$joint)
+  with$regime <- 0
+  # Subject HMC for the group's sake: regimes with every subject at a rate,
+  # priced with the group autocorrelations they imply.
+  if (isTRUE(getOption("emc2.alloc_hmc_regimes", TRUE))) for (r in .EMC_ALLOC_HMC_REGIMES) {
+    reg <- .emc_alloc_regime(u, r)
+    if (is.null(reg)) break
+    cand <- .emc_alloc_solve(reg$units, u$C_rest + u$hmc_fixed + reg$cost, joint = u$joint)
+    if (isTRUE(cand$objective < with$objective)) {
+      cand$regime <- r
+      with <- cand
+    }
+  }
   if (isTRUE(with$objective < without$objective &&
              with$objective <= .EMC_ALLOC_MIN_GAIN * without$objective0)) {
     with$objective0 <- without$objective0
     with$tau0 <- without$tau0
     return(with)
   }
+  without$regime <- 0
   without
 }
 
@@ -820,7 +899,8 @@
     n_g <- length(m$g_rho)
     if (shear_on[j]) ch$shear$plan$rounds <- sol$x[seq_len(n_g)]
     if (isTRUE(m$coll)) ch$collapsed$plan$rounds <- sol$joint
-    rate <- sol$x[n_g + seq_len(ch$n_subjects)]
+    regime <- if (is.null(sol$regime)) 0 else sol$regime
+    rate <- pmin(1, regime + sol$x[n_g + seq_len(ch$n_subjects)])
     q <- rep(1, ch$n_subjects)
     if (!is.null(st) && isTRUE(st$supported)) {
       for (s in seq_len(ch$n_subjects)) {
@@ -841,6 +921,7 @@
         as.integer(ch$sample_transitions),
       stored = m$stored, pairs = m$pairs, C_rest = u$C_rest, c_round = u$c_round,
       c_hmc = m$c_hmc, c_part = m$c_part, hmc_fixed = u$hmc_fixed, tau = sol$tau, tau0 = sol$tau0, cost = sol$cost,
+      regime = regime, r_bar = m$r_bar,
       objective = sol$objective, objective0 = sol$objective0,
       group_rho = m$g_rho, group_g = m$g_fac, group_a = m$g_sat,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
