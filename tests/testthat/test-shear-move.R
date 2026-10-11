@@ -1,3 +1,4 @@
+local_rng_guard()
 ok_check <- list(pareto_k = 0, outside = 0, laplace_status = "ok")
 
 test_that("the shear plan is the centred Gibbs step's lag-1 operator", {
@@ -335,6 +336,7 @@ test_that("transport walls come from the model's declared bounds and the subject
 })
 
 test_that("the wall transport leaves a bounded joint posterior invariant", {
+  local_test_rng(kind = "Mersenne-Twister")
   # The diagonal hierarchy of the invariance test below with the first
   # parameter bounded below for every subject; the sampler sees each
   # subject's wall.

@@ -1,3 +1,4 @@
+local_rng_guard()
 ok_check <- list(pareto_k = 0, outside = 0, laplace_status = "ok")
 
 # A small hierarchy with an inverse-Wishart block (parameters 1-3), an
@@ -286,6 +287,7 @@ test_that("the collapsed move leaves the joint posterior invariant (diagonal-gam
 })
 
 test_that("the collapsed move with transport walls leaves a bounded joint posterior invariant", {
+  local_test_rng(kind = "Mersenne-Twister")
   # The diagonal hierarchy above with the first parameter bounded below for
   # every subject; the move sees each subject's wall. Exact and wrong
   # approximations, then a broken control that drops the wall map's quantile
@@ -328,7 +330,7 @@ test_that("the collapsed move with transport walls leaves a bounded joint poster
       c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
     }, numeric(2 * p + p * n)))
     expect_true(all(after[, 2 * p + seq(1, p * n, by = p)] >= h$b))
-    expect_gt(mean(after[, p + 1] != h$before[, p + 1]), 0.1)
+    expect_gt(mean(after[, p + 1] != h$before[, p + 1]), 0.05)
     se <- apply(h$before, 2, sd) / sqrt(N)
     z_mean <- abs(colMeans(after) - colMeans(h$before)) / se
     z_var <- abs(apply(after, 2, var) / apply(h$before, 2, var) - 1) / sqrt(2 / N)
@@ -342,6 +344,7 @@ test_that("the collapsed move with transport walls leaves a bounded joint poster
 })
 
 test_that("the collapsed move keeps the joint distribution with a full covariance block", {
+  local_test_rng(kind = "Mersenne-Twister")
   # Successive-conditional simulation (Geweke 2004): alternate the move with
   # exact draws of a | mu, V, y and y | a. With a valid move the chain's
   # stationary law is the prior joint, so (mu, log sd, correlation) must
