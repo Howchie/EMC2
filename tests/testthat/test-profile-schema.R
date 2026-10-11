@@ -74,6 +74,30 @@ test_that("binding rows keeps the schema and tolerates empties", {
   expect_identical(names(empty), names(.emc_profile_schema))
 })
 
+test_that("per-iteration rows from every block's chains accumulate in the master", {
+  withr::local_options(emc2.sampler_profile = TRUE)
+  .emc_block_reset()
+  chain <- function(its) {
+    ch <- list(samples = list())
+    attr(ch$samples, "sampler_profile") <-
+      .emc_profile_bind(lapply(its, function(i) .emc_profile_row(iteration = i, stage = "sample")))
+    ch
+  }
+  .emc_iteration_record(list(chain(1:2), chain(1:2)), block = 1L)
+  .emc_iteration_record(list(chain(1:3), list(samples = list())), block = 2L)
+  got <- .emc_iteration_profile()
+  expect_identical(nrow(got), 7L)
+  expect_identical(got$chain, c(1L, 1L, 2L, 2L, 1L, 1L, 1L))
+  expect_identical(got$block, c(1L, 1L, 1L, 1L, 2L, 2L, 2L))
+  expect_true(all(names(.emc_profile_schema) %in% names(got)))
+  .emc_block_reset()
+  expect_null(.emc_iteration_profile())
+  # Off, nothing is recorded.
+  withr::local_options(emc2.sampler_profile = FALSE)
+  .emc_iteration_record(list(chain(1)), block = 1L)
+  expect_null(.emc_iteration_profile())
+})
+
 test_that("worker workload is the assigned partition, not the largest subject", {
   # The measurement contract this commit repairs.  Eight subjects of 10 ms
   # each, two workers: the slowest single subject is 10 ms, but each worker was

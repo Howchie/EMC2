@@ -518,6 +518,7 @@
 # travel back -- these can simply be accumulated.
 .emc_block_reset <- function() {
   .emc_profile_state$blocks <- NULL
+  .emc_profile_state$iterations <- NULL
   invisible(NULL)
 }
 
@@ -534,6 +535,32 @@
   rows <- .emc_profile_state$blocks
   if (is.null(rows) || !length(rows)) return(NULL)
   .emc_profile_bind(rows)
+}
+
+# The per-iteration record is built inside each forked chain and does not
+# survive `concat_emc`, so `run_emc` hands every block's chains here before
+# merging them and the rows accumulate in the master beside the block record.
+.emc_iteration_record <- function(chains, block) {
+  if (!.emc_profile_enabled()) return(invisible(NULL))
+  rows <- .emc_profile_state$iterations
+  if (is.null(rows)) rows <- list()
+  for (j in seq_along(chains)) {
+    pr <- attr(chains[[j]]$samples, "sampler_profile")
+    if (is.null(pr) || !nrow(pr)) next
+    pr$chain <- j
+    pr$block <- block
+    rows[[length(rows) + 1L]] <- pr
+  }
+  .emc_profile_state$iterations <- rows
+  invisible(NULL)
+}
+
+.emc_iteration_profile <- function() {
+  rows <- .emc_profile_state$iterations
+  if (is.null(rows) || !length(rows)) return(NULL)
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  out
 }
 
 .emc_reject_counts_all <- function() {

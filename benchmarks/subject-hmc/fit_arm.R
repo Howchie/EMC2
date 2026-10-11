@@ -151,6 +151,7 @@ res <- list(case = case, arm = arm, seed = seed, feature = feature, feature_par 
             iters = chain_n(emc), stage_iters = stage_iters, stage_cpu = stage_cpu, stop_ok = stop_ok, sample_try = if (is.null(ls)) NA else ls$try,
             sample_gd = if (is.null(ls)) NULL else ls$gd$stats, diag = d, recovery = rec, moves = moves,
             blocks = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_block_profile() else NULL,
+            iterations = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_iteration_profile() else NULL,
             n_draws = dim(mu)[1], n_subjects = emc[[1]]$n_subjects, p = p)
 saveRDS(res, out)
 if (Sys.getenv("SAVE_EMC") == "1") saveRDS(emc, sub("\\.rds$", "_emc.rds", out))

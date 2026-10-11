@@ -256,6 +256,7 @@ run_emc <- function(emc, stage, stop_criteria,
     concat_started <- proc.time()[["elapsed"]]
     if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
     class(sub_emc) <- "emc"
+    .emc_iteration_record(sub_emc, block_no)
     if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
     if(stage != 'preburn'){
       if(is.numeric(thin)){
