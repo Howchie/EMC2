@@ -1,6 +1,6 @@
 # One default fit() arm of the optional-moves panel.
 #   EMC_LIB=<lib> Rscript benchmarks/subject-hmc/fit_arm.R <case> <arm> <seed> <out.rds>
-# case: T30 | corr15 | lbaA | forstmann | T30m | T30p (T30 with t0 drawn
+# case: T30 | corr15 | lbaA | lbaT | forstmann | T30m | T30p (T30 with t0 drawn
 #   independently of the other effects / shared by all subjects; read from
 #   FIXTURE_DIR, default benchmarks/subject-hmc/fixtures)
 # arm: base (ensemble only) | shear | hmc | full (ensemble + shear + subject HMC)
@@ -26,6 +26,7 @@ matchfun <- function(d) d$S == d$lR
 fx <- switch(case,
   T30 = readRDS("benchmarks/subject-hmc/fixtures/fixture_T30.rds"),
   lbaA = readRDS("benchmarks/subject-hmc/fixtures/fixture_lbaA.rds"),
+  lbaT = readRDS("benchmarks/subject-hmc/fixtures/fixture_lbaT.rds"),
   corr15 = local({
     fx <- readRDS("benchmarks/mode-start/results_plausible/fixture_corr15.rds")
     fx$design <- q(design(data = fx$data, model = RDM, matchfun = matchfun,
@@ -35,7 +36,7 @@ fx <- switch(case,
   }),
   forstmann = list(data = forstmann, design = q(design(data = forstmann, model = LNR,
     matchfun = matchfun, formula = list(m ~ lM, s ~ 1, t0 ~ 1), verbose = FALSE))),
-  T30m = , T30p = readRDS(file.path(Sys.getenv("FIXTURE_DIR", "benchmarks/subject-hmc/fixtures"),
+  T30m = , T30p = , nback = , nback31 = readRDS(file.path(Sys.getenv("FIXTURE_DIR", "benchmarks/subject-hmc/fixtures"),
                                     paste0("fixture_", case, ".rds"))),
   stop("unknown case"))
 feature <- Sys.getenv("FEATURE")
@@ -69,11 +70,20 @@ timed_run_emc <- function(emc, stage, ...) {
 }
 unlockBinding("run_emc", ns); assign("run_emc", timed_run_emc, envir = ns); lockBinding("run_emc", ns)
 set.seed(seed)
-emc <- q(make_emc(fx$data, fx$design, n_chains = 3, prior = prior_in))
+# A fixture may carry its own prior and sampler type (the N-back fixtures do).
+if (is.null(prior_in) && !is.null(fx$prior)) prior_in <- fx$prior
+emc <- if (is.null(fx$type)) q(make_emc(fx$data, fx$design, n_chains = 3, prior = prior_in)) else
+  q(make_emc(fx$data, fx$design, n_chains = 3, prior = prior_in, type = fx$type))
 t0 <- proc.time()[["elapsed"]]
 cores_per_chain <- as.integer(Sys.getenv("CORES_PER_CHAIN", "5"))
+# PARTICLE_FACTOR sets fit()'s particle_factor (default 50); VERBOSE=1 prints
+# fit()'s progress; FIT_FILE=<path> autosaves the chains there as fit() runs.
+particle_factor <- as.numeric(Sys.getenv("PARTICLE_FACTOR", "50"))
+verbose <- identical(Sys.getenv("VERBOSE", "0"), "1")
+fit_file <- Sys.getenv("FIT_FILE", "")
 emc <- suppressWarnings(q(fit(emc, cores_per_chain = cores_per_chain, cores_for_chains = 3,
-                              verbose = FALSE)))
+                              particle_factor = particle_factor, verbose = verbose,
+                              fileName = if (nzchar(fit_file)) fit_file else NULL)))
 elapsed <- proc.time()[["elapsed"]] - t0
 emc <- EMC2:::restore_duplicates(emc)
 pn <- emc[[1]]$par_names; p <- length(pn)
@@ -132,8 +142,12 @@ moves <- lapply(emc, function(ch) list(
   shear = if (is.null(ch$shear)) NULL else list(iterations = ch$shear$iterations, rounds = ch$shear$rounds),
   history = ch$alloc$history,
   collapsed = if (is.null(ch$collapsed)) NULL else list(iterations = ch$collapsed$iterations,
-    rounds = ch$collapsed$rounds, accepted = ch$collapsed$accepted, eps = ch$collapsed$plan$eps)))
-res <- list(case = case, arm = arm, seed = seed, feature = feature, feature_par = feature_par, lib = find.package("EMC2"), elapsed = elapsed,
+    rounds = ch$collapsed$rounds, accepted = ch$collapsed$accepted,
+    attempts = ch$collapsed$attempts, accepted_rounds = ch$collapsed$accepted_rounds,
+    acceptance_probability_sum = ch$collapsed$acceptance_probability_sum,
+    eps = ch$collapsed$plan$eps)))
+res <- list(case = case, arm = arm, seed = seed, feature = feature, feature_par = feature_par,
+            lib = find.package("EMC2"), elapsed = elapsed,
             iters = chain_n(emc), stage_iters = stage_iters, stage_cpu = stage_cpu, stop_ok = stop_ok, sample_try = if (is.null(ls)) NA else ls$try,
             sample_gd = if (is.null(ls)) NULL else ls$gd$stats, diag = d, recovery = rec, moves = moves,
             blocks = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_block_profile() else NULL,
@@ -156,9 +170,17 @@ if (!is.null(rec)) {
 }
 for (j in seq_along(moves)) {
   m <- moves[[j]]
-  if (!is.null(m$collapsed)) cat(sprintf("  chain %d: collapsed moves with a likelihood round %s, accepted iterations %s over %s its, eps %.3f, last plan moves/it %.2f\n",
-    j, format(m$collapsed$rounds), format(m$collapsed$accepted), format(m$collapsed$iterations), m$collapsed$eps,
-    if (length(m$history)) m$history[[length(m$history)]]$collapsed_rounds else NA))
+  if (!is.null(m$collapsed)) {
+    attempts <- as.numeric(m$collapsed$attempts %||% 0)
+    accepted_rounds <- as.numeric(m$collapsed$accepted_rounds %||% 0)
+    expected_acceptance <- as.numeric(m$collapsed$acceptance_probability_sum %||% 0)
+    cat(sprintf("  chain %d: collapsed exact acceptance %s/%s rounds (observed %.3f, expected %.3f), accepted iterations %s over %s its, eps %.3f, last plan moves/it %.2f\n",
+      j, format(accepted_rounds), format(attempts),
+      if (attempts > 0) accepted_rounds / attempts else NA_real_,
+      if (attempts > 0) expected_acceptance / attempts else NA_real_,
+      format(m$collapsed$accepted), format(m$collapsed$iterations), m$collapsed$eps,
+      if (length(m$history)) m$history[[length(m$history)]]$collapsed_rounds else NA))
+  }
   h <- m$history
   last <- if (length(h)) h[[length(h)]] else NULL
   cat(sprintf("  chain %d: shear rounds %s over %s its | HMC attempts %s accepted %s cpu %.1f s calib %.1f s | last plan: rounds/it %.2f, rates>0 %d, tau %.2f -> %.2f\n",

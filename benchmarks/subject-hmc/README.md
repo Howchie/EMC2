@@ -5,8 +5,8 @@ under Design. Code: `R/subject_hmc.R` (kernel, warmup, step-size updates),
 `R/shear_move.R` (shear rounds), `R/move_allocation.R` (measurement and the
 solver), wired into `run_stage()` (`R/sampling.R`), the worker pool
 (`R/chain_pool.R`) and `add_proposals()` (`R/fitting.R`). Committed in
-`e43fdc30` on `playground`. Both moves are opt-in switches while they are
-evaluated: `options(emc2.group_move = "shear", emc2.subject_hmc = TRUE)`.
+`e43fdc30` on `playground`. The collapsed transport is enabled by default and
+can be disabled with `options(emc2.collapsed_move = FALSE)`.
 
 ## Design
 
@@ -42,9 +42,11 @@ warmup; forward in place of central differences.
 
 Default `fit()` stop rule (mu and alpha R-hat < 1.1, at most 20 sample
 tries), cgroup CPU in seconds. `base` is the ensemble update alone; `full`
-adds shear rounds and subject HMC. The `full` column pools runs whose builds
-differ from the commit in one of: the saturating round composition,
-up-front calibration in place of the warmup, or central differences.
+adds shear rounds and subject HMC. Neither arm enables the collapsed group
+transport; only the separate `fullc` arm does. The reported `full` column
+pools runs whose builds differ from the commit in one of: the saturating round
+composition, up-front calibration in place of the warmup, or central
+differences.
 
 | case | base | full |
 |---|---|---|
@@ -52,6 +54,12 @@ up-front calibration in place of the warmup, or central differences.
 | corr15 (RDM, 30 subj) | 1465, 1463 | 1516-1579 (4 runs) |
 | T30 (Wald, 40 subj) | fails both: mu R-hat 1.24, 1.15 | converges in all 12 runs: 10-19 tries, 2516-4038 s |
 | lbaA (LBA, 20 subj) | 4811 (10 tries), 7193 (15 tries) | met in 2 of 4: 5404-6053 s; 2 runs hit 20+ tries |
+
+These fixture results do not measure collapsed-transport acceptance or
+efficiency. The reported HMC acceptance belongs to the subject-level HMC
+kernel. Direct collapsed-move tests use small synthetic Gaussian likelihoods;
+the large nonlinear LBA support case is covered by the checkpoint probes in
+`plans/collapsed_transport_adaptation_2026-10-09/report.md`.
 
 - T30 is the case the shear exists for: the ensemble update does not mix mu
   there, and shear mean rounds do.
@@ -72,10 +80,60 @@ up-front calibration in place of the warmup, or central differences.
   seeds: acceptance and accepted jump unchanged to 3 dp, half the rows,
   CPU per transition -7% (forstmann), -31% (T30), -40% (lbaA).
 
-Driver: `run_arm.sh <lib> <case> <arm> <seed> <outdir>` runs `fit_arm.R` in a
+Driver: `run_arm.sh <lib> <case> <arm> <seed> <outdir> [cores]` runs `fit_arm.R` in a
 cgroup scope; `summarise.R <dir>` tabulates a directory of runs. Build each
 test library from a clean tree (`git archive`) so uncommitted work elsewhere
 in the worktree is not picked up.
+
+## Evaluation protocol
+
+Single from-scratch fits do not rank sampler builds. Three fullc fits of the
+same lbaT fixture under near-identical builds took 17.1k, 30.4k and 44.8k
+CPU-seconds; two T30 seeds under one build took 8.9k and 5.1k. Convergence
+time is a stopping time of a noisy R-hat and swings by 2-3x between seeds.
+Continuations of 200-300 iterations are no better: on the N-back checkpoint,
+arms at identical settings gave slowest-direction ESS between 13 and 73.
+Comparisons are therefore made in two phases.
+
+Phase A, convergence: `fit_arm.R`, the default stop rule, three seeds per
+case. Reports whether the rule was met, the tries, and CPU to the stop.
+This is the acceptance criterion (R-hat < 1.1 first), not the ranking
+statistic. The seed-1 end state (`SAVE_EMC=1`) is the case's checkpoint.
+
+Phase B, stationary efficiency: `continue_arm.R` continues the checkpoint
+for a fixed number of production iterations, three seeds per arm, every arm
+from the same checkpoint. The first 100 new iterations are discarded (one
+block: a rebuild is forced at the start so each arm allocates under its own
+kernel, and the first block's plan is the only one built from the
+checkpoint's measurements). The score is ESS per cgroup CPU-second on
+quantities fixed by the checkpoint: the group means and log sds,
+standardised by their checkpoint sds and rotated to the directions of
+largest lag-one autocorrelation (generalised eigenvectors of the lag-one
+autocovariance against the covariance, chains pooled; cached in
+`<ckpt>_dirs.rds`). The slowest of these directions is the headline, with
+coordinate-wise mu, log-sd and alpha minima, split-half ESS as a
+stationarity check, R-hat on the new draws, and the move totals. Runs are
+long enough that the reference arm's slowest direction reaches ESS of
+about 100 (relative error of the ESS estimate near 15%); on the N-back
+checkpoint that is 1800 iterations.
+
+Ranking rule: `summarise_cont.R <dir> <reference>` reports each arm's
+median over seeds as a ratio to the reference and whether the seed ranges
+are separated. A build is a gain only when the ratio exceeds 1 on the
+slowest direction with separated ranges, and Phase A still meets the stop
+rule.
+
+Machine protocol: one fit at a time, 3 chains x 9 cores, pinned with
+`taskset` (`queue.sh <jobs.txt>` runs a job list this way). The allocator
+prices moves by wall-clock, so concurrent load changes plans, not only CPU
+totals. A frozen copy of the installed library per launched run, since a
+reinstall under a running fit changes the code its workers load.
+
+Cases: T30 (Wald), lbaT (LBA ridges), and the N-back fixtures built by
+`make_fixture_nback.R` from the user's fitted object (real data, written to
+`FIXTURE_DIR` outside the repo): `nback` (93 subjects, p = 21, the minimum
+target) and `nback31` (every third subject; same design and prior, a third
+of the cost per iteration, used for screening before the full fixture).
 
 ## Fixture manifest
 
@@ -85,6 +143,7 @@ in the worktree is not picked up.
 | corr15 | `benchmarks/mode-start/results_plausible/fixture_corr15.rds` (RDM, 30 subjects, 400 trials/cell) | `cb9c47fe214f52608e99b760522e30b5` |
 | forstmann | package data, LNR `m ~ lM, s ~ 1, t0 ~ 1` | package data |
 | lbaA | `fixtures/fixture_lbaA.rds` from `make_fixture.R` (below) | see below |
+| lbaT | `fixtures/fixture_lbaT.rds` from `make_fixture_lbaT.R`: LBA `v ~ lM` with an exponential practice trend `v + w exp(-d_ed trial)`, `B ~ 1, A ~ 1, t0 ~ 1, sv ~ lM` (8 parameters), 80 subjects x 150 trials, group SD of the log rate 0.15, seed 20261011. Few trials per subject leave the subject posteriors on curved ridges and the group means identified by pooling. First fullc fit (seed 1): no convergence in 20 tries (1135 draws, 1547 s); `B`, `A`, `t0` means and log SDs at ESS 6-9, R-hat 1.4, trend parameters fine (ESS 44-128). | generated |
 | lba71sim stuck state | `benchmarks/production-adaptation/results_shear/shear_v4/emc_lba71sim_doubling_shearK4_2.rds`, subject 11 / chain 1, 2000 production transitions, next rebuild 3200, `diagonal-gamma`, 20 subjects, p = 71 | `38c06da04e0c21fdda3539305f6c2fd9` |
 
 ### Identified free-A fixture (lbaA)
