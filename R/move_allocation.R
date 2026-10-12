@@ -905,11 +905,16 @@
   with_h <- which(ns > 0 & !vapply(hs, is.null, logical(1)))
   if (length(with_h)) {
     h_ref <- Reduce(`+`, lapply(with_h, function(i) ns[i] * hs[[i]])) / sum(ns[with_h])
+    # The deviation factors have their own variances, so their own reference.
+    hd <- lapply(units[-seq_along(ms$g_rho)], function(x) x$h_dev)
+    with_d <- with_h[!vapply(hd[with_h], is.null, logical(1))]
+    hd_ref <- if (length(with_d))
+      Reduce(`+`, lapply(with_d, function(i) ns[i] * hd[[i]])) / sum(ns[with_d])
     for (i in with_h) {
       k <- length(ms$g_rho) + i
       units[[k]]$h <- (ns[i] * hs[[i]] + n0 * h_ref) / (ns[i] + n0)
-      if (!is.null(units[[k]]$h_dev))
-        units[[k]]$h_dev <- (ns[i] * units[[k]]$h_dev + n0 * h_ref) / (ns[i] + n0)
+      if (!is.null(units[[k]]$h_dev) && !is.null(hd_ref))
+        units[[k]]$h_dev <- (ns[i] * units[[k]]$h_dev + n0 * hd_ref) / (ns[i] + n0)
     }
   }
   list(units = units, C_rest = C_rest, c_round = c_round, joint = joint,
