@@ -208,3 +208,22 @@ within minutes but a full fit costs 20-60 minutes on 27 cores.
 - Earlier reports: plans/collapsed_transport_adaptation_2026-10-09/report.md,
   plans/lba_sampling_audit_2026-10-09/report.md,
   plans/sampler_mechanisms_review_2026-10-11.md (+ response).
+
+## Superseded (2026-10-12, after the two reviews)
+
+Both reviews (plans/collapsed_move_lba_review_2026-10-12/review-CODEX.md and
+review-OPUS.md) contradict this document's premise: on the same checkpoint
+the shear rounds on log sd(A) accept and mix it where they run (chain 3,
+1.87 rounds per iteration, 71% moved, lag-100 autocorrelation 0.04), and
+chains 1 and 2 were starved of them (0.04 and 0.01 rounds per iteration);
+chain 1 sits in the funnel neck (log sd(A) about -5.4) and chains 2 and 3
+in the bulk (about -1.8). The offline production rebuild on the fixed
+allocator build reproduces chain 2 buying nothing: its pooled round factor
+reads 0.995 from a handful of rounds and a round is priced at 1.59 against a
+rest-of-iteration cost of 0.56, so the starvation is self-sustaining. The
+collapsed move stays allocator-gated at zero; it is not the target. The
+wall-transport reversibility defect the CODEX review found is fixed
+(mirror map; commit after 300572e0). Next: the forced-rounds scaffold
+(arm force4: 4 rounds per iteration on log sd(A), no rebuild), then pooling
+shear-round evidence across chains and pricing rounds without the per-block
+fixed shear costs.
