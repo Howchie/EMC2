@@ -1019,9 +1019,11 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   step <- ch$shear$plan$log_step[sd_k]
   ch <- rebuild(ch, "sample", 30L, 15L, 3)
   pl <- ch$shear$plan
-  expect_equal(pl$last$n[sd_k], rep(40L, p))
-  expect_equal(pl$last$E[sd_k], rep(5, p))
-  expect_equal(pl$last$moved[sd_k], rep(25L, p))
+  # The pool carries the earlier blocks discounted at each rebuild.
+  d <- EMC2:::.EMC_SHEAR_POOL_DECAY
+  expect_equal(pl$last$n[sd_k], rep(d * 10 + 30, p))
+  expect_equal(pl$last$E[sd_k], rep(d * 2 + 3, p))
+  expect_equal(pl$last$moved[sd_k], rep(d * 10 + 15, p))
   shift <- max(-log(2), min(log(2), 2 * (0.5 - EMC2:::.EMC_SHEAR_MOVE_TARGET)))
   expect_equal(pl$log_step[sd_k],
                pmin(EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[2],

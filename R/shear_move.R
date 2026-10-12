@@ -131,6 +131,11 @@
 # Initial step scale in posterior sds of the coordinate, and the bounds every
 # adapted scale stays in.
 .EMC_SHEAR_STEP0 <- 2.5
+# Production round records carry across rebuilds discounted by this factor,
+# so a coordinate's evidence is bounded (about two blocks' worth) and a
+# coordinate whose rounds stopped is measured afresh rather than priced for
+# ever on the rounds it once had.
+.EMC_SHEAR_POOL_DECAY <- 0.5
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
 
 .emc_shear_options <- function() {
@@ -442,9 +447,10 @@
     recent <- carry(blk)
     if (pooled) {
       prev <- carry(old$pool)
-      plan$pool <- list(E = prev$E + recent$E, n = prev$n + recent$n,
-                        moved = prev$moved + recent$moved, N = prev$N + recent$N,
-                        K = .emc_alloc_khist_sum(prev$K, recent$K))
+      d <- .EMC_SHEAR_POOL_DECAY
+      plan$pool <- list(E = d * prev$E + recent$E, n = d * prev$n + recent$n,
+                        moved = d * prev$moved + recent$moved, N = d * prev$N + recent$N,
+                        K = .emc_alloc_khist_sum(d * prev$K, recent$K))
     }
   }
   # The allocation measures a coordinate's rounds from the pooled production
@@ -1193,6 +1199,7 @@
   any_moved <- FALSE
   blk <- .emc_shear_record(plan$block, p)
   net <- numeric(2L * p)
+  round_el0 <- proc.time()[["elapsed"]]
   for (k in take[sample.int(length(take))]) {
     x <- .emc_shear_round(x, .emc_shear_coord_dir(plan, k), exp(plan$log_step[k]),
                           sampler, ctx)
@@ -1206,6 +1213,7 @@
     }
     any_moved <- any_moved || x$moved
   }
+  round_el <- proc.time()[["elapsed"]] - round_el0
   # Each coordinate's net move over its rounds in this iteration, by how many
   # it had (the rounds' saturation, R/move_allocation.R).
   ran <- which(n_rounds > 0L)
@@ -1232,5 +1240,5 @@
   }
   sampler$shear <- st
   list(sampler = sampler, pars = pars, proposals = proposals, wpool = x$wpool,
-       rounds = x$rounds)
+       rounds = x$rounds, round_el = round_el)
 }

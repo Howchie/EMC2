@@ -474,6 +474,69 @@ test_that("a chain held to shared particle rates is solved at those rates", {
   expect_gte(held$cost, own$cost - 1e-9)
 })
 
+test_that("a few rounds shade a coordinate's factor towards its kind's, and log-sd rounds pool across chains", {
+  p <- 2; n <- 1; k <- 50
+  a <- matrix(stats::rnorm(p * k), p)
+  tv <- array(0, c(p, p, k)); for (t in seq_len(k)) tv[, , t] <- diag(exp(stats::rnorm(p)))
+  chain <- function(last, stage = "sample") list(
+    n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = c("x", "y"),
+    lik_laplace = list(NULL),
+    samples = list(idx = k, stage = rep("sample", k), theta_mu = a,
+                   theta_var = tv, alpha = array(a, c(p, 1, k))),
+    shear = list(plan = list(dirs = diag(p), stage = stage, last = last)),
+    alloc = list(window = NULL))
+  withr::local_options(list(emc2.shear_move = TRUE))
+  local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
+  n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
+  # Mean direction 1: 50 rounds moving well; direction 2: 5 rounds that did
+  # not move at all. The five shade direction 2 towards direction 1's factor
+  # instead of declaring it immovable.
+  ch <- chain(list(E = c(50, 0, 0, 0), n = c(50, 5, 0, 0), moved = integer(4)))
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  g1 <- 1 - 1 / (2 * ms$g_var[1])
+  expect_equal(ms$g_fac[1], (50 * g1 + n0 * ((50 * g1 + 5 * 1) / 55)) / (50 + n0))
+  expect_equal(ms$g_fac[2], (5 * 1 + n0 * ((50 * g1 + 5 * 1) / 55)) / (5 + n0))
+  expect_lt(ms$g_fac[2], 1)
+  # With evidence the measured zero movement wins: 500 rounds of nothing.
+  ch2 <- chain(list(E = c(50, 0, 0, 0), n = c(50, 500, 0, 0), moved = integer(4)))
+  ms2 <- EMC2:::.emc_alloc_measure(list(ch2), 1, NULL, diag(p))
+  expect_gt(ms2$g_fac[2], 0.98)
+  # A second chain's log-sd rounds count for this chain's log sds, not for
+  # its mean directions.
+  other <- chain(list(E = c(0, 0, 1, 0), n = c(0, 0, 10, 0), moved = integer(4)))
+  mine <- chain(list(E = c(0, 0, 0, 0), n = c(0, 0, 0, 0), moved = integer(4)))
+  msp <- EMC2:::.emc_alloc_measure(list(mine, other), 1, NULL, diag(p), stage = "sample")
+  g3 <- max(0, 1 - 0.1 / (2 * msp$g_var[3]))
+  expect_true(msp$g_measured[3]); expect_false(msp$g_measured[1])
+  expect_equal(msp$g_fac[3], (10 * g3 + n0 * g3) / (10 + n0))
+  # Outside production nothing pools.
+  msb <- EMC2:::.emc_alloc_measure(list(mine, other), 1, NULL, diag(p), stage = "burn")
+  expect_false(msb$g_measured[3])
+})
+
+test_that("rounds are priced at their own time, the frames as a fixed cost paid once", {
+  s <- list(n_pars = 2, n_subjects = 3)
+  for (i in 1:12) s <- EMC2:::.emc_alloc_record_cost(s, 1, shear = 2.5, rounds = 5L,
+    tasks = list(NULL, NULL, NULL), shear_round = 0.5)
+  s <- EMC2:::.emc_alloc_record_cost(s, 1, shear = 0, rounds = 0L, tasks = list(NULL, NULL, NULL))
+  w <- s$alloc$window
+  expect_equal(w$cpu_shear_rounds, 6)
+  expect_identical(w$shear_iters, 12L)
+  expect_identical(w$rounds, 60L)
+  # A plan with rounds pays the fixed cost; one whose rounds cannot repay it
+  # runs none.
+  fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
+  sh <- list(kind = "shear", rho = 0.95, g = 0.4, cost = 0.02)
+  u <- list(units = list(sh, fixed), C_rest = 1, joint = NULL, hmc_fixed = 0, shear_fixed = 0.3)
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  expect_gt(sol$x[1], 0)
+  expect_equal(sol$cost, 1 + 0.3 + sol$x[1] * 0.02)
+  expect_equal(sol$tau0, EMC2:::.emc_alloc_tau(0.95))
+  dear <- EMC2:::.emc_alloc_solve_units(replace(u, "shear_fixed", list(50)))
+  expect_identical(dear$x[1], 0)
+  expect_equal(dear$cost, 1)
+})
+
 test_that("an unmeasured shear coordinate counts at the prior factor, uncapped", {
   ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.976, 0.6), g_fac = c(0.5, 0.9),
              g_measured = c(FALSE, TRUE), C_rest = 1, c_round = 0.05, coll = TRUE,

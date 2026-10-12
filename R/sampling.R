@@ -1057,7 +1057,7 @@ run_stage <- function(pmwgs,
                               wpool_part, ens_pools)
     # Then the shear (R/shear_move.R) when enabled: the non-centred move of
     # the same group state.
-    shear_cpu <- shear_raw <- shear_el <- 0
+    shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
     shear_rounds <- 0L
     if (alloc_on) ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
     if (.emc_shear_active(ens$sampler)) {
@@ -1079,6 +1079,7 @@ run_stage <- function(pmwgs,
         ens$proposals <- sh$proposals
         ens$wpool <- sh$wpool
         shear_rounds <- shear_rounds + (if (is.null(sh$rounds)) 0L else sh$rounds)
+        shear_round_el <- shear_round_el + (if (is.null(sh$round_el)) 0 else sh$round_el)
         if (part < K) {
           hr <- .emc_hmc_round(hmc_plan, ens$proposals, ens$pars, pmwgs$type, wpool_streams,
                                data, pmwgs$model, wpool = ens$wpool,
@@ -1093,7 +1094,10 @@ run_stage <- function(pmwgs,
       if (K > 1L) ens$sampler$shear$plan$rounds <- rounds_all
       shear_raw <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
       shear_el <- proc.time()[["elapsed"]] - shear_el0
-      if (alloc_on) shear_cpu <- .emc_reserved_cost(shear_el, cores_it)
+      if (alloc_on) {
+        shear_cpu <- .emc_reserved_cost(shear_el, cores_it)
+        shear_round_cpu <- .emc_reserved_cost(shear_round_el, cores_it)
+      }
     }
     # Then the collapsed move (R/collapsed_move.R) when enabled: the whole
     # group state with the subjects in their conditional frames.
@@ -1198,7 +1202,8 @@ run_stage <- function(pmwgs,
                                        hmc_el, cores_it)
       pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, shear_cpu, shear_rounds, hmc_tasks,
                                       coll_cpu, coll_moves,
-                                      hmc_round = .emc_reserved_cost(hmc_el, cores_it))
+                                      hmc_round = .emc_reserved_cost(hmc_el, cores_it),
+                                      shear_round = shear_round_cpu)
     }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started
