@@ -1120,6 +1120,8 @@
 # carries the current state, its subject likelihoods and the worker pool.
 # Adds E, the selection-weighted squared move in t, and whether it moved.
 .emc_shear_round <- function(x, v, step, sampler, ctx) {
+  # Elapsed time building the candidates and in their likelihood round.
+  build_el0 <- proc.time()[["elapsed"]]
   t_aux <- step * stats::rnorm(1L)
   t <- t_aux + step * stats::rnorm(.EMC_SHEAR_CANDIDATES)
   p <- nrow(x$alpha)
@@ -1159,14 +1161,17 @@
     rows <- lapply(seq_len(n), function(s)
       matrix(vapply(cand, function(a) a[, s], numeric(p)), length(ok), byrow = TRUE,
              dimnames = list(NULL, pn)))
+    ll_el0 <- proc.time()[["elapsed"]]
+    x$build_el <- x$build_el + ll_el0 - build_el0
     evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
                                       source = "shear")
+    x$ll_el <- x$ll_el + proc.time()[["elapsed"]] - ll_el0
     x$wpool <- evaluated$pool
     x$rounds <- x$rounds + 1L
     ll_new <- matrix(evaluated$ll, n, length(ok))
     v_ok <- colSums(ll_new) - sum(x$ll) + prior_delta[ok]
     lw[ok] <- ifelse(is.finite(v_ok), v_ok, -Inf)
-  }
+  } else x$build_el <- x$build_el + proc.time()[["elapsed"]] - build_el0
   w <- c(0, lw)
   w <- exp(w - max(w))
   w <- w / sum(w)
@@ -1225,7 +1230,7 @@
     return(keep)
   }
   x <- list(cur = cur, cur_hier = .emc_shear_log_hier(alpha, cur),
-            alpha = alpha, ll = proposals[p + 1L, ], rounds = 0L,
+            alpha = alpha, ll = proposals[p + 1L, ], rounds = 0L, build_el = 0, ll_el = 0,
             wpool = wpool, wpool_part = wpool_part)
   adapt <- stage != "sample"
   any_moved <- FALSE
@@ -1272,5 +1277,5 @@
   }
   sampler$shear <- st
   list(sampler = sampler, pars = pars, proposals = proposals, wpool = x$wpool,
-       rounds = x$rounds, round_el = round_el)
+       rounds = x$rounds, round_el = round_el, build_el = x$build_el, ll_el = x$ll_el)
 }

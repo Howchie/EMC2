@@ -1073,6 +1073,7 @@ run_stage <- function(pmwgs,
     # Then the shear (R/shear_move.R) when enabled: the non-centred move of
     # the same group state.
     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
+    shear_build_el <- shear_ll_el <- 0
     shear_rounds <- 0L
     if (alloc_on) ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
     if (.emc_shear_active(ens$sampler)) {
@@ -1095,6 +1096,8 @@ run_stage <- function(pmwgs,
         ens$wpool <- sh$wpool
         shear_rounds <- shear_rounds + (if (is.null(sh$rounds)) 0L else sh$rounds)
         shear_round_el <- shear_round_el + (if (is.null(sh$round_el)) 0 else sh$round_el)
+        shear_build_el <- shear_build_el + (if (is.null(sh$build_el)) 0 else sh$build_el)
+        shear_ll_el <- shear_ll_el + (if (is.null(sh$ll_el)) 0 else sh$ll_el)
         if (part < K) {
           hr <- .emc_hmc_round(hmc_plan, ens$proposals, ens$pars, pmwgs$type, wpool_streams,
                                data, pmwgs$model, wpool = ens$wpool,
@@ -1291,6 +1294,10 @@ run_stage <- function(pmwgs,
         fallback_subjects = pp$fallback_subjects,
         degraded = pp$degraded,
         shear_rounds = shear_rounds, shear_cpu = shear_raw,
+        shear_elapsed = shear_el, shear_build = shear_build_el, shear_ll = shear_ll_el,
+        hmc_elapsed = hmc_el,
+        hmc_task_cpu_max = max(c(0, vapply(hmc_tasks, function(x)
+          if (is.null(x) || is.null(x$work)) 0 else x$work, numeric(1)))),
         hmc_attempts = sum(!vapply(hmc_tasks, is.null, logical(1))),
         hmc_accepted = sum(vapply(hmc_tasks, function(x) isTRUE(x$accepted), logical(1))),
         hmc_cpu = sum(vapply(hmc_tasks, function(x) if (is.null(x)) 0 else x$cpu, numeric(1)))),
