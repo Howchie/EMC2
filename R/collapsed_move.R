@@ -428,11 +428,10 @@
     f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
     if (!is.null(walls) && walls$has[s]) {
       wm <- .emc_shear_wall_map(x$alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
-      if (!is.null(wm)) {
-        r1 <- drop(f1$R %*% (wm$a - f1$m))
-        jac[s] <<- wm$log_jac - (f0$logdet - f1$logdet) - 0.5 * (sum(r1^2) - sum(r[, s]^2))
-        return(wm$a)
-      }
+      if (is.null(wm)) return(rep(NA_real_, p))
+      r1 <- drop(f1$R %*% (wm$a - f1$m))
+      jac[s] <<- wm$log_jac - (f0$logdet - f1$logdet) - 0.5 * (sum(r1^2) - sum(r[, s]^2))
+      return(wm$a)
     }
     f1$m + drop(backsolve(f1$R, r[, s]))
   }, numeric(p)), p)

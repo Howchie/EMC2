@@ -268,6 +268,61 @@ test_that("the wall map keeps its half-space, inverts, composes and has the stat
   }
 })
 
+test_that("a subject outside its wall stays outside, and the map is a bijection of the line", {
+  # The reviewer's counterexample: unit precisions, frames centred at -1 and
+  # +1 on the wall's normal, wall at 0, state just below it.
+  f0 <- list(m = c(-1, 0), R = diag(2), logdet = 0)
+  f1 <- list(m = c(1, 0), R = diag(2), logdet = 0)
+  u <- c(1, 0); Uperp <- matrix(c(0, 1), 2, 1)
+  map <- EMC2:::.emc_shear_wall_map
+  for (a0 in list(c(-0.1, 0), c(-2, 0.3), c(0.1, 0), c(2.5, -1))) {
+    fwd <- map(a0, f0, f1, u, 0, Uperp)
+    expect_false(is.null(fwd))
+    expect_identical(fwd$a[1] >= 0, a0[1] >= 0)
+    back <- map(fwd$a, f1, f0, u, 0, Uperp)
+    expect_equal(back$a, a0, tolerance = 1e-9)
+    expect_equal(back$log_jac, -fwd$log_jac, tolerance = 1e-9)
+    # The Jacobian of the wall coordinate's map, numerically.
+    h <- 1e-6
+    d <- (map(a0 + c(h, 0), f0, f1, u, 0, Uperp)$a[1] - map(a0 - c(h, 0), f0, f1, u, 0, Uperp)$a[1]) / (2 * h)
+    expect_equal(log(d), fwd$log_jac, tolerance = 1e-5)
+  }
+  # The mirror quantile map inverts and composes like the upper one.
+  q <- EMC2:::.emc_shear_qmap
+  for (z in c(-3, -0.5, 0.2, 2)) {
+    m1 <- q(z, 0.1, -0.4); m2 <- q(m1$z, -0.4, 0.1)
+    expect_equal(m2$z, z, tolerance = 1e-9)
+    expect_equal(m1$log_jac + m2$log_jac, 0, tolerance = 1e-9)
+    expect_identical(m1$z >= -0.4, z >= 0.1)
+  }
+})
+
+test_that("the full transport inverts and composes from below the wall too", {
+  f <- shear_fixture("standard")
+  p <- length(f$mu)
+  fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+  walls <- shear_walls(f)
+  state <- function(mu, V) EMC2:::.emc_shear_state(mu, V, fits, prior, spec)
+  propose <- function(cur, u, alpha) EMC2:::.emc_shear_propose(cur, u, alpha, fits, prior, spec, walls = walls)
+  cur <- state(f$mu, f$V)
+  # Push every walled subject just below its wall.
+  alpha <- f$alpha
+  for (s in which(walls$has)) alpha[, s] <- alpha[, s] - (sum(walls$U[, s] * alpha[, s]) - walls$b[s] + 0.2) * walls$U[, s]
+  below <- function(a) vapply(which(walls$has), function(s) sum(walls$U[, s] * a[, s]) < walls$b[s], logical(1))
+  expect_true(all(below(alpha)))
+  fwd <- propose(cur, f$u, alpha)
+  expect_false(is.null(fwd))
+  expect_true(all(below(fwd$alpha)))
+  back <- propose(fwd$state, -f$u, fwd$alpha)
+  expect_equal(back$alpha, alpha, tolerance = 1e-9)
+  expect_equal(back$log_jac, -fwd$log_jac, tolerance = 1e-9)
+  v <- c(-0.1, 0.25, 0.05, -0.2, 0.1, 0.3)
+  two <- propose(fwd$state, v, fwd$alpha)
+  one <- propose(cur, f$u + v, alpha)
+  expect_equal(two$alpha, one$alpha, tolerance = 1e-9)
+  expect_equal(fwd$log_jac + two$log_jac, one$log_jac, tolerance = 1e-9)
+})
+
 test_that("mean-step candidates on the line match the full wall map", {
   for (type in c("standard", "diagonal-gamma")) {
     f <- shear_fixture(type)

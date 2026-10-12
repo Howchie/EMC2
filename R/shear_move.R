@@ -936,11 +936,10 @@
     f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
     if (!is.null(walls) && walls$has[s]) {
       wm <- .emc_shear_wall_map(alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
-      if (!is.null(wm)) {
-        # the wall map's Jacobian replaces this subject's plain one
-        jac <<- jac + wm$log_jac - (f0$logdet - f1$logdet)
-        return(wm$a)
-      }
+      if (is.null(wm)) return(rep(NA_real_, p))
+      # the wall map's Jacobian replaces this subject's plain one
+      jac <<- jac + wm$log_jac - (f0$logdet - f1$logdet)
+      return(wm$a)
     }
     f1$m + drop(backsolve(f1$R, f0$R %*% (alpha[, s] - f0$m)))
   }, numeric(p)), p)
@@ -990,8 +989,15 @@
 
 # ---- Wall-aware transport --------------------------------------------------
 # Quantile map between standard normals truncated below at c0 and at c1:
-# the point z (z >= c0) keeps its conditional upper-tail probability.
+# the point z (z >= c0) keeps its conditional upper-tail probability. Below
+# the wall (z < c0) the mirror map between the normals truncated above at c0
+# and at c1 applies, so each side maps onto itself and the map is a
+# bijection of the line.
 .emc_shear_qmap <- function(z, c0, c1) {
+  if (is.finite(z) && z < c0) {
+    m <- .emc_shear_qmap(-z, -c0, -c1)
+    return(list(z = -m$z, log_jac = m$log_jac))
+  }
   ls0 <- stats::pnorm(c0, lower.tail = FALSE, log.p = TRUE)
   ls1 <- stats::pnorm(c1, lower.tail = FALSE, log.p = TRUE)
   lf <- stats::pnorm(z, lower.tail = FALSE, log.p = TRUE) - ls0
@@ -1005,9 +1011,10 @@
 # there, and u'a by the quantile map between the frames' conditionals given
 # the complement (Gaussian, precision u'Qu). The maps compose, and where b
 # is far below the map is affine: the frame map whose whitening takes the
-# wall's normal last.
-# Returns the moved subject and the log Jacobian, or NULL when the state is
-# outside its wall (then the plain map applies).
+# wall's normal last. A state outside its wall takes the mirror quantile map
+# and stays outside, so the map is a bijection whichever side the state is
+# on. Returns the moved subject and the log Jacobian, or NULL when the map
+# cannot be computed (the candidate is then invalid).
 .emc_shear_wall_map <- function(a, f0, f1, u, b, Uperp) {
   cond <- function(f, y) {
     Qu <- drop(crossprod(f$R, f$R %*% u))
@@ -1026,7 +1033,7 @@
   t0 <- sum(u * a)
   z0 <- (t0 - c0$mc) / c0$sc
   w0 <- (b - c0$mc) / c0$sc
-  if (!is.finite(z0) || z0 < w0) return(NULL)
+  if (!is.finite(z0)) return(NULL)
   w1 <- (b - c1$mc) / c1$sc
   qm <- .emc_shear_qmap(z0, w0, w1)
   t1 <- c1$mc + c1$sc * qm$z
@@ -1056,7 +1063,7 @@
     mc <- sum(Qu * (f$m - (a - sum(u * a) * u))) / q
     z <- (sum(u * a) - mc) / sc
     c0 <- (b - mc) / sc
-    if (!is.finite(z) || z < c0) next
+    if (!is.finite(z)) { delta[] <- -Inf; next }
     dc <- -sum(u * Delta[, s]) / sc
     for (i in seq_along(t)) {
       qm <- .emc_shear_qmap(z, c0, c0 + t[i] * dc)
