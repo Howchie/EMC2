@@ -656,3 +656,20 @@ test_that("collapsed round allocations remain specific to each chain", {
   expect_equal(vapply(out, function(ch) ch$collapsed$plan$rounds, numeric(1)),
                c(1.125, 0))
 })
+
+test_that("a family's fixed cost is charged at the plan's activation probability", {
+  sh <- list(kind = "shear", rho = 0.9, g = 0.5, cost = 0.05)
+  subj <- list(kind = "subject", rho = 0.9, p = NULL, c_p = 0, h = 0.5, c_h = 0.1)
+  act <- EMC2:::.emc_alloc_activation
+  # independent fractional rounds; a whole round always activates
+  expect_equal(act(list(sh, sh), cbind(c(0.1, 0.2), c(1.5, 0)), c(0, 0), 10, 0),
+               10 * c(1 - 0.9 * 0.8, 1))
+  # HMC subjects at their total rates, including a regime's floor
+  expect_equal(act(list(subj, subj, sh), cbind(c(0.5, 0.5, 3)), c(0, 0.5, 0), 0, 4),
+               4 * (1 - 0.5 * 0))
+  expect_equal(act(list(subj, sh), cbind(c(0, 1)), c(0, 0), 0, 4), 0)
+  # A solved plan pays the fixed cost only on the iterations that run rounds.
+  sol <- EMC2:::.emc_alloc_solve(list(sh), 1, shear_fixed = 0.5)
+  expect_gt(sol$x, 0)
+  expect_equal(sol$cost, 1 + sol$x * 0.05 + 0.5 * min(1, sol$x))
+})

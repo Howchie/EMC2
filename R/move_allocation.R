@@ -403,9 +403,13 @@
 # on that grid; only the group units are re-priced per candidate rate.
 # movable: which units count towards the target (default: those a move can
 # lower), given so that solves of the same problem with and without a kernel
-# are judged on the same coordinates.
+# are judged on the same coordinates. shear_fixed and hmc_fixed: each
+# family's fixed cost per iteration that runs any of its moves, charged at
+# the plan's probability of such an iteration (.emc_alloc_activation); the
+# collapsed move's (joint$fixed) at min(1, x_c).
 .emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
-                             joint = NULL, movable = NULL) {
+                             joint = NULL, movable = NULL, shear_fixed = 0,
+                             hmc_fixed = 0) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
   refresh <- identical(getOption("emc2.alloc_subject_floor", "particle"), "refresh")
@@ -432,8 +436,14 @@
   # The plan with nothing chosen still runs every move's exploration.
   x0 <- vapply(units, function(u)
     if (identical(u$kind, "shear") && !is.null(u$floor)) u$floor else 0, numeric(1))
+  r_min <- vapply(units, function(u)
+    if (identical(u$kind, "subject") && !is.null(u$h) && !is.null(u$r_min)) u$r_min else 0,
+    numeric(1))
+  activation <- function(X) .emc_alloc_activation(units, X, r_min, shear_fixed, hmc_fixed)
+  j_fixed <- function(xc) if (xc > 0 && !is.null(joint$fixed)) joint$fixed * min(1, xc) else 0
   c_f0 <- sum(x0 * vapply(units, function(u) if (is.null(u$cost)) 0 else u$cost, numeric(1))) +
-    (if (j_floor > 0) j_floor * joint$cost + (if (is.null(joint$fixed)) 0 else joint$fixed) else 0)
+    (if (j_floor > 0) j_floor * joint$cost else 0) + j_fixed(j_floor) +
+    activation(matrix(x0, ncol = 1L))
   r00 <- if (j_floor > 0) ranges[[1L]] else r0
   zero <- list(x = x0, q = rep(1, n_u), rho = r00$hi, tau = .emc_alloc_tau(r00$hi),
                cost = C_rest + c_p0 + c_f0,
@@ -457,9 +467,11 @@
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
     for (c in seq_along(xcs)) {
       nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx])
-      cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) +
-        (if (xcs[c] > 0 && !is.null(joint$fixed)) joint$fixed else 0) +
-        Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets)))
+      need_c <- need
+      need_c[moved_idx] <- nm
+      cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) + j_fixed(xcs[c]) +
+        Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
+        activation(do.call(rbind, lapply(need_c, `[[`, "x")))
       obj <- tau_t * cost
       k <- which.min(obj)
       if (!length(k) || !is.finite(obj[k]) || obj[k] >= best$objective * (1 - 1e-9)) next
@@ -478,6 +490,34 @@
   # The slowest coordinate of all, moved or not.
   best$tau0_all <- .emc_alloc_tau(r0$hi_all)
   best
+}
+
+# The fixed costs a plan pays per iteration, by target: X holds each unit's
+# allocation (rows) at each target (columns). Shear rounds run whole parts
+# plus a Bernoulli fraction independently per coordinate, so an iteration
+# builds frames with probability 1 - prod_k (1 - x_k), or 1 once any
+# coordinate has a whole round; subjects take HMC independently at their
+# total rates r_min + x, so a round runs with probability 1 - prod_s (1 - r_s).
+.emc_alloc_activation <- function(units, X, r_min, shear_fixed, hmc_fixed) {
+  out <- numeric(ncol(X))
+  if (shear_fixed > 0) {
+    sh <- which(vapply(units, function(u) identical(u$kind, "shear"), logical(1)))
+    if (length(sh)) {
+      Xs <- pmin(X[sh, , drop = FALSE], 1)
+      Xs[!is.finite(Xs)] <- 1
+      out <- out + shear_fixed * (1 - apply(1 - Xs, 2, prod))
+    }
+  }
+  if (hmc_fixed > 0) {
+    hs <- which(vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
+                       logical(1)))
+    if (length(hs)) {
+      R <- pmin(X[hs, , drop = FALSE] + r_min[hs], 1)
+      R[!is.finite(R)] <- 1
+      out <- out + hmc_fixed * (1 - apply(1 - R, 2, prod))
+    }
+  }
+  out
 }
 
 # The unallocated rho of each unit, the least rho* it can reach, and whether
@@ -959,10 +999,12 @@
 }
 
 # The allocation with the HMC round's fixed cost: the best plan that runs the
-# round (paying it once) against the best plan without HMC. A plan with HMC
-# must clear the minimum gain against the iteration without any moves. The
-# shear's fixed cost (the frames an iteration with rounds builds) is paid the
-# same way: the best plan with rounds against the best without.
+# round against the best plan without HMC. A plan with HMC must clear the
+# minimum gain against the iteration without any moves. The shear's fixed
+# cost (the frames an iteration with rounds builds) is weighed the same way:
+# the best plan with rounds against the best without. Each fixed cost is
+# charged at the probability that an iteration runs any of the family's
+# moves under the plan (.emc_alloc_solve).
 .emc_alloc_solve_units <- function(u) {
   fixed_shear <- if (is.null(u$shear_fixed)) 0 else u$shear_fixed
   if (fixed_shear > 0 && any(vapply(u$units, function(x) identical(x$kind, "shear"), logical(1)))) {
@@ -983,12 +1025,12 @@
       list(kind = "fixed", rho = x$rho, cost = 0)
     })
     no_shear$shear_fixed <- 0
-    if (explored) no_shear$C_rest <- u$C_rest + fixed_shear
+    no_shear$shear_act <- if (explored) fixed_shear else 0
     no_shear$movable <- movable
     without <- .emc_alloc_solve_units(no_shear)
     on <- u
-    on$C_rest <- u$C_rest + fixed_shear
     on$shear_fixed <- 0
+    on$shear_act <- fixed_shear
     on$movable <- movable
     with <- .emc_alloc_solve_units(on)
     if (isTRUE(with$objective < without$objective &&
@@ -1023,14 +1065,18 @@
         (.emc_alloc_range(reg$units, .EMC_ALLOC_MAX_ROUNDS)$levels < levels0 - 1e-9)
     }
   }
-  without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable)
+  shear_act <- if (is.null(u$shear_act)) 0 else u$shear_act
+  hmc_fixed <- if (is.null(u$hmc_fixed)) 0 else u$hmc_fixed
+  without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable,
+                              shear_fixed = shear_act)
   if (!has_h) return(without)
-  with <- .emc_alloc_solve(u$units, u$C_rest + u$hmc_fixed, joint = u$joint,
-                           movable = movable)
+  with <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint, movable = movable,
+                           shear_fixed = shear_act, hmc_fixed = hmc_fixed)
   with$regime <- 0
   for (reg in regimes) {
-    cand <- .emc_alloc_solve(reg$units, u$C_rest + u$hmc_fixed + reg$cost, joint = u$joint,
-                             movable = movable)
+    cand <- .emc_alloc_solve(reg$units, u$C_rest + reg$cost, joint = u$joint,
+                             movable = movable, shear_fixed = shear_act,
+                             hmc_fixed = hmc_fixed)
     if (isTRUE(cand$objective < with$objective)) {
       cand$regime <- reg$r
       with <- cand
