@@ -59,6 +59,23 @@
     bin width is stored on the data, and
     `score_held_out()` checks against it.
 
+-   **DDM start-point and non-decision-time variability:** the Wiener density
+    with `SZ` or `st0` is now a fixed-node integral instead of an adaptive
+    cubature. The cubature's tolerance was absolute, so small densities (fast
+    responses, wide start-point ranges, small boundaries) were off by up to a
+    nat or more, and its decision to subdivide made the log likelihood jump in
+    the parameters. The start point is integrated in closed form term by term
+    at short decision times and by a fixed rule over the large-time series
+    otherwise; `st0` uses a fixed rule whose nodes follow the process time
+    scale. The density is now smooth in every parameter and close to a
+    high-precision reference. With `rt_resolution` and `st0 > 0` a binned
+    response takes the bin-midpoint density plus a curvature correction for
+    each side of the bin, and integrates a side exactly where it lies on the
+    density's leading edge (near onset and near the end of the onset window),
+    where the plain midpoint biased `st0` and `t0`. The DDM CDF used for
+    censoring and truncation uses the same fixed rules in place of its own
+    adaptive cubature, which had the same absolute-tolerance error.
+
 -   **R-hat stopping rules per selection:** `mean_gd` and `max_gd` now apply
     to each element of `selection` separately, so the default burn rule needs
     a mean R-hat below 1.1 for the subject parameters and, separately, for the

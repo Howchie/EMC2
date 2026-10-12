@@ -6,9 +6,9 @@ using namespace Rcpp;
 #include "utility_functions.h"
 #include "pdf_fncs.h"
 #include "cdf_fncs.h"
-#include "fncs_seven.h"
 #include "tools.h"
 #include "ddm_functions_inline.h"
+#include "ddm_variability.h"
 #include "col_registry.h"
 #include <cstdlib> // getenv
 
@@ -22,9 +22,6 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
   int Epsflag = 1;
   double eps = 5e-3;
   int K = 0;
-  int Neval = 6000;
-  int choice = 0; //the type of integration method to choose.
-  //0 = "v", 1 = "a", 2= "sv", 3 = "t0", 4 = "st0", 5 = "s", 6 = "Z", 7 = "SZ",
   int N = rts.length();
   NumericVector out(N);
   for(int i = 0; i < N; i++){
@@ -41,12 +38,9 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         } else{
           out[i] = 	R_NegInf;
         }
-      } else{ // otherwise use ddiff function with integration
-        double Rval;
-        double Rerr = 0.0;
+      } else{ // otherwise integrate over the start point and onset
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
-        ddiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
-        out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? log(Rval) : R_NegInf;
+        out[i] = ddmvar::log_density(rts[i], Rs[i] == 1 ? 1 : 2, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4));
       }
       // PDF log-probabilities should always be finite; clamp any numerical
       // pathologies to log(0) so caller-level min_ll flooring can handle them.
@@ -64,8 +58,6 @@ inline void d_DDM_Wien_raw(const double* rts, const int* Rs,
   int Epsflag = 1;
   double eps = 5e-3;
   int K = 0;
-  int Neval = 6000;
-  int choice = 0;
 
   const double* v_   = cols[emc2col::ddm::v];
   const double* a_   = cols[emc2col::ddm::a];
@@ -124,14 +116,12 @@ inline void d_DDM_Wien_raw(const double* rts, const int* Rs,
           out[i] = min_ll;
         }
       } else {
-        double Rval;
-        double Rerr = 0.0;
         const double sz = (Z_[i] < (1.0 - Z_[i])) ? 2.0 * SZ_[i] * Z_[i]
                                                   : 2.0 * SZ_[i] * (1.0 - Z_[i]);
-        ddiff(choice, rts[i], pm, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
-              Z_[i], sz, sv_[i] / s_[i], st0_[i], eps, K, Epsflag, Neval,
-              &Rval, &Rerr);
-        out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? std::log(Rval) : min_ll;
+        const double ld = ddmvar::log_density(
+          rts[i], Rs[i] == 1 ? 1 : 2, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
+          Z_[i], sz, sv_[i] / s_[i], st0_[i]);
+        out[i] = R_FINITE(ld) ? ld : min_ll;
       }
     }
   }
@@ -144,8 +134,6 @@ inline void p_DDM_Wien_raw(const double* rts, const int* Rs,
   int Epsflag = 1;
   double eps = 5e-3;
   int K = 0;
-  int Neval = 6000;
-  int choice = 0;
 
   const double* v_   = cols[emc2col::ddm::v];
   const double* a_   = cols[emc2col::ddm::a];
@@ -175,15 +163,11 @@ inline void p_DDM_Wien_raw(const double* rts, const int* Rs,
       }
       out[i] = pwiener_inline(new_rt, a_[i] / s_[i], v, w, eps, K, Epsflag);
     } else {
-      double Rval;
-      double Rerr = 0.0;
-      const double pm = (Rs[i] == 1) ? -1.0 : 1.0;
       const double sz = (Z_[i] < (1.0 - Z_[i])) ? 2.0 * SZ_[i] * Z_[i]
                                                 : 2.0 * SZ_[i] * (1.0 - Z_[i]);
-      pdiff(choice, rts[i], pm, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
-            Z_[i], sz, sv_[i] / s_[i], st0_[i], eps, K, Epsflag, Neval,
-            &Rval, &Rerr);
-      out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? std::log(Rval) : min_ll;
+      out[i] = ddmvar::log_cdf(rts[i], Rs[i] == 1 ? 1 : 2, a_[i] / s_[i],
+                               v_[i] / s_[i], t0_[i], Z_[i], sz,
+                               sv_[i] / s_[i], st0_[i]);
     }
     
     if (!R_FINITE(out[i])) {
@@ -201,8 +185,6 @@ NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
   int Epsflag = 1;
   double eps = 5e-3;
   int K = 0;
-  int Neval = 6000;
-  int choice = 0; //the type of integration method to choose.
   //0 = "v", 1 = "a", 2= "sv", 3 = "t0", 4 = "st0", 5 = "s", 6 = "Z", 7 = "SZ",
   int N = rts.length();
   NumericVector out(N);
@@ -236,13 +218,9 @@ NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
                       << " Rs=" << Rs[i]
                       << "\n";
         }
-      } else{ // otherwise use pdiff function with integration
-        double Rval;
-        double Rerr = 0.0;
-        double pm = (Rs[i]==1) ? -1 : 1;
+      } else{ // otherwise integrate over the variability
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
-        pdiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
-        out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? log(Rval) : R_NegInf;
+        out[i] = ddmvar::log_cdf(rts[i], Rs[i] == 1 ? 1 : 2, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4));
       }
       // CDF log-probabilities should always be finite and <= 0; guard against
       // occasional numerical spillover in backend routines.

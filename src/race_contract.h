@@ -333,9 +333,17 @@ using DDMRawFun = void (*)(const double*, const int*, const double* const*, int,
                            const int*, const int*, double*, double,
                            ContextForDDMModels*);
 
+// (lo, hi, h, R, cols, row, out): LOG probability of a response time in
+// [lo, hi] divided by the nominal bin width h, for one row. Returns false when
+// the model has no rule of its own for that row, which then takes the shared
+// bin route.
+using DDMBinFun = bool (*)(double, double, double, int, const double* const*,
+                           int, double*);
+
 struct DDMAdapter {
   DDMRawFun d_raw = nullptr;
   DDMRawFun p_raw = nullptr;
+  DDMBinFun d_bin = nullptr;
   emc2col::ColSpec col_spec{};
   // The analytic Wiener DDM can memoize numerical endpoint CDFs by exact
   // parameter key.  PDE-backed two-boundary adapters have their own solve

@@ -919,6 +919,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   if (is_bou_type) {
     ddm_adapter.d_raw = &bou::d_BOU_raw;
     ddm_adapter.p_raw = &bou::p_BOU_raw;
+    ddm_adapter.d_bin = nullptr;
     ddm_adapter.col_spec = emc2col::bou::spec();
     ddm_adapter.endpoint_cdf_cache = false;
     ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
@@ -1627,6 +1628,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     if (is_bou_pw) {
       ddm_adapter.d_raw = &bou::d_BOU_raw;
       ddm_adapter.p_raw = &bou::p_BOU_raw;
+      ddm_adapter.d_bin = nullptr;
       ddm_adapter.col_spec = emc2col::bou::spec();
       ddm_adapter.endpoint_cdf_cache = false;
       ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();

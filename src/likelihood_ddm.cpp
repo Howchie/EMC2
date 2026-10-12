@@ -96,12 +96,31 @@ static void ddm_wien_p_raw(const double* rts, const int* Rs,
   p_DDM_Wien_raw(rts, Rs, cols, n_rows, mask, is_ok, out, floor_);
 }
 
+// With st0 > 0 the bin and the onset are both uniform, so the bin probability
+// is one integral over decision time (ddmvar::log_bin_density): the midpoint
+// window plus a correction for each side of the bin, taken exactly where the
+// side lies on the density's leading edge.
+static bool ddm_wien_d_bin(double lo, double hi, double h, int R,
+                           const double* const* cols, int i, double* out) {
+  const double st0 = cols[emc2col::ddm::st0][i];
+  if (!(st0 > 0.0)) return false;
+  const double s = cols[emc2col::ddm::s][i];
+  const double Z = cols[emc2col::ddm::Z][i], SZ = cols[emc2col::ddm::SZ][i];
+  const double sz = (Z < (1.0 - Z)) ? 2.0 * SZ * Z : 2.0 * SZ * (1.0 - Z);
+  *out = ddmvar::log_bin_density(lo, hi, h, R, cols[emc2col::ddm::a][i] / s,
+                                 cols[emc2col::ddm::v][i] / s,
+                                 cols[emc2col::ddm::t0][i], Z, sz,
+                                 cols[emc2col::ddm::sv][i] / s, st0);
+  return true;
+}
+
 // The adapter every existing DDM caller gets when it passes none.
 const DDMAdapter& ddm_wien_adapter() {
   static const DDMAdapter a = [] {
     DDMAdapter x;
     x.d_raw = &ddm_wien_d_raw;
     x.p_raw = &ddm_wien_p_raw;
+    x.d_bin = &ddm_wien_d_bin;
     x.col_spec = emc2col::ddm::spec();
     x.endpoint_cdf_cache = true;
     return x;
@@ -259,10 +278,32 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
       return;
     }
 
+    // Rows whose model has its own bin rule (the Wiener DDM with st0 > 0) are
+    // finished here and skip the midpoint and onset routes below.
+    std::vector<char> direct;
+    if (ker.d_bin != nullptr) {
+      for (int i = 0; i < n_trials; ++i) {
+        if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
+            static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+        const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
+        if (!(bin.hi > bin.lo)) continue;
+        double value;
+        if (ker.d_bin(bin.lo, bin.hi, bin.h, Rs[i], cols, i, &value)) {
+          if (direct.empty()) direct.assign(static_cast<size_t>(n_trials), 0);
+          direct[static_cast<size_t>(i)] = 1;
+          out[i] = value;
+        }
+      }
+    }
+    auto is_direct = [&](int i) {
+      return !direct.empty() && direct[static_cast<size_t>(i)] != 0;
+    };
+
     bool have_boundary = false;
     for (int i = 0; i < n_trials; ++i) {
       if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
-          static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+          static_cast<size_t>(i) >= shared->rt_bins.bins.size() ||
+          is_direct(i)) continue;
       const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
       if (!(bin.hi > bin.lo) ||
           rt_bin_near_support(bin, cols[emc2col::ddm::t0][i])) {
@@ -277,7 +318,7 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
     // path allocation free: one bulk midpoint pass, then only the bin-width
     // correction. Construct sparse masks only when an integral will replace
     // at least one point density.
-    if (!have_boundary) {
+    if (!have_boundary && direct.empty()) {
       ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
       for (int i = 0; i < n_trials; ++i) {
         if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
@@ -290,7 +331,7 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
     std::vector<int> point_mask(static_cast<size_t>(n_trials));
     for (int i = 0; i < n_trials; ++i)
       point_mask[static_cast<size_t>(i)] =
-        mask == nullptr || mask[i] ? 1 : 0;
+        (mask == nullptr || mask[i]) && !is_direct(i) ? 1 : 0;
     for (int i = 0; i < n_trials; ++i) {
       if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
           static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
@@ -322,6 +363,7 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
     for (int i = 0; i < n_trials; ++i) {
       if ((mask != nullptr && !mask[i]) || !ok_[i] || !R_FINITE(rts[i]) ||
           static_cast<size_t>(i) >= shared->rt_bins.bins.size()) continue;
+      if (is_direct(i)) continue;
       const RtBin& bin = shared->rt_bins.bins[static_cast<size_t>(i)];
       const double onset = cols[emc2col::ddm::t0][i];
       if (!(bin.hi > bin.lo)) {
