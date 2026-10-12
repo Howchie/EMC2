@@ -1,6 +1,6 @@
 # One default fit() arm of the optional-moves panel.
 #   EMC_LIB=<lib> Rscript benchmarks/subject-hmc/fit_arm.R <case> <arm> <seed> <out.rds>
-# case: T30 | corr15 | lbaA | lbaT | forstmann | T30m | T30p (T30 with t0 drawn
+# case: T30 | corr15 | lbaA | lbaT | lbaE | forstmann | T30m | T30p (T30 with t0 drawn
 #   independently of the other effects / shared by all subjects; read from
 #   FIXTURE_DIR, default benchmarks/subject-hmc/fixtures)
 # arm: base (ensemble only) | shear | hmc | full (ensemble + shear + subject HMC)
@@ -36,7 +36,7 @@ fx <- switch(case,
   }),
   forstmann = list(data = forstmann, design = q(design(data = forstmann, model = LNR,
     matchfun = matchfun, formula = list(m ~ lM, s ~ 1, t0 ~ 1), verbose = FALSE))),
-  T30m = , T30p = , nback = , nback31 = readRDS(file.path(Sys.getenv("FIXTURE_DIR", "benchmarks/subject-hmc/fixtures"),
+  T30m = , T30p = , nback = , nback31 = , lbaE = readRDS(file.path(Sys.getenv("FIXTURE_DIR", "benchmarks/subject-hmc/fixtures"),
                                     paste0("fixture_", case, ".rds"))),
   stop("unknown case"))
 feature <- Sys.getenv("FEATURE")
@@ -143,8 +143,7 @@ moves <- lapply(emc, function(ch) list(
   history = ch$alloc$history,
   collapsed = if (is.null(ch$collapsed)) NULL else list(iterations = ch$collapsed$iterations,
     rounds = ch$collapsed$rounds, accepted = ch$collapsed$accepted,
-    attempts = ch$collapsed$attempts, accepted_rounds = ch$collapsed$accepted_rounds,
-    acceptance_probability_sum = ch$collapsed$acceptance_probability_sum,
+    last = ch$collapsed$plan$last[c("n", "acc", "moved")],
     eps = ch$collapsed$plan$eps)))
 res <- list(case = case, arm = arm, seed = seed, feature = feature, feature_par = feature_par,
             lib = find.package("EMC2"), elapsed = elapsed,
@@ -172,14 +171,11 @@ if (!is.null(rec)) {
 for (j in seq_along(moves)) {
   m <- moves[[j]]
   if (!is.null(m$collapsed)) {
-    attempts <- as.numeric(m$collapsed$attempts %||% 0)
-    accepted_rounds <- as.numeric(m$collapsed$accepted_rounds %||% 0)
-    expected_acceptance <- as.numeric(m$collapsed$acceptance_probability_sum %||% 0)
-    cat(sprintf("  chain %d: collapsed exact acceptance %s/%s rounds (observed %.3f, expected %.3f), accepted iterations %s over %s its, eps %.3f, last plan moves/it %.2f\n",
-      j, format(accepted_rounds), format(attempts),
-      if (attempts > 0) accepted_rounds / attempts else NA_real_,
-      if (attempts > 0) expected_acceptance / attempts else NA_real_,
-      format(m$collapsed$accepted), format(m$collapsed$iterations), m$collapsed$eps,
+    l <- m$collapsed$last
+    cat(sprintf("  chain %d: collapsed rounds %s over %s its, accepted iterations %s, eps %.3f | last measurement: %s rounds, mean acceptance %.3g, moved %s | last plan moves/it %.2f\n",
+      j, format(m$collapsed$rounds %||% 0), format(m$collapsed$iterations %||% 0),
+      format(m$collapsed$accepted %||% 0), m$collapsed$eps %||% NA_real_,
+      format(l$n %||% 0), if (isTRUE(l$n > 0)) l$acc / l$n else NA_real_, format(l$moved %||% 0),
       if (length(m$history)) m$history[[length(m$history)]]$collapsed_rounds else NA))
   }
   h <- m$history
