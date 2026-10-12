@@ -133,9 +133,12 @@
 # offsets (in window sds) of a log-sd atlas's nodes along each path.
 .EMC_SHEAR_ATLAS_MIN_SPREAD <- 0.1
 .EMC_SHEAR_ATLAS_PATH <- c(-2, -1, -0.5, 0.5, 1, 2)
-# Initial step scale in posterior sds of the coordinate, and the bounds every
-# adapted scale stays in.
+# Initial step scale in posterior sds of the coordinate, the rounds whose
+# move share weighs as much as a measured orbit width, the grid (in widths)
+# a width is measured on, and the bounds every adapted scale stays in.
 .EMC_SHEAR_STEP0 <- 2.5
+.EMC_SHEAR_STEP_ROUNDS <- 20
+.EMC_SHEAR_WIDTH_GRID <- seq(-3, 3, by = 0.5)
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
 
 .emc_shear_options <- function() {
@@ -307,17 +310,18 @@
   emc <- .emc_shear_atlas_add(emc, idx, n_cores, stage)
   emc <- .emc_shear_build_curves(emc, idx, stage)
   for (j in seq_along(emc)) emc[[j]] <- .emc_shear_curve_validate(emc[[j]], idx, n_cores)
-  emc
+  .emc_shear_orbit_steps(emc, idx, n_cores)
 }
 
-# Each subject's orbit spread along the plan's coordinates ks at the current
-# state: the variance over the pilot grid of its contribution to the orbit's
-# log density (likelihood, hierarchical density and the transport's Jacobian
-# at the point the move's own transport, walls included, takes it to), summed
-# over ks, one column per entry of fits_of (the fits a path state's frames
-# use). A frame that fails sets its column to Inf, as does a subject whose
-# transport or likelihood fails.
-.emc_shear_orbit_spread <- function(ch, idx, ks, fits_of, n_cores = 1L) {
+# The orbit of the current state along coordinate k of the plan, at the
+# offsets grid (in .emc_shear_coord_path's units): per subject its
+# contribution to the orbit's log density (likelihood, hierarchical density
+# and the Jacobian of the move's own transport, walls included; NA where its
+# transport or likelihood fails), and the group terms (mean and covariance
+# priors, and the covariance scaling's Jacobian along a log sd). NULL when
+# the coordinate has no path; every contribution NA when a frame fails.
+# fits_of gives the fits a path state's frames use.
+.emc_shear_orbit_terms <- function(ch, idx, k, grid, fits_of, n_cores = 1L) {
   s <- ch$samples
   i <- s$idx
   p <- ch$n_pars
@@ -327,46 +331,130 @@
   alpha <- matrix(s$alpha[, , i], p)
   spec <- .emc_shear_v_spec(ch)
   walls <- .emc_shear_walls_of(ch)
-  grid <- .EMC_SHEAR_PILOT_GRID
   g0 <- which(grid == 0)
   par_names <- rownames(s$alpha)
-  spread <- matrix(0, n, length(fits_of))
+  path <- .emc_shear_coord_path(ch, idx, k, mu, V, grid)
+  if (is.null(path) || length(g0) != 1L) return(NULL)
+  for (g in seq_along(grid))
+    path[[g]]$chol <- tryCatch(chol(path[[g]]$V), error = function(e) NULL)
+  if (any(vapply(path, function(st) is.null(st$chol), logical(1)))) return(NULL)
+  states <- lapply(path, function(st)
+    .emc_shear_state(st$mu, st$V, fits_of(st), ch$prior, spec))
+  if (any(vapply(states, is.null, logical(1))))
+    return(list(per = matrix(NA_real_, length(grid), n), lp = rep(NA_real_, length(grid))))
+  ldn <- function(a, st) {
+    z <- backsolve(st$chol, a - st$mu, transpose = TRUE)
+    -0.5 * sum(z^2) - sum(log(diag(st$chol)))
+  }
+  tr <- lapply(states, function(st) .emc_shear_transport(alpha, states[[g0]], st, walls))
+  per <- .emc_with_preserved_rng(auto_mclapply(seq_len(n), function(ss) {
+    if (!all(vapply(tr, function(x) isTRUE(x$ok[ss]), logical(1))))
+      return(rep(NA_real_, length(grid)))
+    X <- t(vapply(tr, function(x) x$alpha[, ss], numeric(p)))
+    ll <- tryCatch(.emc_burn_ll_batch(X, ch$data[[ss]], ch$model, par_names),
+                   error = function(e) rep(NA_real_, length(grid)))
+    vapply(seq_along(grid), function(g)
+      ll[g] + ldn(X[g, ], path[[g]]) + states[[g0]]$fm$logdet[ss] -
+        states[[g]]$fm$logdet[ss] + tr[[g]]$jac[ss], numeric(1))
+  }, mc.cores = max(1L, min(n, n_cores)), mc.set.seed = FALSE))
+  lp <- vapply(path, function(st) .emc_shear_log_prior_mu(st$mu, ch$prior) +
+    (if (k <= p) 0 else tryCatch(.emc_shear_log_prior_v(st$V, spec), error = function(e) NA_real_) +
+       sum((spec$size + 1) * st$u_sd)), numeric(1))
+  list(per = matrix(unlist(per), length(grid)), lp = lp)
+}
+
+# Each subject's orbit spread along the plan's coordinates ks at the current
+# state: the variance over the pilot grid of its orbit contribution
+# (.emc_shear_orbit_terms), summed over ks, one column per entry of fits_of.
+# A frame that fails sets its column to Inf, as does a subject whose
+# transport or likelihood fails.
+.emc_shear_orbit_spread <- function(ch, idx, ks, fits_of, n_cores = 1L) {
+  spread <- matrix(0, ch$n_subjects, length(fits_of))
   for (k in ks) {
-    path <- .emc_shear_coord_path(ch, idx, k, mu, V, grid)
-    if (is.null(path)) next
-    for (g in seq_along(grid))
-      path[[g]]$chol <- tryCatch(chol(path[[g]]$V), error = function(e) NULL)
-    if (any(vapply(path, function(st) is.null(st$chol), logical(1)))) next
-    ldn <- function(a, st) {
-      z <- backsolve(st$chol, a - st$mu, transpose = TRUE)
-      -0.5 * sum(z^2) - sum(log(diag(st$chol)))
-    }
     for (kind in seq_along(fits_of)) {
-      states <- lapply(path, function(st)
-        .emc_shear_state(st$mu, st$V, fits_of[[kind]](st), ch$prior, spec))
-      if (any(vapply(states, is.null, logical(1)))) {
-        spread[, kind] <- Inf
-        next
-      }
-      tr <- lapply(states, function(st) .emc_shear_transport(alpha, states[[g0]], st, walls))
-      f <- .emc_with_preserved_rng(auto_mclapply(seq_len(n), function(ss) {
-        if (!all(vapply(tr, function(x) isTRUE(x$ok[ss]), logical(1))))
-          return(rep(NA_real_, length(grid)))
-        X <- t(vapply(tr, function(x) x$alpha[, ss], numeric(p)))
-        ll <- tryCatch(.emc_burn_ll_batch(X, ch$data[[ss]], ch$model, par_names),
-                       error = function(e) rep(NA_real_, length(grid)))
-        vapply(seq_along(grid), function(g)
-          ll[g] + ldn(X[g, ], path[[g]]) + states[[g0]]$fm$logdet[ss] -
-            states[[g]]$fm$logdet[ss] + tr[[g]]$jac[ss], numeric(1))
-      }, mc.cores = max(1L, min(n, n_cores)), mc.set.seed = FALSE))
-      for (ss in seq_len(n)) {
-        v <- f[[ss]]
-        spread[ss, kind] <- spread[ss, kind] +
-          (if (all(is.finite(v))) stats::var(v) else Inf)
-      }
+      tm <- .emc_shear_orbit_terms(ch, idx, k, .EMC_SHEAR_PILOT_GRID, fits_of[[kind]], n_cores)
+      if (is.null(tm)) break
+      v <- apply(tm$per, 2L, function(x) if (all(is.finite(x))) stats::var(x) else Inf)
+      spread[, kind] <- spread[, kind] + v
     }
   }
   spread
+}
+
+# The sd of the orbit's density along coordinate k (in .emc_shear_coord_path's
+# units), on a grid scaled to the width s0 and rescaled until the grid
+# resolves the orbit; NA when it cannot be measured.
+.emc_shear_orbit_width <- function(ch, idx, k, fits_of, s0, n_cores = 1L) {
+  s <- s0
+  sd <- NA_real_
+  for (it in seq_len(4L)) {
+    grid <- s * .EMC_SHEAR_WIDTH_GRID
+    tm <- .emc_shear_orbit_terms(ch, idx, k, grid, fits_of, n_cores)
+    if (is.null(tm)) return(NA_real_)
+    f <- rowSums(tm$per) + tm$lp
+    f[!is.finite(f)] <- -Inf
+    if (!is.finite(max(f))) return(NA_real_)
+    w <- exp(f - max(f))
+    w <- w / sum(w)
+    m <- sum(w * grid)
+    sd <- sqrt(sum(w * (grid - m)^2))
+    edge <- w[1L] + w[length(w)]
+    if (edge > 0.01) {
+      # Wider than the grid: the log density's curvature on it estimates
+      # the width.
+      ok <- is.finite(f)
+      a <- if (sum(ok) >= 3L) stats::coef(stats::lm(f[ok] ~ grid[ok] + I(grid[ok]^2)))[3L] else NA
+      s <- if (is.finite(a) && a < 0) max(2 * s, 1 / sqrt(-2 * a)) else 4 * s
+    } else if (sd < 0.5 * s) s <- max(sd, s / 8)
+    else return(sd)
+  }
+  sd
+}
+
+# Each coordinate's step scale from its orbit under the block's frames: the
+# multiple-proposal step is best near .EMC_SHEAR_STEP0 orbit sds, so the
+# measured width sets the step, weighed against the step the rounds adapted
+# by how many rounds it rests on (.EMC_SHEAR_STEP_ROUNDS count as much as
+# the width). A coordinate with few rounds would otherwise keep whatever step it
+# last had, and a step far from the orbit's width makes its rounds look
+# ineffective, which then buys it fewer rounds still. One job per chain and
+# coordinate, each measured within its worker.
+.emc_shear_orbit_steps <- function(emc, idx, n_cores = 1L) {
+  n0 <- .EMC_SHEAR_STEP_ROUNDS
+  jobs <- list()
+  for (j in seq_along(emc)) {
+    plan <- emc[[j]]$shear$plan
+    if (!is.list(plan) || !is.matrix(plan$dirs)) next
+    p <- emc[[j]]$n_pars
+    n_ev <- if (is.list(plan$last) && length(plan$last$n) == 2L * p) plan$last$n else numeric(2L * p)
+    sd_l <- apply(.emc_shear_window_lsd(emc[[j]], idx), 1L, stats::sd)
+    for (k in which(n_ev < 4 * n0)) {
+      unit <- if (k <= p) 1 else sd_l[k - p]
+      if (!is.finite(unit) || unit <= 0) next
+      jobs[[length(jobs) + 1L]] <- list(chain = j, k = k, unit = unit, n = n_ev[k],
+        s0 = exp(plan$log_step[k]) / .EMC_SHEAR_STEP0 / unit)
+    }
+  }
+  if (!length(jobs)) return(emc)
+  widths <- .emc_with_preserved_rng(auto_mclapply(seq_along(jobs), function(m) {
+    jb <- jobs[[m]]
+    ch <- emc[[jb$chain]]
+    ctx <- .emc_shear_context(ch)
+    tryCatch(.emc_shear_orbit_width(ch, idx, jb$k,
+                                    function(st) .emc_shear_fits_at(ctx, st$mu, st$V), jb$s0),
+             error = function(e) NA_real_)
+  }, mc.cores = max(1L, min(length(jobs), n_cores)), mc.set.seed = FALSE))
+  for (m in seq_along(jobs)) {
+    jb <- jobs[[m]]
+    w <- widths[[m]]
+    if (!is.numeric(w) || length(w) != 1L || !is.finite(w) || w <= 0) next
+    plan <- emc[[jb$chain]]$shear$plan
+    target <- log(.EMC_SHEAR_STEP0 * w * jb$unit)
+    plan$log_step[jb$k] <- min(.EMC_SHEAR_LOG_STEP_RANGE[2], max(.EMC_SHEAR_LOG_STEP_RANGE[1],
+      (jb$n * plan$log_step[jb$k] + n0 * target) / (jb$n + n0)))
+    emc[[jb$chain]]$shear$plan <- plan
+  }
+  emc
 }
 
 # A curved subject keeps its curve only where its orbit contribution along

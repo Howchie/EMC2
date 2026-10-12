@@ -1189,3 +1189,15 @@ test_that("atlas nodes go to the subjects whose fixed-frame orbit contribution v
   expect_identical(pick(c(0, 0, 0)), integer(0))
   expect_identical(pick(c(1, 2), ks = integer(0)), 1:2)
 })
+
+test_that("an orbit's width is measured whatever scale the grid starts at", {
+  sigma <- 0.37
+  local_mocked_bindings(
+    .emc_shear_orbit_terms = function(ch, idx, k, grid, fits_of, n_cores = 1L)
+      list(per = matrix(0, length(grid), 2), lp = -0.5 * ((grid - 0.1) / sigma)^2),
+    .package = "EMC2")
+  for (s0 in sigma * c(1 / 20, 1, 20)) {
+    w <- EMC2:::.emc_shear_orbit_width(NULL, 1:10, 1L, NULL, s0)
+    expect_equal(w, sigma, tolerance = 0.05)
+  }
+})
