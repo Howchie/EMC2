@@ -4,7 +4,7 @@
 \alias{r_hat}
 \title{R-hat convergence diagnostic}
 \usage{
-r_hat(mcmc_list, version = c("old", "new"), omit_mpsrf = TRUE)
+r_hat(mcmc_list, version = c("old", "new"), omit_mpsrf = TRUE, transform = TRUE)
 }
 \arguments{
 \item{mcmc_list}{A \code{coda::mcmc.list} object containing MCMC draws.}
@@ -15,6 +15,11 @@ implementation of rank-normalized, folded Rhat from Vehtari et al. (2021).}
 
 \item{omit_mpsrf}{Boolean, only relevant if \code{version = "old"}. If \code{TRUE}
 (default) the multivariate PSRF is not returned.}
+
+\item{transform}{Boolean, only relevant if \code{version = "old"}. Passed to
+\code{\link[coda:gelman.diag]{coda::gelman.diag()}}, which log- or logit-transforms every parameter whose
+draws all lie in a restricted range. Use \code{FALSE} for parameters on an
+unbounded scale, where an all-positive column is a coincidence of the draws.}
 }
 \value{
 A named numeric vector of \eqn{\hat{R}} values. If

@@ -44,3 +44,26 @@ test_that("R-hat thresholds are validated against the selection", {
   expect_error(gsc("burn", list(mean_gd = c(1.1, 1.2)), "standard"), "single number")
   expect_silent(gsc("burn", list(mean_gd = c(alpha = 1.1), max_gd = c(mu = 1.2)), "standard"))
 })
+
+test_that("sampled-scale R-hats are not range-transformed", {
+  emc <- samples_LNR
+  idx <- which(emc[[1]]$samples$stage == "sample")
+  # Every draw positive, one chain wandering near zero: coda would log it.
+  for (j in seq_along(emc)) {
+    x <- emc[[j]]$samples$alpha[1, 1, idx]
+    emc[[j]]$samples$alpha[1, 1, idx] <- x - min(x) + if (j == 1) 1e-3 else 0.5
+  }
+  mcl <- get_pars(emc, selection = "alpha", stage = "sample", by_subject = TRUE)[[1]]
+  raw <- EMC2:::gelman_diag_robust(mcl, transform = FALSE)
+  logged <- EMC2:::gelman_diag_robust(mcl, transform = TRUE)
+  expect_gt(abs(logged[1] - raw[1]), 1e-3)
+  got <- gd_summary.emc(emc, selection = "alpha", stage = "sample", stat = NULL,
+                        version = "old", digits = 10)
+  expect_equal(unname(got[[1]][1]), unname(raw[1]), tolerance = 1e-8)
+  # Positive-support selections keep the transform.
+  vs <- get_pars(emc, selection = "sigma2", stage = "sample")[[1]]
+  expect_equal(unlist(gd_summary.emc(emc, selection = "sigma2", stage = "sample",
+                                     stat = NULL, digits = 10)),
+               EMC2:::gelman_diag_robust(vs, transform = TRUE), tolerance = 1e-8,
+               ignore_attr = TRUE)
+})

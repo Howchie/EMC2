@@ -13,6 +13,10 @@
 #'    implementation of rank-normalized, folded Rhat from Vehtari et al. (2021).
 #' @param omit_mpsrf Boolean, only relevant if `version = "old"`. If `TRUE`
 #'    (default) the multivariate PSRF is not returned.
+#' @param transform Boolean, only relevant if `version = "old"`. Passed to
+#'    [coda::gelman.diag()], which log- or logit-transforms every parameter whose
+#'    draws all lie in a restricted range. Use `FALSE` for parameters on an
+#'    unbounded scale, where an all-positive column is a coincidence of the draws.
 #'
 #' @details
 #' The `"old"` method produces the traditional Gelman-Rubin diagnostic but
@@ -39,10 +43,12 @@
 #' assessing convergence of MCMC. *Bayesian Analysis*, *16*(2), 667-718.
 #'
 #' @keywords internal
-r_hat <- function(mcmc_list, version = c("old", "new"), omit_mpsrf = TRUE) {
+r_hat <- function(mcmc_list, version = c("old", "new"), omit_mpsrf = TRUE,
+                  transform = TRUE) {
   version <- match.arg(version)
   if (version == "old") {
-    result <- gelman_diag_robust(mcmc_list, omit_mpsrf = omit_mpsrf)
+    result <- gelman_diag_robust(mcmc_list, transform = transform,
+                                 omit_mpsrf = omit_mpsrf)
   } else {
     mcmc_mats <- prep_mcmc_diagnostics(mcmc_list)
     result <- vapply(
