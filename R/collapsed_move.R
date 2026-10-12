@@ -424,19 +424,11 @@
   # Subjects with a transport wall take the wall-aware map; the exact
   # correction then carries the map's Jacobian in place of the plain one and
   # the change of their whitened coordinate (see .emc_shear_wall_map).
-  jac <- numeric(n)
-  alpha_new <- matrix(vapply(seq_len(n), function(s) {
-    f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
-    if (!is.null(walls) && walls$has[s]) {
-      wm <- .emc_shear_wall_map(x$alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
-      if (is.null(wm)) return(rep(NA_real_, p))
-      r1 <- drop(f1$R %*% (wm$a - f1$m))
-      jac[s] <<- wm$log_jac - (f0$logdet - f1$logdet) - 0.5 * (sum(r1^2) - sum(r[, s]^2))
-      return(wm$a)
-    }
-    f1$m + drop(backsolve(f1$R, r[, s]))
-  }, numeric(p)), p)
-  if (any(!is.finite(alpha_new))) return(x)
+  tr <- .emc_shear_transport(x$alpha, cur, new, walls)
+  if (!all(tr$ok) || any(!is.finite(tr$alpha))) return(x)
+  alpha_new <- tr$alpha
+  jac <- if (is.null(walls)) numeric(n) else
+    ifelse(walls$has, tr$jac - 0.5 * (tr$r1sq - colSums(r^2)), 0)
   pn <- sampler$par_names
   rows <- lapply(seq_len(n), function(s)
     matrix(alpha_new[, s], 1L, dimnames = list(NULL, pn)))

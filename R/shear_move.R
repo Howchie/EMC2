@@ -860,7 +860,8 @@
 
 # Everything the move needs about one group state (mu, V): its prior density
 # and each subject's conditional frame (m_s, R_s), with R_s the upper Cholesky
-# factor of the conditional precision H_s + V^-1.
+# factor of the conditional precision H_s + V^-1, both per subject (frames)
+# and stacked for the transport kernel (fm).
 .emc_shear_state <- function(mu, V, fits, prior, spec) {
   chol_V <- tryCatch(chol(V), error = function(e) NULL)
   if (is.null(chol_V)) return(NULL)
@@ -872,6 +873,7 @@
     list(m = out$m[, s], R = out$R[, , s], logdet = out$logdet[s]))
   lp_v <- tryCatch(.emc_shear_log_prior_v(V, spec), error = function(e) NA_real_)
   list(mu = mu, V = V, Vi = Vi, chol_V = chol_V, frames = frames,
+       fm = list(m = out$m, R = out$R, logdet = out$logdet),
        logdet = sum(out$logdet), lp_v = lp_v,
        lp = .emc_shear_log_prior_mu(mu, prior) + lp_v)
 }
@@ -901,6 +903,8 @@
     f$m <- f$m + drop(backsolve(f$R, forwardsolve(t(f$R), Vi_u)))
     f
   })
+  if (!is.null(new$fm))
+    new$fm$m <- matrix(vapply(new$frames, function(f) f$m, numeric(length(u_mu))), length(u_mu))
   new$mu <- cur$mu + u_mu
   new$lp <- .emc_shear_log_prior_mu(new$mu, prior) + cur$lp_v
   new
@@ -932,21 +936,52 @@
                           .emc_shear_fits_at(list(packed = fits, curve = curve), mu_new),
                           prior, spec)
   if (is.null(new) || !is.finite(new$lp)) return(NULL)
-  jac <- 0
-  alpha_new <- matrix(vapply(seq_len(ncol(alpha)), function(s) {
-    f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
-    if (!is.null(walls) && walls$has[s]) {
-      wm <- .emc_shear_wall_map(alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
-      if (is.null(wm)) return(rep(NA_real_, p))
-      # the wall map's Jacobian replaces this subject's plain one
-      jac <<- jac + wm$log_jac - (f0$logdet - f1$logdet)
-      return(wm$a)
-    }
-    f1$m + drop(backsolve(f1$R, f0$R %*% (alpha[, s] - f0$m)))
-  }, numeric(p)), p)
-  if (!all(is.finite(alpha_new))) return(NULL)
-  list(state = new, alpha = alpha_new,
-       log_jac = sum((spec$size + 1) * u_sd) + cur$logdet - new$logdet + jac)
+  # A wall subject's map Jacobian replaces its plain one (tr$jac).
+  tr <- .emc_shear_transport(alpha, cur, new, walls)
+  if (!all(tr$ok) || !all(is.finite(tr$alpha))) return(NULL)
+  list(state = new, alpha = tr$alpha,
+       log_jac = sum((spec$size + 1) * u_sd) + cur$logdet - new$logdet + sum(tr$jac))
+}
+
+# Every subject transported from group state cur's frames to new's
+# (emc_shear_transport_cpp, the C++ form of the frame map and
+# .emc_shear_wall_map).
+.emc_shear_transport <- function(alpha, cur, new, walls = NULL) {
+  f0 <- .emc_shear_frame_arrays(cur)
+  f1 <- .emc_shear_frame_arrays(new)
+  p <- nrow(alpha)
+  if (is.null(walls)) {
+    has <- logical(0)
+    U <- matrix(0, p, 0)
+    b <- numeric(0)
+    Uc <- array(0, c(p, max(p - 1L, 0L), 0))
+  } else {
+    has <- walls$has
+    U <- walls$U
+    b <- ifelse(has, walls$b, 0)
+    Uc <- .emc_shear_uperp_cube(walls, p)
+  }
+  emc_shear_transport_cpp(alpha, f0$m, f0$R, f0$logdet, f1$m, f1$R, f1$logdet,
+                          has, U, b, Uc)
+}
+
+# A state's frames stacked as the transport kernel takes them.
+.emc_shear_frame_arrays <- function(state) {
+  if (!is.null(state$fm)) return(state$fm)
+  fr <- state$frames
+  p <- length(state$mu)
+  list(m = matrix(vapply(fr, function(f) f$m, numeric(p)), p),
+       R = array(vapply(fr, function(f) f$R, matrix(0, p, p)), c(p, p, length(fr))),
+       logdet = vapply(fr, function(f) f$logdet, numeric(1)))
+}
+
+# The walls' complement bases as a cube (a zero slice without a wall).
+.emc_shear_uperp_cube <- function(walls, p) {
+  if (!is.null(walls$Uc)) return(walls$Uc)
+  n <- length(walls$has)
+  Uc <- array(0, c(p, p - 1L, n))
+  for (s in which(walls$has)) Uc[, , s] <- walls$Uperp[[s]]
+  Uc
 }
 
 # What every round of one move shares: the usable fits and the covariance
@@ -967,7 +1002,9 @@
   ok <- is.list(w) && is.matrix(w$U) && nrow(w$U) == sampler$n_pars &&
     ncol(w$U) == sampler$n_subjects && length(w$has) == sampler$n_subjects &&
     any(w$has)
-  if (ok) w else NULL
+  if (!ok) return(NULL)
+  w$Uc <- .emc_shear_uperp_cube(w, sampler$n_pars)
+  w
 }
 
 # A mean step's candidates lie on a line: with Delta_s = Q_s^-1 V^-1 d, the

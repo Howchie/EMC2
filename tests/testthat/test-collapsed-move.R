@@ -290,7 +290,7 @@ test_that("the collapsed move with transport walls leaves a bounded joint poster
   local_test_rng(kind = "Mersenne-Twister")
   # The diagonal hierarchy above with the first parameter bounded below for
   # every subject; the move sees each subject's wall. Exact and wrong
-  # approximations, then a broken control that drops the wall map's quantile
+  # approximations, then a broken control that drops the wall map's
   # Jacobian, which must fail.
   N <- 4000
   h <- diag_hierarchy_draws(N, b = -0.4)
@@ -307,10 +307,10 @@ test_that("the collapsed move with transport walls leaves a bounded joint poster
                list(lik = fits$exact, broken = TRUE))
   for (run in runs) {
     if (isTRUE(run$broken)) {
-      qmap <- EMC2:::.emc_shear_qmap
-      local_mocked_bindings(.emc_shear_qmap = function(...) {
-        out <- qmap(...)
-        out$log_jac <- 0
+      transport <- EMC2:::.emc_shear_transport
+      local_mocked_bindings(.emc_shear_transport = function(...) {
+        out <- transport(...)
+        out$jac[] <- 0
         out
       }, .package = "EMC2")
     }

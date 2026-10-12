@@ -818,6 +818,10 @@ emc_shear_frames_cpp <- function(prec, lin, Vi, Vi_mu) {
     .Call(`_EMC2_emc_shear_frames_cpp`, prec, lin, Vi, Vi_mu)
 }
 
+emc_shear_transport_cpp <- function(alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp) {
+    .Call(`_EMC2_emc_shear_transport_cpp`, alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp)
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }

@@ -3464,6 +3464,27 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_transport_cpp
+Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::mat& m1, const arma::cube& R1, const arma::vec& logdet1, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp);
+RcppExport SEXP _EMC2_emc_shear_transport_cpp(SEXP alphaSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP m1SEXP, SEXP R1SEXP, SEXP logdet1SEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type R0(R0SEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet0(logdet0SEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type m1(m1SEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type R1(R1SEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet1(logdet1SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has(hasSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type U(USEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type b(bSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type Uperp(UperpSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_transport_cpp(alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -3711,6 +3732,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_set_particle_slice", (DL_FUNC) &_EMC2_emc_set_particle_slice, 5},
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
+    {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

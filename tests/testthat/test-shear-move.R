@@ -297,6 +297,45 @@ test_that("a subject outside its wall stays outside, and the map is a bijection 
   }
 })
 
+test_that("the C++ transport is the R frame map and wall map", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu); n <- ncol(f$alpha)
+    fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
+    walls <- shear_walls(f)
+    # subject 3 starts below its wall, which takes the mirror map
+    alpha <- f$alpha
+    alpha[, 3] <- alpha[, 3] - 1.2 * walls$U[, 3]
+    state <- function(mu, V) EMC2:::.emc_shear_state(mu, V, fits, prior, spec)
+    cur <- state(f$mu, f$V)
+    d <- exp(f$u[p + seq_len(p)])
+    new <- state(f$mu + f$u[seq_len(p)], f$V * outer(d, d))
+    tr <- EMC2:::.emc_shear_transport(alpha, cur, new, walls)
+    expect_true(all(tr$ok))
+    for (s in seq_len(n)) {
+      f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
+      if (walls$has[s]) {
+        wm <- EMC2:::.emc_shear_wall_map(alpha[, s], f0, f1, walls$U[, s], walls$b[s], walls$Uperp[[s]])
+        a1 <- wm$a
+        expect_equal(tr$jac[s], wm$log_jac - (f0$logdet - f1$logdet), tolerance = 1e-10)
+      } else {
+        a1 <- f1$m + drop(backsolve(f1$R, f0$R %*% (alpha[, s] - f0$m)))
+        expect_identical(tr$jac[s], 0)
+      }
+      expect_equal(tr$alpha[, s], a1, tolerance = 1e-10)
+      expect_equal(tr$r1sq[s], sum((f1$R %*% (a1 - f1$m))^2), tolerance = 1e-10)
+    }
+    expect_equal(EMC2:::.emc_shear_transport(alpha, cur, new, NULL)$alpha,
+                 vapply(seq_len(n), function(s) {
+                   f0 <- cur$frames[[s]]; f1 <- new$frames[[s]]
+                   f1$m + drop(backsolve(f1$R, f0$R %*% (alpha[, s] - f0$m)))
+                 }, numeric(p)), tolerance = 1e-10)
+    # The stacked frames survive a mean step's shifted state.
+    sh <- EMC2:::.emc_shear_shift_state(cur, f$u[seq_len(p)], prior)
+    expect_equal(sh$fm$m, vapply(sh$frames, function(x) x$m, numeric(p)))
+  }
+})
+
 test_that("the full transport inverts and composes from below the wall too", {
   f <- shear_fixture("standard")
   p <- length(f$mu)
