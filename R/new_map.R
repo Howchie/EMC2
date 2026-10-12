@@ -223,7 +223,7 @@ mapper_wrapper <- function(map, by_subject = FALSE, par_mcmc, design, n_trials =
           if(is.character(map[[1]])){ # Factor input
             map[setdiff(par_names, names(map))] <- ""
           } else{ # Otherwise assume it's a formula
-            map[setdiff(par_names, names(map))] <- as.formula("~ 1")
+            map[setdiff(par_names, names(map))] <- as.formula("~ 1", env = globalenv())
           }
           map <- map[par_names]
         }

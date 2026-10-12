@@ -757,7 +757,7 @@ check_trend <- function(trend, covariates = NULL, model = NULL, formula = NULL) 
     isin <-  trend_pnames %in% unlist(lapply(formula,function(x)all.vars(x)[1]))
     if(any(!isin)){
       # Add missing trend parameters to formula with intercept-only model
-      formula <- c(formula, lapply(trend_pnames[!isin], function(x) as.formula(paste(x, "~ 1"))))
+      formula <- c(formula, lapply(trend_pnames[!isin], function(x) as.formula(paste(x, "~ 1"), env = globalenv())))
       message("Intercept formula added for trend_pars: ", paste(trend_pnames[!isin],collapse=", "))
     }
   }

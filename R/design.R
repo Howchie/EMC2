@@ -413,7 +413,9 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     additional_constants <- p_types[not_specified]
     names(additional_constants) <- not_specified
     constants <- c(constants, additional_constants[!names(additional_constants) %in% names(constants)])
-    for(add_constant in not_specified) formula[[length(formula)+ 1]] <- as.formula(paste0(add_constant, "~ 1"))
+    # Built in the global environment: a formula keeps its environment, and
+    # this call's frame (data, model) would be saved with every fit.
+    for(add_constant in not_specified) formula[[length(formula)+ 1]] <- as.formula(paste0(add_constant, "~ 1"), env = globalenv())
   }
 
 
@@ -1668,6 +1670,16 @@ dm_list <- function(dadm)
 
       attr(dl[[i]], "unique_nort") <- NULL
       attr(dl[[i]], "expand_nort") <- NULL
+      # The subject's own rows of the rt- and response-free contraction (its
+      # cells are unique to it), renumbered from one.
+      if (length(unique_nortR) == nrow(dadm) && length(expand_nortR) == nrow(dadm)) {
+        e <- expand_nortR[isin]
+        attr(dl[[i]], "unique_nortR") <- unique_nortR[isin]
+        attr(dl[[i]], "expand_nortR") <- as.numeric(match(e, unique(e)))
+      } else {
+        attr(dl[[i]], "unique_nortR") <- NULL
+        attr(dl[[i]], "expand_nortR") <- NULL
+      }
       # LL cache attrs are data-shape specific; drop any inherited cache from the
       # full dadm so per-subject caching is always rebuilt safely.
       attr(dl[[i]], "emc2_ll_cache_version") <- NULL

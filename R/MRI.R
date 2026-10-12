@@ -580,7 +580,7 @@ design_fmri <- function(design_matrix,
 
   Flist <- vector("list", n_pars)
   for(i in 1:n_pars){
-    Flist[[i]] <- as.formula(paste0(par_names[i], "~1"))
+    Flist[[i]] <- as.formula(paste0(par_names[i], "~1"), env = globalenv())
   }
 
   design <- list(Flist = Flist, model = model, Ffactors = list(subjects = subjects))
