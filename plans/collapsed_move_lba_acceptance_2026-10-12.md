@@ -51,10 +51,17 @@ scripts collapsed_diag.R, wall_emul.R, curv_check.R):
    Inner HMC proposes ~2 posterior-sd jumps that phat accepts at 93% and
    the exact correction rejects at -13000 nats. With a wall-aware transport
    the non-floored subjects alone sum to -70 nats at 1.1-sd jumps and -15
-   at 0.6 sd; acceptance only at ~0.2-sd jumps. A joint accept over n
-   subjects needs per-subject surrogate error below ~1/n nats where the
-   posterior lives; quadratic surrogates do not reach that at n = 80-93 on
-   LBA (curved A/B/t0 ridges, one-sided plateau likelihoods).
+   at 0.6 sd; acceptance only at ~0.2-sd jumps. What the joint accept
+   depends on is the sum over subjects of the proposal-dependent difference
+   delta_s = [log L_s(a'_s) - log Lhat_s(a'_s)] - [log L_s(a_s) - log Lhat_s(a_s)]
+   (plus the wall correction), not each surrogate's absolute error: a
+   constant per-subject error cancels; independent, roughly zero-mean
+   errors allow a per-subject spread of order n^-1/2 for an O(1) total; a
+   coherent bias (every subject's surrogate wrong the same way along the
+   moved direction) needs order n^-1. On LBA the measured sums (-15 to -70
+   nats at 0.6-1.1 sd) say the errors are coherent along the move, which
+   quadratic surrogates do not fix at n = 80-93 (curved A/B/t0 ridges,
+   one-sided plateau likelihoods).
 3. LBA Laplace fits are poor: far whole-group jumps with residuals fixed
    give log w differences of -30 to -80 on an earlier LBA fixture.
 
@@ -163,9 +170,11 @@ by HMC on the Laplace-collapsed group posterior with subjects carried in
 their conditional frames, then corrected exactly with one likelihood round,
 log w = sum over subjects of [log L_s - log Lhat_s]. It works on an easy
 fixture (acceptance ~30%, n = 30) and has acceptance ~1e-12 to ~0 on LBA
-fixtures with n = 80-93: the per-subject quadratic surrogate errors add up
-across subjects, and a joint accept needs per-subject error well below 1/n
-nats. Per-subject block acceptance was tried and gave worse ESS per second.
+fixtures with n = 80-93: the sum over subjects of the proposal-dependent
+surrogate-error differences is tens of nats, i.e. the errors are coherent
+along the moved direction rather than independent noise that would average
+out as n^-1/2. Per-subject block acceptance was tried and gave worse ESS per
+second.
 
 Questions:
 
