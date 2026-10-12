@@ -87,10 +87,19 @@ for (j in seq_along(emc)) {
     attr(emc[[j]]$samples, "pm_settings") <- pm
   }
 }
+# A checkpoint carries its production options and a resumed fit uses those,
+# not the session's, so the arm's production options and the calibration
+# schedule go into every chain's record.
+prod_opts <- opts[intersect(names(opts), names(ns$.EMC_PRODUCTION_OPTION_DEFAULTS))]
 if (length(calibrate)) {
   n_tr <- emc[[1]]$sample_transitions
-  options(emc2.sample_rebuilds = c(n_tr + calibrate, 2L * (n_tr + max(calibrate))))
+  prod_opts$emc2.sample_rebuilds <- c(n_tr + calibrate, 2L * (n_tr + max(calibrate)))
   cat("Calibration rebuilds at transitions", n_tr + calibrate, "then", 2L * (n_tr + max(calibrate)), "\n")
+}
+if (length(prod_opts)) {
+  do.call(options, prod_opts)
+  for (j in seq_along(emc)) if (!is.null(emc[[j]]$production_options))
+    emc[[j]]$production_options[names(prod_opts)] <- prod_opts
 }
 particle_factor <- if (nzchar(n_particles)) as.numeric(n_particles) / sqrt(p) else 50
 emc <- arm_hook(emc)
