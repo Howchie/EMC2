@@ -158,10 +158,11 @@ test_that("the rest of the iteration is recorded against the previous final stat
   expect_equal(s$alloc$window$G, tcrossprod(d))
   s <- EMC2:::.emc_alloc_record_subjects(s, matrix(1:6, p) + 1)
   expect_equal(s$alloc$window$A[[2]], matrix(1, p, p))
-  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, 0.1, 2L, list(NULL, list(cpu = 0.2), NULL))
+  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, list(NULL, list(cpu = 0.2), NULL),
+                                     moves = list(shear = c(cpu = 0.1, own = 0.05, n = 2)))
   w <- s$alloc$window
-  expect_identical(c(w$n, w$nG, w$nA, w$rounds), c(1L, 1L, 1L, 2L))
-  expect_equal(c(w$cpu_rest, w$cpu_shear), c(0.5, 0.1))
+  expect_identical(c(w$n, w$nG, w$nA, w$fam$shear$moves), c(1L, 1L, 1L, 2L))
+  expect_equal(c(w$cpu_rest, w$fam$shear$cpu, w$fam$shear$own), c(0.5, 0.1, 0.05))
   expect_equal(w$cpu_hmc, c(0, 0.2, 0))
   expect_identical(w$hmc_att, c(0L, 1L, 0L))
 })
@@ -311,13 +312,23 @@ test_that("particle steps are recorded at their marginal (worker CPU) cost", {
 test_that("HMC transitions cost their worker CPU and the round a fixed cost", {
   s <- list(n_pars = 2, n_subjects = 3)
   tasks <- list(list(cpu = 1.5, work = 1), NULL, list(cpu = 2.5, work = 2))
-  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, 0, 0L, tasks, hmc_round = 7)
-  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, 0, 0L, list(NULL, NULL, NULL), hmc_round = 0)
+  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, tasks, moves = list(hmc = 7))
+  s <- EMC2:::.emc_alloc_record_cost(s, 0.5, list(NULL, NULL, NULL), moves = list(hmc = 0))
   w <- s$alloc$window
   expect_equal(w$cpu_hmc, c(1, 0, 2))
   expect_identical(w$hmc_att, c(1L, 0L, 1L))
-  expect_identical(w$hmc_rounds, 1L)
-  expect_equal(c(w$hmc_round_cost, w$hmc_round_work), c(7, 3))
+  expect_identical(w$fam$hmc$iters, 1L)
+  expect_identical(w$fam$hmc$moves, 2L)
+  expect_equal(c(w$fam$hmc$cpu, w$fam$hmc$own), c(7, 3))
+  # Every family splits the same way: marginal per move, fixed per iteration
+  # with moves (carried while the window is short).
+  for (i in 1:9) s <- EMC2:::.emc_alloc_record_cost(s, 0.5, tasks, moves = list(hmc = 7))
+  m <- EMC2:::.emc_alloc_marginal(s$alloc$window, "hmc")
+  expect_equal(m$fixed, 4 / 1)
+  expect_equal(m$c, 3 / 2)
+  short <- EMC2:::.emc_alloc_marginal(w, "hmc", last = list(fixed = list(hmc = 0.25)))
+  expect_equal(short$fixed, 0.25)
+  expect_true(is.na(short$c))
 })
 
 test_that("a plan pays the HMC round's fixed cost only if it uses HMC", {
@@ -462,6 +473,56 @@ test_that("a regime is a lower bound on one total HMC rate, and identity at rate
   expect_lte((if (is.null(sol$regime)) 0 else sol$regime) + sol$x[2], 1 + 1e-9)
 })
 
+test_that("subject HMC factors weigh their transitions against the subjects' pooled factor", {
+  n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
+  p <- 1
+  ev <- function(n, M) list(n = n, M = matrix(M), cpu = n * 0.01)
+  ms <- list(s_rho = matrix(0.9, 2, 1), g_rho = 0.5, g_fac = 0.5, g_measured = FALSE,
+             C_rest = 1, c_round = 0.1, coll = FALSE, W = list(diag(1), diag(1)),
+             s_var = matrix(1, 2, 1), c_hmc = c(0.1, 0.1), c_part = c(NA, NA), hmc_fixed = 0)
+  st <- list(supported = TRUE,
+             subjects = list(list(eligible = TRUE), list(eligible = TRUE)),
+             evidence = list(ev(10, 16), ev(100, 0)))  # subject 1 moves (h 0.2), subject 2 does not (h 1)
+  u <- EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)
+  h1 <- 1 - 16 / 10 / 2; h2 <- 1
+  ref <- (10 * h1 + 100 * h2) / 110
+  expect_equal(u$units[[2]]$h, (10 * h1 + n0 * ref) / (10 + n0))
+  expect_equal(u$units[[3]]$h, (100 * h2 + n0 * ref) / (100 + n0))
+  # Decay halves a subject's evidence at a production rebuild.
+  d <- EMC2:::.emc_hmc_decay_evidence(ev(10, 16))
+  expect_equal(c(d$n, d$M[1], d$cpu), EMC2:::.EMC_ALLOC_EVIDENCE_DECAY * c(10, 16, 0.1))
+})
+
+test_that("a move earns its evidence at an exploration rate and runs no faster than its evidence allows", {
+  n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
+  B <- 100
+  ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.99, 0.6), g_fac = c(0.5, 0.9),
+             g_measured = c(FALSE, TRUE), g_n = c(0, 400), C_rest = 1, c_round = 0.05,
+             coll = TRUE, c_fac = rep(0.5, 2), c_measured = FALSE, c_n = 0, c_coll = 0.1,
+             c_rate = 0, W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
+  u <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = B)
+  # No rounds yet: the floor collects n0 rounds by the next rebuild and is
+  # also the cap; 400 rounds: no floor, the usual cap.
+  expect_equal(c(u$units[[1]]$floor, u$units[[1]]$cap), c(n0 / B, n0 / B))
+  expect_equal(c(u$units[[2]]$floor, u$units[[2]]$cap), c(0, EMC2:::.EMC_ALLOC_MAX_ROUNDS))
+  expect_equal(c(u$joint$floor, u$joint$cap), c(n0 / B, n0 / B))
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  expect_equal(sol$x[1], n0 / B)
+  expect_equal(sol$joint, n0 / B)
+  # Half the evidence in: the floor collects the rest, the cap is twice the
+  # evidence rate.
+  half <- ms; half$g_n <- c(n0 / 2, 400); half$c_n <- n0 / 2
+  uh <- EMC2:::.emc_alloc_units(half, NULL, TRUE, FALSE, B = B)
+  expect_equal(c(uh$units[[1]]$floor, uh$units[[1]]$cap), c(n0 / 2 / B, n0 / B))
+  expect_equal(uh$joint$floor, n0 / 2 / B)
+  # Without B (no rebuild horizon) nothing is floored or capped by evidence.
+  u0 <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE)
+  expect_equal(u0$units[[1]]$floor, 0)
+  expect_equal(u0$joint$floor, 0)
+  # The plan pays for the exploration it runs.
+  expect_gte(sol$cost, 1 + n0 / B * (0.05 + 0.1) - 1e-9)
+})
+
 test_that("a chain held to shared particle rates is solved at those rates", {
   fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
   subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
@@ -516,13 +577,23 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
 
 test_that("rounds are priced at their own time, the frames as a fixed cost paid once", {
   s <- list(n_pars = 2, n_subjects = 3)
-  for (i in 1:12) s <- EMC2:::.emc_alloc_record_cost(s, 1, shear = 2.5, rounds = 5L,
-    tasks = list(NULL, NULL, NULL), shear_round = 0.5)
-  s <- EMC2:::.emc_alloc_record_cost(s, 1, shear = 0, rounds = 0L, tasks = list(NULL, NULL, NULL))
+  for (i in 1:12) s <- EMC2:::.emc_alloc_record_cost(s, 1, list(NULL, NULL, NULL),
+    moves = list(shear = c(cpu = 2.5, own = 0.5, n = 5), collapsed = c(cpu = 1, own = 0.8, n = 1)))
+  s <- EMC2:::.emc_alloc_record_cost(s, 1, list(NULL, NULL, NULL),
+    moves = list(shear = c(cpu = 0, own = 0, n = 0)))
   w <- s$alloc$window
-  expect_equal(w$cpu_shear_rounds, 6)
-  expect_identical(w$shear_iters, 12L)
-  expect_identical(w$rounds, 60L)
+  expect_equal(w$fam$shear$own, 6)
+  expect_identical(w$fam$shear$iters, 12L)
+  expect_identical(w$fam$shear$moves, 60L)
+  ms <- EMC2:::.emc_alloc_marginal(w, "shear"); expect_equal(c(ms$c, ms$fixed), c(0.1, 2))
+  mc <- EMC2:::.emc_alloc_marginal(w, "collapsed"); expect_equal(c(mc$c, mc$fixed), c(0.8, 0.2))
+  # The collapsed move pays its fixed cost once when any move runs.
+  fixed <- list(kind = "fixed", rho = 0.95, cost = 0)
+  joint <- list(idx = 1L, g = 0.3, cost = 0.05, cap = 4, fixed = 0.4)
+  sol <- EMC2:::.emc_alloc_solve(list(fixed), 1, joint = joint)
+  expect_gt(sol$joint, 0)
+  expect_equal(sol$cost, 1 + 0.4 + sol$joint * 0.05)
+  expect_identical(EMC2:::.emc_alloc_solve(list(fixed), 1, joint = replace(joint, "fixed", list(80)))$joint, 0)
   # A plan with rounds pays the fixed cost; one whose rounds cannot repay it
   # runs none.
   fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
@@ -543,7 +614,7 @@ test_that("an unmeasured shear coordinate counts at the prior factor, uncapped",
              c_fac = c(0.965, 0.5), c_measured = TRUE, c_coll = 0.1, c_rate = 1,
              W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
   u <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE)
-  expect_null(u$units[[1]]$cap)
+  expect_equal(u$units[[1]]$cap, EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   expect_identical(u$units[[1]]$g, 0.5)
   # The slowest coordinate's shear is unmeasured: the plan leans on its
   # prior factor rather than conceding to a floor at the guess.

@@ -424,6 +424,15 @@
        accp = numeric(0))
 }
 
+.emc_hmc_decay_evidence <- function(ev) {
+  if (is.null(ev)) return(ev)
+  d <- .EMC_ALLOC_EVIDENCE_DECAY
+  ev$n <- ev$n * d
+  ev$M <- ev$M * d
+  ev$cpu <- ev$cpu * d
+  ev
+}
+
 .emc_hmc_add_evidence <- function(ev, task) {
   ev$n <- ev$n + 1L
   ev$M <- ev$M + task$acc_prob * tcrossprod(task$disp)
@@ -485,6 +494,10 @@
   if (!sup$ok) return(st)
   lik <- sampler$lik_laplace
   evidence <- if (length(old$evidence) == n) old$evidence else vector("list", n)
+  # Production evidence decays at each rebuild like every move family's, so
+  # a subject whose HMC stopped is measured afresh when it runs again.
+  if (identical(stage, "sample") && identical(old$stage, "sample"))
+    evidence <- lapply(evidence, .emc_hmc_decay_evidence)
   subjects <- vector("list", n)
   for (s in seq_len(n)) {
     fit <- if (length(lik) >= s) lik[[s]] else NULL

@@ -353,9 +353,10 @@
   pooled <- identical(stage, "sample") && identical(old$stage, "sample")
   pool <- if (pooled) {
     prev <- .emc_collapsed_record(if (is.list(old$pool)) old$pool, p)
-    list(E = prev$E + blk$E, n = prev$n + blk$n, acc = prev$acc + blk$acc,
-         moved = prev$moved + blk$moved, N = prev$N + blk$N,
-         K = .emc_alloc_khist_sum(prev$K, blk$K))
+    d <- .EMC_ALLOC_EVIDENCE_DECAY
+    list(E = d * prev$E + blk$E, n = d * prev$n + blk$n, acc = d * prev$acc + blk$acc,
+         moved = d * prev$moved + blk$moved, N = d * prev$N + blk$N,
+         K = .emc_alloc_khist_sum(d * prev$K, blk$K))
   } else zero
   last <- if (pooled) pool else blk
   if (last$n < 5L) {
@@ -497,8 +498,10 @@
             ll = proposals[p + 1L, ], rounds = 0L, wpool = wpool,
             wpool_part = wpool_part)
   any_moved <- FALSE
+  round_el <- 0
   if (!is.null(cur) && is.finite(cur$lp)) {
     blk <- .emc_collapsed_record(plan$block, p)
+    round_el0 <- proc.time()[["elapsed"]]
     for (k in seq_len(n_rounds)) {
       x$moved <- FALSE
       x <- .emc_collapsed_round(x, plan, sampler, ctx)
@@ -508,6 +511,7 @@
       blk$moved <- blk$moved + as.integer(x$moved)
       any_moved <- any_moved || x$moved
     }
+    round_el <- proc.time()[["elapsed"]] - round_el0
     # The net jump over this iteration's moves (their saturation,
     # R/move_allocation.R).
     d <- c(x$cur$mu - cur$mu, .emc_alloc_lsd(x$cur$V) - .emc_alloc_lsd(cur$V))
@@ -537,5 +541,5 @@
   sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
   sampler$collapsed <- st
   list(sampler = sampler, pars = pars, proposals = proposals, wpool = x$wpool,
-       rounds = x$rounds)
+       rounds = x$rounds, round_el = round_el)
 }

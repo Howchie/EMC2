@@ -505,13 +505,15 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   chain <- rebuild(chain, "sample", block(8L, 1))
   expect_identical(chain$collapsed$plan$last$n, 8L)
   expect_identical(chain$collapsed$plan$pool$n, 0L)
-  # Production blocks then add up, a thin one included.
+  # Production blocks then add up, a thin one included, the earlier ones
+  # discounted at each rebuild.
   chain <- rebuild(chain, "sample", block(20L, 2))
   chain <- rebuild(chain, "sample", block(3L, 3))
   last <- chain$collapsed$plan$last
-  expect_identical(last$n, 23L)
-  expect_equal(last$E, diag(5, 2 * p))
-  expect_equal(last$acc, 11.5)
+  d <- EMC2:::.EMC_ALLOC_EVIDENCE_DECAY
+  expect_equal(last$n, d * 20 + 3)
+  expect_equal(last$E, diag(d * 2 + 3, 2 * p))
+  expect_equal(last$acc, d * 10 + 1.5)
   # Outside production, nonempty blocks are not pooled. A thin or empty block
   # in the same stage retains the last usable measurement.
   chain <- rebuild(chain, "burn", block(6L, 1))

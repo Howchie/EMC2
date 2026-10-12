@@ -1101,7 +1101,7 @@ run_stage <- function(pmwgs,
     }
     # Then the collapsed move (R/collapsed_move.R) when enabled: the whole
     # group state with the subjects in their conditional frames.
-    coll_cpu <- coll_el <- 0
+    coll_cpu <- coll_el <- coll_round_cpu <- 0
     coll_moves <- 0L
     if (.emc_collapsed_active(ens$sampler)) {
       coll_el0 <- proc.time()[["elapsed"]]
@@ -1116,7 +1116,10 @@ run_stage <- function(pmwgs,
       if (length(moves_before) && length(moves_after))
         coll_moves <- as.integer(moves_after - moves_before)
       coll_el <- proc.time()[["elapsed"]] - coll_el0
-      if (alloc_on) coll_cpu <- .emc_reserved_cost(coll_el, cores_it)
+      if (alloc_on) {
+        coll_cpu <- .emc_reserved_cost(coll_el, cores_it)
+        coll_round_cpu <- .emc_reserved_cost(if (is.null(cm$round_el)) 0 else cm$round_el, cores_it)
+      }
     }
     ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
     ensemble_rejects <- .emc_reject_counts("ensemble")
@@ -1200,10 +1203,10 @@ run_stage <- function(pmwgs,
     if (alloc_on) {
       rest_cpu <- .emc_reserved_cost(proc.time()[["elapsed"]] - el_iter - shear_el - coll_el -
                                        hmc_el, cores_it)
-      pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, shear_cpu, shear_rounds, hmc_tasks,
-                                      coll_cpu, coll_moves,
-                                      hmc_round = .emc_reserved_cost(hmc_el, cores_it),
-                                      shear_round = shear_round_cpu)
+      pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, hmc_tasks, moves = list(
+        shear = c(cpu = shear_cpu, own = shear_round_cpu, n = shear_rounds),
+        collapsed = c(cpu = coll_cpu, own = coll_round_cpu, n = coll_moves),
+        hmc = .emc_reserved_cost(hmc_el, cores_it)))
     }
     fill_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - fill_started

@@ -131,11 +131,6 @@
 # Initial step scale in posterior sds of the coordinate, and the bounds every
 # adapted scale stays in.
 .EMC_SHEAR_STEP0 <- 2.5
-# Production round records carry across rebuilds discounted by this factor,
-# so a coordinate's evidence is bounded (about two blocks' worth) and a
-# coordinate whose rounds stopped is measured afresh rather than priced for
-# ever on the rounds it once had.
-.EMC_SHEAR_POOL_DECAY <- 0.5
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
 
 .emc_shear_options <- function() {
@@ -447,7 +442,7 @@
     recent <- carry(blk)
     if (pooled) {
       prev <- carry(old$pool)
-      d <- .EMC_SHEAR_POOL_DECAY
+      d <- .EMC_ALLOC_EVIDENCE_DECAY
       plan$pool <- list(E = d * prev$E + recent$E, n = d * prev$n + recent$n,
                         moved = d * prev$moved + recent$moved, N = d * prev$N + recent$N,
                         K = .emc_alloc_khist_sum(d * prev$K, recent$K))

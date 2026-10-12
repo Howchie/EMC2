@@ -1020,7 +1020,7 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   ch <- rebuild(ch, "sample", 30L, 15L, 3)
   pl <- ch$shear$plan
   # The pool carries the earlier blocks discounted at each rebuild.
-  d <- EMC2:::.EMC_SHEAR_POOL_DECAY
+  d <- EMC2:::.EMC_ALLOC_EVIDENCE_DECAY
   expect_equal(pl$last$n[sd_k], rep(d * 10 + 30, p))
   expect_equal(pl$last$E[sd_k], rep(d * 2 + 3, p))
   expect_equal(pl$last$moved[sd_k], rep(d * 10 + 15, p))
