@@ -767,13 +767,14 @@
     last <- ch$collapsed$plan$last
     c_measured <- is.list(last) && last$n > 0
     if (c_measured) {
-      # Its moves weigh against the prior factor by their number, as a
-      # shear coordinate's rounds do against its kind's.
+      # A coordinate's moves weigh against the move's pooled factor over
+      # all its coordinates, as a shear coordinate's rounds do against its
+      # kind's: once measured, a move that does not move earns no credit.
       last <- .emc_collapsed_record(last, p)
       c_obs <- pmin(1, pmax(0, 1 - (rowSums((T_g %*% last$E) * T_g) / last$n) /
                               (2 * g_var)))
       n0 <- .EMC_ALLOC_ROUND_EVIDENCE
-      c_fac <- (last$n * c_obs + n0 * .EMC_ALLOC_SHEAR_PRIOR_G) / (last$n + n0)
+      c_fac <- (last$n * c_obs + n0 * mean(c_obs)) / (last$n + n0)
       c_sat <- .emc_alloc_saturation(
         c_fac, rowSums((T_g %*% last$N) * T_g) / max(1, sum(last$K)) / (2 * g_var),
         last$K)

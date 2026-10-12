@@ -435,6 +435,30 @@ test_that("measured zero movement is a factor of exactly one, and buys nothing",
   expect_equal(sol$objective, sol$objective0)
 })
 
+test_that("a measured collapsed move that never moves earns no credit", {
+  p <- 2; n <- 1; k <- 50
+  a <- matrix(stats::rnorm(p * k), p)
+  v <- array(0, c(p, p, k))
+  for (i in seq_len(k)) v[, , i] <- diag(exp(stats::rnorm(p)))
+  ch <- list(n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = c("x", "y"),
+             lik_laplace = list(NULL),
+             samples = list(idx = k, theta_mu = a, theta_var = v,
+                            alpha = array(a, c(p, 1, k))),
+             collapsed = list(plan = list(C = diag(2 * p), rounds = 1,
+                                          last = list(E = matrix(0, 2 * p, 2 * p), n = 600,
+                                                      acc = 0, moved = 0L))),
+             alloc = list(window = NULL))
+  local_mocked_bindings(.emc_collapsed_active = function(sampler) TRUE, .package = "EMC2")
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  expect_true(ms$c_measured)
+  expect_identical(ms$c_fac, rep(1, 2 * p))
+  # Movement on one coordinate is shaded towards the move's own mean factor.
+  ch$collapsed$plan$last$E[1, 1] <- 60
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  obs <- c(1 - 0.1 / (2 * ms$g_var[1]), rep(1, 3))
+  expect_equal(ms$c_fac, (600 * obs + 20 * mean(obs)) / 620)
+})
+
 test_that("a regime is a lower bound on one total HMC rate, and identity at rate zero", {
   tau <- EMC2:::.emc_alloc_tau
   subj <- list(kind = "subject", rho = c(0.86, 0.5), p = c(0.65, 0.6), c_p = 0.38,
