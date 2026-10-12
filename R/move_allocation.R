@@ -619,27 +619,10 @@
   qs <- if (is.null(u$p) || is.null(u$h)) 1 else if (!is.null(u$q_fixed)) u$q_fixed else
     .EMC_ALLOC_PARTICLE_RATES
   r_min <- if (is.null(u$h) || is.null(u$r_min)) 0 else u$r_min
-  r_need <- matrix(pmax(r_min, if (refresh) 1 - qs else 0), length(qs), n_t)
-  for (i in seq_along(rho)) {
-    K <- if (refresh) rs else pmin(rs, level[i])
-    P <- if (is.null(u$p)) 1 else u$p[i]
-    base <- rho[i] * (1 - qs * (1 - P))
-    over <- outer(base, K * (1 + 1e-12), ">")
-    if (!any(over)) next
-    if (is.null(u$h) || u$h[i] >= 1) {
-      r_need[over] <- Inf
-      next
-    }
-    H <- u$h[i]
-    t <- outer(rep(1, length(qs)), K / rho[i])
-    alone <- outer(1 - qs * (1 - P), rep(1, n_t))
-    r1 <- (alone - t) / (1 - H)
-    knee <- outer(1 - qs, rep(1, n_t))
-    at_knee <- outer(qs * P + (1 - qs) * H, rep(1, n_t))
-    r2 <- knee + (at_knee - t) / (P * (1 - H))
-    val <- ifelse(r1 <= knee, r1, r2)
-    r_need <- pmax(r_need, ifelse(over, val, 0))
-  }
+  r_need <- emc_alloc_subject_need_cpp(
+    as.numeric(rho), if (is.null(u$p)) rep(1, length(rho)) else as.numeric(u$p),
+    if (is.null(u$h)) NULL else as.numeric(u$h), as.numeric(level),
+    as.numeric(qs), as.numeric(rs), as.numeric(r_min), refresh)
   r_need[r_need > 1 + 1e-9] <- Inf
   fin <- is.finite(r_need)
   r_need[fin] <- pmin(r_need[fin], 1)
