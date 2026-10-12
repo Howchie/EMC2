@@ -198,4 +198,17 @@ inline GuessKernel rt_bin_guess(const GuessKernel& guess, const RtBin& bin) {
   return result;
 }
 
+// rt_bin_guess into a caller-owned kernel that already holds a copy of
+// `guess`: only the two densities change per bin, so per-trial loops avoid
+// copying the kernel and its shared response mask.
+inline const GuessKernel& rt_bin_guess_into(const GuessKernel& guess, const RtBin& bin,
+                                            GuessKernel& out) {
+  const double lo = std::max(bin.lo, guess.LG);
+  const double hi = std::min(bin.hi, guess.UG);
+  const double fraction = hi > lo ? std::log((hi - lo) / bin.h) : R_NegInf;
+  out.log_g = guess.log_g + fraction;
+  out.log_g_any = guess.log_g_any + fraction;
+  return out;
+}
+
 #endif

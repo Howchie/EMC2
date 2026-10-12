@@ -2041,6 +2041,7 @@ double c_log_likelihood_logicalrules(
       }
 
       const GuessKernel gk = (guess != nullptr) ? *guess : GuessKernel();
+      GuessKernel binned_guess = gk;
       for (int j = 0; j < n_unique_trials; ++j) {
         if (only_trials && !only_trials[j]) continue;
         const size_t sj = static_cast<size_t>(j);
@@ -2048,8 +2049,8 @@ double c_log_likelihood_logicalrules(
         const double pG = pg_col >= 0 && gk.active()
           ? pars_cols[pg_col][sj * n_acc] : 0.0;
         if (pC == 0.0 && pG == 0.0) continue;
-        const GuessKernel trial_guess = finite_bin[sj]
-          ? rt_bin_guess(gk, shared.rt_bins.bins[sj]) : gk;
+        const GuessKernel& trial_guess = finite_bin[sj]
+          ? rt_bin_guess_into(gk, shared.rt_bins.bins[sj], binned_guess) : gk;
         result[sj] = mix_contaminants_rt(result[sj], pC, pG, trial_guess,
           shared.rt_unique[sj], shared.resp_code[sj] != 0,
           trial_guess.response_is_eligible(shared.response_factor_code[sj]));

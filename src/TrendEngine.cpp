@@ -727,11 +727,15 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
 
   int target_idx = pt.base_index_for(spec.target_param);
   double* target_col = &pt.base(0, target_idx);
+  // The trajectory varies by trial, so the column no longer holds one value.
+  pt.const_mark(target_idx, false);
 
   const std::string& base = spec.base_type;
-  bool needs_base_par =
-    (base == "lin" || base == "exp_lin" ||
-    base == "lin_exp" || base == "centered");
+  const bool base_identity = base == "identity";
+  const bool base_exp = base == "exp_lin" || base == "lin_exp";
+  const bool base_scaled = base == "lin" || base_exp;
+  const bool base_centered = base == "centered";
+  bool needs_base_par = base_scaled || base_centered;
 
   // Check if any slot has maps; assume all slots share same #maps if they do.
   const KernelSlotSpec& first_slot = *op.kernels[0].spec;
@@ -761,9 +765,10 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
     base_col0 = &pt.base(0, op.base_par_indices[0]);
   }
 
+  // R's NA_real_ is a NaN, so std::isnan covers both missing markers.
   for (int r = 0; r < n; ++r) {
     double p = target_col[r];
-    if (NumericVector::is_na(p) || emc2_isnan(p)) continue;
+    if (std::isnan(p)) continue;
 
     double contrib = 0.0;
 
@@ -777,7 +782,7 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
       for (int k = 0; k < K; ++k) {
         const KernelSlotSpec& slot = *op.kernels[k].spec;
         double q = (*trajs[k])[r];
-        if (NumericVector::is_na(q) || emc2_isnan(q)) q = 0.0;
+        if (std::isnan(q)) q = 0.0;
 
         for (int m = 0; m < n_maps; ++m) {
           double base_val = pt.base(r, op.base_par_indices[m]);
@@ -791,27 +796,27 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
       double q_combined = 0.0;
       for (int k = 0; k < K; ++k) {
         double q = (*trajs[k])[r];
-        if (NumericVector::is_na(q) || emc2_isnan(q)) q = 0.0;
+        if (std::isnan(q)) q = 0.0;
         q_combined += q;
       }
 
       double tmp = q_combined;
       if (needs_base_par) {
         double tp = base_col0 ? base_col0[r] : 1.0;
-        if (base == "lin" || base == "exp_lin" || base == "lin_exp") {
+        if (base_scaled) {
           tmp *= tp;
-        } else if (base == "centered") {
+        } else if (base_centered) {
           tmp = (tmp - 0.5) * tp;
         }
       }
       contrib = tmp;
     }
 
-    if (base == "identity") {
+    if (base_identity) {
       target_col[r] = contrib;
     } else {
       double base_term;
-      if (base == "exp_lin" || base == "lin_exp") {
+      if (base_exp) {
         base_term = std::exp(p);
       } else {
         base_term = p;

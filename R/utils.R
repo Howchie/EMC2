@@ -334,11 +334,22 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   }
 
   n_trials <- nrow(dadm)
+  has_RACE_col <- "RACE" %in% cols && is.factor(dadm[["RACE"]])
+  # The all-finite cache is valid without the accumulator count, which is the
+  # expensive part of the general check below.
+  if (!isTRUE(force_rebuild) &&
+      identical(attr(dadm, "emc2_ll_cache_version"), .emc2_ll_cache_version) &&
+      isTRUE(attr(dadm, "emc2_all_finite_trials")) &&
+      (!has_RACE_col || (!is.null(attr(dadm, "RACE_nacc_by_row")) &&
+                         !is.null(attr(dadm, "RACE_mask")) &&
+                         length(attr(dadm, "RACE_nacc_by_row")) == n_trials &&
+                         length(attr(dadm, "RACE_mask")) == n_trials))) {
+    return(dadm)
+  }
   lR <- dadm[["lR"]]
   lR_codes <- as.integer(lR)
   n_lR <- length(unique(lR_codes))
 
-  has_RACE_col <- "RACE" %in% cols && is.factor(dadm[["RACE"]])
   if (!isTRUE(force_rebuild) &&
       .is_valid_ll_cache(dadm, n_trials = n_trials, n_lR = n_lR, has_RACE_col = has_RACE_col)) {
     return(dadm)

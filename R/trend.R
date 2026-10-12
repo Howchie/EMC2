@@ -1527,7 +1527,6 @@ get_custom_kernel_pointers <- function(input_data) {
 }
 
 .restore_custom_model_container <- function(model, quiet = FALSE, cache = NULL) {
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
   if (is.function(model)) {
     model_list <- model()
     if (!is.list(model_list)) return(model)
@@ -1539,10 +1538,12 @@ get_custom_kernel_pointers <- function(input_data) {
         !.custom_kernel_pointer_valid(attr(x, "custom_ptr")), logical(1)))
     if (!needs_restore && !nested) return(model)
     if (needs_restore)
-      model_list$trend <- .restore_custom_trend_list(model_list$trend, quiet, cache)
+      model_list$trend <- .restore_custom_trend_list(
+        model_list$trend, quiet, if (is.null(cache)) new.env(parent = emptyenv()) else cache)
     return(.custom_model_container(model_list))
   }
   if (is.list(model)) {
+    if (is.null(cache)) cache <- new.env(parent = emptyenv())
     if (!is.null(model$trend)) {
       model$trend <- .restore_custom_trend_list(model$trend, quiet, cache)
       return(model)

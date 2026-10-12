@@ -77,12 +77,14 @@ run_reference <- function(fx, designs = NULL) {
     fx$prop, fx$dadm, constants = fx$constants, designs = designs,
     bounds = fx$model$bound, transforms = fx$model$transform,
     pretransforms = fx$model$pre_transform, trend = fx$model$trend)
-  ref[, fx$p_types, , drop = FALSE]
+  ref[, intersect(fx$p_types, dimnames(ref)[[2]]), , drop = FALSE]
 }
 
+# The reference returns model parameters only; the prologue also keeps any
+# trend coefficients, so the comparison runs over the reference's columns.
 expect_prologue_matches_reference <- function(fx, designs = NULL, label = "") {
-  got <- run_prologue(fx, designs)$pars
   want <- run_reference(fx, designs)
+  got <- run_prologue(fx, designs)$pars[, dimnames(want)[[2]], , drop = FALSE]
   expect_equal(dim(got), dim(want), info = label)
   expect_equal(as.numeric(got), as.numeric(want), tolerance = 0, info = label)
 }
@@ -167,11 +169,33 @@ test_that("an invariant bound is still enforced for every particle", {
 
 # --- the trend lane ---------------------------------------------------------
 
+test_that("trends in every phase match the reference lane", {
+  # A trend writes into the parameter table outside the design/transform
+  # pipeline, so its target must lose its row-constant claim while every other
+  # column keeps the short cut.  Each phase and base type puts the write at a
+  # different point of the prologue.
+  cases <- list(
+    "premap lin" = make_trend(par_names = "v", cov_names = "trial",
+                              kernels = "exp_decr", bases = "lin"),
+    "pretransform exp_lin" = make_trend(par_names = "B", cov_names = "trial",
+                                        kernels = "exp_incr", bases = "exp_lin",
+                                        phase = "pretransform"),
+    "posttransform centered" = make_trend(par_names = "t0", cov_names = "trial",
+                                          kernels = "pow_incr", bases = "centered",
+                                          phase = "posttransform")
+  )
+  for (nm in names(cases)) {
+    fx <- prologue_fixture(list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1),
+                           covariates = "trial", cov_data = list(trial = seq_len(60)),
+                           trend = cases[[nm]])
+    fx$prop[, grepl("\\.", colnames(fx$prop))] <- -1
+    expect_prologue_matches_reference(fx, label = nm)
+  }
+})
+
 test_that("an identity trend gives the same likelihood as no trend", {
-  # The row-constant short cut is disabled whenever a TrendRuntime is present,
-  # because the trend writes into the parameter table outside the pipeline.
-  # A trend whose kernel is the identity therefore checks the gated and
-  # un-gated lanes against each other.
+  # A trend whose kernel adds nothing checks the trend lane against the
+  # no-trend lane.
   set.seed(3)
   n_trials <- 40
   dat <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1L], ]

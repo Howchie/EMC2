@@ -11,6 +11,38 @@
 #include "emc_scratch.h"
 using Rcpp::_;
 
+// Read-only view of a design's "expand" row map, integer or double, without
+// coercing (and so allocating) it; entries follow as<IntegerVector>: doubles
+// truncate towards zero and NaN or out-of-range values read as NA.
+struct ExpandView {
+  Rcpp::IntegerVector held;
+  const int* iv = nullptr;
+  const double* dv = nullptr;
+  R_xlen_t n = 0;
+
+  explicit ExpandView(SEXP x) {
+    if (x == R_NilValue) return;
+    if (TYPEOF(x) == INTSXP) {
+      iv = INTEGER(x);
+      n = XLENGTH(x);
+    } else if (TYPEOF(x) == REALSXP) {
+      dv = REAL(x);
+      n = XLENGTH(x);
+    } else {
+      held = Rcpp::as<Rcpp::IntegerVector>(x);
+      iv = held.begin();
+      n = held.size();
+    }
+  }
+  R_xlen_t size() const { return n; }
+  int operator[](R_xlen_t r) const {
+    if (iv) return iv[r];
+    const double x = dv[r];
+    if (ISNAN(x) || x >= 2147483648.0 || x <= -2147483649.0) return NA_INTEGER;
+    return static_cast<int>(x);
+  }
+};
+
 struct DesignEntry {
   bool valid;                    // does this design have a usable mapping?
   bool skip_self_intercept;      // from design_is_self_intercept
@@ -329,9 +361,7 @@ struct ParamTable {
       entry.out_idx = out_it->second;
 
       NumericMatrix design = designs[i];
-      IntegerVector expand;
-      SEXP expand_attr = design.attr("expand");
-      if (expand_attr != R_NilValue) expand = as<IntegerVector>(expand_attr);
+      const ExpandView expand(design.attr("expand"));
       if (expand.size() == T) {
         entry.expand_idx.resize(T);
         for (int r = 0; r < T; ++r) {
@@ -624,9 +654,7 @@ struct ParamTable {
 
       NumericMatrix dm = designs[i];
 
-      Rcpp::IntegerVector expand;
-      SEXP expand_attr = dm.attr("expand");
-      if (expand_attr != R_NilValue) expand = Rcpp::as<Rcpp::IntegerVector>(expand_attr);
+      const ExpandView expand(dm.attr("expand"));
       if (dm.nrow() != n_trials && expand.size() != n_trials) continue;
 
       // Exactly 1 column

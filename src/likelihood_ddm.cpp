@@ -411,13 +411,14 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
   const double* pg_ptr = shared->pg_ptr;
   const GuessKernel& gk = shared->guess;
   const bool use_mix = (pc_ptr != nullptr) || (pg_ptr != nullptr && gk.active());
+  GuessKernel binned_guess = gk;
   auto apply_mix = [&](double ll, int i) -> double {
     const double pC = (pc_ptr != nullptr) ? pc_ptr[i] : 0.0;
     const double pG = (pg_ptr != nullptr && gk.active()) ? pg_ptr[i] : 0.0;
     if (pC == 0.0 && pG == 0.0) return ll;
-    const GuessKernel trial_guess = shared != nullptr && shared->rt_bins.active() &&
+    const GuessKernel& trial_guess = shared != nullptr && shared->rt_bins.active() &&
       R_FINITE(rt_ptr[i]) && static_cast<size_t>(i) < shared->rt_bins.bins.size()
-        ? rt_bin_guess(gk, shared->rt_bins.bins[static_cast<size_t>(i)]) : gk;
+        ? rt_bin_guess_into(gk, shared->rt_bins.bins[static_cast<size_t>(i)], binned_guess) : gk;
     return mix_contaminants_rt(ll, pC, pG, trial_guess, rt_ptr[i],
                                R_ptr[i] != NA_INTEGER,
                                trial_guess.response_is_eligible(R_ptr[i]));

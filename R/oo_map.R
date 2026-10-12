@@ -10,6 +10,7 @@
   if (is.null(designs)) {
     stop("dadm must have a 'designs' attribute")
   }
+  if (!expand && is.null(row_idx)) return(designs)
 
   out <- lapply(designs, function(design_mat) {
     expand_idx <- attr(design_mat, "expand")

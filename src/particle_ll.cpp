@@ -228,7 +228,8 @@ static void update_pt_only(ParamTable& param_table,
                            const Rcpp::LogicalVector* invariant_design_mask = nullptr,
                            const std::unordered_set<std::string>* invariant_param_names = nullptr,
                            const Rcpp::LogicalVector* planned_map_next = nullptr,
-                           const std::vector<TransformSpec>* planned_postmap = nullptr) {
+                           const std::vector<TransformSpec>* planned_postmap = nullptr,
+                           const Rcpp::LogicalVector* planned_premap = nullptr) {
   // Planned lane: with no trend runtime the premap / pretransform /
   // posttransform blocks below are all inert, and the design mask and postmap
   // spec list depend only on names (designs, split set, invariant set) — never
@@ -242,6 +243,34 @@ static void update_pt_only(ParamTable& param_table,
   }
 
   if (trend_runtime) trend_runtime->reset_all_kernels();
+
+  // Planned trend lane: the masks and the postmap spec list are the ones the
+  // general code below derives from names alone, resolved once per call.
+  if (trend_runtime && planned_map_next && planned_postmap && planned_premap) {
+    if (trend_runtime->has_premap()) {
+      param_table.map_from_designs(designs, *planned_premap);
+      const auto& specs_premap = trend_runtime->premap_specs();
+      if (!specs_premap.empty()) c_do_transform_pt(param_table, specs_premap);
+      for (std::size_t i = 0; i < trend_runtime->premap_ops.size(); ++i) {
+        trend_runtime->apply_base_for_op(trend_runtime->premap_ops[i], param_table);
+      }
+    }
+    param_table.map_from_designs(designs, *planned_map_next);
+    if (trend_runtime->has_pretransform()) {
+      const auto& specs_pretransform = trend_runtime->pretransform_specs();
+      if (!specs_pretransform.empty()) c_do_transform_pt(param_table, specs_pretransform);
+      for (std::size_t i = 0; i < trend_runtime->pretransform_ops.size(); ++i) {
+        trend_runtime->apply_base_for_op(trend_runtime->pretransform_ops[i], param_table);
+      }
+    }
+    c_do_transform_pt(param_table, *planned_postmap);
+    if (trend_runtime->has_posttransform()) {
+      for (std::size_t i = 0; i < trend_runtime->posttransform_ops.size(); ++i) {
+        trend_runtime->apply_base_for_op(trend_runtime->posttransform_ops[i], param_table);
+      }
+    }
+    return;
+  }
 
   const int n_designs = designs.size();
   LogicalVector map_next(n_designs, false);
@@ -481,6 +510,31 @@ struct PtMapper {
   Rcpp::LogicalVector bound_buf;                  // per-particle verdict, reused
   bool bound_plan_ready = false;
 
+  // Trend lane plan: the premap mask, the remaining-design mask and the
+  // postmap transforms, which depend on names only.  use_invariants is never
+  // set with a trend runtime, so one plan serves every particle.
+  bool trend_plan_ready = false;
+  Rcpp::LogicalVector trend_premap_mask;
+  Rcpp::LogicalVector trend_map_next;
+  std::vector<TransformSpec> trend_postmap;
+
+  void build_trend_plan() {
+    const int n_designs = designs.size();
+    const bool has_premap = trend_runtime->has_premap();
+    trend_premap_mask = has_premap ? trend_runtime->premap_design_mask(designs)
+                                   : Rcpp::LogicalVector(n_designs, false);
+    trend_map_next = Rcpp::LogicalVector(n_designs, true);
+    for (int i = 0; i < n_designs; ++i) {
+      if (has_premap && trend_premap_mask[i]) trend_map_next[i] = false;
+    }
+    std::unordered_set<std::string> transform_next = param_names_excluding(
+      table, { &trend_runtime->premap_trend_params(),
+               &trend_runtime->pretransform_trend_params() });
+    for (const auto& nm : table.split_transform_params()) transform_next.erase(nm);
+    trend_postmap = filter_specs_by_param_set(table, transform_specs, transform_next);
+    trend_plan_ready = true;
+  }
+
   // Build the i > 0 plans.  Only valid without a trend runtime, which is also
   // the only case in which use_invariants is ever set.
   void build_plan() {
@@ -574,12 +628,18 @@ struct PtMapper {
       }
     }
     const bool skip_inv = (i > 0) && use_invariants;
-    update_pt_only(table, designs, trend_runtime ? trend_runtime.get() : nullptr,
-                   transform_specs,
-                   skip_inv ? &invariant_design_mask : nullptr,
-                   skip_inv ? &invariant_param_names : nullptr,
-                   (planned && i > 0) ? &plan_map_next : nullptr,
-                   (planned && i > 0) ? &plan_postmap : nullptr);
+    if (trend_runtime) {
+      if (!trend_plan_ready) build_trend_plan();
+      update_pt_only(table, designs, trend_runtime.get(), transform_specs,
+                     nullptr, nullptr, &trend_map_next, &trend_postmap,
+                     &trend_premap_mask);
+    } else {
+      update_pt_only(table, designs, nullptr, transform_specs,
+                     skip_inv ? &invariant_design_mask : nullptr,
+                     skip_inv ? &invariant_param_names : nullptr,
+                     (planned && i > 0) ? &plan_map_next : nullptr,
+                     (planned && i > 0) ? &plan_postmap : nullptr);
+    }
     if (i == 0) {
       bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
       Rcpp::LogicalVector ok = c_do_bound_pt(table, bound_specs);
@@ -667,10 +727,9 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
     }
   }
 
-  // Row-constant column tracking is only sound while nothing outside the
-  // design/transform pipeline writes into `base`; TrendRuntime::apply_base_for_op
-  // does exactly that, so the trend lane keeps the general code.
-  if (trend.isNull()) m.table.const_init();
+  // Row-constant column tracking: TrendRuntime::apply_base_for_op, the one
+  // writer outside the design/transform pipeline, drops its target's flag.
+  m.table.const_init();
 
   if (!trend.isNull()) {
     m.trend_plan.reset(new TrendPlan(trend, data));
@@ -1184,6 +1243,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     int fast_pc_col = -1;                     // keep_names position of pContaminant
     int fast_pg_col = -1;                     // keep_names position of pGuess
     GuessKernel fast_guess;                   // uniform guess kernel (data-fixed)
+    GuessKernel binned_guess_fp;              // fast_guess with one bin's densities
 
     std::vector<int> time_win_int_buf;
     std::vector<double> alt_res_buf_fp;
@@ -1248,6 +1308,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       fast_guess = resolve_guess_kernel(data);
       fast_guess.pg_col = fast_pg_col;
+      binned_guess_fp = fast_guess;
 
     }
 
@@ -1460,12 +1521,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
             const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                 ? pars_cols[fast_pg_col][base] : 0.0;
-            const GuessKernel trial_guess = pG > 0.0 && rt_bins.active()
-              ? rt_bin_guess(fast_guess, rt_bins.bins[j]) : fast_guess;
-            const double log_guess = guess_log_density_for_response(
-              trial_guess, R_idxs_dadm[base]);
-            if (pC != 0.0 || pG != 0.0)
+            if (pC != 0.0 || pG != 0.0) {
+              const GuessKernel& trial_guess = pG > 0.0 && rt_bins.active()
+                ? rt_bin_guess_into(fast_guess, rt_bins.bins[j], binned_guess_fp) : fast_guess;
+              const double log_guess = guess_log_density_for_response(
+                trial_guess, R_idxs_dadm[base]);
               s = mix_contaminants(s, pC, pG, log_guess, false);
+            }
           }
           ll_uniq_buf[j] = s;
         }
@@ -1487,12 +1549,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
               const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                   ? pars_cols[fast_pg_col][base] : 0.0;
-              const GuessKernel trial_guess = pG > 0.0 && rt_bins.active()
-                ? rt_bin_guess(fast_guess, rt_bins.bins[j]) : fast_guess;
-              const double log_guess = guess_log_density_for_response(
-                trial_guess, R_idxs_dadm[base]);
-              if (pC != 0.0 || pG != 0.0)
+              if (pC != 0.0 || pG != 0.0) {
+                const GuessKernel& trial_guess = pG > 0.0 && rt_bins.active()
+                  ? rt_bin_guess_into(fast_guess, rt_bins.bins[j], binned_guess_fp) : fast_guess;
+                const double log_guess = guess_log_density_for_response(
+                  trial_guess, R_idxs_dadm[base]);
                 s = mix_contaminants(s, pC, pG, log_guess, false);
+              }
             }
             ll_uniq_buf[j] = s;
           }
@@ -2049,6 +2112,7 @@ double c_log_likelihood_race(
     if (use_shared) { shared->pg_col = pg_col; shared->guess = guess; }
   }
   use_pG = guess.active();
+  GuessKernel binned_guess = guess;
   if (use_pG) {
     const double* pg_ptr = pars.begin() + static_cast<std::ptrdiff_t>(pg_col) * pars.nrow();
     const int n_pars_rows = pars.nrow();
@@ -3332,8 +3396,8 @@ apply_trial_trunc:
     const double rt_j = rts_dadm[j * n_lR];
     const double pC = use_pC ? pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR] : 0.0;
     const double pG = use_pG ? pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR] : 0.0;
-    const GuessKernel trial_guess = rt_bins.active() && R_FINITE(rt_j) ?
-      rt_bin_guess(guess, rt_bins.bins[j]) : guess;
+    const GuessKernel& trial_guess = rt_bins.active() && R_FINITE(rt_j) ?
+      rt_bin_guess_into(guess, rt_bins.bins[j], binned_guess) : guess;
     ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC, pG,
                                        trial_guess, rt_j,
                                        R_idxs_dadm[j * n_lR] != NA_INTEGER,
