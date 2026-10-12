@@ -23,6 +23,8 @@ cores_per_chain <- as.integer(Sys.getenv("CORES_PER_CHAIN", "9"))
 discard <- as.integer(Sys.getenv("DISCARD", "100"))
 n_particles <- Sys.getenv("N_PARTICLES", "")
 arm_file <- Sys.getenv("ARM_R", "")
+# PROFILE=1 records fit()'s per-iteration and per-block timings (see fit_arm.R).
+if (Sys.getenv("PROFILE") == "1") options(emc2.sampler_profile = TRUE)
 arm_options <- function() list()
 arm_hook <- function(emc) emc
 if (nzchar(arm_file)) source(arm_file, local = TRUE)
@@ -129,7 +131,9 @@ res <- list(ckpt = ckpt, label = label, seed = seed, iters = iters, discard = di
             half_dirs = half_dirs, moves = moves,
             plan = lapply(last_plan, function(l) if (is.null(l)) NULL else
               list(rounds = l$rounds, rate = l$rate, particle_rate = l$particle_rate, tau = l$tau, tau0 = l$tau0)),
-            n_subjects = n_subjects, p = p)
+            n_subjects = n_subjects, p = p,
+            blocks = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_block_profile() else NULL,
+            iterations = if (Sys.getenv("PROFILE") == "1") EMC2:::.emc_iteration_profile() else NULL)
 saveRDS(res, out)
 k_dir <- which.min(d_dirs$ess_bulk)
 cat(sprintf("%s seed %d: %d iterations (%d scored) | cpu %.0f s (%.2f s/iter/chain) elapsed %.0f s | particles %s\n",

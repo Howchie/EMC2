@@ -72,9 +72,25 @@ mech4 (+ wall fix), mech6 (graded, unbounded), mech7 (graded, bounded = HEAD).
 
 Single seed each; lbaT continuation ESS is small and the halves disagree,
 so these rank mechanisms only where they differ several-fold. N-back 31
-(`$S/bench/C31`): def seeds 8.5 to 9.6 per kCPU-s; `fixed` (mech4) 11.96,
-no HMC bought, no regression; `graded` (mech7) was running at handoff time
-(`$S/bench/C31/graded_1.log`). Phase A references: `$S/bench/P_mech`,
+(`$S/bench/C31`, 1800 iterations):
+
+| arm | lib | wall s | CPU s | slowest-dir ESS | per kCPU-s | per 1000 wall-s |
+|---|---|---|---|---|---|---|
+| def (3 seeds) | mech | 923-945 | 16.8-17.2k | 143-161 | 8.5-9.6 | 15.2-17.2 |
+| fixed (floor/regime/wall fixes) | mech4 | 961 | 17.4k | 208 | 12.0 | 21.6 |
+| graded, bounded (HEAD) | mech7 | 1119 | 19.4k | 207 | 10.6 | 18.5 |
+
+So on the easy fixture the graded build mixes like `fixed` but costs 15%
+more CPU and 20% more wall than `fixed` (still better than def on both).
+That extra is the exploration: every under-measured coordinate runs its
+floor rounds, the collapsed move runs ~0.07 per iteration (108-134 moves
+per chain) and 1000 HMC transitions per chain were tried; the profiled run
+below is the place to see whether the frames built for those rounds are
+the cost. Against the user's rule (a large gain on hard models is worth a
+small cost on easy ones) this is 2x on lbaT for ~20% wall on N-back; the
+exploration rate (`.EMC_ALLOC_ROUND_EVIDENCE / B`) is the knob if that is
+too much, and a cheaper option is to exempt coordinates whose kind already
+has ample pooled evidence from the floor. Phase A references: `$S/bench/P_mech`,
 `$S/bench/P_revert`, `$S/lbaT*`, `$S/bench/A/nback31_fullc_1.log`.
 
 Reading: the graded, bounded build buys log sd(A) rounds in every chain on
