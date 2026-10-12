@@ -968,6 +968,42 @@ test_that("subject likelihood workers preserve results across model families", {
   }
 })
 
+test_that("the shared subject queue gives the serial likelihoods and survives a dead worker", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  fx <- audit_fixture("LBA", n_trials = 100L, n_particles = 3L)
+  ctx <- list(data = rep(list(fx$dadm), 5), model = fx$model)
+  rows <- lapply(seq_len(5), function(j) fx$prop[c(j %% 3L + 1L, 1L), , drop = FALSE])
+  serial <- EMC2:::.emc_wpool_subject_ll(NULL, rows, ctx, source = "shear")$ll
+  pool <- EMC2:::.emc_wpool_start(3L, ctx)
+  skip_if(is.null(pool), "could not start a pool here")
+  on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)), add = TRUE)
+  withr::local_options(list(emc2.worker_queue = TRUE))
+  queue <- EMC2:::.emc_wpool_subject_ll_queue
+  used <- 0L
+  local_mocked_bindings(.emc_wpool_subject_ll_queue = function(...) {
+    used <<- used + 1L
+    queue(...)
+  }, .package = "EMC2")
+  for (k in seq_len(3)) {
+    set.seed(5); seed <- .Random.seed
+    out <- EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, source = "shear")
+    expect_identical(out$ll, serial)
+    expect_identical(.Random.seed, seed)
+    expect_true(out$pool$alive)
+  }
+  expect_identical(used, 3L)
+  expect_length(list.files(pool$dir, pattern = "^shared_"), 0L)
+  # A worker that dies leaves its subjects to the master.
+  pid <- EMC2:::.emc_wpool_job_pid(pool$jobs[[2]])
+  tools::pskill(pid, tools::SIGKILL)
+  deadline <- proc.time()[["elapsed"]] + 20
+  while (EMC2:::.emc_wpool_pid_alive(pid) && proc.time()[["elapsed"]] < deadline) Sys.sleep(0.02)
+  out <- suppressWarnings(EMC2:::.emc_wpool_subject_ll(pool, rows, ctx, source = "shear"))
+  expect_identical(out$ll, serial)
+  expect_false(out$pool$alive)
+})
+
 # Every shear coordinate one round, the collapsed move one round, and every
 # subject with HMC an HMC rate and a particle rate of one half, whatever the
 # measurements say.
