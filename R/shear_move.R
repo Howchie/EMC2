@@ -600,6 +600,7 @@
   for (j in seq_along(emc)) {
     ch <- emc[[j]]
     if (!is.list(ch$shear$plan)) next
+    if (!isTRUE(getOption("emc2.shear_curve", TRUE))) next
     if (!is.null(ch$shear$atlas)) {
       chains <- c(chains, j)
       next
@@ -670,7 +671,8 @@
     ch$shear$curve <- NULL
     plan <- ch$shear$plan
     atlas <- ch$shear$atlas$nodes
-    if (!is.list(plan) || !is.matrix(plan$dirs) || is.null(atlas)) {
+    if (!isTRUE(getOption("emc2.shear_curve", TRUE)) || !is.list(plan) ||
+        !is.matrix(plan$dirs) || is.null(atlas)) {
       emc[[j]] <- ch
       next
     }

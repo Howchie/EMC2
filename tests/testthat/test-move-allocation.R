@@ -402,6 +402,78 @@ test_that("an unmeasured shear coordinate counts at its kind's measured factor",
   expect_equal(ms0$g_fac, rep(EMC2:::.EMC_ALLOC_SHEAR_PRIOR_G, 4))
 })
 
+test_that("measured zero movement is a factor of exactly one, and buys nothing", {
+  p <- 2; n <- 1; k <- 50
+  a <- matrix(stats::rnorm(p * k), p)
+  ch <- list(n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = c("x", "y"),
+             lik_laplace = list(NULL),
+             samples = list(idx = k, theta_mu = a, theta_var = array(diag(2), c(p, p, k)),
+                            alpha = array(a, c(p, 1, k))),
+             shear = list(plan = list(dirs = diag(p),
+                                      last = list(E = c(0, 0, 0, 0), n = c(10L, 0L, 0L, 0L),
+                                                  moved = integer(4)))),
+             alloc = list(window = NULL))
+  withr::local_options(list(emc2.shear_move = TRUE))
+  local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  expect_identical(ms$g_fac[1], 1)
+  # A coordinate at rho 1 whose rounds do not move it is not a kernel the
+  # solver can use: no rounds, no fabricated gain.
+  sol <- EMC2:::.emc_alloc_solve(list(list(kind = "shear", rho = 1, g = 1, cost = 0.05)), 1)
+  expect_identical(sol$x, 0)
+  expect_equal(sol$objective, sol$objective0)
+})
+
+test_that("a regime is a lower bound on one total HMC rate, and identity at rate zero", {
+  tau <- EMC2:::.emc_alloc_tau
+  subj <- list(kind = "subject", rho = c(0.86, 0.5), p = c(0.65, 0.6), c_p = 0.38,
+               h = c(0.18, 0.2), h_dev = c(0.18, 0.2), d_rho = c(0.52, 0.4), c_h = 0.125)
+  u <- list(units = list(list(kind = "shear", rho = 0.84, g = 0.96, cost = 0.16), subj),
+            C_rest = 1, hmc_fixed = 0.01, joint = NULL, r_bar = 0.46, g_floor = 0.1)
+  reg <- EMC2:::.emc_alloc_regime(u, 0.5)
+  expect_identical(reg$units[[2]]$r_min, 0.5)
+  expect_equal(reg$units[[2]]$rho, subj$rho)
+  expect_equal(reg$cost, 0.5 * subj$c_h)
+  # The regime alone: the subject's level is its particle step and the rate.
+  expect_equal(EMC2:::.emc_alloc_level(reg$units[[2]]),
+               subj$rho * subj$p * (1 - 0.5 * (1 - subj$h)))
+  # A supplement x on top runs at the total rate 0.5 + x once: the need at a
+  # target is solved on one factor and priced above the regime's share.
+  need <- EMC2:::.emc_alloc_unit_need(reg$units[[2]], rs = 0.3, max_rounds = 4)
+  tot <- 0.5 + need$x
+  expect_lte(max(subj$rho * (1 - need$q * (1 - subj$p)) * (1 - tot * (1 - subj$h))), 0.3 + 1e-9)
+  expect_equal(need$cost, need$q * subj$c_p + need$x * subj$c_h)
+  # At a target the regime already meets, the plan costs no more than the
+  # particle step alone.
+  need0 <- EMC2:::.emc_alloc_unit_need(reg$units[[2]], rs = 0.6, max_rounds = 4)
+  expect_lte(need0$cost, subj$c_p + 1e-9)
+  expect_lte(max(subj$rho * (1 - need0$q * (1 - subj$p)) * (1 - (0.5 + need0$x) * (1 - subj$h))),
+             0.6 + 1e-9)
+  # A regime at rate zero changes no coordinate, whichever subjects it covers.
+  mixed <- list(units = list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01),
+                             subj, list(kind = "subject", rho = 0.8, h = NULL, c_h = 0,
+                                        d_rho = c(0.2, 0.3))),
+                r_bar = 0.6, g_floor = 0.5)
+  reg0 <- EMC2:::.emc_alloc_regime(mixed, 0)
+  expect_equal(reg0$units[[1]]$rho, 0.9)
+  expect_equal(reg0$cost, 0)
+  # The full solve never schedules more than the executed total rate.
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  expect_lte((if (is.null(sol$regime)) 0 else sol$regime) + sol$x[2], 1 + 1e-9)
+})
+
+test_that("a chain held to shared particle rates is solved at those rates", {
+  fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
+  subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
+               h = c(0.3, 0.3), c_h = 0.2)
+  own <- EMC2:::.emc_alloc_solve(list(fixed, subj), 1)
+  expect_lt(own$q[2], 1)
+  held <- EMC2:::.emc_alloc_solve(list(fixed, replace(subj, "q_fixed", list(1))), 1)
+  expect_identical(held$q[2], 1)
+  expect_equal(held$cost, 1 + 1 * subj$c_p + held$x[2] * subj$c_h)
+  expect_gte(held$cost, own$cost - 1e-9)
+})
+
 test_that("an unmeasured shear coordinate counts at the prior factor, uncapped", {
   ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.976, 0.6), g_fac = c(0.5, 0.9),
              g_measured = c(FALSE, TRUE), C_rest = 1, c_round = 0.05, coll = TRUE,
