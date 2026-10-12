@@ -210,7 +210,8 @@ run_emc <- function(emc, stage, stop_criteria,
         iter <- total_iters_stage + stop_criteria$iter
       }
     } else if (stage %in% c("burn", "adapt") ||
-               (stage == "sample" && is.null(emc[[1L]]$sample_proposals_next))) {
+               (stage == "sample" && (is.null(emc[[1L]]$sample_proposals_next) ||
+                                      .emc_sample_rebuild_due(emc)))) {
       emc <- .emc_laplace_refresh(emc, cores_per_chain * cores_for_chains)
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks

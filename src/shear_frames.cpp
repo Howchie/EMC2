@@ -215,13 +215,24 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
   // and stacked coefficients.
   bool curved = curve.isNotNull();
   arma::mat T;
-  arma::vec mu0;
+  arma::vec mu0, lsd0, lsd_scale;
+  arma::uvec l;
   std::vector<arma::uvec> set_idx, set_q;
   std::vector<arma::mat> set_coef;
   if (curved) {
     Rcpp::List cv(curve.get());
     T = Rcpp::as<arma::mat>(cv["T"]);
     mu0 = Rcpp::as<arma::vec>(cv["mu0"]);
+    // Log-sd coordinates of the curve (R/shear_move.R .emc_shear_curve_coords).
+    if (cv.containsElementNamed("l") && !Rf_isNull(cv["l"])) {
+      Rcpp::IntegerVector ll = cv["l"];
+      l.set_size(ll.size());
+      for (R_xlen_t j = 0; j < ll.size(); ++j) l(j) = ll[j] - 1;
+      if (l.n_elem) {
+        lsd0 = Rcpp::as<arma::vec>(cv["lsd0"]);
+        lsd_scale = Rcpp::as<arma::vec>(cv["lsd_scale"]);
+      }
+    }
     Rcpp::List sets = cv["sets"];
     for (R_xlen_t i = 0; i < sets.size(); ++i) {
       Rcpp::List st = sets[i];
@@ -255,7 +266,13 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
       if (curved) {
         P = prec;
         L = lin;
-        const arma::vec tc = T * (mu1 - mu0);
+        arma::vec tc = T * (mu1 - mu0);
+        if (l.n_elem) {
+          arma::vec tl(l.n_elem);
+          for (arma::uword j = 0; j < l.n_elem; ++j)
+            tl(j) = (0.5 * std::log(V1(l(j), l(j))) - lsd0(j)) / lsd_scale(j);
+          tc = arma::join_cols(tc, tl);
+        }
         for (std::size_t si = 0; si < set_idx.size(); ++si) {
           const arma::rowvec y = shear_features(tc, set_q[si]) * set_coef[si];
           const arma::uword w = p + p * p;

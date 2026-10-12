@@ -383,8 +383,24 @@ test_that("the C++ candidates are the R state, transport and hierarchical terms"
     })
     curve <- list(mu0 = f$mu + 0.1, T = diag(p), q = q, B = B,
                   sets = EMC2:::.emc_shear_curve_sets(B, q))
+    # Curved in the log sds too: the features gain the standardised log sds.
+    l <- c(2L, 1L)
+    B_l <- lapply(B, function(b) {
+      if (is.null(b)) return(NULL)
+      extra <- matrix(rnorm(length(l) * ncol(b$coef), 0, 0.05), length(l))
+      list(coef = rbind(b$coef[1:(1 + p), , drop = FALSE], extra,
+                        b$coef[-(1:(1 + p)), , drop = FALSE]), quad = b$quad)
+    })
+    curve_l <- list(mu0 = f$mu + 0.1, T = diag(p), q = q, l = l,
+                    lsd0 = 0.5 * log(diag(f$V))[l] - 0.2, lsd_scale = c(0.4, 0.7), B = B_l,
+                    sets = EMC2:::.emc_shear_curve_sets(B_l, q))
+    lsd_only <- list(mu0 = f$mu, T = matrix(0, 0, p), q = integer(0), l = l,
+                     lsd0 = curve_l$lsd0, lsd_scale = curve_l$lsd_scale,
+                     B = lapply(B_l, function(b) if (is.null(b)) NULL else
+                       list(coef = b$coef[c(1, 1 + p + seq_along(l)), , drop = FALSE], quad = FALSE)))
+    lsd_only$sets <- EMC2:::.emc_shear_curve_sets(lsd_only$B, integer(0))
     t <- c(-1.3, -0.2, 0.7, 2.1)
-    for (cv in list(NULL, curve)) for (w in list(NULL, walls))
+    for (cv in list(NULL, curve, curve_l, lsd_only)) for (w in list(NULL, walls))
       for (v in list(f$u, replace(f$u, p + seq_len(p), 0))) {
         cand <- EMC2:::.emc_shear_candidates(cur, v, t, f$alpha, fits, prior, spec, cv, w)
         for (i in seq_along(t)) {
@@ -392,7 +408,8 @@ test_that("the C++ candidates are the R state, transport and hierarchical terms"
           d <- exp(u[p + seq_len(p)])
           mu1 <- f$mu + u[seq_len(p)]
           new <- EMC2:::.emc_shear_state(mu1, f$V * outer(d, d),
-                                         EMC2:::.emc_shear_fits_at(list(packed = EMC2:::.emc_shear_pack(fits, p), curve = cv), mu1),
+                                         EMC2:::.emc_shear_fits_at(list(packed = EMC2:::.emc_shear_pack(fits, p), curve = cv),
+                                                                   mu1, f$V * outer(d, d)),
                                          prior, spec)
           tr <- if (is.null(new)) NULL else EMC2:::.emc_shear_transport(f$alpha, cur, new, w)
           if (is.null(tr) || !all(tr$ok)) { expect_null(cand[[i]]); next }
@@ -661,8 +678,9 @@ test_that("the shear move leaves the joint posterior invariant with the group va
 
 test_that("curved frames with arbitrary coefficients leave the joint posterior invariant", {
   # The diagonal hierarchy above, with each subject's likelihood fit an
-  # arbitrary quadratic function of the group mean; the mean steps then take
-  # the full map and must carry its Jacobian (the broken control drops it).
+  # arbitrary quadratic function of the group mean (and then also linear in
+  # the group log sds); every step then takes the full map and must carry its
+  # Jacobian (the broken control drops it).
   p <- 2; n <- 5
   S <- c(2, 1.5); m0 <- 0; P0 <- 0.5; shape <- 2; rate <- 0.3
   set.seed(21)
@@ -718,7 +736,17 @@ test_that("curved frames with arbitrary coefficients leave the joint posterior i
   })
   curve <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, B = B,
                 sets = EMC2:::.emc_shear_curve_sets(B, q))
-  for (broken in c(FALSE, TRUE)) {
+  l <- seq_len(p)
+  B_l <- lapply(B, function(b) list(
+    coef = rbind(b$coef[1:(1 + p), , drop = FALSE],
+                 matrix(rnorm(p * ncol(b$coef), 0, 0.3), p), b$coef[-(1:(1 + p)), , drop = FALSE]),
+    quad = b$quad))
+  curve_l <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, l = l,
+                  lsd0 = colMeans(lsd), lsd_scale = apply(lsd, 2, sd), B = B_l,
+                  sets = EMC2:::.emc_shear_curve_sets(B_l, q))
+  for (case in list(list(curve_l, FALSE), list(curve, FALSE), list(curve, TRUE))) {
+    curve <- case[[1]]
+    broken <- case[[2]]
     if (broken) {
       candidates <- EMC2:::.emc_shear_candidates
       local_mocked_bindings(.emc_shear_candidates = function(...) {
