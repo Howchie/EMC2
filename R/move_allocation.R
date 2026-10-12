@@ -609,7 +609,10 @@
   # rho_i (1 - q (1 - p_i)) (1 - r (1 - h_i)) <= min(rho*, level_i) on every
   # coordinate (<= rho* under refresh, with r >= 1 - q); then the cheapest q.
   rho <- u$rho
-  level <- .emc_alloc_level(u)
+  # The floor is the subject's particle step alone: a regime's HMC rate is
+  # bought for the group, and with it a subject may stand its particle step
+  # down where the HMC moves it at least as well.
+  level <- .emc_alloc_subject_base(u)
   qs <- if (is.null(u$p) || is.null(u$h)) 1 else if (!is.null(u$q_fixed)) u$q_fixed else
     .EMC_ALLOC_PARTICLE_RATES
   r_min <- if (is.null(u$h) || is.null(u$r_min)) 0 else u$r_min
@@ -1027,10 +1030,16 @@
 
 # The group coordinates' rho when the subjects' deviation autocorrelation
 # moves by ratio from the measured one: rho_k' = f_k + (rho_k - f_k) ratio.
+# Where the subjects slow down (ratio > 1) the extrapolation saturates
+# instead, 1 - rho_k' = (1 - rho_k) exp(-(rho_k - f_k)(ratio - 1)/(1 - rho_k)):
+# the same slope at the measured plan, never above the line and never at one,
+# so no plan is priced as a coordinate that never mixes.
 .emc_alloc_credit <- function(units, g_floor, ratio) {
   for (k in seq_along(g_floor)) {
     x <- units[[k]]
-    units[[k]]$rho <- min(1, g_floor[k] + (x$rho - g_floor[k]) * ratio)
+    s <- x$rho - g_floor[k]
+    units[[k]]$rho <- if (ratio <= 1 || x$rho >= 1) min(1, g_floor[k] + s * ratio) else
+      1 - (1 - x$rho) * exp(-s * (ratio - 1) / (1 - x$rho))
   }
   units
 }
@@ -1095,7 +1104,15 @@
   own <- units
   own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio)
   own <- solve(hold(own, rates$q))
-  kept <- solve(hold(units, rep(1, length(units))))
+  # Every particle step kept, the group credited at those rates and the
+  # plan's HMC rates (keeping the particle steps need not make up for HMC
+  # the plan stood down).
+  all_q <- rep(1, length(units))
+  kept <- units
+  ratio_k <- .emc_alloc_dev_ratio(units, all_q, rates$r)
+  if (is.finite(ratio_k))
+    kept[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio_k)
+  kept <- solve(hold(kept, all_q))
   best <- if (isTRUE(own$objective < kept$objective)) own else kept
   best$regime <- sol$regime
   best

@@ -738,6 +738,41 @@ test_that("the group credit follows the subjects' joint kernel rates, anchored a
   # The plan's group coordinate was solved at the movement its rates give.
   credited <- EMC2:::.emc_alloc_credit(u$units[1], u$g_floor, r_dev)[[1]]$rho
   expect_lte(EMC2:::.emc_alloc_tau(credited * EMC2:::.emc_alloc_factor(0.7, sol$x[1], 0.7)),
-             sol$tau + 1e-6)
+             sol$tau * (1 + 1e-6))
   expect_gte(sol$objective, raw$objective - 1e-9)
+})
+
+test_that("a regime's HMC rate does not hold a subject's particle step", {
+  # HMC at rate 1 moves this subject better than its particle step does, so
+  # at a target HMC alone reaches (rho h) the particle step stands down,
+  # although the regime's level (both kernels) is lower still.
+  u <- list(kind = "subject", rho = c(0.9, 0.8), p = c(0.7, 0.7), c_p = 1,
+            h = c(0.5, 0.5), c_h = 0.2, r_min = 1)
+  target <- max(u$rho * u$h)
+  expect_lt(max(EMC2:::.emc_alloc_level(u)), target)
+  need <- EMC2:::.emc_alloc_unit_need(u, rs = target, max_rounds = 4)
+  expect_true(is.finite(need$cost))
+  expect_equal(need$q, 0)
+  expect_equal(need$x, 0)
+  # A subject whose HMC moves it worse than its particle step keeps it.
+  w <- u; w$h <- c(0.95, 0.95)
+  need_w <- EMC2:::.emc_alloc_unit_need(w, rs = max(EMC2:::.emc_alloc_subject_base(w)),
+                                        max_rounds = 4)
+  expect_gt(need_w$q, 0)
+})
+
+test_that("the group credit saturates below one when the subjects slow", {
+  credit <- function(rho, f, ratio)
+    EMC2:::.emc_alloc_credit(list(list(kind = "fixed", rho = rho)), f, ratio)[[1]]$rho
+  expect_equal(credit(0.94, 0.6, 1), 0.94)
+  expect_equal(credit(0.94, 0.6, 0.7), 0.6 + 0.34 * 0.7)
+  for (ratio in c(1.01, 1.3, 2)) {
+    r <- credit(0.94, 0.6, ratio)
+    expect_lt(r, 1)
+    expect_gt(r, 0.94)
+    expect_lte(r, 0.6 + 0.34 * ratio)
+  }
+  # The slope at the measured plan is the line's.
+  h <- 1e-6
+  expect_equal((credit(0.7, 0.3, 1 + h) - 0.7) / h, 0.4, tolerance = 1e-4)
 })
