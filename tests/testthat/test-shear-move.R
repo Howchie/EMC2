@@ -1172,3 +1172,20 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   ch <- rebuild(ch, "burn", 2L, 1L, 1)
   expect_equal(ch$shear$plan$last$n[sd_k], rep(2L, p))
 })
+
+test_that("atlas nodes go to the subjects carrying the fixed frames' orbit spread", {
+  local_mocked_bindings(
+    .emc_shear_context = function(sampler) list(packed = NULL),
+    .emc_shear_orbit_spread = function(ch, idx, ks, fits_of, n_cores) cbind(ch$spread),
+    .package = "EMC2")
+  pick <- function(spread, ks = 1L)
+    EMC2:::.emc_shear_atlas_subjects(list(n_subjects = length(spread), spread = spread),
+                                     1:10, ks, 1L)
+  # Widest first until the share is reached, plus any subject whose
+  # likelihood fails along the orbit.
+  expect_identical(pick(c(1, 50, 0.1, 40, Inf)), c(2L, 4L, 5L))
+  expect_identical(pick(c(10, 10, 10, 10)), 1:4)
+  expect_identical(pick(c(0, 0, 0)), integer(0))
+  expect_identical(pick(rep(Inf, 3)), 1:3)
+  expect_identical(pick(c(1, 2), ks = integer(0)), 1:2)
+})

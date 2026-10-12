@@ -128,6 +128,8 @@
 .EMC_SHEAR_ATLAS_PER_COEF <- 3
 .EMC_SHEAR_ATLAS_PENALTY <- 10
 .EMC_SHEAR_ATLAS_RADIUS <- 12
+# The share of the fixed frames' summed orbit spread whose subjects get nodes.
+.EMC_SHEAR_ATLAS_SHARE <- 0.9
 # Initial step scale in posterior sds of the coordinate, and the bounds every
 # adapted scale stays in.
 .EMC_SHEAR_STEP0 <- 2.5
@@ -300,21 +302,18 @@
   if (!length(idx)) return(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_shear_set_plan(emc[[j]], idx, stage)
   emc <- .emc_shear_atlas_add(emc, idx, n_cores, stage)
-  emc <- .emc_shear_build_curves(emc, idx)
+  emc <- .emc_shear_build_curves(emc, idx, stage)
   for (j in seq_along(emc)) emc[[j]] <- .emc_shear_curve_validate(emc[[j]], idx, n_cores)
   emc
 }
 
-# A curved subject keeps its curve only where its orbit contribution along
-# the curve's coordinates (its slow mean directions and log sds), at the
-# current state, varies less than under the block's fixed frame: the
-# subject's own likelihood at the transported points decides, so a subject
-# whose node fits the regression cannot smooth (an unstable likelihood mode)
-# stays on the fixed frame. Each frame is a function of the group state, so
-# the choice, fixed for the block, keeps the move exact.
-.emc_shear_curve_validate <- function(ch, idx, n_cores = 1L) {
-  cv <- ch$shear$curve
-  if (is.null(cv) || !(length(cv$q) || length(cv$l))) return(ch)
+# Each subject's orbit spread along the plan's coordinates ks at the current
+# state: the variance over the pilot grid of its contribution to the orbit's
+# log density (likelihood, hierarchical density and frame Jacobian at the
+# transported point), summed over ks, one column per entry of fits_of (the
+# fits a path state's frames use). A frame that fails sets its column to
+# Inf, as does a subject whose likelihood fails.
+.emc_shear_orbit_spread <- function(ch, idx, ks, fits_of, n_cores = 1L) {
   s <- ch$samples
   i <- s$idx
   p <- ch$n_pars
@@ -322,13 +321,12 @@
   mu <- as.numeric(s$theta_mu[, i])
   V <- s$theta_var[, , i]
   alpha <- matrix(s$alpha[, , i], p)
-  ctx <- .emc_shear_context(ch)
-  if (is.null(ctx$curve)) return(ch)
+  spec <- .emc_shear_v_spec(ch)
   grid <- .EMC_SHEAR_PILOT_GRID
   g0 <- which(grid == 0)
   par_names <- rownames(s$alpha)
-  spread <- matrix(0, n, 2L)
-  for (k in c(cv$q, p + cv$l)) {
+  spread <- matrix(0, n, length(fits_of))
+  for (k in ks) {
     path <- .emc_shear_coord_path(ch, idx, k, mu, V, grid)
     if (is.null(path)) next
     for (g in seq_along(grid))
@@ -338,11 +336,9 @@
       z <- backsolve(st$chol, a - st$mu, transpose = TRUE)
       -0.5 * sum(z^2) - sum(log(diag(st$chol)))
     }
-    for (kind in 1:2) {
-      states <- lapply(path, function(st) {
-        fits <- if (kind == 1L) .emc_shear_fits_at(ctx, st$mu, st$V) else ctx$packed
-        .emc_shear_state(st$mu, st$V, fits, ch$prior, ctx$spec)
-      })
+    for (kind in seq_along(fits_of)) {
+      states <- lapply(path, function(st)
+        .emc_shear_state(st$mu, st$V, fits_of[[kind]](st), ch$prior, spec))
       if (any(vapply(states, is.null, logical(1)))) {
         spread[, kind] <- Inf
         next
@@ -368,6 +364,25 @@
       }
     }
   }
+  spread
+}
+
+# A curved subject keeps its curve only where its orbit contribution along
+# the curve's coordinates (its slow mean directions and log sds), at the
+# current state, varies less than under the block's fixed frame: the
+# subject's own likelihood at the transported points decides, so a subject
+# whose node fits the regression cannot smooth (an unstable likelihood mode)
+# stays on the fixed frame. Each frame is a function of the group state, so
+# the choice, fixed for the block, keeps the move exact.
+.emc_shear_curve_validate <- function(ch, idx, n_cores = 1L) {
+  cv <- ch$shear$curve
+  if (is.null(cv) || !(length(cv$q) || length(cv$l))) return(ch)
+  ctx <- .emc_shear_context(ch)
+  if (is.null(ctx$curve)) return(ch)
+  spread <- .emc_shear_orbit_spread(
+    ch, idx, c(cv$q, ch$n_pars + cv$l),
+    list(function(st) .emc_shear_fits_at(ctx, st$mu, st$V), function(st) ctx$packed),
+    n_cores)
   drop <- which(!(spread[, 1L] < spread[, 2L]))
   if (!length(drop)) return(ch)
   B <- cv$B
@@ -488,7 +503,11 @@
 # slowest first: the log-sd coordinates the curved frames follow. Frames
 # fitted at one group state go stale as such a coordinate travels, which no
 # pilot at the current state can show, so the measurement alone decides.
-.emc_shear_curve_lsd <- function(chain, idx) {
+# Only the sample stage follows them: the discarded stages refit every
+# subject's approximation each block, and their log sds travel too far for
+# an atlas to settle.
+.emc_shear_curve_lsd <- function(chain, idx, stage) {
+  if (!identical(stage, "sample")) return(integer(0))
   rec <- chain$shear$plan$last
   if (!is.list(rec) || is.null(rec$n) || length(idx) < 2L) return(integer(0))
   p <- chain$n_pars
@@ -651,6 +670,27 @@
   f
 }
 
+# The subjects whose nodes this block fits: those carrying the given share
+# of the summed orbit spread along the curve coordinates ks under the
+# block's fixed frames, widest first, together with any whose likelihood
+# fails along the orbit. A subject whose orbit contribution is flat along
+# every curve coordinate cannot narrow the orbit, curved or not. Without
+# coordinates to measure every subject is fitted.
+.emc_shear_atlas_subjects <- function(ch, idx, ks, n_cores) {
+  n <- ch$n_subjects
+  if (!length(ks)) return(seq_len(n))
+  packed <- .emc_shear_context(ch)$packed
+  spread <- .emc_shear_orbit_spread(ch, idx, ks, list(function(st) packed), n_cores)[, 1L]
+  wild <- which(!is.finite(spread))
+  if (length(wild) == n) return(seq_len(n))
+  fin <- setdiff(seq_len(n), wild)
+  total <- sum(spread[fin])
+  if (!(total > 0)) return(wild)
+  o <- fin[order(spread[fin], decreasing = TRUE)]
+  k <- which(cumsum(spread[o]) >= .EMC_SHEAR_ATLAS_SHARE * total)[1L]
+  sort(c(wild, o[seq_len(k)]))
+}
+
 # Add this block's nodes to every chain's atlas: each subject's likelihood
 # approximation at its conditional mode under the group state (mean and
 # covariance) of one of the block's draws, stored against that state. The
@@ -661,7 +701,9 @@
 # sd's rounds are measured ineffective (the curves follow those log sds). In
 # the discarded stages it starts over when the group log sds drift too far
 # from where it started, which keeps it to the region the chain is in. The
-# sample stage tops the atlas up to the nodes its terms need.
+# sample stage tops the atlas up to the nodes its terms need. Nodes go only
+# to the subjects whose orbits the curve coordinates move
+# (.emc_shear_atlas_subjects).
 .emc_shear_atlas_add <- function(emc, idx, n_cores, stage) {
   chains <- integer(0)
   mean_of <- logical(length(emc))
@@ -684,7 +726,7 @@
     emc[[j]] <- ch
     # Nodes are fitted only while a curve wants them; an atlas no curve uses
     # this block keeps its nodes for when one does.
-    if (mean_of[j] || length(.emc_shear_curve_lsd(ch, idx))) chains <- c(chains, j)
+    if (mean_of[j] || length(.emc_shear_curve_lsd(ch, idx, stage))) chains <- c(chains, j)
   }
   if (!length(chains)) return(emc)
   jobs <- NULL
@@ -697,20 +739,24 @@
                            max(abs(lsd - atlas$lsd_ref)) > .EMC_SHEAR_ATLAS_REANCHOR))
       atlas <- list(lsd_ref = lsd, nodes = vector("list", ch$n_subjects))
     atlas$mean <- mean_of[j]
-    have <- stats::median(vapply(atlas$nodes, function(a)
+    q <- if (atlas$mean) .emc_shear_curve_dirs(ch, idx) else integer(0)
+    l <- .emc_shear_curve_lsd(ch, idx, stage)
+    subs <- .emc_shear_atlas_subjects(ch, idx, c(q, p + l), n_cores)
+    ch$shear$atlas <- atlas
+    emc[[j]] <- ch
+    if (!length(subs)) next
+    have <- stats::median(vapply(atlas$nodes[subs], function(a)
       if (is.null(a)) 0L else ncol(a$mu), integer(1)))
     need <- .EMC_SHEAR_ATLAS_NODES
     if (identical(stage, "sample")) {
-      q <- if (atlas$mean) .emc_shear_curve_dirs(ch, idx) else integer(0)
-      nf <- 1L + (if (atlas$mean) p else 0L) + length(.emc_shear_curve_lsd(ch, idx)) +
+      nf <- 1L + (if (atlas$mean) p else 0L) + length(l) +
         length(q) * (length(q) + 1L) / 2
       need <- max(need, min(.EMC_SHEAR_ATLAS_TOPUP, .EMC_SHEAR_ATLAS_PER_COEF * nf - have))
     }
     take <- unique(round(seq(min(idx), max(idx), length.out = need)))
-    ch$shear$atlas <- atlas
-    emc[[j]] <- ch
-    jobs <- rbind(jobs, expand.grid(chain = j, subject = seq_len(ch$n_subjects), draw = take))
+    jobs <- rbind(jobs, expand.grid(chain = j, subject = subs, draw = take))
   }
+  if (is.null(jobs)) return(emc)
   emc <- .emc_prepare_chain_rng(emc)
   fits <- .emc_with_preserved_rng(auto_mclapply(seq_len(nrow(jobs)), function(k) {
     j <- jobs$chain[k]
@@ -746,7 +792,7 @@
 # window sds), quadratic in the slow mean directions once the atlas holds
 # enough nodes for it, with the quadratic coefficients penalised. Subjects
 # without enough nodes keep the block's likelihood fit.
-.emc_shear_build_curves <- function(emc, idx) {
+.emc_shear_build_curves <- function(emc, idx, stage) {
   for (j in seq_along(emc)) {
     ch <- emc[[j]]
     ch$shear$curve <- NULL
@@ -762,7 +808,7 @@
     mu0 <- as.numeric(ch$samples$theta_mu[, i])
     T <- if (isTRUE(atlas$mean)) tryCatch(solve(plan$dirs), error = function(e) NULL) else
       matrix(0, 0L, p)
-    l <- .emc_shear_curve_lsd(ch, idx)
+    l <- .emc_shear_curve_lsd(ch, idx, stage)
     if (is.null(T) || (nrow(T) == 0L && !length(l))) {
       emc[[j]] <- ch
       next
