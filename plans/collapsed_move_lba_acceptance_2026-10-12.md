@@ -70,6 +70,77 @@ likelihood workers (inner chains are C++ in the chain process; one
 likelihood round per outer correction is the budget), and one default
 sampler with no options framework.
 
+## The sampler, for context
+
+Model: y_s | a_s ~ L_s (per-subject likelihood over p parameters on an
+unconstrained scale, e.g. log A, log B, log t0); a_s ~ N(mu, V) across
+subjects; priors on mu and V (V full, inverse-Wishart style, or a
+diagonal/factor structure). Three chains run in parallel, each with its own
+pool of likelihood workers (9 per chain here); every move that evaluates
+likelihoods is a batch over subjects on that pool. One iteration of one
+chain, in order (R/sampling.R):
+
+1. **Gibbs on the group level.** (mu, V) | {a_s} by their conjugate
+   conditionals.
+2. **Particle (importance) step per subject.** For each subject, K = 50 sqrt(p)
+   particles from a mixture of its own adapted proposal and the conditional
+   prior, weighted by L_s and N(a_s | mu, V), one resampled (an
+   independence Metropolis step on a_s, exact). Each subject runs it with
+   probability q_s set by the allocator (default q_s = 1; it stands down
+   only where HMC replaces it).
+3. **Ensemble group update.** A move of (mu, V) using draws pooled across
+   chains as an ensemble proposal, with the subjects fixed; exact by
+   Metropolis.
+4. **Shear rounds (the frame-transport moves).** Each round steps one group
+   coordinate: a mean direction d (from the Gibbs-conditional covariance's
+   slow eigen-directions) or one log sd. The subjects are not fixed: each is
+   transported in its conditional frame, a_s = m_s(mu, V) + R_s(mu, V)^-1 r_s
+   with r_s fixed, where N(m_s, (R_s' R_s)^-1) is the subject's conditional
+   posterior under a quadratic surrogate Lhat_s of its likelihood (a Laplace
+   fit at the conditional mode, or on curved ridges a per-subject atlas of
+   conditional-mode fits regressed on the slow directions so the frame
+   follows the ridge as mu moves). Declared bounds enter as half-space walls
+   with a truncated-quantile map along the wall normal. Eight candidates
+   (Tjelmeland multi-proposal) are scored with one likelihood round; the
+   Jacobian of the transport makes the step exact. The allocator sets the
+   expected number of rounds per direction per iteration (0 to 4).
+5. **Collapsed move** (the subject of this document): a move of the whole
+   group state with the subjects transported as in 4, proposed by HMC on the
+   Laplace-collapsed group posterior and corrected with one likelihood
+   round. Allocated like a round; currently 0 on LBA.
+6. **Pooled parameters** (if the design declares any): a move of parameters
+   shared across subjects, one likelihood round.
+7. **Subject HMC round.** For each subject with an allocated rate r_s, with
+   probability r_s one HMC transition on a_s | mu, V (gradient by finite
+   differences of L_s on the worker, whitened in the subject's frame, step
+   size from a bracketed warm-up and pilots). Under the "refresh" option a
+   subject must be refreshed by step 2 or step 7 each iteration (q_s + r_s
+   >= 1) and the cheaper kernel that meets the target is chosen; by default
+   the particle step is a floor and HMC is only added on top.
+
+Allocation (R/move_allocation.R): every move is priced by its measured CPU
+per use and its measured effect on the lag-one autocorrelation of each
+coordinate (group means along the shear directions, group log sds, each
+subject's whitened coordinates), from expected squared jumps against the
+pooled production variance. At each production rebuild (every 100
+iterations, on an increasingly rare schedule) the plan minimises
+max over coordinates of tau x cost with tau = (1 + rho) / (1 - rho), over
+rounds per direction, collapsed moves, subject HMC rates and particle rates,
+with pilots for subjects lacking HMC evidence. Coordinates no move can lower
+no longer bound the target (changed 2026-10-11). The lag-one surrogate is an
+AR(1) model and understates the integrated time on slow directions.
+
+Stages: pre-burn, burn (mode-start from a batched Hessian at the Laplace
+mode, random-walk steps, stop on mean R-hat), adapt (builds the subjects'
+adapted proposals), sample (production, stop rule on R-hat < 1.1 and
+minimum ESS over up to 20 tries of 100 iterations).
+
+What the pieces are for: 1 and 3 move the group given the subjects; 2 and 7
+move the subjects given the group; 4 and 5 are the only moves that change a
+group coordinate and the subjects together, which is what a hierarchical
+funnel needs. On lbaT, 4 moves the log sd of A only a little per round
+(factor near one) and 5 never accepts.
+
 ## Prompt for an expert review
 
 You are reviewing a hierarchical MCMC sampler for cognitive models (EMC2,
