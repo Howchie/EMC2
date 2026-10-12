@@ -408,8 +408,7 @@
   x$jump <- numeric(2L * p)
   cur <- x$cur
   r <- matrix(vapply(seq_len(n), function(s) {
-    f <- cur$frames[[s]]
-    drop(f$R %*% (x$alpha[, s] - f$m))
+    drop(cur$fm$R[, , s] %*% (x$alpha[, s] - cur$fm$m[, s]))
   }, numeric(p)), p)
   phi0 <- .emc_collapsed_to_phi(cur$mu, cur$V, ctx$chart)
   inner <- collapsed_trajectories_cpp(phi0, plan$C, plan$eps, .EMC_COLLAPSED_INNER,

@@ -3,6 +3,7 @@
 // (H_s + V^-1)^-1 (lin_s + V^-1 mu) and log|R_s|, from the likelihood
 // approximations stacked as a cube (a zero slice is a subject without one).
 #include <RcppArmadillo.h>
+#include <vector>
 
 // [[Rcpp::export]]
 Rcpp::List emc_shear_frames_cpp(const arma::cube& prec, const arma::mat& lin,
@@ -92,20 +93,24 @@ static bool shear_qmap(double z, double c0, double c1, double& z1, double& log_j
 // quantile map between the conditionals given it. Returns the moved
 // subjects; per subject the wall map's log Jacobian less the plain one's
 // (zero without a wall), whether the map was computed, and |R1 (a1 - m1)|^2.
-// [[Rcpp::export]]
-Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
-                                   const arma::mat& m0, const arma::cube& R0,
-                                   const arma::vec& logdet0,
-                                   const arma::mat& m1, const arma::cube& R1,
-                                   const arma::vec& logdet1,
-                                   const Rcpp::LogicalVector& has,
-                                   const arma::mat& U, const arma::vec& b,
-                                   const arma::cube& Uperp) {
+struct ShearTransport {
+  arma::mat alpha;
+  arma::vec jac, r1sq;
+  std::vector<bool> ok;
+};
+
+static void shear_transport(const arma::mat& alpha,
+                            const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0,
+                            const arma::mat& m1, const arma::cube& R1, const arma::vec& logdet1,
+                            const Rcpp::LogicalVector& has, const arma::mat& U,
+                            const arma::vec& b, const arma::cube& Uperp, ShearTransport& res) {
   const arma::uword p = alpha.n_rows, n = alpha.n_cols;
   const bool walls = has.size() == (R_xlen_t) n;
-  arma::mat out(p, n);
-  arma::vec jac(n, arma::fill::zeros), r1sq(n);
-  Rcpp::LogicalVector ok(n, true);
+  res.alpha.set_size(p, n);
+  res.jac.zeros(n);
+  res.r1sq.set_size(n);
+  res.ok.assign(n, true);
+  arma::mat& out = res.alpha;
   arma::vec a, y0, y1, Qu0, Qu1, u, d;
   arma::mat W0, W1, S0, S1, L0, L1, Up;
   for (arma::uword s = 0; s < n; ++s) {
@@ -124,7 +129,7 @@ Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
       S0 = W0.t() * W0;
       S1 = W1.t() * W1;
       if (!arma::chol(L0, S0, "lower") || !arma::chol(L1, S1, "lower")) {
-        ok[s] = false; out.col(s).fill(NA_REAL); continue;
+        res.ok[s] = false; out.col(s).fill(NA_REAL); continue;
       }
       y0 = Up.t() * (a - m0.col(s));
       y1 = L1 * lower_solve(L0, y0);
@@ -139,19 +144,162 @@ Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
       const double w1 = (b(s) - mc1) / sc1;
       double z1 = NA_REAL, lj = NA_REAL;
       if (!std::isfinite(z0) || !shear_qmap(z0, w0, w1, z1, lj)) {
-        ok[s] = false; out.col(s).fill(NA_REAL); continue;
+        res.ok[s] = false; out.col(s).fill(NA_REAL); continue;
       }
       const double t1 = mc1 + sc1 * z1;
-      if (!std::isfinite(t1)) { ok[s] = false; out.col(s).fill(NA_REAL); continue; }
+      if (!std::isfinite(t1)) { res.ok[s] = false; out.col(s).fill(NA_REAL); continue; }
       out.col(s) = m1.col(s) + Up * y1 + (t1 - arma::dot(u, m1.col(s))) * u;
       const double wall_jac = arma::sum(arma::log(L1.diag())) - arma::sum(arma::log(L0.diag())) +
         lj - std::log(sc0) + std::log(sc1);
-      jac(s) = wall_jac - (logdet0(s) - logdet1(s));
+      res.jac(s) = wall_jac - (logdet0(s) - logdet1(s));
     }
     d = Rb * (out.col(s) - m1.col(s));
-    r1sq(s) = arma::dot(d, d);
-    if (!out.col(s).is_finite()) ok[s] = false;
+    res.r1sq(s) = arma::dot(d, d);
+    if (!out.col(s).is_finite()) res.ok[s] = false;
   }
-  return Rcpp::List::create(Rcpp::Named("alpha") = out, Rcpp::Named("jac") = jac,
-                            Rcpp::Named("ok") = ok, Rcpp::Named("r1sq") = r1sq);
+}
+
+// [[Rcpp::export]]
+Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
+                                   const arma::mat& m0, const arma::cube& R0,
+                                   const arma::vec& logdet0,
+                                   const arma::mat& m1, const arma::cube& R1,
+                                   const arma::vec& logdet1,
+                                   const Rcpp::LogicalVector& has,
+                                   const arma::mat& U, const arma::vec& b,
+                                   const arma::cube& Uperp) {
+  ShearTransport res;
+  shear_transport(alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp, res);
+  return Rcpp::List::create(Rcpp::Named("alpha") = res.alpha, Rcpp::Named("jac") = res.jac,
+                            Rcpp::Named("ok") = Rcpp::wrap(res.ok), Rcpp::Named("r1sq") = res.r1sq);
+}
+
+// Quadratic features of t over the directions q (0-based), as
+// .emc_shear_atlas_features: 1, t, then the upper triangle (with diagonal)
+// of t[q] t[q]' by columns.
+static arma::rowvec shear_features(const arma::vec& t, const arma::uvec& q) {
+  const arma::uword nq = q.n_elem, nt = t.n_elem;
+  arma::rowvec f(1 + nt + nq * (nq + 1) / 2);
+  f(0) = 1.0;
+  for (arma::uword i = 0; i < nt; ++i) f(1 + i) = t(i);
+  arma::uword k = 1 + nt;
+  for (arma::uword c = 0; c < nq; ++c)
+    for (arma::uword r = 0; r <= c; ++r) f(k++) = t(q(r)) * t(q(c));
+  return f;
+}
+
+// The candidates of one shear round (R/shear_move.R .emc_shear_candidates):
+// for each offset t[k] the group state moves by u = t[k] v (mean part, then
+// log-sd part), every subject's likelihood approximation is evaluated there
+// (the curved frames' regression when curve is given), the frames are
+// rebuilt and the subjects transported from the current frames (m0, R0).
+// Per candidate: whether it is valid, the moved subjects, the new frames
+// (m, R, logdet), the inverse and upper Cholesky factor of the moved V, the
+// summed log N(a_s | mu, V) of the moved subjects and the transport's log
+// Jacobian (frames plus walls, without the V-prior term), with the walls'
+// part of it (wall maps less the plain maps they replace) separately.
+// [[Rcpp::export]]
+Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
+                                    const arma::mat& alpha, const arma::vec& mu,
+                                    const arma::mat& V,
+                                    const arma::mat& m0, const arma::cube& R0,
+                                    const arma::vec& logdet0,
+                                    const arma::cube& prec, const arma::mat& lin,
+                                    Rcpp::Nullable<Rcpp::List> curve,
+                                    const Rcpp::LogicalVector& has,
+                                    const arma::mat& U, const arma::vec& b,
+                                    const arma::cube& Uperp) {
+  const arma::uword p = alpha.n_rows, n = alpha.n_cols, K = t.n_elem;
+  const double logdet0_sum = arma::accu(logdet0);
+  // The curved frames: per feature set its subjects, quadratic directions
+  // and stacked coefficients.
+  bool curved = curve.isNotNull();
+  arma::mat T;
+  arma::vec mu0;
+  std::vector<arma::uvec> set_idx, set_q;
+  std::vector<arma::mat> set_coef;
+  if (curved) {
+    Rcpp::List cv(curve.get());
+    T = Rcpp::as<arma::mat>(cv["T"]);
+    mu0 = Rcpp::as<arma::vec>(cv["mu0"]);
+    Rcpp::List sets = cv["sets"];
+    for (R_xlen_t i = 0; i < sets.size(); ++i) {
+      Rcpp::List st = sets[i];
+      arma::uvec idx = Rcpp::as<arma::uvec>(st["idx"]) - 1;
+      Rcpp::IntegerVector qq = st["q"];
+      arma::uvec q(qq.size());
+      for (R_xlen_t j = 0; j < qq.size(); ++j) q(j) = qq[j] - 1;
+      set_idx.push_back(idx);
+      set_q.push_back(q);
+      set_coef.push_back(Rcpp::as<arma::mat>(st["coef"]));
+    }
+  }
+  Rcpp::List out(K);
+  arma::cube P(prec);
+  arma::mat L(lin);
+  arma::mat m1(p, n), Rs, Q, cholV, Ri, Vi;
+  arma::cube R1(p, p, n);
+  arma::vec logdet1(n), rhs;
+  arma::mat Z;
+  ShearTransport tr;
+  for (arma::uword k = 0; k < K; ++k) {
+    const arma::vec u = t(k) * v;
+    const arma::vec mu1 = mu + u.head(p);
+    const arma::vec d = arma::exp(u.tail(p));
+    const arma::mat V1 = V % (d * d.t());
+    bool ok = arma::chol(cholV, V1);
+    if (ok) {
+      Ri = upper_solve(cholV, arma::eye(p, p));
+      Vi = Ri * Ri.t();
+      const arma::vec Vi_mu = Vi * mu1;
+      if (curved) {
+        P = prec;
+        L = lin;
+        const arma::vec tc = T * (mu1 - mu0);
+        for (std::size_t si = 0; si < set_idx.size(); ++si) {
+          const arma::rowvec y = shear_features(tc, set_q[si]) * set_coef[si];
+          const arma::uword w = p + p * p;
+          for (arma::uword j = 0; j < set_idx[si].n_elem; ++j) {
+            const arma::uword s = set_idx[si](j);
+            const arma::uword off = j * w;
+            for (arma::uword r = 0; r < p; ++r) L(r, s) = y(off + r);
+            arma::mat Ps(p, p);
+            for (arma::uword c = 0; c < p * p; ++c) Ps(c) = y(off + p + c);
+            P.slice(s) = 0.5 * (Ps + Ps.t());
+          }
+        }
+      }
+      const arma::cube& Pk = curved ? P : prec;
+      const arma::mat& Lk = curved ? L : lin;
+      for (arma::uword s = 0; s < n && ok; ++s) {
+        Q = Pk.slice(s) + Vi;
+        if (!arma::chol(Rs, Q)) { ok = false; break; }
+        R1.slice(s) = Rs;
+        rhs = Lk.col(s) + Vi_mu;
+        m1.col(s) = upper_solve(Rs, upper_t_solve(Rs, rhs));
+        logdet1(s) = arma::sum(arma::log(Rs.diag()));
+      }
+    }
+    if (!ok) {
+      out[k] = Rcpp::List::create(Rcpp::Named("ok") = false);
+      continue;
+    }
+    shear_transport(alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp, tr);
+    bool all_ok = tr.alpha.is_finite();
+    for (arma::uword s = 0; s < n && all_ok; ++s) all_ok = tr.ok[s];
+    if (!all_ok) {
+      out[k] = Rcpp::List::create(Rcpp::Named("ok") = false);
+      continue;
+    }
+    // sum_s log N(a_s | mu1, V1) without the 2 pi constant.
+    Z = upper_t_solve(cholV, tr.alpha.each_col() - mu1);
+    const double hier = -0.5 * arma::accu(Z % Z) - (double) n * arma::sum(arma::log(cholV.diag()));
+    const double jac = logdet0_sum - arma::accu(logdet1) + arma::accu(tr.jac);
+    out[k] = Rcpp::List::create(Rcpp::Named("ok") = true, Rcpp::Named("alpha") = tr.alpha,
+                                Rcpp::Named("m") = m1, Rcpp::Named("R") = R1,
+                                Rcpp::Named("logdet") = logdet1, Rcpp::Named("Vi") = Vi,
+                                Rcpp::Named("chol_V") = cholV, Rcpp::Named("hier") = hier,
+                                Rcpp::Named("jac") = jac, Rcpp::Named("wall_jac") = arma::accu(tr.jac));
+  }
+  return out;
 }

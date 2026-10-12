@@ -96,14 +96,14 @@ test_that("f / phat is the likelihood over its approximation at fixed residuals"
       list(st = s, state = EMC2:::.emc_shear_state(s$mu, s$V, ctx$fits, ctx$prior, ctx$spec))
     }
     cur <- frame(f$phi)$state
-    r <- vapply(seq_len(n), function(s) drop(cur$frames[[s]]$R %*% (f$alpha[, s] - cur$frames[[s]]$m)),
+    r <- vapply(seq_len(n), function(s) drop(cur$fm$R[, , s] %*% (f$alpha[, s] - cur$fm$m[, s])),
                 numeric(p))
     set.seed(3)
     gap <- vapply(1:6, function(k) {
       ph <- f$phi + rnorm(ctx$chart$dim, 0, 0.3)
       fr <- frame(ph)
       A <- vapply(seq_len(n), function(s)
-        fr$state$frames[[s]]$m + drop(backsolve(fr$state$frames[[s]]$R, r[, s])), numeric(p))
+        fr$state$fm$m[, s] + drop(backsolve(fr$state$fm$R[, , s], r[, s])), numeric(p))
       f_val <- sum(ll(A)) + EMC2:::.emc_shear_log_hier(A, fr$state) + fr$state$lp +
         fr$st$log_jac - fr$state$logdet
       f_val - EMC2:::.emc_collapsed_surrogate(ph, ctx)$lp -

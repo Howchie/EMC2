@@ -3485,6 +3485,31 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_candidates_cpp
+Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v, const arma::mat& alpha, const arma::vec& mu, const arma::mat& V, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::cube& prec, const arma::mat& lin, Rcpp::Nullable<Rcpp::List> curve, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp);
+RcppExport SEXP _EMC2_emc_shear_candidates_cpp(SEXP tSEXP, SEXP vSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP precSEXP, SEXP linSEXP, SEXP curveSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type t(tSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type v(vSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type V(VSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type R0(R0SEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet0(logdet0SEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type prec(precSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type lin(linSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type curve(curveSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has(hasSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type U(USEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type b(bSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type Uperp(UperpSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, curve, has, U, b, Uperp));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -3733,6 +3758,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
+    {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 15},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

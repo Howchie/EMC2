@@ -343,15 +343,15 @@
         next
       }
       f <- .emc_with_preserved_rng(auto_mclapply(seq_len(n), function(ss) {
-        f0 <- states[[g0]]$frames[[ss]]
+        f0 <- .emc_shear_frame(states[[g0]], ss)
         X <- t(vapply(seq_along(grid), function(g) {
-          f1 <- states[[g]]$frames[[ss]]
+          f1 <- .emc_shear_frame(states[[g]], ss)
           f1$m + drop(backsolve(f1$R, f0$R %*% (alpha[, ss] - f0$m)))
         }, numeric(p)))
         ll <- tryCatch(.emc_burn_ll_batch(X, ch$data[[ss]], ch$model, par_names),
                        error = function(e) rep(NA_real_, length(grid)))
         vapply(seq_along(grid), function(g) {
-          f1 <- states[[g]]$frames[[ss]]
+          f1 <- .emc_shear_frame(states[[g]], ss)
           ll[g] + ldn(X[g, ], mu + grid[g] * d) +
             sum(log(diag(f0$R))) - sum(log(diag(f1$R)))
         }, numeric(1))
@@ -860,8 +860,8 @@
 
 # Everything the move needs about one group state (mu, V): its prior density
 # and each subject's conditional frame (m_s, R_s), with R_s the upper Cholesky
-# factor of the conditional precision H_s + V^-1, both per subject (frames)
-# and stacked for the transport kernel (fm).
+# factor of the conditional precision H_s + V^-1, stacked by subject (fm:
+# m by column, R and logdet by slice; .emc_shear_frame takes out one).
 .emc_shear_state <- function(mu, V, fits, prior, spec) {
   chol_V <- tryCatch(chol(V), error = function(e) NULL)
   if (is.null(chol_V)) return(NULL)
@@ -869,13 +869,20 @@
   if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, length(mu))
   out <- emc_shear_frames_cpp(fits$cube, fits$lin, Vi, drop(Vi %*% mu))
   if (!isTRUE(out$ok)) return(NULL)
-  frames <- lapply(seq_len(ncol(fits$lin)), function(s)
-    list(m = out$m[, s], R = out$R[, , s], logdet = out$logdet[s]))
+  .emc_shear_state_of(mu, V, Vi, chol_V, list(m = out$m, R = out$R, logdet = out$logdet),
+                      prior, spec)
+}
+
+.emc_shear_state_of <- function(mu, V, Vi, chol_V, fm, prior, spec) {
   lp_v <- tryCatch(.emc_shear_log_prior_v(V, spec), error = function(e) NA_real_)
-  list(mu = mu, V = V, Vi = Vi, chol_V = chol_V, frames = frames,
-       fm = list(m = out$m, R = out$R, logdet = out$logdet),
-       logdet = sum(out$logdet), lp_v = lp_v,
+  list(mu = mu, V = V, Vi = Vi, chol_V = chol_V, fm = fm,
+       logdet = sum(fm$logdet), lp_v = lp_v,
        lp = .emc_shear_log_prior_mu(mu, prior) + lp_v)
+}
+
+# Subject s's frame of a state.
+.emc_shear_frame <- function(state, s) {
+  list(m = state$fm$m[, s], R = state$fm$R[, , s], logdet = state$fm$logdet[s])
 }
 
 # The likelihood approximations as the frames' C++ takes them: a cube of
@@ -897,14 +904,8 @@
 # The state after a mean step u_mu: V, and so every R_s, is unchanged and
 # each centre moves by Q_s^-1 V^-1 u_mu.
 .emc_shear_shift_state <- function(cur, u_mu, prior) {
-  Vi_u <- drop(cur$Vi %*% u_mu)
   new <- cur
-  new$frames <- lapply(cur$frames, function(f) {
-    f$m <- f$m + drop(backsolve(f$R, forwardsolve(t(f$R), Vi_u)))
-    f
-  })
-  if (!is.null(new$fm))
-    new$fm$m <- matrix(vapply(new$frames, function(f) f$m, numeric(length(u_mu))), length(u_mu))
+  new$fm$m <- cur$fm$m + .emc_shear_centre_shift(cur, u_mu)
   new$mu <- cur$mu + u_mu
   new$lp <- .emc_shear_log_prior_mu(new$mu, prior) + cur$lp_v
   new
@@ -914,6 +915,16 @@
 .emc_shear_log_hier <- function(alpha, state) {
   z <- backsolve(state$chol_V, alpha - state$mu, transpose = TRUE)
   -0.5 * sum(z^2) - ncol(alpha) * sum(log(diag(state$chol_V)))
+}
+
+# Each frame centre's move under a mean step u_mu with V fixed:
+# Q_s^-1 V^-1 u_mu (p x n).
+.emc_shear_centre_shift <- function(cur, u_mu) {
+  Vi_u <- drop(cur$Vi %*% u_mu)
+  R <- cur$fm$R
+  matrix(vapply(seq_len(dim(R)[3]), function(s)
+    drop(backsolve(R[, , s], forwardsolve(t(R[, , s]), Vi_u))), numeric(length(u_mu))),
+    length(u_mu))
 }
 
 # The map for a given u, from the group state cur and subjects alpha: the
@@ -926,21 +937,44 @@
   if (all(u_sd == 0) && is.null(curve) && is.null(walls)) {
     new <- .emc_shear_shift_state(cur, u[seq_len(p)], prior)
     if (!is.finite(new$lp)) return(NULL)
-    shift <- vapply(seq_along(new$frames), function(s)
-      new$frames[[s]]$m - cur$frames[[s]]$m, numeric(p))
-    return(list(state = new, alpha = alpha + shift, log_jac = 0))
+    return(list(state = new, alpha = alpha + new$fm$m - cur$fm$m, log_jac = 0))
   }
-  d <- exp(u_sd)
-  mu_new <- cur$mu + u[seq_len(p)]
-  new <- .emc_shear_state(mu_new, cur$V * outer(d, d),
-                          .emc_shear_fits_at(list(packed = fits, curve = curve), mu_new),
-                          prior, spec)
-  if (is.null(new) || !is.finite(new$lp)) return(NULL)
-  # A wall subject's map Jacobian replaces its plain one (tr$jac).
-  tr <- .emc_shear_transport(alpha, cur, new, walls)
-  if (!all(tr$ok) || !all(is.finite(tr$alpha))) return(NULL)
-  list(state = new, alpha = tr$alpha,
-       log_jac = sum((spec$size + 1) * u_sd) + cur$logdet - new$logdet + sum(tr$jac))
+  .emc_shear_candidates(cur, u, 1, alpha, fits, prior, spec, curve, walls)[[1L]]
+}
+
+# The candidates of one round: for each offset t[k] the map for u = t[k] v
+# (as .emc_shear_propose), built in one call (emc_shear_candidates_cpp).
+# Per candidate NULL when the moved state is invalid, else the moved state,
+# the moved subjects, their summed hierarchical density (hier, as
+# .emc_shear_log_hier), log|det| of the map's Jacobian and the walls' part
+# of it.
+.emc_shear_candidates <- function(cur, v, t, alpha, fits, prior, spec, curve = NULL,
+                                  walls = NULL) {
+  p <- length(cur$mu)
+  if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, p)
+  n <- ncol(alpha)
+  if (is.null(walls)) {
+    has <- logical(0); U <- matrix(0, p, 0); b <- numeric(0)
+    Uc <- array(0, c(p, max(p - 1L, 0L), 0))
+  } else {
+    has <- walls$has; U <- walls$U; b <- ifelse(has, walls$b, 0)
+    Uc <- .emc_shear_uperp_cube(walls, p)
+  }
+  f0 <- .emc_shear_frame_arrays(cur)
+  out <- emc_shear_candidates_cpp(t, v, alpha, cur$mu, cur$V, f0$m, f0$R, f0$logdet,
+                                  fits$cube, fits$lin, curve, has, U, b, Uc)
+  u_sd <- v[p + seq_len(p)]
+  lapply(seq_along(t), function(k) {
+    o <- out[[k]]
+    if (!isTRUE(o$ok)) return(NULL)
+    u <- t[k] * v
+    d <- exp(u[p + seq_len(p)])
+    new <- .emc_shear_state_of(cur$mu + u[seq_len(p)], cur$V * outer(d, d), o$Vi, o$chol_V,
+                               list(m = o$m, R = o$R, logdet = o$logdet), prior, spec)
+    if (!is.finite(new$lp)) return(NULL)
+    list(state = new, alpha = o$alpha, hier = o$hier,
+         log_jac = sum((spec$size + 1) * t[k] * u_sd) + o$jac, wall_jac = o$wall_jac)
+  })
 }
 
 # Every subject transported from group state cur's frames to new's
@@ -966,14 +1000,7 @@
 }
 
 # A state's frames stacked as the transport kernel takes them.
-.emc_shear_frame_arrays <- function(state) {
-  if (!is.null(state$fm)) return(state$fm)
-  fr <- state$frames
-  p <- length(state$mu)
-  list(m = matrix(vapply(fr, function(f) f$m, numeric(p)), p),
-       R = array(vapply(fr, function(f) f$R, matrix(0, p, p)), c(p, p, length(fr))),
-       logdet = vapply(fr, function(f) f$logdet, numeric(1)))
-}
+.emc_shear_frame_arrays <- function(state) state$fm
 
 # The walls' complement bases as a cube (a zero slice without a wall).
 .emc_shear_uperp_cube <- function(walls, p) {
@@ -1012,10 +1039,7 @@
 # and mean-prior terms are quadratics in t. Returns, per candidate, the moved
 # subjects and the change of those terms (V, and so the Jacobian, fixed).
 .emc_shear_line <- function(cur, d, alpha, t, prior) {
-  Vi_d <- drop(cur$Vi %*% d)
-  Delta <- vapply(cur$frames, function(f)
-    drop(backsolve(f$R, forwardsolve(t(f$R), Vi_d))), numeric(length(d)))
-  Delta <- matrix(Delta, length(d))
+  Delta <- .emc_shear_centre_shift(cur, d)
   Z0 <- backsolve(cur$chol_V, alpha - cur$mu, transpose = TRUE)
   Zd <- backsolve(cur$chol_V, Delta - d, transpose = TRUE)
   P0 <- as.matrix(prior$theta_mu_invar)
@@ -1080,42 +1104,6 @@
        log_jac = sum(log(diag(L1))) - sum(log(diag(L0))) + qm$log_jac - log(c0$sc) + log(c1$sc))
 }
 
-# The wall map for a mean step, where every frame keeps its R: the complement
-# shifts with the plain line, and u'a's conditional centre shifts by u'Delta.
-# For candidates t, the corrections to the plain moved subjects (p x n, zero
-# for subjects without a wall) and, per candidate, the change this makes to
-# the hierarchical terms plus the log Jacobian.
-.emc_shear_wall_line <- function(cur, alpha, Delta, t, d, walls) {
-  p <- nrow(alpha)
-  n <- ncol(alpha)
-  corr <- lapply(t, function(tt) matrix(0, p, n))
-  delta <- numeric(length(t))
-  ldn <- function(a, m) { z <- backsolve(cur$chol_V, a - m, transpose = TRUE); -0.5 * sum(z^2) }
-  for (s in which(walls$has)) {
-    u <- walls$U[, s]; b <- walls$b[s]
-    f <- cur$frames[[s]]
-    Qu <- drop(crossprod(f$R, f$R %*% u))
-    q <- sum(u * Qu)
-    sc <- 1 / sqrt(q)
-    a <- alpha[, s]
-    mc <- sum(Qu * (f$m - (a - sum(u * a) * u))) / q
-    z <- (sum(u * a) - mc) / sc
-    c0 <- (b - mc) / sc
-    if (!is.finite(z)) { delta[] <- -Inf; next }
-    dc <- -sum(u * Delta[, s]) / sc
-    for (i in seq_along(t)) {
-      qm <- .emc_shear_qmap(z, c0, c0 + t[i] * dc)
-      if (!is.finite(qm$z)) { delta[i] <- -Inf; next }
-      plain <- a + t[i] * Delta[, s]
-      moved <- plain + sc * (qm$z - z) * u
-      corr[[i]][, s] <- moved - plain
-      mu1 <- cur$mu + t[i] * d
-      delta[i] <- delta[i] + ldn(moved, mu1) - ldn(plain, mu1) + qm$log_jac
-    }
-  }
-  list(corr = corr, delta = delta)
-}
-
 # One round along step direction v with scale step (see the header); x
 # carries the current state, its subject likelihoods and the worker pool.
 # Adds E, the selection-weighted squared move in t, and whether it moved.
@@ -1126,31 +1114,24 @@
   t <- t_aux + step * stats::rnorm(.EMC_SHEAR_CANDIDATES)
   p <- nrow(x$alpha)
   n <- ncol(x$alpha)
-  # Mean steps lie on a line when the frames are fixed in mu.
-  mean_step <- all(v[p + seq_len(p)] == 0) && is.null(ctx$curve)
+  # Mean steps lie on a line when the frames are fixed in mu and no
+  # subject has a wall.
+  mean_step <- all(v[p + seq_len(p)] == 0) && is.null(ctx$curve) && is.null(ctx$walls)
   if (mean_step) {
     d <- v[seq_len(p)]
     line <- .emc_shear_line(x$cur, d, x$alpha, t, sampler$prior)
-    if (is.null(ctx$walls)) {
-      moved_alpha <- function(i) x$alpha + t[i] * line$Delta
-      prior_delta <- line$delta
-    } else {
-      wl <- .emc_shear_wall_line(x$cur, x$alpha, line$Delta, t, d, ctx$walls)
-      moved_alpha <- function(i) x$alpha + t[i] * line$Delta + wl$corr[[i]]
-      prior_delta <- line$delta + wl$delta
-    }
+    moved_alpha <- function(i) x$alpha + t[i] * line$Delta
+    prior_delta <- line$delta
     ok <- which(is.finite(prior_delta))
   } else {
-    props <- lapply(t, function(tj)
-      .emc_shear_propose(x$cur, tj * v, x$alpha, ctx$packed, sampler$prior, ctx$spec,
-                         ctx$curve, ctx$walls))
+    props <- .emc_shear_candidates(x$cur, v, t, x$alpha, ctx$packed, sampler$prior, ctx$spec,
+                                   ctx$curve, ctx$walls)
     ok <- which(!vapply(props, is.null, logical(1)))
     moved_alpha <- function(i) props[[i]]$alpha
     prior_delta <- vapply(seq_along(t), function(i) {
       pr <- props[[i]]
       if (is.null(pr)) return(-Inf)
-      .emc_shear_log_hier(pr$alpha, pr$state) + pr$state$lp + pr$log_jac -
-        x$cur_hier - x$cur$lp
+      pr$hier + pr$state$lp + pr$log_jac - x$cur_hier - x$cur$lp
     }, numeric(1))
   }
   lw <- rep(-Inf, length(t))
