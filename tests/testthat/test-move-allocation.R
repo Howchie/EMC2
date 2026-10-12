@@ -195,9 +195,15 @@ test_that("a chain held in one region measures slow against the pooled spread", 
 })
 
 # rho of a subject unit under particle rate q and HMC rate r.
+# A subject's rho under particle rate q and HMC rate r, the two kernels
+# selected jointly as R/sampling.R runs them (one uniform per subject).
 alloc_subject_rho <- function(u, q, r) {
-  base <- if (is.null(u$p)) u$rho else u$rho * (1 - q * (1 - u$p))
-  base * if (is.null(u$h)) 1 else (1 - r * (1 - u$h))
+  P <- if (is.null(u$p)) rep(1, length(u$rho)) else u$p
+  H <- if (is.null(u$h)) rep(1, length(u$rho)) else u$h
+  if (is.null(u$p)) q <- 1
+  if (is.null(u$h)) r <- 0
+  u$rho * vapply(seq_along(u$rho), function(i)
+    EMC2:::.emc_alloc_dev_factor(q, r, P[i], H[i]), numeric(1))
 }
 
 test_that("particle and HMC rates are as good as a dense grid over both", {
@@ -775,4 +781,25 @@ test_that("the group credit saturates below one when the subjects slow", {
   # The slope at the measured plan is the line's.
   h <- 1e-6
   expect_equal((credit(0.7, 0.3, 1 + h) - 0.7) / h, 0.4, tolerance = 1e-4)
+})
+
+test_that("a subject's rates are priced as the kernels are selected, jointly", {
+  need <- EMC2:::.emc_alloc_unit_need
+  u <- list(kind = "subject", rho = 0.9, p = 0.6, c_p = 1, h = 0.2, c_h = 1, q_fixed = 0.6)
+  rs <- c(0.5, 0.3, 0.1)
+  got <- need(u, rs, 10)
+  # One target met while the kernels exclude each other (r <= 1 - q), one
+  # only once they overlap, one out of reach.
+  expect_lt(got$x[1], 1 - 0.6)
+  expect_gt(got$x[2], 1 - 0.6)
+  for (k in 1:2)
+    expect_equal(alloc_subject_rho(u, 0.6, got$x[k]), rs[k], tolerance = 1e-10)
+  expect_identical(got$cost[3], Inf)
+  # A held HMC rate stands where it meets the target and nowhere else.
+  held <- need(replace(u, "r_fixed", list(0.7)), rs, 10)
+  expect_identical(held$x[1:2], c(0.7, 0.7))
+  expect_identical(held$cost[3], Inf)
+  held <- need(replace(u, "r_fixed", list(0.5)), rs, 10)
+  expect_identical(held$x[1], 0.5)
+  expect_identical(held$cost[2:3], c(Inf, Inf))
 })

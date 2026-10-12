@@ -606,8 +606,11 @@
     return(list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)))
   }
   # Subject: for each particle rate q, the least HMC rate r with
-  # rho_i (1 - q (1 - p_i)) (1 - r (1 - h_i)) <= min(rho*, level_i) on every
-  # coordinate (<= rho* under refresh, with r >= 1 - q); then the cheapest q.
+  # rho_i F(q, r) <= min(rho*, level_i) on every coordinate (<= rho* under
+  # refresh, with r >= 1 - q), F the kernels' joint factor under coupled
+  # selection (.emc_alloc_dev_factor); then the cheapest q. F falls linearly
+  # in r at slope 1 - h_i while the kernels exclude each other (r <= 1 - q)
+  # and at slope p_i (1 - h_i) once they overlap.
   rho <- u$rho
   # The floor is the subject's particle step alone: a regime's HMC rate is
   # bought for the group, and with it a subject may stand its particle step
@@ -619,19 +622,31 @@
   r_need <- matrix(pmax(r_min, if (refresh) 1 - qs else 0), length(qs), n_t)
   for (i in seq_along(rho)) {
     K <- if (refresh) rs else pmin(rs, level[i])
-    base <- if (is.null(u$p)) rep(rho[i], length(qs)) else rho[i] * (1 - qs * (1 - u$p[i]))
+    P <- if (is.null(u$p)) 1 else u$p[i]
+    base <- rho[i] * (1 - qs * (1 - P))
     over <- outer(base, K * (1 + 1e-12), ">")
     if (!any(over)) next
-    if (is.null(u$h)) {
+    if (is.null(u$h) || u$h[i] >= 1) {
       r_need[over] <- Inf
       next
     }
-    val <- (1 - outer(1 / base, K)) / (1 - u$h[i])
+    H <- u$h[i]
+    t <- outer(rep(1, length(qs)), K / rho[i])
+    alone <- outer(1 - qs * (1 - P), rep(1, n_t))
+    r1 <- (alone - t) / (1 - H)
+    knee <- outer(1 - qs, rep(1, n_t))
+    at_knee <- outer(qs * P + (1 - qs) * H, rep(1, n_t))
+    r2 <- knee + (at_knee - t) / (P * (1 - H))
+    val <- ifelse(r1 <= knee, r1, r2)
     r_need <- pmax(r_need, ifelse(over, val, 0))
   }
   r_need[r_need > 1 + 1e-9] <- Inf
   fin <- is.finite(r_need)
   r_need[fin] <- pmin(r_need[fin], 1)
+  # A held HMC rate reaches the targets the least rate needed does not exceed.
+  if (!is.null(u$h) && !is.null(u$r_fixed))
+    r_need[] <- ifelse(r_need <= u$r_fixed + 1e-9, u$r_fixed, Inf)
+  fin <- is.finite(r_need)
   c_h <- if (is.null(u$c_h)) 0 else u$c_h
   c_p <- if (is.null(u$c_p)) 0 else u$c_p
   # The rate a regime holds the subject to is priced with the regime; x is
@@ -1084,26 +1099,29 @@
 # The group credit a plan was solved with assumed the particle rates in
 # force; the rates it chose may move the subjects less (a particle step
 # stood down for HMC that moves the deviations less). Where they do, the
-# plan is solved again with the group credited at its own rates, and
+# plan is priced again with the group credited at its own rates, and
 # against the same plan with every particle step kept: the cheaper by the
-# objective stands.
+# objective stands. Both hold the subjects' rates the credit was computed
+# at, so only the group's moves are solved again.
 .emc_alloc_settle <- function(u, sol, units, credit, C_rest, movable, shear_act, hmc_fixed) {
   rates <- .emc_alloc_plan_rates(units, sol)
   ratio <- .emc_alloc_dev_ratio(units, rates$q, rates$r)
   if (!is.finite(ratio) || ratio <= credit * (1 + 1e-6)) return(sol)
   n_g <- length(u$g_floor)
   raw <- u$units
-  hold <- function(us, q) {
-    for (i in seq_along(us)) if (identical(us[[i]]$kind, "subject") &&
-                                 !is.null(us[[i]]$p) && !is.null(us[[i]]$h))
-      us[[i]]$q_fixed <- q[i]
+  hold <- function(us, q, r) {
+    for (i in seq_along(us)) {
+      if (!identical(us[[i]]$kind, "subject") || is.null(us[[i]]$h)) next
+      if (!is.null(us[[i]]$p)) us[[i]]$q_fixed <- q[i]
+      us[[i]]$r_fixed <- r[i]
+    }
     us
   }
   solve <- function(us) .emc_alloc_solve(us, C_rest, joint = u$joint, movable = movable,
                                          shear_fixed = shear_act, hmc_fixed = hmc_fixed)
   own <- units
   own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio)
-  own <- solve(hold(own, rates$q))
+  own <- solve(hold(own, rates$q, rates$r))
   # Every particle step kept, the group credited at those rates and the
   # plan's HMC rates (keeping the particle steps need not make up for HMC
   # the plan stood down).
@@ -1112,7 +1130,7 @@
   ratio_k <- .emc_alloc_dev_ratio(units, all_q, rates$r)
   if (is.finite(ratio_k))
     kept[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio_k)
-  kept <- solve(hold(kept, all_q))
+  kept <- solve(hold(kept, all_q, rates$r))
   best <- if (isTRUE(own$objective < kept$objective)) own else kept
   best$regime <- sol$regime
   best
