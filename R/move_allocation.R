@@ -73,9 +73,15 @@
 # of the iteration without it has rho t_i = rho_i / (1 - q (1 - p_i)) at the
 # rate q in force, so HMC can stand in for the particle step where it moves
 # the subject more per unit cost; each subject's (q_s, r_s) is the cheapest
-# pair that brings its coordinates to the target. The group's measured
-# mixing depends on how the subjects move, which the units do not model, so
-# no coordinate may end slower than under its particle step alone. A subject the
+# pair that brings its coordinates to the target, and no coordinate may end
+# slower than under its particle step alone. The two kernels are selected
+# jointly (R/sampling.R). The group mixes on the subjects' deviations from
+# the group mean, so a plan's group coordinates are credited with the
+# deviation autocorrelation its (q_s, r_s) imply relative to the measured
+# one (.emc_alloc_dev_ratio): HMC regimes, the plan without HMC, and a plan
+# whose chosen particle rates move the subjects less than it was credited
+# for, which is solved again against keeping every particle step
+# (.emc_alloc_settle). A subject the
 # allocation would use without measured HMC moves first gets a bracketed
 # step size and pilot transitions on a private copy of its state. Under
 # emc2.alloc_subject_floor = "refresh" the particle step is not a floor: each
@@ -813,19 +819,29 @@
   prev <- ch$alloc$particle
   nP <- if (stored || is.null(w$nP)) integer(n) else w$nP
   p_fac <- matrix(NA_real_, n, p)
+  # The particle step's factor on the deviations from the group mean (the
+  # group mean is fixed during the step, so its jumps are the deviations'),
+  # for the group's credit.
+  p_dev <- matrix(NA_real_, n, p)
   c_part <- rep(NA_real_, n)
   for (s in seq_len(n)) {
     if (nP[s] >= .EMC_ALLOC_MIN_PAIRS) {
       esjd <- rowSums((W[[s]] %*% w$P[[s]]) * W[[s]]) / nP[s]
       p_fac[s, ] <- pmin(1, pmax(0, 1 - esjd / (2 * pmax(s_var[s, ], .Machine$double.xmin))))
+      if (all(is.finite(d_var[s, ])))
+        p_dev[s, ] <- pmin(1, pmax(0, 1 - esjd / (2 * pmax(d_var[s, ], .Machine$double.xmin))))
       c_part[s] <- w$cpu_part[s] / nP[s]
     } else if (is.matrix(prev$fac) && all(dim(prev$fac) == c(n, p)) &&
                all(is.finite(prev$fac[s, ])) && is.finite(prev$cost[s])) {
       p_fac[s, ] <- prev$fac[s, ]
+      if (is.matrix(prev$fac_dev) && all(dim(prev$fac_dev) == c(n, p)))
+        p_dev[s, ] <- prev$fac_dev[s, ]
       c_part[s] <- prev$cost[s]
     }
   }
   q_old <- if (is.null(prev$rate)) rep(1, n) else prev$rate
+  r_old <- ch$alloc$last$rate
+  if (length(r_old) != n || !all(is.finite(r_old))) r_old <- numeric(n)
   t_rho <- s_rho
   for (s in which(is.finite(c_part))) {
     den <- 1 - q_old[s] * (1 - p_fac[s, ])
@@ -849,8 +865,8 @@
        c_coll = if (stored) NA_real_ else marg$collapsed$c,
        coll_fixed = marg$collapsed$fixed,
        c_rate = if (!stored && w$n > 0 && !is.null(w$fam)) w$fam$collapsed$moves / w$n else 0,
-       W = W, s_rho = s_rho, t_rho = t_rho, p_fac = p_fac, c_part = c_part,
-       q_old = q_old, s_var = s_var, C_rest = C_rest,
+       W = W, s_rho = s_rho, t_rho = t_rho, p_fac = p_fac, p_dev = p_dev, c_part = c_part,
+       q_old = q_old, r_old = r_old, s_var = s_var, C_rest = C_rest,
        d_var = d_var, d_rho = d_rho, r_bar = r_bar,
        g_floor = if (is.finite(r_bar) && r_bar < 1)
          pmin(g_rho, pmax(0, (g_rho - r_bar) / (1 - r_bar))) else g_rho,
@@ -919,7 +935,12 @@
         }
       }
     }
-    if (!is.null(ms$d_rho) && all(is.finite(ms$d_rho[s, ]))) u$d_rho <- ms$d_rho[s, ]
+    if (!is.null(ms$d_rho) && all(is.finite(ms$d_rho[s, ]))) {
+      u$d_rho <- ms$d_rho[s, ]
+      if (!is.null(ms$p_dev) && all(is.finite(ms$p_dev[s, ]))) u$p_dev <- ms$p_dev[s, ]
+      u$q_old <- if (is.null(ms$q_old)) 1 else ms$q_old[s]
+      u$r_old <- if (is.null(ms$r_old)) 0 else ms$r_old[s]
+    }
     if (priced) {
       u$rho <- ms$t_rho[s, ]
       u$p <- ms$p_fac[s, ]
@@ -963,39 +984,120 @@
        r_bar = ms$r_bar, g_floor = ms$g_floor)
 }
 
-# The units under a subject-HMC regime: every subject with a deviation
-# factor runs HMC at a rate of at least r (its unit's r_min, priced here;
-# the solver may raise it, one transition at the total rate), and the group
-# coordinates take the lag-1 autocorrelation the subjects' remaining
-# deviation autocorrelation implies, rho_k' = f_k + (rho_k - f_k) r_bar' /
-# r_bar (see .emc_alloc_measure), over the same subjects r_bar averages, so
-# that r = 0 changes nothing.
-.emc_alloc_regime <- function(u, r) {
-  units <- u$units
-  n_g <- length(u$g_floor)
-  cost <- 0
-  dev <- dev0 <- numeric(0)
-  covered <- FALSE
+# A subject's deviation retention per iteration under particle rate q and HMC
+# rate r with their joint selection (R/sampling.R): both run with probability
+# max(0, q + r - 1), each alone with its rate less that, neither otherwise.
+# P and H are the kernels' factors on the deviations.
+.emc_alloc_dev_factor <- function(q, r, P, H) {
+  both <- max(0, q + r - 1)
+  (1 - q - r + both) + (q - both) * P + (r - both) * H + both * P * H
+}
+
+# The subjects' deviation autocorrelation under particle rates q and HMC
+# rates r (per unit; ignored for other units) relative to the one measured,
+# under the rates that ran (q_old, r_old). The measured statistic spans the
+# particle step and the group's transports but not the HMC round, so its
+# particle factor is divided out and every plan, the measured one included,
+# multiplied by its full factor: the ratio is exactly 1 at the measured
+# plan. A subject without a measured particle factor keeps its particle
+# rate. NA without deviation measurements.
+.emc_alloc_dev_ratio <- function(units, q, r) {
+  num <- den <- 0
   for (i in seq_along(units)) {
     x <- units[[i]]
     if (!identical(x$kind, "subject") || is.null(x$d_rho) || !all(is.finite(x$d_rho))) next
-    dev0 <- c(dev0, x$d_rho)
-    if (is.null(x$h_dev) || is.null(x$h)) {
-      dev <- c(dev, x$d_rho)
-      next
+    k <- length(x$d_rho)
+    q0 <- if (is.null(x$q_old)) 1 else x$q_old
+    r0 <- if (is.null(x$r_old)) 0 else x$r_old
+    H <- if (is.null(x$h_dev)) rep(1, k) else x$h_dev
+    P <- x$p_dev
+    qi <- q[i]
+    if (is.null(P)) {
+      P <- rep(1, k)
+      qi <- q0
     }
+    ri <- if (is.null(x$h_dev)) 0 else r[i]
+    base <- x$d_rho / pmax(1 - q0 * (1 - P), 1e-6)
+    num <- num + sum(base * .emc_alloc_dev_factor(qi, ri, P, H))
+    den <- den + sum(base * .emc_alloc_dev_factor(q0, r0, P, H))
+  }
+  if (den > 0) num / den else NA_real_
+}
+
+# The group coordinates' rho when the subjects' deviation autocorrelation
+# moves by ratio from the measured one: rho_k' = f_k + (rho_k - f_k) ratio.
+.emc_alloc_credit <- function(units, g_floor, ratio) {
+  for (k in seq_along(g_floor)) {
+    x <- units[[k]]
+    units[[k]]$rho <- min(1, g_floor[k] + (x$rho - g_floor[k]) * ratio)
+  }
+  units
+}
+
+# Subject HMC for the group's sake: every subject with an HMC factor at rate
+# at least r (r_min), its cost, and the group coordinates' rho the subjects'
+# deviation autocorrelation implies at the particle rates in force
+# (.emc_alloc_dev_ratio, credit). NULL without deviation measurements.
+.emc_alloc_regime <- function(u, r) {
+  units <- u$units
+  cost <- 0
+  covered <- FALSE
+  q <- r_new <- numeric(length(units))
+  for (i in seq_along(units)) {
+    x <- units[[i]]
+    if (!identical(x$kind, "subject")) next
+    q[i] <- if (is.null(x$q_old)) 1 else x$q_old
+    if (is.null(x$d_rho) || !all(is.finite(x$d_rho)) || is.null(x$h_dev) || is.null(x$h)) next
     covered <- TRUE
     units[[i]]$r_min <- r
-    dev <- c(dev, x$d_rho * (1 - r * (1 - x$h_dev)))
+    r_new[i] <- r
     cost <- cost + r * x$c_h
   }
-  if (!covered || !length(dev) || mean(dev0) <= 0) return(NULL)
-  ratio <- mean(dev) / mean(dev0)
-  for (k in seq_len(n_g)) {
-    x <- units[[k]]
-    units[[k]]$rho <- u$g_floor[k] + (x$rho - u$g_floor[k]) * ratio
+  if (!covered) return(NULL)
+  ratio <- .emc_alloc_dev_ratio(units, q, r_new)
+  if (!is.finite(ratio)) return(NULL)
+  list(units = .emc_alloc_credit(units, u$g_floor, ratio), cost = cost, credit = ratio)
+}
+
+# A solved plan's particle and total HMC rates per unit.
+.emc_alloc_plan_rates <- function(units, sol) {
+  n_u <- length(units)
+  q <- if (length(sol$q) == n_u) sol$q else rep(1, n_u)
+  r <- vapply(seq_len(n_u), function(i) {
+    x <- units[[i]]
+    if (!identical(x$kind, "subject") || is.null(x$h)) return(0)
+    min(1, sol$x[i] + (if (is.null(x$r_min)) 0 else x$r_min))
+  }, numeric(1))
+  list(q = q, r = r)
+}
+
+# The group credit a plan was solved with assumed the particle rates in
+# force; the rates it chose may move the subjects less (a particle step
+# stood down for HMC that moves the deviations less). Where they do, the
+# plan is solved again with the group credited at its own rates, and
+# against the same plan with every particle step kept: the cheaper by the
+# objective stands.
+.emc_alloc_settle <- function(u, sol, units, credit, C_rest, movable, shear_act, hmc_fixed) {
+  rates <- .emc_alloc_plan_rates(units, sol)
+  ratio <- .emc_alloc_dev_ratio(units, rates$q, rates$r)
+  if (!is.finite(ratio) || ratio <= credit * (1 + 1e-6)) return(sol)
+  n_g <- length(u$g_floor)
+  raw <- u$units
+  hold <- function(us, q) {
+    for (i in seq_along(us)) if (identical(us[[i]]$kind, "subject") &&
+                                 !is.null(us[[i]]$p) && !is.null(us[[i]]$h))
+      us[[i]]$q_fixed <- q[i]
+    us
   }
-  list(units = units, cost = cost)
+  solve <- function(us) .emc_alloc_solve(us, C_rest, joint = u$joint, movable = movable,
+                                         shear_fixed = shear_act, hmc_fixed = hmc_fixed)
+  own <- units
+  own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio)
+  own <- solve(hold(own, rates$q))
+  kept <- solve(hold(units, rep(1, length(units))))
+  best <- if (isTRUE(own$objective < kept$objective)) own else kept
+  best$regime <- sol$regime
+  best
 }
 
 # The allocation with the HMC round's fixed cost: the best plan that runs the
@@ -1067,12 +1169,23 @@
   }
   shear_act <- if (is.null(u$shear_act)) 0 else u$shear_act
   hmc_fixed <- if (is.null(u$hmc_fixed)) 0 else u$hmc_fixed
+  # Without HMC every particle step runs, and the group is credited with the
+  # subjects' movement that leaves (the measured group ran under the HMC
+  # rates in force).
+  if (has_h && !is.null(u$g_floor)) {
+    ratio <- .emc_alloc_dev_ratio(u$units, rep(1, length(u$units)), numeric(length(u$units)))
+    if (is.finite(ratio)) {
+      n_g <- length(u$g_floor)
+      off[seq_len(n_g)] <- .emc_alloc_credit(off[seq_len(n_g)], u$g_floor, ratio)
+    }
+  }
   without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable,
                               shear_fixed = shear_act)
   if (!has_h) return(without)
   with <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint, movable = movable,
                            shear_fixed = shear_act, hmc_fixed = hmc_fixed)
   with$regime <- 0
+  used <- list(units = u$units, credit = 1, C_rest = u$C_rest)
   for (reg in regimes) {
     cand <- .emc_alloc_solve(reg$units, u$C_rest + reg$cost, joint = u$joint,
                              movable = movable, shear_fixed = shear_act,
@@ -1080,8 +1193,12 @@
     if (isTRUE(cand$objective < with$objective)) {
       cand$regime <- reg$r
       with <- cand
+      used <- list(units = reg$units, credit = reg$credit, C_rest = u$C_rest + reg$cost)
     }
   }
+  if (!is.null(u$g_floor))
+    with <- .emc_alloc_settle(u, with, used$units, used$credit, used$C_rest, movable,
+                              shear_act, hmc_fixed)
   if (isTRUE(with$objective < without$objective &&
              with$objective <= .EMC_ALLOC_MIN_GAIN * without$objective0)) {
     with$objective0 <- without$objective0
@@ -1224,7 +1341,7 @@
         sum(vapply(st$subjects, function(x) x$calib_cpu, numeric(1))))
     ch$alloc <- list(window = .emc_alloc_empty_window(ch$n_subjects, ch$n_pars),
                      stage = stage, pool = m$pool, last = rec, history = c(ch$alloc$history, list(rec)),
-                     particle = list(rate = q, fac = m$p_fac, cost = m$c_part))
+                     particle = list(rate = q, fac = m$p_fac, fac_dev = m$p_dev, cost = m$c_part))
     if (!is.null(st)) {
       st$alloc <- rec
       ch$subject_hmc <- st

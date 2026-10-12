@@ -673,3 +673,47 @@ test_that("a family's fixed cost is charged at the plan's activation probability
   expect_gt(sol$x, 0)
   expect_equal(sol$cost, 1 + sol$x * 0.05 + 0.5 * min(1, sol$x))
 })
+
+test_that("the group credit follows the subjects' joint kernel rates, anchored at the measured plan", {
+  dev <- EMC2:::.emc_alloc_dev_factor
+  # The joint selection's retention (the proposal's stationary check: .536).
+  expect_equal(dev(0.6, 0.7, 0.4, 0.8), 0.3 * 0.4 + 0.4 * 0.8 + 0.3 * 0.4 * 0.8)
+  expect_equal(dev(0.6, 0.7, 0.4, 0.8), 0.536)
+  expect_equal(dev(1, 0, 0.4, 0.8), 0.4)
+  expect_equal(dev(0, 1, 0.4, 0.8), 0.8)
+  # q + r < 1 leaves some iterations without either kernel.
+  expect_equal(dev(0.3, 0.2, 0.4, 0.8), 0.5 + 0.3 * 0.4 + 0.2 * 0.8)
+  subj <- function(q_old, r_old) list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5),
+                                      c_p = 1, h = c(0.5, 0.5), c_h = 0.2, d_rho = c(0.9, 0.85),
+                                      p_dev = c(0.2, 0.3), h_dev = c(0.95, 0.9),
+                                      q_old = q_old, r_old = r_old)
+  units <- list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01), subj(1, 0), subj(0.5, 0.75))
+  ratio <- EMC2:::.emc_alloc_dev_ratio
+  # Identity at the measured plan.
+  expect_equal(ratio(units, c(1, 1, 0.5), c(0, 0, 0.75)), 1)
+  # Standing a particle step down for HMC that moves the deviations less
+  # slows them; adding particle steps speeds them.
+  expect_gt(ratio(units, c(1, 0.25, 0.5), c(0, 0.75, 0.75)), 1)
+  expect_lt(ratio(units, c(1, 1, 1), c(0, 0, 0.75)), 1)
+  # Without a measured particle factor a subject's particle rate is held.
+  nop <- units; nop[[2]]$p_dev <- NULL
+  expect_equal(ratio(nop, c(1, 0, 0.5), c(0, 0, 0.75)), 1)
+
+  # HMC is cheap and moves each subject's own coordinates, but barely moves
+  # their deviations, which the particle step moves well: the plan that
+  # stands the particle steps down is credited at the group movement it
+  # gives, so it does not stand in for them for free.
+  u <- list(units = list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01),
+                         subj(1, 0), subj(1, 0)),
+            C_rest = 1, joint = NULL, hmc_fixed = 0, g_floor = 0.5)
+  raw <- EMC2:::.emc_alloc_solve(u$units, u$C_rest)
+  expect_true(any(raw$q[2:3] < 1))
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  rates <- EMC2:::.emc_alloc_plan_rates(u$units, sol)
+  r_dev <- ratio(u$units, rates$q, rates$r)
+  # The plan's group coordinate was solved at the movement its rates give.
+  credited <- EMC2:::.emc_alloc_credit(u$units[1], u$g_floor, r_dev)[[1]]$rho
+  expect_lte(EMC2:::.emc_alloc_tau(credited * EMC2:::.emc_alloc_factor(0.7, sol$x[1], 0.7)),
+             sol$tau + 1e-6)
+  expect_gte(sol$objective, raw$objective - 1e-9)
+})

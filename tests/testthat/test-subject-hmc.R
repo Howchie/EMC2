@@ -159,6 +159,16 @@ test_that("unsupported hierarchies take no HMC and a round without rates draws n
   expect_identical(out$streams, streams)
   expect_identical(out$proposals, props)
   expect_true(all(vapply(out$tasks, is.null, logical(1))))
+  # A subject whose joint draw with the particle step declined HMC draws
+  # nothing more and takes no transition.
+  plan[[1]] <- plan[[2]] <- list(prec = diag(2), eps = 0.5, rate = 0.5, h = 1e-4, floor = -Inf)
+  out <- EMC2:::.emc_hmc_round(plan, props, pars, "standard", streams, NULL, NULL,
+                               par_names = c("a", "b"), pick = c(FALSE, FALSE))
+  expect_identical(out$streams, streams)
+  expect_identical(out$proposals, props)
+  expect_true(all(vapply(out$tasks, is.null, logical(1))))
+  expect_equal(EMC2:::.emc_hmc_plan_rates(plan, 2), c(0.5, 0.5))
+  expect_equal(EMC2:::.emc_hmc_plan_rates(NULL, 2), c(0, 0))
 })
 
 hmc_small_fit <- function(route = "static", stages = c(20, 50), seed = 17, hmc = TRUE,

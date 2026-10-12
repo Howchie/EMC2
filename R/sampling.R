@@ -925,15 +925,30 @@ run_stage <- function(pmwgs,
     recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
     pool_profile <- NULL
     # Subjects whose particle step the allocation (R/move_allocation.R) skips
-    # this iteration, each drawn from the subject's own stream.
+    # this iteration, each drawn from the subject's own stream. A subject
+    # that also takes HMC at rate r draws one uniform U for both kernels:
+    # the particle step runs if U < q and HMC if U >= 1 - r, which keeps
+    # both rates and runs at least one of them whenever q + r >= 1. A
+    # subject whose allocated HMC rate has since dropped to zero (its warmup
+    # ended) takes its particle step.
     part_skip <- NULL
+    hmc_pick <- NULL
     q_part <- if (alloc_on) pmwgs$alloc$particle$rate
     if (length(q_part) == pmwgs$n_subjects && any(q_part < 1)) {
       part_skip <- logical(pmwgs$n_subjects)
+      r_now <- .emc_hmc_plan_rates(hmc_plan, pmwgs$n_subjects)
+      r_alloc <- pmwgs$alloc$last$rate
+      if (length(r_alloc) != pmwgs$n_subjects) r_alloc <- r_now
       .emc_with_preserved_rng(for (s in which(q_part < 1)) {
+        if (r_alloc[s] > 0 && !(r_now[s] > 0)) next
         assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
-        part_skip[s] <- stats::runif(1) >= q_part[s]
+        u <- stats::runif(1)
         wpool_streams[[s]] <- get(".Random.seed", envir = globalenv())
+        part_skip[s] <- u >= q_part[s]
+        if (r_now[s] > 0 && r_now[s] < 1) {
+          if (is.null(hmc_pick)) hmc_pick <- rep(NA, pmwgs$n_subjects)
+          hmc_pick[s] <- u >= 1 - r_now[s]
+        }
       })
     }
     part_started <- proc.time()[["elapsed"]]
@@ -1165,7 +1180,7 @@ run_stage <- function(pmwgs,
       hr <- .emc_hmc_round(hmc_plan, proposals, pars, pmwgs$type, wpool_streams,
                            data, pmwgs$model, wpool = wpool,
                            n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
-                           par_names = par_names)
+                           par_names = par_names, pick = hmc_pick)
       proposals <- hr$proposals
       wpool_streams <- hr$streams
       hmc_tasks <- hr$tasks

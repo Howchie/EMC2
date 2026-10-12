@@ -298,9 +298,12 @@
 # subject's selection uniform from its own stream on the master, runs the
 # selected transitions on the workers (or in-process), and returns the
 # updated proposals and streams with one task per subject (NULL when no
-# transition ran).
+# transition ran). pick: per subject, whether the iteration's joint draw
+# with the particle step (R/sampling.R) selected HMC (NA where the round
+# draws its own selection).
 .emc_hmc_round <- function(plan, proposals, pars, type, streams, data, model,
-                           wpool = NULL, n_cores = 1L, r_cores = 1L, par_names) {
+                           wpool = NULL, n_cores = 1L, r_cores = 1L, par_names,
+                           pick = NULL) {
   n <- length(streams)
   p <- nrow(proposals) - 1L
   tasks <- vector("list", n)
@@ -310,6 +313,10 @@
     if (is.null(ps) || !(ps$rate > 0)) next
     if (ps$rate >= 1) {
       go[s] <- TRUE
+      next
+    }
+    if (length(pick) >= s && !is.na(pick[s])) {
+      go[s] <- pick[s]
       next
     }
     assign(".Random.seed", streams[[s]], envir = globalenv())
@@ -404,6 +411,13 @@
 .emc_hmc_active <- function(sampler) {
   isTRUE(.emc_hmc_options()$enabled) && !is.null(sampler$subject_hmc) &&
     isTRUE(sampler$subject_hmc$supported)
+}
+
+# Each subject's HMC rate under a worker plan (zero without one).
+.emc_hmc_plan_rates <- function(plan, n) {
+  if (is.null(plan)) return(numeric(n))
+  vapply(seq_len(n), function(s)
+    if (length(plan) >= s && !is.null(plan[[s]])) plan[[s]]$rate else 0, numeric(1))
 }
 
 # What a transition needs from the plan (sent to the workers once per block);
