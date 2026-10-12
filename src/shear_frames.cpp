@@ -216,6 +216,7 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
   bool curved = curve.isNotNull();
   arma::mat T;
   arma::vec mu0, lsd0, lsd_scale;
+  double lsd_range = R_PosInf;
   arma::uvec l;
   std::vector<arma::uvec> set_idx, set_q;
   std::vector<arma::mat> set_coef;
@@ -231,6 +232,8 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
       if (l.n_elem) {
         lsd0 = Rcpp::as<arma::vec>(cv["lsd0"]);
         lsd_scale = Rcpp::as<arma::vec>(cv["lsd_scale"]);
+        if (cv.containsElementNamed("lsd_range") && !Rf_isNull(cv["lsd_range"]))
+          lsd_range = Rcpp::as<double>(cv["lsd_range"]);
       }
     }
     Rcpp::List sets = cv["sets"];
@@ -270,7 +273,8 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
         if (l.n_elem) {
           arma::vec tl(l.n_elem);
           for (arma::uword j = 0; j < l.n_elem; ++j)
-            tl(j) = (0.5 * std::log(V1(l(j), l(j))) - lsd0(j)) / lsd_scale(j);
+            tl(j) = std::min(lsd_range, std::max(-lsd_range,
+              (0.5 * std::log(V1(l(j), l(j))) - lsd0(j)) / lsd_scale(j)));
           tc = arma::join_cols(tc, tl);
         }
         for (std::size_t si = 0; si < set_idx.size(); ++si) {

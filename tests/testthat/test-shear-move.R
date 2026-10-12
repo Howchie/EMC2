@@ -396,6 +396,8 @@ test_that("the C++ candidates are the R state, transport and hierarchical terms"
                     sets = EMC2:::.emc_shear_curve_sets(B_l, q))
     lsd_only <- list(mu0 = f$mu, T = matrix(0, 0, p), q = integer(0), l = l,
                      lsd0 = curve_l$lsd0, lsd_scale = curve_l$lsd_scale,
+                     # A range the candidates leave, so the held coordinates count.
+                     lsd_range = 0.3,
                      B = lapply(B_l, function(b) if (is.null(b)) NULL else
                        list(coef = b$coef[c(1, 1 + p + seq_along(l)), , drop = FALSE], quad = FALSE)))
     lsd_only$sets <- EMC2:::.emc_shear_curve_sets(lsd_only$B, integer(0))
@@ -742,8 +744,8 @@ test_that("curved frames with arbitrary coefficients leave the joint posterior i
                  matrix(rnorm(p * ncol(b$coef), 0, 0.3), p), b$coef[-(1:(1 + p)), , drop = FALSE]),
     quad = b$quad))
   curve_l <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, l = l,
-                  lsd0 = colMeans(lsd), lsd_scale = apply(lsd, 2, sd), B = B_l,
-                  sets = EMC2:::.emc_shear_curve_sets(B_l, q))
+                  lsd0 = colMeans(lsd), lsd_scale = apply(lsd, 2, sd), lsd_range = 0.5,
+                  B = B_l, sets = EMC2:::.emc_shear_curve_sets(B_l, q))
   for (case in list(list(curve_l, FALSE), list(curve, FALSE), list(curve, TRUE))) {
     curve <- case[[1]]
     broken <- case[[2]]
@@ -1173,7 +1175,7 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   expect_equal(ch$shear$plan$last$n[sd_k], rep(2L, p))
 })
 
-test_that("atlas nodes go to the subjects carrying the fixed frames' orbit spread", {
+test_that("atlas nodes go to the subjects whose fixed-frame orbit contribution varies", {
   local_mocked_bindings(
     .emc_shear_context = function(sampler) list(packed = NULL),
     .emc_shear_orbit_spread = function(ch, idx, ks, fits_of, n_cores) cbind(ch$spread),
@@ -1181,11 +1183,9 @@ test_that("atlas nodes go to the subjects carrying the fixed frames' orbit sprea
   pick <- function(spread, ks = 1L)
     EMC2:::.emc_shear_atlas_subjects(list(n_subjects = length(spread), spread = spread),
                                      1:10, ks, 1L)
-  # Widest first until the share is reached, plus any subject whose
-  # likelihood fails along the orbit.
-  expect_identical(pick(c(1, 50, 0.1, 40, Inf)), c(2L, 4L, 5L))
-  expect_identical(pick(c(10, 10, 10, 10)), 1:4)
+  floor <- EMC2:::.EMC_SHEAR_ATLAS_MIN_SPREAD
+  # An outlier does not crowd out the others; a failed orbit is always fitted.
+  expect_identical(pick(c(1e5, floor, floor / 2, 3 * floor, Inf, 0)), c(1L, 2L, 4L, 5L))
   expect_identical(pick(c(0, 0, 0)), integer(0))
-  expect_identical(pick(rep(Inf, 3)), 1:3)
   expect_identical(pick(c(1, 2), ks = integer(0)), 1:2)
 })
