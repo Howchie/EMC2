@@ -126,19 +126,55 @@ further points from the review: with independent Bernoulli selection
 run HMC when the particle step did not), and the arm must be re-run on the
 same checkpoint against graded-bounded.
 
-## Idle time: priced, not fixed, not yet attributed
+## Idle time: attributed (two profiles, 2026-10-12 02:45)
 
-CPU per wall-second (27 cores): def 8.4, refresh 7.4, graded bounded 11.0.
-The shear frame build (80 subjects, in the chain process) and the collapsed
-context are centralised work that idles the workers; they are now priced
-as fixed costs so the allocator does not buy rounds they do not pay for,
-but when it does the idling remains. Attribute it with a profiled
-continuation: add `PROFILE=1` to continue_arm.R (set
-`options(emc2.sampler_profile = TRUE)` and save
-`EMC2:::.emc_iteration_profile()`; the rows now carry gibbs, particle, fill,
-response_wait, shear and hmc per iteration) and run the graded build on the
-lbaT checkpoint. If the frame build is a large share, move it to the
-workers (same shape as the collapsed move's C++ inner chain).
+Profiled graded-bounded continuation on the lbaT checkpoint (`$S/bench/CL/
+gradedP_1.rds`, PROFILE=1, 1800 iterations, 505 s wall) and the review's
+300-iteration probe (plans/graded_refresh_proposal_2026-10-12/) agree:
+
+- Per-iteration wall by chain 0.174 / 0.199 / 0.264 s; the slowest chain's
+  iterations sum to 476 of the 505 s, so chains 1 and 2 spend ~30% of the
+  wall waiting at the block barrier for chain 3, which bought 2.5x the
+  shear rounds (1.48 vs 0.58 per iteration) and more HMC. **Chain imbalance
+  from per-chain plans is the largest idle term.** Work outside iterations
+  (rebuilds, proposals, progress checks) is 29 s of 505.
+- Within an iteration: Gibbs 0.008 s, particle step 0.083-0.096 s (its
+  response wait equals the workers' elapsed, i.e. the workers are busy),
+  shear CPU 0.08-0.24 s, HMC CPU 0.02-0.05 s. Worker busy share 0.44 / 0.44
+  / 0.30 of (workers x wall). Shear setup (frames) is only 2-3% of the
+  shear's reserved cost (review), so moving the frame build to the workers
+  is NOT the first target. 78-86% of HMC's reserved cost is fixed: a round
+  attempting 4-9 subjects per iteration activates every iteration with its
+  latency and idle reservation.
+
+So the order is: (1) balance chains, either by pricing the barrier (a
+chain's plan cost is really the block's slowest chain) or by sharing shear
+round rates across chains as HMC/particle rates are; (2) sparse-family
+activation pricing (charge the fixed cost at the probability any round or
+transition runs, `1 - prod(1 - x_k)` for independent rounds; group low-rate
+rounds on a shared activation); (3) HMC round latency/right-sizing;
+(4) only then worker-resident frame/transport work.
+
+**Benchmark limitation (review, confirmed):** the checkpoint holds 2000
+production transitions and no family cost fields, the harness forces one
+rebuild, and the doubling schedule puts the next at 4000, beyond the 1800
+iterations. Every continuation above therefore allocated once from the
+checkpoint's legacy evidence with the family fixed costs at zero and never
+repriced. `emc2.sample_rebuilds` accepts an explicit schedule: the
+continuation should run a calibration segment (rebuilds at +100, +300)
+before the scored window, with DISCARD covering it. Not yet done; it is the
+first thing to change before trusting any pricing conclusion, including the
+N-back cost figure.
+
+Also from the review and fixed (bb7c3acb): the HMC deviation factors were
+shrunk toward a reference built from ordinary subject factors; they now
+pool against their own. Noted, not changed: `.emc_alloc_record_subjects`
+measures the subjects just before the HMC round against the previous
+iteration's final state, so the deviation statistic spans the previous HMC
+round and this iteration's transports; any refresh model must anchor to
+that measured schedule (the review's `d_new = d_old * F_new / F_old`), and
+coupled selection (one uniform per subject: particle if U < q, HMC if
+U >= 1 - r) is the scheduler that guarantees a refresh.
 
 ## Clean-up list (not done)
 
