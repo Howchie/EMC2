@@ -747,6 +747,7 @@ run_stage <- function(pmwgs,
   if(is.null(chains_mu)) chains_mu <- vector("list", pmwgs$n_subjects)
   if(is.null(eff_var)) eff_var <- vector("list", pmwgs$n_subjects)
   if(is.null(chains_var)) chains_var <- vector("list", pmwgs$n_subjects)
+  ens_factors <- NULL
   if (verboseProgress) {
     pb <- accept_progress_bar(min = 0, max = iter)
   }
@@ -904,11 +905,15 @@ run_stage <- function(pmwgs,
     # Ensemble pool members come from the group-step stream and depend only on
     # the frozen proposals, so their likelihoods ride along with the subject
     # step below.
+    # The proposals are frozen for this call, so their factors from the first
+    # draw serve the rest.
     ens_q <- pmwgs$ensemble_q
     ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
                                           if (is.null(ens_q)) chains_mu else ens_q$mu,
                                           if (is.null(ens_q)) chains_var else ens_q$var,
-                                          iteration = j)
+                                          iteration = j, factors = ens_factors)
+    if (!is.null(ens_pools) && is.null(ens_factors))
+      ens_factors <- list(L = ens_pools$L, logdet = ens_pools$logdet)
     pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started
@@ -1068,8 +1073,10 @@ run_stage <- function(pmwgs,
 
     # Ensemble group update (R/ensemble_move.R): after the subject step, so the
     # group Gibbs rounds and the final reselection close the sweep.
+    ens_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
                               wpool_part, ens_pools)
+    ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
     # Then the shear (R/shear_move.R) when enabled: the non-centred move of
     # the same group state.
     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
@@ -1295,6 +1302,8 @@ run_stage <- function(pmwgs,
         degraded = pp$degraded,
         shear_rounds = shear_rounds, shear_cpu = shear_raw,
         shear_elapsed = shear_el, shear_build = shear_build_el, shear_ll = shear_ll_el,
+        ensemble_elapsed = ens_elapsed,
+        collapsed_elapsed = coll_el, collapsed_moves = coll_moves,
         hmc_elapsed = hmc_el,
         hmc_task_cpu_max = max(c(0, vapply(hmc_tasks, function(x)
           if (is.null(x) || is.null(x$work)) 0 else x$work, numeric(1)))),

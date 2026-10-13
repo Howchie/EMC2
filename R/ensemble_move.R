@@ -237,9 +237,13 @@
 # alone, never from the current state, so they can be drawn before the subject
 # step and their likelihoods computed in the same worker round trip as the
 # particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
-# when the update does not run this iteration.
+# when the update does not run this iteration. The draws and their proposal
+# densities come from one C++ call (src/ensemble_move.cpp). `factors` (the
+# proposals' Cholesky factors and log determinants, from
+# emc_ensemble_factors_cpp) can be passed in, since the proposals are frozen
+# within a block; without them they are computed here.
 .emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var,
-                                     iteration = 0L) {
+                                     iteration = 0L, factors = NULL) {
   cfg <- .emc_ensemble_options()
   if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler) ||
       iteration %% cfg$cadence != 0L)
@@ -249,18 +253,12 @@
       any(vapply(chains_mu, is.null, logical(1))) ||
       any(vapply(chains_var, is.null, logical(1))))
     return(NULL)
-  pn <- sampler$par_names
-  q <- lapply(seq_len(n), function(s)
-    .emc_ensemble_q(as.numeric(chains_mu[[s]]), as.matrix(chains_var[[s]]), cfg))
-  lq <- vector("list", n)
-  rows <- lapply(seq_len(n), function(s) {
-    fresh <- .emc_ensemble_draw_q(cfg$pool - 1L, q[[s]], cfg)
-    lq[[s]] <<- .emc_ensemble_log_q_m2(attr(fresh, "m2"), q[[s]], cfg)
-    attr(fresh, "m2") <- NULL
-    colnames(fresh) <- pn
-    fresh
-  })
-  list(q = q, rows = rows, lq = lq, ll = NULL)
+  if (is.null(factors)) factors <- emc_ensemble_factors_cpp(lapply(chains_var, as.matrix))
+  d <- emc_ensemble_draw_pools_cpp(lapply(chains_mu, as.numeric), factors$L, factors$logdet,
+                                   cfg$pool - 1L, cfg$tail_weight, cfg$tail_df,
+                                   cfg$tail_excess, sampler$par_names)
+  list(rows = d$rows, lq = d$lq, ll = NULL, L = factors$L, mu = d$mu,
+       logdet = factors$logdet, c = d$c)
 }
 
 # Log-likelihoods of a matrix of candidate states for one subject. A failure
@@ -313,6 +311,76 @@
   ll_new
 }
 
+# The hierarchies whose Gibbs rounds run in C++: standard without group
+# designs, and diagonal-gamma. The others take the R rounds below.
+.emc_ensemble_rounds_in_cpp <- function(sampler) {
+  if (sampler$type == "diagonal-gamma") return(TRUE)
+  if (sampler$type != "standard") return(FALSE)
+  is.null(sampler$gd) && (is.null(sampler$group_designs) || length(sampler$group_designs) == 0L)
+}
+
+# The Gibbs rounds on pi~(h, k | A) in C++ (src/ensemble_move.cpp): the
+# group state from the package's conjugate update given the selected subject
+# states, then every subject's pool position given the group state. Returns
+# the final selection, the group state in the form gibbs_step() returns it,
+# and the pools' weight ESS under the final state.
+.emc_ensemble_rounds_cpp <- function(sampler, pars, pool_stack, base_w, k0, M, cfg) {
+  n <- length(k0)
+  p <- ncol(pool_stack)
+  if (sampler$type == "standard") {
+    is_blocked <- sampler$is_blocked[!sampler$nuisance]
+    par_group <- sampler$par_group[!sampler$nuisance]
+    if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
+    if (is.null(par_group)) par_group <- rep(1L, p)
+    par_group <- as.integer(factor(par_group, levels = unique(par_group)))
+    res <- emc_ensemble_rounds_cpp(pool_stack, base_w, k0, M, cfg$rounds, 0L,
+                                   list(tvinv = pars$tvinv, a_half = as.numeric(pars$a_half)),
+                                   sampler$prior, as.logical(is_blocked), par_group)
+    pars <- list(tmu = res$tmu, tvar = res$tvar, tvinv = res$tvinv, a_half = res$a_half,
+                 subj_mu = matrix(res$tmu, p, n), alpha = NULL)
+  } else {
+    res <- emc_ensemble_rounds_cpp(pool_stack, base_w, k0, M, cfg$rounds, 1L,
+                                   list(tvinv = diag(pars$tvinv)), sampler$prior,
+                                   logical(0), integer(0))
+    tmu <- res$tmu
+    names(tmu) <- sampler$par_names[!sampler$nuisance]
+    pars <- list(tmu = tmu, tvar = diag(1 / res$tvinv, p), tvinv = diag(res$tvinv, p),
+                 alpha = NULL)
+  }
+  list(selected = res$selected, pars = pars, wess = res$wess)
+}
+
+# The same rounds in R, through gibbs_step() and the subject prior of every
+# pool member: the path for the latent-factor hierarchies and for standard
+# hierarchies with group designs, and the reference the C++ rounds are
+# tested against. The scratch store only needs the group state: gibbs_step()
+# takes the subject states as an argument.
+.emc_ensemble_rounds_r <- function(sampler, pars, pool_stack, base_w, k0, M, cfg) {
+  n <- length(k0)
+  n_pars <- ncol(pool_stack)
+  subj_of_row <- rep(seq_len(n), each = M)
+  offset <- (seq_len(n) - 1L) * M
+  tmp <- sampler
+  store <- .emc_ensemble_store(sampler$samples)
+  selected <- k0
+  wess <- numeric(n)
+  for (r in seq_len(cfg$rounds)) {
+    alpha_k <- t(pool_stack[offset + selected, , drop = FALSE])
+    store <- fill_samples(samples = store, group_level = pars, proposals = NULL,
+                          j = 1L, n_pars = n_pars, type = sampler$type)
+    tmp$samples <- store
+    pars <- gibbs_step(tmp, alpha_k, sampler$type)
+    lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
+                                                  n, cfg$latent_weight), nrow = M)
+    selected <- .emc_ensemble_select_all(lw_all)
+    if (r == cfg$rounds) {
+      w <- exp(sweep(lw_all, 2, apply(lw_all, 2, max)))
+      wess <- colSums(w)^2 / colSums(w^2)
+    }
+  }
+  list(selected = selected, pars = pars, wess = wess)
+}
+
 .emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
                                wpool_part, pools) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
@@ -326,53 +394,29 @@
 
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())
-  # Pools: current state at a uniform position among the M - 1 fresh draws.
-  # Stacked pools, subject s in rows (s - 1) * M + 1:M, with the current state
-  # at a uniform position k0.
-  pool_stack <- matrix(NA_real_, n * M, n_pars, dimnames = list(NULL, pn))
-  ll_stack <- lq_stack <- numeric(n * M)
+  # Pools: the current state at a uniform position among the M - 1 fresh
+  # draws. Stacked pools, subject s in rows (s - 1) * M + 1:M.
   k0 <- integer(n)
-  for (s in seq_len(n)) {
-    k0[s] <- sample.int(M, 1L)
-    rows <- (s - 1L) * M + seq_len(M)
-    cur <- rows[k0[s]]
-    pool_stack[cur, ] <- proposals[seq_len(n_pars), s]
-    pool_stack[rows[-k0[s]], ] <- pools$rows[[s]]
-    ll_stack[cur] <- proposals[n_pars + 1L, s]
-    ll_stack[rows[-k0[s]]] <- ll_new[, s]
-    lq_stack[cur] <- .emc_ensemble_log_q(pool_stack[cur, , drop = FALSE], pools$q[[s]], cfg)
-    lq_stack[rows[-k0[s]]] <- pools$lq[[s]]
-  }
-  base_w <- ll_stack - lq_stack                  # h-independent part of log w
-  subj_of_row <- rep(seq_len(n), each = M)
+  for (s in seq_len(n)) k0[s] <- sample.int(M, 1L)
+  st <- emc_ensemble_stack_cpp(pools$rows, pools$lq, ll_new,
+                               proposals[seq_len(n_pars + 1L), , drop = FALSE], k0,
+                               pools$L, pools$mu, pools$logdet, pools$c,
+                               cfg$tail_weight, cfg$tail_df)
+  pool_stack <- st$pool_stack
+  colnames(pool_stack) <- pn
   offset <- (seq_len(n) - 1L) * M
 
   # Gibbs on pi~(h, k | A): h | k with the package's group step, then k | h.
-  # The scratch store only needs the group state: gibbs_step() takes the
-  # subject states as an argument.
-  tmp <- sampler
-  store <- .emc_ensemble_store(sampler$samples)
-  selected <- k0
-  sel_alpha <- function() t(pool_stack[offset + selected, , drop = FALSE])
-  wess <- numeric(n)
-  for (r in seq_len(cfg$rounds)) {
-    alpha_k <- sel_alpha()
-    store <- fill_samples(samples = store, group_level = pars, proposals = NULL,
-                          j = 1L, n_pars = n_pars, type = sampler$type)
-    tmp$samples <- store
-    pars <- gibbs_step(tmp, alpha_k, sampler$type)
-    lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
-                                                  n, cfg$latent_weight), nrow = M)
-    selected <- .emc_ensemble_select_all(lw_all)
-    if (r == cfg$rounds) {
-      w <- exp(sweep(lw_all, 2, apply(lw_all, 2, max)))
-      wess <- colSums(w)^2 / colSums(w^2)
-    }
-  }
+  rounds <- if (.emc_ensemble_rounds_in_cpp(sampler)) .emc_ensemble_rounds_cpp else
+    .emc_ensemble_rounds_r
+  res <- rounds(sampler, pars, pool_stack, st$base_w, k0, M, cfg)
+  selected <- res$selected
+  pars <- res$pars
+  wess <- res$wess
 
   moved <- selected != k0
-  proposals[seq_len(n_pars), ] <- sel_alpha()
-  proposals[n_pars + 1L, ] <- ll_stack[offset + selected]
+  proposals[seq_len(n_pars), ] <- t(pool_stack[offset + selected, , drop = FALSE])
+  proposals[n_pars + 1L, ] <- st$ll_stack[offset + selected]
   pars$alpha <- proposals[seq_len(n_pars), , drop = FALSE]
   if (cfg$latent_weight == "marginal")
     pars <- .emc_ensemble_refresh_scores(pars, sampler, pars$alpha)

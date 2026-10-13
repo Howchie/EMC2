@@ -231,7 +231,26 @@ group_design_moments <- function(group_designs, tvinv, alpha, M) {
   list(prec_data = prec_data, mean_data = mean_data)
 }
 
+# The group update without group designs runs in C++ (src/ensemble_move.cpp,
+# the same kernel the ensemble rounds use); with group designs it takes the R
+# update below.
 gibbs_step_standard <- function(sampler, alpha) {
+  if (!is.null(sampler$gd) || (!is.null(sampler$group_designs) && length(sampler$group_designs) > 0))
+    return(.gibbs_step_standard_r(sampler, alpha))
+  last <- last_sample_standard(sampler$samples)
+  p <- nrow(alpha)
+  is_blocked <- sampler$is_blocked[!sampler$nuisance]
+  par_group <- sampler$par_group[!sampler$nuisance]
+  if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
+  if (is.null(par_group)) par_group <- rep(1L, p)
+  res <- emc_gibbs_standard_cpp(alpha, last$tvinv, as.numeric(last$a_half), sampler$prior,
+                                as.logical(is_blocked),
+                                as.integer(factor(par_group, levels = unique(par_group))))
+  list(tmu = res$tmu, tvar = res$tvar, tvinv = res$tvinv, a_half = res$a_half,
+       subj_mu = matrix(res$tmu, nrow = p, ncol = ncol(alpha)), alpha = alpha)
+}
+
+.gibbs_step_standard_r <- function(sampler, alpha) {
   #
   # alpha:  (p x n) subject-level parameter matrix
   #

@@ -257,6 +257,105 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_gibbs_standard_cpp
+Rcpp::List emc_gibbs_standard_cpp(const arma::mat& alpha, const arma::mat& tvinv0, const arma::vec& a_half0, const Rcpp::List& prior, const Rcpp::LogicalVector& is_blocked, const Rcpp::IntegerVector& par_group);
+RcppExport SEXP _EMC2_emc_gibbs_standard_cpp(SEXP alphaSEXP, SEXP tvinv0SEXP, SEXP a_half0SEXP, SEXP priorSEXP, SEXP is_blockedSEXP, SEXP par_groupSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type tvinv0(tvinv0SEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type a_half0(a_half0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type is_blocked(is_blockedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type par_group(par_groupSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_gibbs_standard_cpp(alpha, tvinv0, a_half0, prior, is_blocked, par_group));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_gibbs_diag_gamma_cpp
+Rcpp::List emc_gibbs_diag_gamma_cpp(const arma::mat& alpha, const arma::vec& tvinv0, const Rcpp::List& prior);
+RcppExport SEXP _EMC2_emc_gibbs_diag_gamma_cpp(SEXP alphaSEXP, SEXP tvinv0SEXP, SEXP priorSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type tvinv0(tvinv0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_gibbs_diag_gamma_cpp(alpha, tvinv0, prior));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_ensemble_factors_cpp
+Rcpp::List emc_ensemble_factors_cpp(const Rcpp::List& var);
+RcppExport SEXP _EMC2_emc_ensemble_factors_cpp(SEXP varSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type var(varSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_factors_cpp(var));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_ensemble_draw_pools_cpp
+Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const arma::cube& L, const arma::vec& logdet, int M1, double tail_weight, double tail_df, double tail_excess, const Rcpp::CharacterVector& par_names);
+RcppExport SEXP _EMC2_emc_ensemble_draw_pools_cpp(SEXP muSEXP, SEXP LSEXP, SEXP logdetSEXP, SEXP M1SEXP, SEXP tail_weightSEXP, SEXP tail_dfSEXP, SEXP tail_excessSEXP, SEXP par_namesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type L(LSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet(logdetSEXP);
+    Rcpp::traits::input_parameter< int >::type M1(M1SEXP);
+    Rcpp::traits::input_parameter< double >::type tail_weight(tail_weightSEXP);
+    Rcpp::traits::input_parameter< double >::type tail_df(tail_dfSEXP);
+    Rcpp::traits::input_parameter< double >::type tail_excess(tail_excessSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::CharacterVector& >::type par_names(par_namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_draw_pools_cpp(mu, L, logdet, M1, tail_weight, tail_df, tail_excess, par_names));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_ensemble_stack_cpp
+Rcpp::List emc_ensemble_stack_cpp(const Rcpp::List& rows, const Rcpp::List& lq, const arma::mat& ll_new, const arma::mat& proposals, const Rcpp::IntegerVector& k0, const arma::cube& L, const arma::mat& mu, const arma::vec& logdet, double c, double tail_weight, double tail_df);
+RcppExport SEXP _EMC2_emc_ensemble_stack_cpp(SEXP rowsSEXP, SEXP lqSEXP, SEXP ll_newSEXP, SEXP proposalsSEXP, SEXP k0SEXP, SEXP LSEXP, SEXP muSEXP, SEXP logdetSEXP, SEXP cSEXP, SEXP tail_weightSEXP, SEXP tail_dfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type lq(lqSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type ll_new(ll_newSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type proposals(proposalsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type k0(k0SEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type L(LSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet(logdetSEXP);
+    Rcpp::traits::input_parameter< double >::type c(cSEXP);
+    Rcpp::traits::input_parameter< double >::type tail_weight(tail_weightSEXP);
+    Rcpp::traits::input_parameter< double >::type tail_df(tail_dfSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_stack_cpp(rows, lq, ll_new, proposals, k0, L, mu, logdet, c, tail_weight, tail_df));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_ensemble_rounds_cpp
+Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec& base_w, const Rcpp::IntegerVector& k0, int M, int rounds, int type, const Rcpp::List& state, const Rcpp::List& prior, const Rcpp::LogicalVector& is_blocked, const Rcpp::IntegerVector& par_group);
+RcppExport SEXP _EMC2_emc_ensemble_rounds_cpp(SEXP pool_stackSEXP, SEXP base_wSEXP, SEXP k0SEXP, SEXP MSEXP, SEXP roundsSEXP, SEXP typeSEXP, SEXP stateSEXP, SEXP priorSEXP, SEXP is_blockedSEXP, SEXP par_groupSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type pool_stack(pool_stackSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type base_w(base_wSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type k0(k0SEXP);
+    Rcpp::traits::input_parameter< int >::type M(MSEXP);
+    Rcpp::traits::input_parameter< int >::type rounds(roundsSEXP);
+    Rcpp::traits::input_parameter< int >::type type(typeSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type state(stateSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type is_blocked(is_blockedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type par_group(par_groupSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_rounds_cpp(pool_stack, base_w, k0, M, rounds, type, state, prior, is_blocked, par_group));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sp_new
 Rcpp::List sp_new(const int iter, const arma::cube& lambda_varimax, const int q, const int p, const int dim_all_c, const arma::mat& all_c, const arma::mat& lambda_hat, const arma::uvec& st, arma::mat cost_matrix, arma::mat perm);
 RcppExport SEXP _EMC2_sp_new(SEXP iterSEXP, SEXP lambda_varimaxSEXP, SEXP qSEXP, SEXP pSEXP, SEXP dim_all_cSEXP, SEXP all_cSEXP, SEXP lambda_hatSEXP, SEXP stSEXP, SEXP cost_matrixSEXP, SEXP permSEXP) {
@@ -3669,6 +3768,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_collapsed_trajectories_cpp", (DL_FUNC) &_EMC2_collapsed_trajectories_cpp, 6},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
     {"_EMC2_emc_pt_cell_budget", (DL_FUNC) &_EMC2_emc_pt_cell_budget, 1},
+    {"_EMC2_emc_gibbs_standard_cpp", (DL_FUNC) &_EMC2_emc_gibbs_standard_cpp, 6},
+    {"_EMC2_emc_gibbs_diag_gamma_cpp", (DL_FUNC) &_EMC2_emc_gibbs_diag_gamma_cpp, 3},
+    {"_EMC2_emc_ensemble_factors_cpp", (DL_FUNC) &_EMC2_emc_ensemble_factors_cpp, 1},
+    {"_EMC2_emc_ensemble_draw_pools_cpp", (DL_FUNC) &_EMC2_emc_ensemble_draw_pools_cpp, 8},
+    {"_EMC2_emc_ensemble_stack_cpp", (DL_FUNC) &_EMC2_emc_ensemble_stack_cpp, 11},
+    {"_EMC2_emc_ensemble_rounds_cpp", (DL_FUNC) &_EMC2_emc_ensemble_rounds_cpp, 10},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_fast_dmvnorm", (DL_FUNC) &_EMC2_fast_dmvnorm, 3},
     {"_EMC2_fast_dmvnorm_factor", (DL_FUNC) &_EMC2_fast_dmvnorm_factor, 1},
