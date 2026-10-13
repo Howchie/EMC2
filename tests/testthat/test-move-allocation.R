@@ -804,6 +804,28 @@ test_that("a subject's rates are priced as the kernels are selected, jointly", {
   expect_identical(held$cost[2:3], c(Inf, Inf))
 })
 
+test_that("a plan's predicted autocorrelations are those it was solved for", {
+  local_test_rng(22)
+  for (trial in 1:15) {
+    units <- c(list(list(kind = "shear", rho = stats::runif(1, 0.5, 0.99),
+                         g = stats::runif(1, 0.2, 0.95), cost = stats::runif(1, 0.01, 0.2)),
+                    list(kind = "fixed", rho = stats::runif(1, 0, 0.5), cost = 0)),
+               lapply(1:3, function(i)
+                 list(kind = "subject", rho = stats::runif(2, 0.3, 0.999),
+                      p = stats::runif(2, 0.05, 0.95), c_p = stats::runif(1, 0.05, 0.5),
+                      h = stats::runif(2, 0, 0.95), c_h = stats::runif(1, 0.02, 0.5))))
+    sol <- EMC2:::.emc_alloc_solve(units, 1)
+    pred <- sol$pred
+    expect_length(pred, length(units))
+    expect_equal(pred[[1]], units[[1]]$rho *
+                   EMC2:::.emc_alloc_factor(units[[1]]$g, sol$x[1], units[[1]]$g))
+    expect_equal(pred[[2]], units[[2]]$rho)
+    for (i in 3:5) expect_equal(pred[[i]], alloc_subject_rho(units[[i]], sol$q[i], sol$x[i]))
+    # The solver's target bounds every coordinate it ranges over.
+    expect_lte(max(unlist(pred[-2])), sol$rho + 1e-9)
+  }
+})
+
 test_that("the solver's objective is the model's objective at the plan it returns", {
   local_test_rng(23)
   subj <- function() {

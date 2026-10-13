@@ -495,7 +495,38 @@
   best$tau0 <- zero$tau
   # The slowest coordinate of all, moved or not.
   best$tau0_all <- .emc_alloc_tau(r0$hi_all)
+  best$pred <- .emc_alloc_predict(units, best, joint, max_rounds)
   best
+}
+
+# Each unit's lag-one rho under a solved plan (sol$x, sol$q, sol$joint): the
+# collapsed move's factor at sol$joint on the units it moves, then the unit's
+# own moves; a subject's HMC runs at its total rate, r_min included, with the
+# particle step under coupled selection (.emc_alloc_dev_factor).
+.emc_alloc_predict <- function(units, sol, joint = NULL, max_rounds = .EMC_ALLOC_MAX_ROUNDS) {
+  xc <- if (is.null(sol$joint)) 0 else sol$joint
+  idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
+  fac_c <- if (xc > 0 && length(idx))
+    rep_len(.emc_alloc_factor(joint$g, xc, if (is.null(joint$a)) joint$g else joint$a),
+            length(idx))
+  lapply(seq_along(units), function(i) {
+    u <- .emc_alloc_as_subject(units[[i]])
+    rho <- u$rho
+    k <- match(i, idx)
+    if (!is.null(fac_c) && !is.na(k)) rho <- rho * fac_c[k]
+    x <- if (length(sol$x) >= i && is.finite(sol$x[i])) sol$x[i] else 0
+    switch(u$kind,
+      fixed = rho,
+      shear = rho * .emc_alloc_factor(u$g, x, if (is.null(u$a)) u$g else u$a),
+      subject = {
+        q <- if (is.null(u$p) || length(sol$q) < i) 1 else sol$q[i]
+        r <- if (is.null(u$h)) 0 else
+          min(1, x + (if (is.null(u$r_min)) 0 else u$r_min))
+        rho * .emc_alloc_dev_factor(q, r, if (is.null(u$p)) 1 else u$p,
+                                    if (is.null(u$h)) 1 else u$h)
+      },
+      rho)
+  })
 }
 
 # The fixed costs a plan pays per iteration, by target: X holds each unit's
@@ -1341,6 +1372,15 @@
       tau0_all = sol$tau0_all, cost = sol$cost,
       regime = regime, r_bar = m$r_bar,
       objective = sol$objective, objective0 = sol$objective0,
+      # Predicted lag-one rho per coordinate under the plan, and the rest of
+      # the iteration's with nothing bought (subjects under their particle
+      # step alone), for checking the allocation against the next block.
+      pred_group = if (length(sol$pred) >= n_g) vapply(sol$pred[seq_len(n_g)], max, numeric(1)),
+      pred_subject = if (length(sol$pred) >= n_g + ch$n_subjects)
+        do.call(rbind, sol$pred[n_g + seq_len(ch$n_subjects)]),
+      pred0_group = m$g_rho,
+      pred0_subject = do.call(rbind, lapply(u$units[n_g + seq_len(ch$n_subjects)],
+                                            .emc_alloc_subject_base)),
       group_rho = m$g_rho, group_g = m$g_fac, group_a = m$g_sat,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,
