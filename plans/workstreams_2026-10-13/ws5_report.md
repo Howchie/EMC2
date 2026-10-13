@@ -11,17 +11,18 @@ Status (2026-10-13):
 | 7d875047 | Ensemble update in C++ (pool draws, stacked pools, Gibbs rounds), RNG-identical |
 | ad3183b4 | Main group Gibbs step (standard, diagonal-gamma) in C++ |
 | 873c734a | Iteration profile: `ensemble_elapsed`, `collapsed_elapsed`, `collapsed_moves` |
-| c910a3c4 | Between-block pool/rounds rule, first version (hook in `add_proposals()`: WS2) |
-| 141df019 | Rule revised: measured pool-row CPU as the member price, slowest coordinate as the objective |
+| c910a3c4, 141df019 | Between-block pool/rounds rule, two versions: **reverted** (07a5cf11, 37ba83dc) |
+| 369ef06d | Proposal factors once per block; the inverse-Wishart draw's own precision factor; constant terms of the proposal density hoisted (RNG-identical) |
+| 1bb98ee6 | Three ensemble rounds by default (was ten) |
 | others | this report and `benchmarks/ensemble-cost/` |
 
-Phase 1 is done and verified. The first-version rule lost efficiency on Forstmann (see Check);
-the revised rule is unit-tested only. Pending, queued in `h/queue_g.sh`
-(= `benchmarks/ensemble-cost/ablation_forstmann.sh`): a Forstmann ablation of the two revisions
-(3 seeds), then the test suites on build `final` (141df019). Whether the rule stays the
-default, or (32,10) does, waits on that ablation; the rule is only to be run on T30 and lba7r
-if Forstmann shows a gain. nback31 was not run (its checkpoint build was stopped to release the
-shared lock). Latent-factor hierarchies and standard ones with group designs keep the R rounds.
+Phase 1 is done and verified. Phase 2's rule is withdrawn (see "A between-block rule: tried and
+withdrawn"): it valued the pool only by the group state's displacement inside one move and so
+cut the pool to two members, losing a third of the worst coordinate's ESS per CPU-s on
+Forstmann. The pool size stays a fixed option (32) pending the measurements in "Pool size: cost
+and sensitivity". nback31 was not run (its checkpoint build was stopped to release the shared
+lock). Latent-factor hierarchies and standard ones with group designs keep the R rounds. The
+`add_proposals()` hook the rule added is gone with it, so WS2's between-block code is untouched.
 
 ## Phase 1: what the move computes, and what was ported
 
@@ -94,6 +95,19 @@ is rounding only: LAPACK/Armadillo factorisations and summation order, and `-ffa
 What the R rounds still do: the latent-factor hierarchies (`.emc_ensemble_rounds_r`, through
 `gibbs_step()` and `.emc_ensemble_log_g()`), and standard hierarchies with group designs. These
 were not profiled as significant and are not among the four fixtures.
+
+Follow-up (369ef06d), after the external review: the pool proposals are frozen between
+rebuilds, so `run_stage` computes their Cholesky factors and log determinants once
+(`emc_ensemble_factors_cpp`) and passes them to every later pool draw of the block; the
+inverse-Wishart draw returns its Bartlett factor `U = Z C` (upper triangular, the drawn
+precision's Cholesky factor), so the precision block is `U'U` rather than a second inversion,
+and the rounds' group density is evaluated block by block through those factors (no Cholesky
+of the full covariance, no dense p x p triangular solve over all pool rows); the proposal
+density's constant terms (two `lgamma` calls) are computed once per call instead of per pool
+member. The Gumbel-max selection stays: replacing it would change the random numbers. Identity
+(`sbs_ens2.R`, build `cpp2`, one chain, 9 cores, 200 iterations): Forstmann and T30 both 0
+selection and 0 RNG mismatches; largest relative differences 1.2e-14 (Forstmann) and 1.4e-12
+(T30) over pool draws, moves and 2200 Gibbs calls each.
 
 Guard semantics: the R `riwish()` rejected a scale matrix by `eigen`/`kappa` thresholds
 (`rcond < 1e-12`); the C++ path rejects when the symmetrised scale, its inverse or the Wishart
@@ -202,54 +216,28 @@ and 20 rounds 43% of the subjects end with a fresh state. Those refreshed states
 group conditional's reach. The rounds cost 0.2-0.5 ms each.
 
 So, on these two fixtures, a pool larger than a handful of members and more than two or three
-rounds buy no group movement. The ensemble's value on Forstmann comes through the subject
-refresh: the refreshed states let the next iteration's group draw be independent, which the
-in-sweep displacement shows as the first-round jump already sitting at 2.
+rounds buy no group movement inside one move. That was the wrong yardstick: the move's product
+is the subject refresh (the `moved` columns), which grows with M on both fixtures and, where
+the pools are inefficient (T30), with the rounds too (M = 32: 0.09 after one round, 0.20 after
+twenty). Refreshed subject states change what the following iterations' group draws condition
+on, which a single move's group displacement cannot show. The rule below was built on the
+group displacement and failed for that reason.
 
-### The rule (step 7), first version
+### A between-block rule: tried and withdrawn
 
-`R/ensemble_plan.R`, applied once per block where the pool proposal is rebuilt
-(`add_proposals()`, one added call, which WS2 should know about). Objective: the group state's
-expected squared displacement per unit of wall time; every quantity is measured in the block:
-- inside the move (C++ returns the trajectory): the standardised displacement after each round
-  from the state the move received, J_r; the move's gain G = J_R - J_1 (the reselections'
-  displacement; J_1 is the Gibbs draw the main step also makes) and its increments dJ_r;
-- the fresh members' weight odds e_s per subject, from the final weights;
-- the chain's own lag-1 displacement of the same coordinates over the block, J_tot, and the
-  iteration's wall time C, which set the exchange rate J_tot / C;
-- the wall time of a round, c_round, and of a fresh member, c_member (the pool rows' share of
-  the particle round's wall time, a pool row costing what a particle row costs).
+Two versions were implemented and reverted (c910a3c4, 141df019; reverts 07a5cf11, 37ba83dc).
+Both set M and R between blocks to maximise the group means' and log sds' expected squared
+jump per wall time, using the in-move group displacement by round, the fresh members' weight
+odds e_s, and measured costs. Version 1 priced a pool member by the pool rows' share of the
+particle round by row count and averaged displacement over coordinates; version 2 measured
+the pool rows' worker CPU and maximised the slowest coordinate. Both share the flaw above: the
+pool's benefit is the subject refresh share, which the objective never credits, so both drive
+M to 2 whenever the in-move group gain is small (Forstmann: small because the means are already
+independent; T30: small because the pools are inefficient).
 
-Rounds: keep round r while dJ_r / c_round >= J_tot / C (its marginal displacement per cost
-beats the chain's average); double when the last round still qualifies; floor 2 (one
-reselection must be observable), cap 64. Pool: the reselections' displacement is taken to scale
-with the share of subjects they refresh, m(x) = mean_s x e_s / (1 + x e_s) for x = M - 1 fresh
-members (an independence sampler's displacement odds), G(x) = D m(x) with D = G / m(x_cur);
-keep members while D m'(x) / c_member >= J_tot / C; double when the current pool still
-qualifies; floor 1 fresh member (M = 2), cap 256. Both change only between blocks. The rule
-has no dataset constants; the floor and caps are structural.
-
-Unit tests (`test-ensemble-plan.R`): constructed block records with known answers (rounds
-grow / stop after the last qualifying increment / floor; pool grows / stops at the last
-qualifying member / floor when the reselections bring nothing / unchanged on a record too
-short to price). Invariance (`test-ensemble-move.R`, full level): the joint posterior is
-invariant when the pool and rounds change between blocks on a schedule
-(2,2) -> (8,3) -> (24,6) -> (4,2).
-
-Functional run (short Forstmann fit from scratch, 4 cores, build `dev`): at the first sample
-rebuild the rule cut M from 32 to 2 and kept 9 rounds, then settled at M = 2, R = 4-5, with
-the chain's lag-1 displacement unchanged (J_tot about 2 per coordinate before and after). The
-measured prices: 31 fresh members were about 65% of the iteration's wall time on 4 cores and
-bought G = 0.44 of displacement inside the move; a round about 5e-5 s.
-
-### Check (step 8)
-
-Continuations from saved states (`cont_queue.sh`, build `p2` = the first-version rule), 3
-chains x 3 cores pinned to 9 CPUs, rebuilds every 100 transitions, one seed: indicative, and
-only comparisons between arms are meaningful. Worst coordinate's ESS (bulk, over the group
-means and log sds) and per CPU-s. The CPU figure is the session cgroup's, which other
-sessions share, so it may include their work; wall times are clean. The harness now also
-reports the run's own process-tree CPU (used for the ablation).
+Continuations from saved states with the first version (`cont_queue.sh`, build `p2`), 3 chains
+x 3 cores pinned to 9 CPUs, one seed (indicative). CPU is the session cgroup's, which other
+sessions share; wall times are clean.
 
 | Fixture, 400 it | arm | worst coordinate | worst ESS | per CPU-s | lag-1 of worst | wall s |
 |---|---|---|---|---|---|---|
@@ -267,41 +255,26 @@ coordinate mu_v.g_lure, ESS 63, 0.011 per CPU-s, 0.08 per wall-s, lag-1 0.92, wa
 first-version rule arm was stopped after 31 minutes (2.4x the fixed arm, no result; that rule is
 superseded); (2,2) dropped as clearly worse.
 
-The first-version rule cut M to 2 on every chain of both fixtures at the first rebuild. On
-Forstmann that cost a third of the worst coordinate's ESS per CPU-s: log sd(t0) slows (lag-1
-0.03 -> 0.17) while the saving is 2 s of 35. Two faults:
-- the price of a pool member was the pool rows' share of the particle round by row count. The
-  likelihood is vectorised over rows with a per-call cost, and the round's wall time includes
-  latency and idle cores, so that share overstated the members' cost several-fold (the
-  functional run's "65% of the iteration" against a measured 2 s of 35);
-- the objective averaged displacement over coordinates. The pool's gain sits on the log sds,
-  and the slowest coordinate is a log sd; the average hid its loss behind the means, which sit
-  at the independence limit from round 1.
-On T30 the rule kept 6-10 rounds although the rounds' measured gain is noise around zero:
-rounds are cheap enough that any positive noise passes. Harmless in cost.
+On Forstmann the rule's cut to M = 2 slowed log sd(t0) (lag-1 0.03 -> 0.17) and cost a third
+of the worst ESS per CPU-s for a 2 s saving in 35. On lba7r the rule arm was stopped after 31
+minutes, 2.4x the fixed arm's time. An exact-length rerun (`diag_lba7r.R`, 300 iterations,
+`max_tries = 1`) showed the per-iteration cost unchanged (2.2 s per iteration; a chain
+iteration 0.9-1.2 s at M = 32 and 1.1-1.3 s at M = 2-6 after the cut): the long run was
+`fit()` repeating 100-iteration tries (up to `max_tries = 20`) because the stop rule kept
+failing with the smaller pool, i.e. a mixing loss, not a cost one.
 
-### The rule, revised
+### Rounds
 
-Both faults fixed in `R/ensemble_plan.R`:
-- the pool rows' cost is measured: each worker times the candidate likelihood of its
-  subjects' pool rows (CPU), returned with the particle results (`extra_times` from
-  `.emc_wpool_iter`, `extra_time` per subject on the fork path); the block's member price is
-  that CPU spread over the chain's cores;
-- the objective is the slowest coordinate's displacement per wall time, the next plan
-  maximising, over pools up to twice the current and rounds up to the current,
-  min_k (T_k + G_k(x', R') - G_k(x, R)) / (C + c_member (x' - x) + c_round (R' - R)),
-  with T_k the chain's lag-1 displacement of coordinate k over the block, G_k(R') its
-  reselection gain after R' rounds (negative counted as none) scaled by m(x')/m(x), the
-  cheapest plan winning ties; the rounds double when the last round still raises the
-  objective. Without a measured member price the pool is kept.
-Tests (`test-ensemble-plan.R`): rounds grow / drop a round that adds nothing / floor with no
-gain; the pool falls monotonically with the member's price and doubles when members are cheap;
-a slow coordinate that the reselections move keeps the pool, while gains confined to already
-fast coordinates cut it to one fresh member (the case the averaged objective got wrong); pool
-CPU is spread over the chain's cores.
+Three rounds by default (1bb98ee6). Round 1 is the main Gibbs step's draw again; one or two
+reselections capture the in-move group gain on both fixtures. Where pools are inefficient the
+refresh share still grows with the rounds; whether that matters is checked by (32,3) against
+(32,10) below. Checkpoints keep the rounds they were recorded with (`production_options`), so a
+resumed fit from before this commit still runs ten.
 
-Check of the revision (queued, `ablation_forstmann.sh`): Forstmann continuations, 400
-iterations, 3 seeds, one fit at a time on CPUs 23-31: fixed (32,10) and the first rule (build
-`p2`), the price change alone (`abl_price`: 141df019 with the first-version objective), the
-objective change alone (`abl_obj`: 141df019 with the row-share price), and both (`final` =
-141df019). Results in `/data/work/EMC2_ws5_libs/abl/`. Not yet run.
+### Pool size: cost and sensitivity
+
+(pending: `h/queue_m.sh`, harness `cont_m.R`, build `cpp2` = 1bb98ee6; fixed (M, R)
+continuations, exactly 400 iterations (`max_tries = 1`), 3 chains x 3 cores on CPUs 23-31, one
+fit at a time, each in its own systemd scope so the cgroup CPU is the fit's own. Forstmann M in
+{2, 8, 19 = n, 32, 64} at R = 3 and (32,10), 3 seeds; T30 M in {2, 8, 32, 64} at R = 3 and
+(32,10), 2 seeds; lba7r M in {2, 32, 106 = n} at R = 3, 100 iterations, cost only.)

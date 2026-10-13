@@ -33,9 +33,9 @@ draw_pools_ref <- function(sampler, chains_mu, chains_var) {
   list(q = q, rows = rows, lq = lq)
 }
 g_draw <- ns$.emc_ensemble_draw_pools
-w_draw <- function(sampler, stage, chains_mu, chains_var, iteration = 0L) {
+w_draw <- function(sampler, stage, chains_mu, chains_var, iteration = 0L, factors = NULL) {
   seed0 <- seed_get()
-  out <- g_draw(sampler, stage, chains_mu, chains_var, iteration)
+  out <- g_draw(sampler, stage, chains_mu, chains_var, iteration, factors)
   if (is.null(out)) return(out)
   seed_new <- seed_get()
   seed_set(seed0)
