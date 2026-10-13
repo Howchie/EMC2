@@ -698,6 +698,15 @@ test_that("a family's fixed cost is charged at the plan's activation probability
   expect_equal(act(list(subj, subj, sh), cbind(c(0.5, 0.5, 3)), c(0, 0.5, 0), 0, 4),
                4 * (1 - 0.5 * 0))
   expect_equal(act(list(subj, sh), cbind(c(0, 1)), c(0, 0), 0, 4), 0)
+  # The compiled product is R's long-double prod() exactly, non-finite rates
+  # counting as one.
+  set.seed(3)
+  X <- matrix(runif(400, -0.1, 1.2), 80)
+  X[c(3, 90, 200)] <- c(NA, Inf, -Inf)
+  add <- runif(80) * (runif(80) < 0.5)
+  R <- pmin(X + add, 1)
+  R[!is.finite(R)] <- 1
+  expect_identical(EMC2:::emc_alloc_act_term_cpp(X, add), 1 - apply(1 - R, 2, prod))
   # A solved plan pays the fixed cost only on the iterations that run rounds.
   sol <- EMC2:::.emc_alloc_solve(list(sh), 1, shear_fixed = 0.5)
   expect_gt(sol$x, 0)

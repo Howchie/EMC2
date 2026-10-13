@@ -143,3 +143,25 @@ Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
   return Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
                             Rcpp::Named("cost") = C);
 }
+
+// A family's activation probability at each target (column of X): one minus
+// the product over its units (rows) of one minus min(x + add, 1), a
+// non-finite rate counting as one. The product is accumulated in long double,
+// as R's prod() does, so the result equals the R expression exactly.
+// [[Rcpp::export]]
+Rcpp::NumericVector emc_alloc_act_term_cpp(const Rcpp::NumericMatrix& X,
+                                           const Rcpp::NumericVector& add) {
+  const int n_r = X.nrow(), n_t = X.ncol();
+  const double inf = std::numeric_limits<double>::infinity();
+  Rcpp::NumericVector out(n_t);
+  for (int t = 0; t < n_t; ++t) {
+    long double s = 1.0L;
+    for (int i = 0; i < n_r; ++i) {
+      double v = X(i, t) + add[i];
+      if (std::isnan(v) || v == -inf || v > 1.0) v = 1.0;
+      s *= static_cast<long double>(1.0 - v);
+    }
+    out[t] = 1.0 - static_cast<double>(s);
+  }
+  return out;
+}

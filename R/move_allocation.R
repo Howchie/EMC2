@@ -485,13 +485,27 @@
     need <- vector("list", n_u)
     need[still] <- need_of(units[still], r0$movable[still])
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
+    # A family's activation term is the same at every collapsed rate unless
+    # the collapsed move shifts one of its units.
+    act_rows <- .emc_alloc_act_rows(units)
+    act_add <- list(shear = 0, hmc = r_min[act_rows$hmc])
+    act_fixed <- list(shear = shear_fixed, hmc = hmc_fixed)
+    act_part <- function(nd, f) {
+      rows <- act_rows[[f]]
+      if (act_fixed[[f]] <= 0 || !length(rows)) return(NULL)
+      .emc_alloc_act_part(do.call(rbind, lapply(nd[rows], `[[`, "x")), act_add[[f]], act_fixed[[f]])
+    }
+    act_held <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
+      if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
     for (c in seq_along(xcs)) {
       nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx])
       need_c <- need
       need_c[moved_idx] <- nm
+      act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
+        if (is.null(act_held[[f]])) act_part(need_c, f) else act_held[[f]][[1L]])
       cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) + j_fixed(xcs[c]) +
         Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
-        activation(do.call(rbind, lapply(need_c, `[[`, "x")))
+        .emc_alloc_act_sum(act$shear, act$hmc, length(targets))
       obj <- tau_t * cost
       k <- which.min(obj)
       if (!length(k) || !is.finite(obj[k]) || obj[k] >= best$objective * (1 - 1e-9)) next
@@ -550,24 +564,30 @@
 # coordinate has a whole round; subjects take HMC independently at their
 # total rates r_min + x, so a round runs with probability 1 - prod_s (1 - r_s).
 .emc_alloc_activation <- function(units, X, r_min, shear_fixed, hmc_fixed) {
-  out <- numeric(ncol(X))
-  if (shear_fixed > 0) {
-    sh <- which(vapply(units, function(u) identical(u$kind, "shear"), logical(1)))
-    if (length(sh)) {
-      Xs <- pmin(X[sh, , drop = FALSE], 1)
-      Xs[!is.finite(Xs)] <- 1
-      out <- out + shear_fixed * (1 - apply(1 - Xs, 2, prod))
-    }
-  }
-  if (hmc_fixed > 0) {
-    hs <- which(vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
-                       logical(1)))
-    if (length(hs)) {
-      R <- pmin(X[hs, , drop = FALSE] + r_min[hs], 1)
-      R[!is.finite(R)] <- 1
-      out <- out + hmc_fixed * (1 - apply(1 - R, 2, prod))
-    }
-  }
+  rows <- .emc_alloc_act_rows(units)
+  .emc_alloc_act_sum(
+    .emc_alloc_act_part(X[rows$shear, , drop = FALSE], 0, shear_fixed),
+    .emc_alloc_act_part(X[rows$hmc, , drop = FALSE], r_min[rows$hmc], hmc_fixed),
+    ncol(X))
+}
+
+# The units whose allocation activates each family's fixed cost.
+.emc_alloc_act_rows <- function(units) list(
+  shear = which(vapply(units, function(u) identical(u$kind, "shear"), logical(1))),
+  hmc = which(vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
+                     logical(1))))
+
+# One family's fixed cost at each target, or NULL when it has none: Xf holds
+# the family's units (rows), each running at min(x + add, 1).
+.emc_alloc_act_part <- function(Xf, add, fixed) {
+  if (fixed <= 0 || !nrow(Xf)) return(NULL)
+  fixed * emc_alloc_act_term_cpp(Xf, rep_len(as.numeric(add), nrow(Xf)))
+}
+
+.emc_alloc_act_sum <- function(shear, hmc, n_t) {
+  out <- numeric(n_t)
+  if (!is.null(shear)) out <- out + shear
+  if (!is.null(hmc)) out <- out + hmc
   out
 }
 
