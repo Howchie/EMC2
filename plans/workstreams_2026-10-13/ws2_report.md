@@ -241,6 +241,21 @@ contention, queue cancellation and reproducible restart behaviour would all
 need measurement. This option changes draws and adaptation timing and has
 therefore been left for the user to decide.
 
+## HMC pilot failures (added from WS1)
+
+The HMC calibration pilots in `.emc_hmc_calibrate` used to turn every
+likelihood error into a NULL. A broken kernel or worker therefore looked like a
+rejected step, and the subject's step size and HMC price were set from it,
+with no count and no warning. WS1's replays hit this when saved states were
+replayed without `restore_custom_kernel_pointers()`, because forked pilots
+raced on Rcpp's build cache. Pilot errors are now classified in the same way as
+a production HMC transition's. Under `strict`, a non-numerical failure stops
+the fit. Each pilot returns its tally, and the master counts it under the
+`pilot` source and announces it, because a forked pilot's own counters and
+warnings end with the process. The change does not alter sampling when no
+likelihood fails. `test-subject-hmc.R` checks it with a mocked failing
+likelihood.
+
 ## Commits and reproducibility
 
 | Commit | Scope |
@@ -255,6 +270,7 @@ therefore been left for the user to decide.
 | `6a3f6d7f` | Balanced atlas node fits |
 | `46e56829` | Regression workload/width guard |
 | `3372d5df` | Large stopping diagnostics over unchanged MCMC groups |
+| `983e4120` | HMC pilot likelihood failures counted and under the failure policy (from WS1) |
 
 The benchmark [README](../../benchmarks/rebuild-overhead/README.md) describes
 commands and interpretation. Raw inputs, sampler states and full result
