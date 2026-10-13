@@ -985,11 +985,7 @@ run_stage <- function(pmwgs,
                             pmwgs$samples$subj_ll[, j - 1], wpool_streams,
                             extra = ens_pools$rows,
                             pooled = pmwgs$pooled$value, skip = part_skip)
-      if (!is.null(ens_pools)) {
-        ens_pools$ll <- it$extra_ll
-        ens_pools$cpu <- sum(it$extra_times)
-        ens_pools$cores <- chain_cores
-      }
+      if (!is.null(ens_pools)) ens_pools$ll <- it$extra_ll
       proposals <- it$props
       pm_settings <- it$pm_settings
       wpool_streams <- it$seeds
@@ -1031,23 +1027,16 @@ run_stage <- function(pmwgs,
         r_cores = core_budget$likelihood, chol_cache = chol_caches[[s]],
         group_chol = group_chol_it)
       out$rng_seed <- get(".Random.seed", envir = globalenv())
-      if (!is.null(ens_pools)) {
-        t0 <- sum(proc.time()[c("user.self", "sys.self")])
+      if (!is.null(ens_pools))
         out$extra_ll <- .emc_ensemble_ll_candidate(ens_pools$rows[[s]], data[[s]],
                                                    pmwgs$model)
-        out$extra_time <- sum(proc.time()[c("user.self", "sys.self")]) - t0
-      }
       out
     }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
     if (!is.null(ens_pools)) {
       ens_pools$ll <- vector("list", pmwgs$n_subjects)
-      ens_pools$cpu <- 0
-      ens_pools$cores <- n_cores
       for (res in raw_proposals) if (is.list(res) && is.numeric(res$subject) &&
-                                     length(res$subject) == 1L && !is.null(res$extra_ll)) {
+                                     length(res$subject) == 1L && !is.null(res$extra_ll))
         ens_pools$ll[[as.integer(res$subject)]] <- res$extra_ll
-        if (is.numeric(res$extra_time)) ens_pools$cpu <- ens_pools$cpu + res$extra_time
-      }
     }
     next_streams <- wpool_streams
     for (res in raw_proposals) {
@@ -1069,7 +1058,11 @@ run_stage <- function(pmwgs,
     proposals <- assembled$proposals
     }
     if (!is.null(ens_pools))
-      pmwgs <- .emc_ensemble_record_rows(pmwgs, ens_pools)
+      pmwgs <- .emc_ensemble_record_rows(pmwgs, ens_pools, proc.time()[["elapsed"]] - part_started,
+                                         vapply(pm_settings, function(x)
+                                           if (is.null(x$n_particles)) NA_real_ else as.numeric(x$n_particles),
+                                           numeric(1)),
+                                         if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip)
     if (alloc_on) {
       pmwgs <- .emc_alloc_record_particle(
         pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),

@@ -1449,7 +1449,6 @@
        seeds = do.call(c, lapply(outs, `[[`, "seeds")),
        times = as.numeric(unlist(lapply(outs, `[[`, "times"))),
        extra_ll = if (is.null(inp$extra)) NULL else do.call(c, lapply(outs, `[[`, "extra_ll")),
-       extra_times = as.numeric(unlist(lapply(outs, `[[`, "extra_times"))),
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(spent[["user.self"]] + spent[["sys.self"]]),
        elapsed = unname(spent[["elapsed"]]), rejects = rejects)
@@ -1470,7 +1469,6 @@
   seeds <- vector("list", length(subs))
   times <- numeric(length(subs))
   extra_ll <- if (is.null(msg$extra)) NULL else vector("list", length(subs))
-  extra_times <- numeric(length(subs))
   t_recv <- Sys.time()
   w_started <- proc.time()
   rejects_before <- .emc_reject_counts("particle")
@@ -1508,16 +1506,13 @@
     pm[[k]] <- out$pm_settings
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
     # Ensemble pool members for this subject (no RNG use).
-    if (!is.null(extra_ll) && !is.null(msg$extra[[k]])) {
-      t0 <- sum(proc.time()[c("user.self", "sys.self")])
+    if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
       extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], data_s,
                                                   ctx$model)
-      extra_times[k] <- sum(proc.time()[c("user.self", "sys.self")]) - t0
-    }
   }
   w_spent <- proc.time() - w_started
   list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,
-       extra_times = extra_times, t_recv = t_recv, t_done = Sys.time(),
+       t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
        elapsed = unname(w_spent[["elapsed"]]),
        rejects = .emc_reject_delta(rejects_before, "particle"))
@@ -1761,7 +1756,6 @@
   times <- numeric(n_subjects)
   cpu_total <- 0
   extra_ll <- if (is.null(extra)) NULL else vector("list", n_subjects)
-  extra_times <- numeric(n_subjects)
 
   population_mu <- vapply(seq_len(n_subjects), function(s) {
     as.numeric(get_group_level(pars, s, ctx$type)$mu)
@@ -1870,8 +1864,6 @@
     seeds[subs] <<- res$seeds
     stored[subs] <<- TRUE
     if (!is.null(extra) && !is.null(res$extra_ll)) extra_ll[subs] <<- res$extra_ll
-    if (!is.null(extra) && length(res$extra_times) == length(subs))
-      extra_times[subs] <<- res$extra_times
     if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
     if (identical(source, "master") && was_alive) {
       fallback_workers <<- fallback_workers + 1L
@@ -2030,8 +2022,7 @@
   } else if (measure_wire) 0 else NA_real_
   worker_load <- vapply(assigned, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       extra_ll = extra_ll, extra_times = extra_times, alive = pool$alive,
-       rejects = rejects, worker_cpu = cpu_total,
+       extra_ll = extra_ll, alive = pool$alive, rejects = rejects, worker_cpu = cpu_total,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,
