@@ -66,7 +66,7 @@ acf_k <- function(k) mean(vapply(seq_len(dim(arr)[2]), function(c) {
 lag <- vapply(1:10, acf_k, 0)
 plans <- lapply(emc, function(ch) ch$ensemble_plan_history)
 plan_tab <- do.call(rbind, lapply(seq_along(plans), function(j) do.call(rbind, lapply(plans[[j]], function(r)
-  data.frame(chain = j, n = r$n, M = r$M, R = r$R, G = r$G, J_tot = r$J_tot, C = r$C, eff = r$eff, moved = r$moved, pool = r$pool, rounds = r$rounds)))))
+  data.frame(chain = j, n = r$n, M = r$M, R = r$R, G = r$G, J_tot = r$J_tot, C = r$C, c_member = r$c_member, T_min = if (is.null(r$T_min)) NA else r$T_min, G_min = if (is.null(r$G_min)) NA else r$G_min, worst = if (is.null(r$worst)) NA else r$worst, eff = r$eff, moved = r$moved, pool = r$pool, rounds = r$rounds)))))
 res <- list(fixture = basename(fx), arm = arm, seed = seed, iter = iter, n_new = n_new, wall = wall, cpu = cpu,
             ess = ess, worst = names(ess)[worst], ess_min = min(ess), ess_min_per_cpu = min(ess) / cpu,
             ess_min_per_wall = min(ess) / wall, lag = lag, plans = plan_tab,
