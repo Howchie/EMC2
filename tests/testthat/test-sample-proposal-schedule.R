@@ -2,19 +2,14 @@
 
 local_rng_guard()
 
-test_that("production refreshes its proposals on a doubling schedule by default", {
-  withr::local_options(list(emc2.sample_rebuilds = NULL))
+test_that("production refreshes its proposals on a doubling schedule", {
   expect_identical(EMC2:::.emc_next_sample_rebuild(0), 100L)
   expect_identical(EMC2:::.emc_next_sample_rebuild(100), 200L)
-  expect_identical(EMC2:::.emc_next_sample_rebuild(400), 800L)
-  withr::local_options(list(emc2.sample_rebuilds = "doubling"))
   expect_identical(EMC2:::.emc_next_sample_rebuild(200), 400L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(400), 800L)
 })
 
-test_that("an empty schedule freezes production proposals", {
-  withr::local_options(list(emc2.sample_rebuilds = numeric(0)))
-  expect_identical(EMC2:::.emc_next_sample_rebuild(0), Inf)
-  expect_identical(EMC2:::.emc_next_sample_rebuild(100), Inf)
+test_that("production proposals are not rebuilt before their next refresh", {
   calls <- 0L
   local_mocked_bindings(
     create_chain_proposals = function(emc, ...) { calls <<- calls + 1L; emc },
@@ -23,24 +18,16 @@ test_that("an empty schedule freezes production proposals", {
   emc <- list(list(samples = list(stage = rep("adapt", 20), idx = 20L)))
   emc <- EMC2:::add_proposals(emc, "sample", 1, NULL)
   expect_equal(calls, 2L)
-  expect_identical(emc[[1]]$sample_proposals_next, Inf)
-  emc[[1]]$sample_transitions <- 1000L
-  emc[[1]]$samples <- list(stage = c(rep("adapt", 20), rep("sample", 1000)), idx = 1020L)
+  expect_identical(emc[[1]]$sample_proposals_next, 100L)
+  emc[[1]]$sample_transitions <- 50L
+  emc[[1]]$samples <- list(stage = c(rep("adapt", 20), rep("sample", 50)), idx = 70L)
   later <- EMC2:::add_proposals(emc, "sample", 1, NULL)
   expect_equal(calls, 2L)
   expect_identical(later, emc)
   expect_false(EMC2:::.emc_sample_rebuild_due(emc))
 })
 
-test_that("production refresh schedules must be finite and integer-valued", {
-  for (at in list(Inf, NA_real_, -1, 0, 1.5, "halving")) {
-    withr::local_options(list(emc2.sample_rebuilds = at))
-    expect_error(EMC2:::.emc_next_sample_rebuild(0), "finite positive integer")
-  }
-})
-
-test_that("explicit production refreshes use every stored production draw", {
-  withr::local_options(list(emc2.sample_rebuilds = c(100L, 200L, 400L, 800L)))
+test_that("production refreshes use every stored production draw", {
   calls <- list()
   local_mocked_bindings(
     create_chain_proposals = function(emc, samples_idx = NULL, ...) {
@@ -101,10 +88,8 @@ test_that("explicit production refreshes use every stored production draw", {
 })
 
 # End to end: a real fit on a weak-data Gaussian mock whose exact posterior is
-# known, with production long enough for four rebuilds (100, 200, 400, 800),
-# with and without the ensemble update.
+# known, with production long enough for four rebuilds (100, 200, 400, 800).
 test_that("rebuilding sample proposals keeps an exact Gibbs posterior", {
-  withr::local_options(list(emc2.sample_rebuilds = c(100L, 200L, 400L, 800L, 1600L)))
   skip_model_validation()
   skip_on_os("windows")
   data("forstmann", package = "EMC2")
@@ -141,33 +126,33 @@ test_that("rebuilding sample proposals keeps an exact Gibbs posterior", {
     }
     out[-seq_len(10000L)]
   }
-  ref <- NULL
-  for (ensemble in c(FALSE, TRUE)) {
-    withr::local_options(list(emc2.ensemble = ensemble, emc2.ensemble_pool = 8L))
-    set.seed(20260925L)
-    fitted <- testthat::with_mocked_bindings({
-      emc <- suppressMessages(make_emc(dat, des, type = "diagonal-gamma",
-                                       compress = FALSE, n_chains = 2L))
-      fit(emc, cores_for_chains = 1L,
-          stop_criteria = list(preburn = list(iter = 20L), burn = list(iter = 50L),
-                               adapt = list(iter = 50L, min_unique = 0L),
-                               sample = list(iter = 1200L)),
-          verbose = FALSE, particle_factor = 10, step_size = 25L,
-          max_tries = 1L, trim = FALSE)
-    }, calc_ll_manager = fake_likelihood, .package = "EMC2")
-    fitted <- EMC2:::restore_duplicates(fitted)
-    expect_identical(fitted[[1L]]$sample_proposals_next, 1600L)
-    if (is.null(ref)) ref <- reference(fitted[[1L]]$prior)
-    draws <- lapply(fitted, function(ch) ch$samples$theta_mu["m", ch$samples$stage == "sample"])
-    se <- stats::sd(unlist(lapply(draws, batch_means, n_batch = 20L))) / sqrt(20L * length(draws))
-    ref_se <- stats::sd(batch_means(ref, 50L)) / sqrt(50L)
-    expect_lt(abs(mean(unlist(draws)) - mean(ref)) / sqrt(se^2 + ref_se^2), 5,
-              label = paste("group mean, ensemble =", ensemble))
-    m2 <- unlist(lapply(draws, function(x) (x - mean(ref))^2))
-    se2 <- stats::sd(unlist(lapply(draws, function(x) batch_means((x - mean(ref))^2, 20L)))) /
-      sqrt(20L * length(draws))
-    ref_se2 <- stats::sd(batch_means((ref - mean(ref))^2, 50L)) / sqrt(50L)
-    expect_lt(abs(mean(m2) - mean((ref - mean(ref))^2)) / sqrt(se2^2 + ref_se2^2), 5,
-              label = paste("group variance, ensemble =", ensemble))
-  }
+  # A small ensemble pool keeps the test fast.
+  small_pool <- EMC2:::.emc_ensemble_options()
+  small_pool$pool <- 8L
+  local_mocked_bindings(.emc_ensemble_options = function() small_pool, .package = "EMC2")
+  set.seed(20260925L)
+  fitted <- testthat::with_mocked_bindings({
+    emc <- suppressMessages(make_emc(dat, des, type = "diagonal-gamma",
+                                     compress = FALSE, n_chains = 2L))
+    fit(emc, cores_for_chains = 1L,
+        stop_criteria = list(preburn = list(iter = 20L), burn = list(iter = 50L),
+                             adapt = list(iter = 50L, min_unique = 0L),
+                             sample = list(iter = 1200L)),
+        verbose = FALSE, particle_factor = 10, step_size = 25L,
+        max_tries = 1L, trim = FALSE)
+  }, calc_ll_manager = fake_likelihood, .package = "EMC2")
+  fitted <- EMC2:::restore_duplicates(fitted)
+  expect_identical(fitted[[1L]]$sample_proposals_next, 1600L)
+  ref <- reference(fitted[[1L]]$prior)
+  draws <- lapply(fitted, function(ch) ch$samples$theta_mu["m", ch$samples$stage == "sample"])
+  se <- stats::sd(unlist(lapply(draws, batch_means, n_batch = 20L))) / sqrt(20L * length(draws))
+  ref_se <- stats::sd(batch_means(ref, 50L)) / sqrt(50L)
+  expect_lt(abs(mean(unlist(draws)) - mean(ref)) / sqrt(se^2 + ref_se^2), 5,
+            label = "group mean")
+  m2 <- unlist(lapply(draws, function(x) (x - mean(ref))^2))
+  se2 <- stats::sd(unlist(lapply(draws, function(x) batch_means((x - mean(ref))^2, 20L)))) /
+    sqrt(20L * length(draws))
+  ref_se2 <- stats::sd(batch_means((ref - mean(ref))^2, 50L)) / sqrt(50L)
+  expect_lt(abs(mean(m2) - mean((ref - mean(ref))^2)) / sqrt(se2^2 + ref_se2^2), 5,
+            label = "group variance")
 })

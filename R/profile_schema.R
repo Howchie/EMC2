@@ -1,23 +1,13 @@
 # One profiling record schema for the sampler.
 #
-# Every low-level timing number the sampler produces goes through this file.
-# Before it existed the worker pool built an ad-hoc list, `run_stage()` copied
-# that list field-by-field into a data frame, and each benchmark script printed
-# its own selection with its own labels.  Three places had to agree on a name
-# and none of them declared it, which is how `worker_max` came to be documented
-# in `WorkingTests/bench_worker_pool.R` as "slowest worker's own work" while it
-# actually held the slowest *subject's* CPU time.  With several subjects per
-# worker those differ by roughly the number of subjects per worker, and the
-# difference was being read as transport overhead.
+# Every low-level timing number the sampler produces goes through this file,
+# so the producer, the data frame and every report agree on what each name
+# means (e.g. the slowest subject's CPU time versus the slowest worker's whole
+# partition, which differ by the number of subjects per worker).
 #
 # The schema below is the single declaration.  `.emc_profile_row()` builds rows
-# from it, `.emc_profile_report()` prints them, and both benchmark scripts call
-# that one reporting path.  Adding a measurement means adding one entry here.
-#
-# Reserved names for later work, so that they are not invented twice with
-# different spellings: `block_proposals`, `block_eff_proposals`,
-# `block_check_progress`, `block_save`, and `block_concat` (per-block costs).
-# Add them here when the commit that populates them lands.
+# from it and `.emc_profile_report()` prints them.  Adding a measurement means
+# adding one entry here.
 
 # --- schema -----------------------------------------------------------------
 
@@ -76,7 +66,7 @@
                          desc = "writing the iteration into the sample store"),
       # Not a component of any iteration: pool start-up happens once, before
       # the loop, and is reported on the first row so that dropping that row
-      # (which every benchmark does) does not also hide what it cost.
+      # does not also hide what it cost.
       .emc_profile_field("startup", "numeric", "time", "s",
                          desc = "worker pool start-up, charged to the first iteration"),
       .emc_profile_field("shared_serialize", "numeric", "time", "s", "particle",
@@ -131,8 +121,8 @@
                          desc = "how private_memory was obtained"),
 
       # -- per-block costs ---------------------------------------------------
-      # C16.  `run_emc` does work between blocks that never appeared in
-      # per-iteration timing: building chain and efficient proposals,
+      # `run_emc` does work between blocks that per-iteration timing does
+      # not see: building chain and efficient proposals,
       # convergence diagnostics, the checkpoint write and the history join.  A
       # block is not an iteration, so these carry their own total rather than
       # nesting under one.
@@ -161,13 +151,11 @@
 
       # -- particle adaptation ----------------------------------------------
       # What `update_pm_settings` adapts the particle count from: the effective
-      # size of one proposal cloud, NOT the chain's effective sample size. The
-      # two are different questions and the audit's experiment is whether the
-      # first tracks the second.
+      # size of one proposal cloud, NOT the chain's effective sample size.
       .emc_profile_field("particle_weight_ess", "numeric", "work", "count",
                          desc = "importance-weight ESS of the proposal cloud, mean over subjects"),
 
-      # -- optional moves (R/move_allocation.R) ----------------------------
+      # -- allocated moves (R/move_allocation.R) ---------------------------
       .emc_profile_field("shear_rounds", "integer", "work", "count",
                          desc = "shear likelihood rounds"),
       .emc_profile_field("shear_cpu", "numeric", "work", "s",
@@ -239,8 +227,7 @@
 # --- row construction -------------------------------------------------------
 
 # Build one profile row.  Unknown field names are an error rather than a silent
-# extra column: the whole purpose of the schema is that a typo in a benchmark
-# cannot quietly create `worker_max` again.
+# extra column, so a typo in a caller cannot quietly create a new field.
 .emc_profile_row <- function(...) {
   vals <- list(...)
   if (length(vals) && is.null(names(vals))) stop("profile fields must be named")
@@ -286,8 +273,8 @@
 # /proc's parent links finds them.  Worker pool *templates* are not: the
 # default backend starts them with `system2(wait = FALSE)`, whose shell exits
 # immediately, so init adopts the template and the fit's own subtree no longer
-# contains it or any of the workers it forks.  On an eight-subject fit that is
-# most of the processes and most of the memory.
+# contains it or any of the workers it forks, which can be most of the
+# processes and most of the memory.
 #
 # The pool publishes the ownership we need: `.emc_wpool_template_start` puts
 # `EMC2-worker-pool[<dir>|master=<pid>]` in the template's command line, and
@@ -663,10 +650,7 @@
 #' Print a sampler profile
 #'
 #' The single reporting path for the profiling record described in
-#' `.emc_profile_schema`.  Both `WorkingTests/bench_worker_pool.R` and
-#' `WorkingTests/bench_large_fit_sampling.R` call this, so a field only has to
-#' be formatted once and the two benchmarks cannot drift apart in what they
-#' call a number.
+#' `.emc_profile_schema`, so a field is formatted once for every caller.
 #'
 #' @param profile Data frame produced by the sampler with
 #'   `options(emc2.sampler_profile = TRUE)`.
@@ -745,10 +729,10 @@
   }
 
   say("\nwork distribution\n")
-  # These two lines are the correction this schema exists for.  The first is
-  # the slowest single subject; the second is the slowest worker's whole
-  # assigned partition.  Comparing `response_wait` against the first one makes
-  # every subject after the first in a partition look like transport cost.
+  # The first line is the slowest single subject; the second is the slowest
+  # worker's whole assigned partition.  Comparing `response_wait` against the
+  # first one makes every subject after the first in a partition look like
+  # transport cost.
   say(sprintf("  %-20s %8.2f ms  (slowest single subject)\n",
               "subject_cpu_max", 1000 * m("subject_cpu_max")))
   say(sprintf("  %-20s %8.2f ms  (slowest worker's assigned partition)\n",

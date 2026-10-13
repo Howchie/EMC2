@@ -1,7 +1,6 @@
 test_that("the shear preserves the joint posterior with a full standard covariance", {
   skip_model_validation()
   withr::local_seed(83)
-  withr::local_options(list(emc2.group_move = "shear"))
   p <- 2L
   n <- 3L
   N <- 3000L

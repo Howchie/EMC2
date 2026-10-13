@@ -12,8 +12,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // emc_alloc_subject_need_cpp
-Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& p, Rcpp::Nullable<Rcpp::NumericVector> h_, const Rcpp::NumericVector& level, const Rcpp::NumericVector& qs, const Rcpp::NumericVector& rs, double r_min, bool refresh);
-RcppExport SEXP _EMC2_emc_alloc_subject_need_cpp(SEXP rhoSEXP, SEXP pSEXP, SEXP h_SEXP, SEXP levelSEXP, SEXP qsSEXP, SEXP rsSEXP, SEXP r_minSEXP, SEXP refreshSEXP) {
+Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& p, Rcpp::Nullable<Rcpp::NumericVector> h_, const Rcpp::NumericVector& level, const Rcpp::NumericVector& qs, const Rcpp::NumericVector& rs, double r_min);
+RcppExport SEXP _EMC2_emc_alloc_subject_need_cpp(SEXP rhoSEXP, SEXP pSEXP, SEXP h_SEXP, SEXP levelSEXP, SEXP qsSEXP, SEXP rsSEXP, SEXP r_minSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -24,14 +24,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type qs(qsSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
     Rcpp::traits::input_parameter< double >::type r_min(r_minSEXP);
-    Rcpp::traits::input_parameter< bool >::type refresh(refreshSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_subject_need_cpp(rho, p, h_, level, qs, rs, r_min, refresh));
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_subject_need_cpp(rho, p, h_, level, qs, rs, r_min));
     return rcpp_result_gen;
 END_RCPP
 }
 // emc_alloc_subjects_need_cpp
-Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& p, const Rcpp::NumericVector& h, const Rcpp::NumericVector& level, const Rcpp::IntegerVector& off, const Rcpp::LogicalVector& has_p, const Rcpp::LogicalVector& has_h, const Rcpp::NumericVector& q_fixed, const Rcpp::NumericVector& r_fixed, const Rcpp::NumericVector& r_min, const Rcpp::NumericVector& c_p, const Rcpp::NumericVector& c_h, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs, bool refresh);
-RcppExport SEXP _EMC2_emc_alloc_subjects_need_cpp(SEXP rhoSEXP, SEXP pSEXP, SEXP hSEXP, SEXP levelSEXP, SEXP offSEXP, SEXP has_pSEXP, SEXP has_hSEXP, SEXP q_fixedSEXP, SEXP r_fixedSEXP, SEXP r_minSEXP, SEXP c_pSEXP, SEXP c_hSEXP, SEXP q_gridSEXP, SEXP rsSEXP, SEXP refreshSEXP) {
+Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& p, const Rcpp::NumericVector& h, const Rcpp::NumericVector& level, const Rcpp::IntegerVector& off, const Rcpp::LogicalVector& has_p, const Rcpp::LogicalVector& has_h, const Rcpp::NumericVector& q_fixed, const Rcpp::NumericVector& r_fixed, const Rcpp::NumericVector& r_min, const Rcpp::NumericVector& c_p, const Rcpp::NumericVector& c_h, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs);
+RcppExport SEXP _EMC2_emc_alloc_subjects_need_cpp(SEXP rhoSEXP, SEXP pSEXP, SEXP hSEXP, SEXP levelSEXP, SEXP offSEXP, SEXP has_pSEXP, SEXP has_hSEXP, SEXP q_fixedSEXP, SEXP r_fixedSEXP, SEXP r_minSEXP, SEXP c_pSEXP, SEXP c_hSEXP, SEXP q_gridSEXP, SEXP rsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -49,8 +48,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type c_h(c_hSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_grid(q_gridSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
-    Rcpp::traits::input_parameter< bool >::type refresh(refreshSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_subjects_need_cpp(rho, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs, refresh));
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_subjects_need_cpp(rho, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3753,8 +3751,8 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
-    {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
+    {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 7},
+    {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 14},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},
     {"_EMC2_emc_alloc_act_term_list_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_list_cpp, 2},
     {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 7},

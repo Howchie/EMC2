@@ -540,28 +540,20 @@ get_pars <- function(emc,selection= "mu", stage=get_last_stage(emc),thin=1,filte
 
 # Join two blocks' worth of one sample element along the iteration axis.
 #
-# C14.  `abind()` was doing this for every element of the sample store, and it
-# is general at the cost of being slow: it builds index arrays and dispatches on
-# dimension. For the big numeric arrays -- alpha, theta_mu, theta_var, subj_ll,
-# which are the whole of the cost -- the join is a memcpy of two contiguous
-# prefixes, because extending the LAST dimension leaves both operands contiguous.
-#
-# Measured over 30 blocks at 140 subjects: 1.67 s against 0.80 s at P = 8,
-# 10.81 s against 5.29 s at P = 64, 75.17 s against 26.91 s at P = 250.
+# `abind()` is general at the cost of being slow: it builds index arrays and
+# dispatches on dimension. For the big numeric arrays -- alpha, theta_mu,
+# theta_var, subj_ll, which are the whole of the cost -- the join is a memcpy
+# of two contiguous prefixes, because extending the LAST dimension leaves both
+# operands contiguous.
 #
 # Everything else -- the stage vector, scalar indices, lists -- keeps `abind`,
 # because those are not where the time is and its semantics for them are what
 # the rest of the file expects.
 #
-# This halves a constant; it does not change the order. Total copying is still
-# quadratic in blocks, because each block re-copies the accumulated history.
-# Fixing THAT needs owned growable capacity with allocated and committed lengths
-# kept apart, and the measurement above is why it is not in this commit: on a
-# realistic fit (P = 8, N = 140, 3000 iterations) the entire quadratic term is
-# 1.67 s against a fit of about twenty-two minutes, and the change would put a
-# capacity/committed distinction in front of 37 places that read these arrays
-# directly. It is worth doing when a wide, long fit makes it worth the audit --
-# the numbers above say where that starts -- and not before.
+# Total copying is still quadratic in blocks, because each block re-copies the
+# accumulated history. Removing that needs owned growable capacity with
+# allocated and committed lengths kept apart; the quadratic term is small
+# against the likelihood cost of a realistic fit, so the arrays stay plain.
 .emc_join_iteration <- function(...) {
   parts <- list(...)
   if (length(parts) == 0L) return(NULL)

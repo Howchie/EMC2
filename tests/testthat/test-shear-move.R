@@ -489,7 +489,6 @@ test_that("the wall transport leaves a bounded joint posterior invariant", {
   p <- h$p; n <- h$n; y <- h$y; Si <- h$Si
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) h$ll(proposals, dadm),
                         .package = "EMC2")
-  withr::local_options(list(emc2.group_move = "shear"))
   pn <- c("x1", "x2")
   fits <- list(exact = lapply(seq_len(n), function(s)
                  list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
@@ -624,7 +623,6 @@ test_that("the shear move leaves the joint posterior invariant with the group va
       -0.5 * rowSums((dd %*% Si) * dd)
     },
     .package = "EMC2")
-  withr::local_options(list(emc2.group_move = "shear"))
   pn <- c("x1", "x2")
   fits <- list(exact = lapply(seq_len(n), function(s)
                  list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
@@ -719,7 +717,6 @@ test_that("curved frames with arbitrary coefficients leave the joint posterior i
       -0.5 * rowSums((dd %*% Si) * dd)
     },
     .package = "EMC2")
-  withr::local_options(list(emc2.group_move = "shear"))
   pn <- c("x1", "x2")
   lik <- lapply(seq_len(n), function(s)
     list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check))
@@ -789,7 +786,6 @@ test_that("curved frames with arbitrary coefficients leave the joint posterior i
 test_that("the shear move leaves the joint posterior invariant with a full standard covariance", {
   skip_model_validation()
   withr::local_seed(83)
-  withr::local_options(list(emc2.group_move = "shear"))
   p <- 2L
   n <- 3L
   N <- 3000L
@@ -867,7 +863,6 @@ test_that("updates after the shear see the moved group mean as every subject's p
   local_mocked_bindings(
     calc_ll_manager = function(proposals, dadm, ...) -0.5 * rowSums(sweep(proposals, 2, dadm)^2),
     .package = "EMC2")
-  withr::local_options(list(emc2.group_move = "shear"))
   plan <- EMC2:::.emc_shear_plan(f$ctx$fits, f$sampler$prior, f$V)
   sampler <- c(f$sampler, list(par_names = pn, model = NULL, rng = list(),
                                data = lapply(seq_len(n), function(s) f$alpha[, s] + 0.3),
@@ -887,7 +882,7 @@ test_that("updates after the shear see the moved group mean as every subject's p
 test_that("worker evaluation preserves the complete shear transition and RNG", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
-  withr::local_options(list(emc2.group_move = "shear", emc2.worker_backend = "fork"))
+  withr::local_options(list(emc2.worker_backend = "fork"))
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) {
     -0.5 * rowSums(sweep(proposals, 2, dadm)^2)
   }, .package = "EMC2")
@@ -1034,29 +1029,9 @@ test_that("the shared subject queue gives the serial likelihoods and survives a 
   expect_false(out$pool$alive)
 })
 
-# Every shear coordinate one round, the collapsed move one round, and every
-# subject with HMC an HMC rate and a particle rate of one half, whatever the
-# measurements say.
-force_allocation <- function(env = parent.frame()) {
-  local_mocked_bindings(.emc_alloc_solve_units = function(u) {
-    units <- u$units
-    joint <- u$joint
-    C_rest <- u$C_rest
-    hmc <- vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
-                  logical(1))
-    x <- vapply(units, function(u) if (identical(u$kind, "shear")) 1 else 0, numeric(1))
-    x[hmc] <- 0.5
-    list(x = x, q = ifelse(hmc, 0.5, 1), joint = if (!is.null(joint)) 1,
-         rho = NA_real_, tau = NA_real_, cost = C_rest,
-         objective = NA_real_, objective0 = NA_real_, tau0 = NA_real_)
-  }, .package = "EMC2", .env = env)
-}
-
 test_that("a fit with shear and subject HMC is identical serially, statically, and queued", {
   skip_on_os("windows")
   skip_on_cran()
-  withr::local_options(list(emc2.group_move = "shear", emc2.subject_hmc = TRUE,
-                            emc2.independent_chains = TRUE))
   force_allocation()
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
   dat$subjects <- droplevels(dat$subjects)
@@ -1090,8 +1065,7 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
   withr::local_seed(95)
-  withr::local_options(list(emc2.group_move = "shear", emc2.worker_backend = "fork",
-                            emc2.independent_chains = TRUE))
+  withr::local_options(list(emc2.worker_backend = "fork"))
   local_mocked_bindings(calc_ll_manager = function(proposals, ...) {
     -rowSums(proposals^2) / 2
   }, .package = "EMC2")

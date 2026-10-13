@@ -28,19 +28,18 @@ arma::vec fast_dmvnorm(const arma::mat& x, const arma::rowvec& mean, const arma:
 // The factorisation `fast_dmvnorm` performs internally, hoisted so a caller that
 // evaluates the same covariance many times can do it once.
 //
-// C15.  With more than one block, the prior density is evaluated per subject per
-// component per iteration against the SAME group covariance, and each call
-// factorised it again: N x blocks Cholesky decompositions of one matrix per
-// iteration.
+// With more than one block, the prior density is evaluated per subject per
+// component per iteration against the SAME group covariance; factorising it
+// once avoids N x blocks Cholesky decompositions of one matrix per iteration.
 //
 // It must be this function and not R's `chol` + `backsolve`, because the point
 // is that `fast_dmvnorm_rooti()` with this factor reproduces `fast_dmvnorm()`
 // bit for bit -- a different triangular inverse would agree to about a ULP,
 // which is not the same thing.
 //
-// Singular handling is preserved rather than improved: `fast_dmvnorm` returns
-// -Inf for every row when the Cholesky fails, so `ok = FALSE` here means the
-// caller must do the same. The regularisation ladder in `.chol_factor()` is
+// Singular handling matches `fast_dmvnorm`, which returns -Inf for every row
+// when the Cholesky fails, so `ok = FALSE` here means the caller must do the
+// same. The regularisation ladder in `.chol_factor()` is
 // PROPOSAL regularisation and deliberately does not appear here; applying it
 // would quietly change the prior.
 // [[Rcpp::export]]

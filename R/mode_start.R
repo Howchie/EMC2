@@ -497,19 +497,6 @@
 # and corrupts the stream), and they carry no information here.
 .emc_quiet_fork <- function(expr) suppressWarnings(suppressMessages(expr))
 
-# Laplace log mass of a mode under a conditional posterior, up to a constant:
-# log posterior at the mode plus half the log determinant of its covariance.
-.emc_laplace_log_mass <- function(ll, x, prior, covariance) {
-  u <- forwardsolve(t(chol(prior$var)), x - prior$mu)
-  ll - 0.5 * sum(u^2) + sum(log(diag(chol(covariance))))
-}
-
-# A chain's mode moves to another chain's mode of the same subject when that
-# has more Laplace mass, averaged over all chains' group states, by this many
-# nats. Averaging matters: a chain stuck in a local mode has widened its own
-# group variance around it, so under its own group state the trap still wins.
-.emc_mode_share_gap <- 20
-
 # Proposal covariances (and their means) use the group prior widened by this
 # factor, at the burn mode start and at every refresh alike.
 .emc_laplace_prior_scale <- 4
@@ -517,36 +504,7 @@
 .emc_usable_mode <- function(r) is.list(r) && !inherits(r, "try-error") &&
   is.matrix(r$covariance)
 
-# Laplace log mass of mode r averaged over a subject's group states (one prior
-# per chain); -Inf for an unusable mode.
-.emc_shared_mode_mass <- function(r, priors) {
-  if (!.emc_usable_mode(r) || !is.finite(r$ll)) return(-Inf)
-  m <- vapply(priors, function(prior) if (is.null(prior)) NA_real_ else
-    tryCatch(.emc_laplace_log_mass(r$ll, r$alpha, prior, .emc_start_cov(r)),
-             error = function(e) -Inf), numeric(1))
-  if (all(is.na(m))) -Inf else mean(m, na.rm = TRUE)
-}
-
-# For each chain x subject job, the chain whose mode of that subject beats its
-# own by more than .emc_mode_share_gap; NA to keep its own.
-.emc_mode_share_sources <- function(jobs, results, priors) {
-  out <- rep(NA_integer_, nrow(jobs))
-  for (k in seq_len(nrow(jobs))) {
-    if (is.null(priors[[k]])) next
-    same <- which(jobs$subject == jobs$subject[k])
-    subject_priors <- priors[same]
-    own <- .emc_shared_mode_mass(results[[k]], subject_priors)
-    others <- setdiff(same, k)
-    cand <- vapply(others, function(kk)
-      .emc_shared_mode_mass(results[[kk]], subject_priors), numeric(1))
-    if (length(cand) && max(cand) > own + .emc_mode_share_gap)
-      out[k] <- jobs$chain[others[which.max(cand)]]
-  }
-  out
-}
-
 .emc_burn_mode_start <- function(emc, n_cores) {
-  if (!isTRUE(getOption("emc2.burn_mode_start", TRUE))) return(emc)
   if (any(emc[[1L]]$nuisance)) return(emc)
   # Subject modes are conditional on each chain's current pooled values.
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
@@ -561,37 +519,7 @@
         proposal_prior_scale = .emc_laplace_prior_scale,
         start_covariance = TRUE))
     }, mc.cores = cores, mc.set.seed = FALSE))
-  # 2. Compare each subject's modes across chains.
-  priors <- lapply(seq_len(nrow(jobs)), function(k) tryCatch(
-    .emc_burn_subject_prior(emc[[jobs$chain[k]]], jobs$subject[k]),
-    error = function(e) NULL))
-  mass <- function(k, r) .emc_shared_mode_mass(
-    r, priors[jobs$subject == jobs$subject[k]])
-  switch_from <- if (.emc_independent_chains()) rep(NA_integer_, nrow(jobs)) else
-    .emc_mode_share_sources(jobs, results, priors)
-  # 3. Re-optimise from the better mode under the chain's own group state; keep
-  # it only if it still wins by the same margin.
-  todo <- which(!is.na(switch_from))
-  if (length(todo)) {
-    redo <- .emc_with_preserved_rng(auto_mclapply(todo, function(k) {
-      src <- results[[which(jobs$chain == switch_from[k] &
-                            jobs$subject == jobs$subject[k])]]
-      .emc_quiet_fork(.emc_burn_subject_mode(
-        emc[[jobs$chain[k]]], jobs$subject[k], x0 = src$alpha,
-        proposal_prior_scale = .emc_laplace_prior_scale,
-        start_covariance = TRUE))
-    }, mc.cores = min(length(todo), n_cores), mc.set.seed = FALSE))
-    for (m in seq_along(todo)) {
-      k <- todo[m]
-      new <- redo[[m]]
-      if (!.emc_usable_mode(new)) next
-      if (mass(k, new) > mass(k, results[[k]]) + .emc_mode_share_gap) {
-        new$shared_from <- switch_from[k]
-        results[[k]] <- new
-      }
-    }
-  }
-  # 4. Start draws, each on its chain's subject RNG stream.
+  # 2. Start draws, each on its chain's subject RNG stream.
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
       j <- jobs$chain[k]
@@ -637,8 +565,7 @@
       reason = rep("optimizer error", emc[[j]]$n_subjects),
       pareto_k = rep(NA_real_, emc[[j]]$n_subjects),
       outside = rep(NA_real_, emc[[j]]$n_subjects),
-      laplace_status = rep("none", emc[[j]]$n_subjects),
-      shared_from = rep(NA_integer_, emc[[j]]$n_subjects))
+      laplace_status = rep("none", emc[[j]]$n_subjects))
   }
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
@@ -653,8 +580,6 @@
     if (!is.null(result$converged))
       emc[[j]]$burn_mode_stats$converged[s] <- result$converged
     if (is.null(result$covariance) || !is.matrix(result$covariance)) next
-    if (!is.null(result$shared_from))
-      emc[[j]]$burn_mode_stats$shared_from[s] <- result$shared_from
     if (!is.null(result$laplace_status)) {
       emc[[j]]$burn_mode_stats$pareto_k[s] <- result$pareto_k
       emc[[j]]$burn_mode_stats$outside[s] <- result$outside
@@ -732,7 +657,6 @@
 # current group state and store the Laplace covariance (and mode). The chain
 # state is not moved. create_chain_proposals() consumes these once.
 .emc_laplace_refresh <- function(emc, n_cores) {
-  if (!isTRUE(getOption("emc2.laplace_refresh", TRUE))) return(emc)
   if (any(emc[[1L]]$nuisance)) return(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
   emc <- .emc_prepare_chain_rng(emc)

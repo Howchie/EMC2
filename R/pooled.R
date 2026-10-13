@@ -24,11 +24,7 @@
 # candidates are scored in one worker round trip, and the chosen one's
 # per-subject likelihoods become the stored subject log-likelihoods.
 
-.emc_pooled_options <- function() {
-  k <- suppressWarnings(as.integer(getOption("emc2.pooled_candidates", 8L)))
-  if (length(k) != 1L || is.na(k) || k < 1L) k <- 8L
-  list(candidates = k, target = 0.5)
-}
+.emc_pooled_options <- function() list(candidates = 8L, target = 0.5)
 
 .emc_pooled_names <- function(sampler) {
   if (is.null(sampler$pooled)) character(0) else names(sampler$pooled$value)

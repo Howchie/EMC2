@@ -65,39 +65,3 @@ test_that("score restoration preserves the full conditional covariance", {
   variance_mcse <- sqrt((V^2 + outer(diag(V), diag(V))) / (n - 1))
   expect_true(all(abs(cov(scores) - V) < 6 * variance_mcse))
 })
-
-test_that("marginal ensemble output redraws scores after final subject selection", {
-  withr::local_seed(28)
-  withr::local_options(list(emc2.ensemble_pool = 4L, emc2.ensemble_rounds = 2L,
-                           emc2.ensemble_latent_weight = "marginal"))
-  p <- 2L
-  n <- 3L
-  sampler <- list(type = "factor", n_pars = p, n_subjects = n, par_names = c("a", "b"),
-                  nuisance = rep(FALSE, p), marginalised_idx = rep(FALSE, p),
-                  model = NULL, marginalise = NULL)
-  sampler <- EMC2:::add_info_factor(sampler, n_factors = 1L)
-  sampler$samples <- EMC2:::sample_store_factor(
-    data.frame(subjects = factor(seq_len(n))), sampler$par_names,
-    iters = 1L, stage = "sample", integrate = TRUE, is_nuisance = rep(FALSE, p),
-    n_factors = 1L, Lambda_mat = attr(sampler, "Lambda_mat"))
-  sampler$samples$idx <- 1L
-  pars <- EMC2:::get_startpoints_factor(sampler, rep(0, p), diag(p))
-  proposals <- rbind(matrix(0, p, n), 0)
-  sampler$samples <- EMC2:::fill_samples(sampler$samples, pars, proposals, 1L, p, "factor")
-  sampler$data <- rep(list(NULL), n)
-  seen <- NULL
-  local_mocked_bindings(
-    calc_ll_manager = function(proposals, ...) -rowSums(proposals^2) / 2,
-    .emc_ensemble_refresh_scores = function(pars, sampler, alpha) {
-      seen <<- alpha
-      pars$eta[,] <- seq_len(n)
-      stats::rnorm(1)
-      pars
-    }, .package = "EMC2")
-  pools <- EMC2:::.emc_ensemble_draw_pools(sampler, "sample",
-                                        rep(list(rep(0, p)), n), rep(list(diag(p)), n))
-  out <- EMC2:::.emc_ensemble_move(sampler, pars, proposals, "sample", NULL, NULL, NULL, pools)
-  expect_identical(seen, out$proposals[seq_len(p), , drop = FALSE])
-  expect_equal(drop(out$pars$eta), seq_len(n))
-  expect_identical(out$sampler$rng$gibbs, .Random.seed)
-})

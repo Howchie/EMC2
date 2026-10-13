@@ -2,13 +2,14 @@
 //
 // The clean backend already cascades: the master dies, its end of the
 // template's request pipe closes, the template sees end-of-stream and kills
-// the workers it forked.  Measured, including from SIGKILL.
+// the workers it forked, including when the master is SIGKILLed.
 //
 // The fork backend has no such intermediary.  Its workers are the master's own
 // `mcparallel` children, blocked on a request pipe, and an orderly shutdown is
-// the only thing that ends them.  `kill -9` and `kill` on the master therefore
-// left every worker running -- reparented to init, blocked forever, each
-// holding a whole likelihood context.  That backend is not exotic: it is what
+// the only thing that ends them.  Without more, `kill -9` or `kill` on the
+// master would leave every worker running -- reparented to init, blocked
+// forever, each holding a whole likelihood context.  That backend is not
+// exotic: it is what
 // `devtools::load_all()` selects, because the namespace is then not an
 // installed package, and what any model with custom trend kernels selects,
 // because external pointers cannot be serialised to a spawned process.

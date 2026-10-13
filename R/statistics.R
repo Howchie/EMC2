@@ -545,12 +545,8 @@ rwish <- function(v, S){
 }
 
 
-.iwish_condition <- function(S, context = NULL,
-                             rcond_tol = getOption("emc2.iwish_rcond_tol", 1e-12)) {
+.iwish_condition <- function(S, context = NULL, rcond_tol = 1e-12) {
   label <- if(is.null(context) || !nzchar(context)) "inverse-Wishart scale" else context
-  if(length(rcond_tol) != 1L || !is.finite(rcond_tol) || rcond_tol <= 0) {
-    rcond_tol <- 1e-12
-  }
   if(!is.matrix(S) || nrow(S) != ncol(S)) {
     stop(sprintf("%s must be a finite square matrix", label), call. = FALSE)
   }

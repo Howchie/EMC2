@@ -1769,8 +1769,8 @@
                  group_chol = group_chol)
   was_alive <- isTRUE(pool$alive)
   watch <- !is.null(pool$done)
-  # Shared subject queue: per-subject cost varies ~30% between iterations with
-  # the proposals, so a partition planned from last iteration's times leaves
+  # Shared subject queue: per-subject cost varies between iterations with the
+  # proposals, so a partition planned from last iteration's times leaves
   # workers idle while the unluckiest finishes.  Every subject's inputs go out
   # once in the broadcast, and each worker claims the next subject (costliest
   # first) from a shared counter as it frees up, replying once when the queue

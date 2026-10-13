@@ -15,19 +15,9 @@ test_that("inter-block proposal scaling converts variance to standard deviation"
   expect_lte(max(attr(bounded$samples, "pm_settings")[[1]][[1]]$epsilon), 5)
 })
 
-test_that("empirical covariance fallback resets proposal multipliers", {
+test_that("a degenerate empirical covariance is detected", {
   expect_true(.emc_empirical_covariance_ok(diag(2)))
   expect_false(.emc_empirical_covariance_ok(diag(c(1, 1e-20)), subject = 7))
-
-  pmwgs <- list(
-    samples = structure(
-      list(),
-      pm_settings = list(list(list(epsilon = c(1e38, 1e-20))))
-    )
-  )
-  out <- update_epsilon_scale(pmwgs, reset = TRUE)
-  expect_equal(attr(out$samples, "pm_settings")[[1]][[1]]$epsilon,
-               c(1, 1))
 })
 
 test_that("each burn block resets particle adaptation counters", {
@@ -79,14 +69,13 @@ test_that("long runs of identical sample iterations are detectable", {
   expect_true(.emc_sample_iteration_equal(samples, 2))
 })
 
-test_that("a proposal-covariance fallback resets only the affected subject", {
+test_that("proposal multipliers scale per subject", {
   pm <- lapply(1:3, function(s) list(list(epsilon = c(.2, .3))))
   pmwgs <- list(samples = list()); attr(pmwgs$samples, "pm_settings") <- pm
-  out <- update_epsilon_scale(pmwgs, prop_var_ratio = c(4, 1, 1),
-                              reset = c(FALSE, TRUE, FALSE))
+  out <- update_epsilon_scale(pmwgs, prop_var_ratio = c(4, 1, NA))
   eps <- lapply(attr(out$samples, "pm_settings"), function(x) x[[1]]$epsilon)
   expect_equal(eps[[1]], c(.4, .6))
-  expect_equal(eps[[2]], c(1, 1))
+  expect_equal(eps[[2]], c(.2, .3))
   expect_equal(eps[[3]], c(.2, .3))
 })
 

@@ -59,8 +59,7 @@ test_that("ensemble group update leaves the joint posterior invariant", {
   skip_model_validation()
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, model, ...)
     ens_mock_ll(proposals, dadm, model), .package = "EMC2")
-  withr::local_options(list(emc2.ensemble = TRUE, emc2.ensemble_pool = 16L,
-                            emc2.ensemble_rounds = 5L))
+  small_ensemble(16L, 5L)
   set.seed(3)
   y <- rbind(a = rnorm(6, 0, 0.8), b = rnorm(6, 0, 0.8))
   obs_prec <- solve(matrix(c(1.5, 1, 1, 1.5), 2))
@@ -78,12 +77,9 @@ test_that("ensemble group update leaves the joint posterior invariant", {
   }
 })
 
-test_that("ensemble update is a no-op when disabled or unsupported", {
-  withr::local_options(list(emc2.ensemble = FALSE))
+test_that("ensemble update is a no-op in preburn, without proposals, or when unsupported", {
   s <- list(type = "standard", n_subjects = 3L, n_pars = 2L, nuisance = c(FALSE, FALSE))
   cm <- rep(list(c(0, 0)), 3); cv <- rep(list(diag(2)), 3)
-  expect_null(EMC2:::.emc_ensemble_draw_pools(s, "sample", cm, cv))
-  withr::local_options(list(emc2.ensemble = TRUE))
   expect_null(EMC2:::.emc_ensemble_draw_pools(s, "preburn", cm, cv))
   expect_null(EMC2:::.emc_ensemble_draw_pools(s, "sample", list(), list()))
   s$type <- "single"
@@ -96,8 +92,8 @@ test_that("ensemble update is a no-op when disabled or unsupported", {
 # Latent-factor hierarchies. Subject states are drawn exactly from
 #   ref : the textbook conditional a_s | h, eta_s (no ensemble), or
 #   prod: the eta-marginal subject prior from get_group_level(), which is what
-#         the particle step targets, optionally followed by the ensemble move
-#         with either reselection weight.
+#         the particle step targets, or
+#   cond: that, followed by the ensemble move.
 # All four must target the same posterior.
 ens_latent_chain <- function(type, y, obs_prec, iters, arm, seed, x = NULL) {
   set.seed(seed)
@@ -127,8 +123,6 @@ ens_latent_chain <- function(type, y, obs_prec, iters, arm, seed, x = NULL) {
                                                 Ls %*% rnorm(p)), numeric(p))
   }
   ll_of <- function(a) vapply(seq_len(n), function(k) ens_mock_ll(t(a[, k]), s$data[[k]]), 0)
-  withr::local_options(list(emc2.ensemble = arm %in% c("cond", "marg"),
-    emc2.ensemble_latent_weight = if (arm == "marg") "marginal" else "conditional"))
   chains_mu <- lapply(seq_len(n), function(k) y[, k])
   chains_var <- lapply(seq_len(n), function(k) solve(obs_prec))
   alpha <- y
@@ -160,7 +154,7 @@ test_that("latent-factor hierarchies: particle target and ensemble weights are i
   skip_model_validation()
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, model, ...)
     ens_mock_ll(proposals, dadm, model), .package = "EMC2")
-  withr::local_options(list(emc2.ensemble_pool = 16L, emc2.ensemble_rounds = 5L))
+  small_ensemble(16L, 5L)
   set.seed(11)
   n <- 12
   f <- rnorm(n)
@@ -168,9 +162,9 @@ test_that("latent-factor hierarchies: particle target and ensemble weights are i
   obs_prec <- diag(1 / 0.5^2, 3)
   for (type in c("factor", "infnt_factor")) {
     ref <- ens_latent_chain(type, y, obs_prec, 40000, "ref", 1)[-(1:2000), ]
-    for (arm in c("prod", "cond", "marg")) {
+    for (arm in c("prod", "cond")) {
       d <- ens_latent_chain(type, y, obs_prec, if (arm == "prod") 40000 else 10000,
-                            arm, match(arm, c("prod", "cond", "marg")) + 1)[-(1:1000), ]
+                            arm, match(arm, c("prod", "cond")) + 1)[-(1:1000), ]
       for (k in seq_len(ncol(d))) {
         z <- (mean(d[, k]) - mean(ref[, k])) / sqrt(ens_bm_se(d[, k])^2 + ens_bm_se(ref[, k])^2)
         expect_lt(abs(z), 4.5, label = paste(type, arm, "column", k, "mean z"))
@@ -194,7 +188,7 @@ test_that("SEM subject prior conditions on the subject's own covariates", {
   expect_equal(gl[[3]]$mu, c(0.1 + 0.3 * 2 + 0.8 * 2, -0.2 + 0.5 * 0.8 * 2))
   expect_false(isTRUE(all.equal(gl[[1]]$mu, gl[[3]]$mu)))
   expect_equal(gl[[1]]$var, subj_var)
-  # And the ensemble's marginal weight uses the same prior.
+  # And the eta-marginal subject prior (used by the burn mode start) is the same.
   s <- list(type = "SEM", sem_settings = list(covariates = x))
   sp <- EMC2:::.emc_ensemble_subject_prior(pars, s, 3L, "marginal")
   expect_equal(sp$mean, subj_mu, ignore_attr = TRUE)
@@ -211,8 +205,8 @@ test_that("ensemble pool likelihoods give the same fit serially, split, or queue
   dat$subjects <- droplevels(dat$subjects)
   des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
   fit_on <- function(cores, queue) {
-    withr::local_options(list(emc2.worker_queue = queue, emc2.ensemble = TRUE,
-                              emc2.ensemble_pool = 8L))
+    withr::local_options(list(emc2.worker_queue = queue))
+    small_ensemble(8L)
     RNGkind("L'Ecuyer-CMRG"); set.seed(23)
     emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))
     emc <- suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 1,
@@ -243,6 +237,6 @@ test_that("pool draws carry exact Mahalanobis distances for the proposal density
   pars <- list(tmu = c(0.3, -0.2), tvar = diag(c(0.5, 2)))
   s <- list(type = "diagonal-gamma")
   a <- matrix(rnorm(12), 6, 2)
-  lg <- EMC2:::.emc_ensemble_log_g(a, rep(1:3, each = 2), pars, s, 3L, "conditional")
+  lg <- EMC2:::.emc_ensemble_log_g(a, rep(1:3, each = 2), pars, s, 3L)
   expect_equal(lg, mvtnorm::dmvnorm(a, pars$tmu, pars$tvar, log = TRUE), tolerance = 1e-10)
 })

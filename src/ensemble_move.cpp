@@ -2,8 +2,8 @@
 // frozen proposals, the stacked pools with their proposal densities, and the
 // Gibbs rounds on the pool-augmented target for the standard and
 // diagonal-gamma hierarchies. Random numbers come from R's generator in the
-// order the R implementation consumed them, so a seed gives the same chain
-// up to rounding.
+// order the R rounds (.emc_ensemble_rounds_r) consume them, so a seed gives
+// the same chain up to rounding.
 
 #include <RcppArmadillo.h>
 #include <algorithm>

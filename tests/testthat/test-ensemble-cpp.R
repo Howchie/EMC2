@@ -84,7 +84,7 @@ ens_cpp_case <- function(type, p, n, par_groups = NULL, seed = 1) {
 }
 
 test_that("pool draws from C++ match the R reference draw for draw", {
-  withr::local_options(list(emc2.ensemble_pool = 12L))
+  small_ensemble(12L)
   cs <- ens_cpp_case("standard", 4, 5)
   set.seed(11)
   pools <- EMC2:::.emc_ensemble_draw_pools(cs$s, "sample", cs$chains_mu, cs$chains_var)
@@ -124,7 +124,7 @@ test_that("pool draws from C++ match the R reference draw for draw", {
 })
 
 test_that("C++ Gibbs rounds reproduce the R rounds for every covered hierarchy", {
-  withr::local_options(list(emc2.ensemble_pool = 10L, emc2.ensemble_rounds = 4L))
+  small_ensemble(10L, 4L)
   cases <- list(list("standard", 3, 6, NULL), list("standard", 4, 7, c(1, 1, 2, 2)),
                 list("standard", 4, 5, c(1, 2, 1, 3)), list("diagonal-gamma", 3, 6, NULL))
   for (cse in cases) {

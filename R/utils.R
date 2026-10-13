@@ -275,11 +275,10 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
 
   # Validate cache partition against current dadm content to guard against stale
   # attributes.  Every likelihood call runs this, so it has to be O(n) and
-  # vectorised.  The per-trial loop it replaces cost 0.41 s per call on 20,000
-  # censored trials -- more than the RLF grid solve it was guarding -- because
-  # `j0 %in% finite_set` rescans a 20,000-element vector once per iteration, and
-  # `R_idx[start_row]` dispatches [.factor 20,000 times.  Only data sets with a
-  # non-finite trial reach here at all: `all_finite` returns above.
+  # vectorised: a per-trial loop with `%in%` membership tests is quadratic in
+  # the number of trials and can cost more than the likelihood it guards.
+  # Only data sets with a non-finite trial reach here at all: `all_finite`
+  # returns above.
   rts <- dadm[["rt"]]
   R_idx <- dadm[["R"]]
   if (is.null(rts) || is.null(R_idx)) return(FALSE)
@@ -411,11 +410,9 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
     race_mask <- if (has_RACE_col) attr(dadm, "RACE_mask") else NULL
     nogo_code <- match("nogo", levels(lR))
 
-    # This used to be a per-unique-trial loop that grew the two index vectors
-    # with c(), i.e. reallocating and copying on every iteration: 4x the rows
-    # cost 6.1x the time, and a 20k-trial censored subject spent a quarter of a
-    # second here.  It is paid once per subject at fit setup and again on every
-    # predict()/make_data(), never inside the sampler.
+    # Vectorised so the cost stays linear in the trials: it is paid once per
+    # subject at fit setup and again on every predict()/make_data(), never
+    # inside the sampler.
     #
     # Rows are laid out trial-major, n_lR of them per unique trial, so a
     # (trial, within-trial position) pair addresses every row.

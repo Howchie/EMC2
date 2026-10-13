@@ -61,23 +61,15 @@
 # block: its step size has settled, and the allocation has the evidence it
 # needs.
 .EMC_HMC_WARMUP_MOVES <- 20L
+# Finite-difference step of the likelihood gradient, pilot trajectories run
+# for a subject that lacks evidence, and the moves that count as evidence.
+.EMC_HMC_H <- 1e-4
+.EMC_HMC_PILOTS <- 20L
+.EMC_HMC_MIN_EVIDENCE <- 10L
 
 .emc_hmc_clip_eps <- function(eps) {
   if (!is.finite(eps)) return(eps)
   min(.EMC_HMC_EPS_RANGE[2], max(.EMC_HMC_EPS_RANGE[1], eps))
-}
-
-.emc_hmc_options <- function() {
-  num_opt <- function(name, default) {
-    v <- suppressWarnings(as.numeric(getOption(name, default)))
-    if (length(v) != 1L || !is.finite(v)) default else v
-  }
-  list(enabled = isTRUE(getOption("emc2.subject_hmc", TRUE)),
-       h = num_opt("emc2.subject_hmc_h", 1e-4),
-       pilots = max(0L, as.integer(num_opt("emc2.subject_hmc_pilots", 20))),
-       min_evidence = max(1L, as.integer(num_opt("emc2.subject_hmc_min_evidence", 10))),
-       fixed_rate = getOption("emc2.subject_hmc_rate", NULL),
-       fixed_eps = getOption("emc2.subject_hmc_eps", NULL))
 }
 
 # Hierarchies whose subject conditional is the Gaussian prior times the
@@ -235,12 +227,6 @@
   E <- sweep(E, 2L, sgn, "*")
   # Sigma_ref = E diag(1 / values) E', so its whitening is diag(sqrt(values)) E'.
   sqrt(e$values) * t(E)
-}
-
-# Per-coordinate mean squared whitened jump from a summed second moment.
-.emc_hmc_esjd <- function(M, n, W) {
-  if (is.null(W) || !is.matrix(M) || n <= 0) return(NULL)
-  pmax(0, rowSums((W %*% M) * W) / n)
 }
 
 # --- the round ------------------------------------------------------------
@@ -409,8 +395,7 @@
 # --- plan state -----------------------------------------------------------
 
 .emc_hmc_active <- function(sampler) {
-  isTRUE(.emc_hmc_options()$enabled) && !is.null(sampler$subject_hmc) &&
-    isTRUE(sampler$subject_hmc$supported)
+  !is.null(sampler$subject_hmc) && isTRUE(sampler$subject_hmc$supported)
 }
 
 # Each subject's HMC rate under a worker plan (zero without one).
@@ -497,14 +482,13 @@
 # moves are measured in), the bound floor, and a step size moved by the
 # last evidence; rates are set by the move allocation.
 .emc_hmc_plan_chain <- function(sampler, stage, Vbar) {
-  opts <- .emc_hmc_options()
   sup <- .emc_hmc_support(sampler)
   old <- sampler$subject_hmc
   n <- sampler$n_subjects
   p <- sampler$n_pars
   st <- list(supported = sup$ok, reason = sup$reason,
              version = if (is.null(old$version)) 1L else old$version + 1L,
-             stage = stage, p = p, n = n, h = opts$h)
+             stage = stage, p = p, n = n, h = .EMC_HMC_H)
   if (!sup$ok) return(st)
   lik <- sampler$lik_laplace
   evidence <- if (length(old$evidence) == n) old$evidence else vector("list", n)
@@ -526,14 +510,12 @@
         "factorisation failed" else ""
     old_s <- if (length(old$subjects) == n) old$subjects[[s]] else NULL
     sj <- list(eligible = !nzchar(reason), reason = reason,
-               prec = if (ok_prec) prec, W = W, h = opts$h,
+               prec = if (ok_prec) prec, W = W, h = .EMC_HMC_H,
                floor = .emc_hmc_ll_floor(sampler$data[[s]]), rate = 0,
                eps = if (!is.null(old_s$eps)) old_s$eps else NA_real_,
                n_tuned = if (is.null(old_s$n_tuned)) 0L else old_s$n_tuned,
                calib_cpu = 0, warmup = FALSE, n_warm = 0L)
-    if (!is.null(opts$fixed_eps)) {
-      sj$eps <- .emc_hmc_clip_eps(as.numeric(opts$fixed_eps))
-    } else if (identical(stage, "burn") && sj$eligible && is.na(sj$eps)) {
+    if (identical(stage, "burn") && sj$eligible && is.na(sj$eps)) {
       sj$warmup <- TRUE
       sj$eps <- .emc_hmc_clip_eps(p^(-1 / 4))
     } else {

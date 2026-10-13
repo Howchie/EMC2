@@ -264,8 +264,7 @@ test_that("the particle step stands down only for a cheaper, better HMC rate", {
   expect_identical(sol$q[2], 1)
 })
 
-test_that("under the refresh floor the cheaper kernel refreshes every subject", {
-  local_test_rng(12)
+test_that("a cheaper HMC step that moves a coordinate less keeps the particle step", {
   solve <- EMC2:::.emc_alloc_solve
   # A group coordinate the rounds barely move: a floor near 0.8.
   fixed <- list(kind = "shear", rho = 0.8, g = 0.999, cost = 0)
@@ -274,26 +273,6 @@ test_that("under the refresh floor the cheaper kernel refreshes every subject", 
                h = c(0.4, 0.5), c_h = 0.5)
   sol <- solve(list(fixed, subj), 1)
   expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
-  withr::local_options(emc2.alloc_subject_floor = "refresh")
-  sol <- solve(list(fixed, subj), 1)
-  expect_identical(c(sol$q[2], sol$x[2]), c(0, 1))
-  expect_equal(sol$cost, 1 + subj$c_h)
-  # Every subject is refreshed (q + r >= 1) and meets the target; HMC that
-  # costs more than the particle step never replaces it.
-  dear <- replace(subj, "c_h", list(1.5))
-  sol <- solve(list(fixed, dear), 1)
-  expect_identical(c(sol$q[2], sol$x[2]), c(1, 0))
-  for (trial in 1:20) {
-    s <- list(kind = "subject", rho = stats::runif(2, 0.5, 1),
-              p = stats::runif(2, 0.1, 0.9), c_p = stats::runif(1, 0.05, 0.5),
-              h = stats::runif(2, 0, 0.9), c_h = stats::runif(1, 0.02, 0.5))
-    units <- list(s, list(kind = "fixed", rho = stats::runif(1, 0, 0.9), cost = 0))
-    sol <- solve(units, 1)
-    q <- sol$q[1]; r <- sol$x[1]
-    expect_gte(q + r, 1 - 1e-9)
-    expect_true(all(alloc_subject_rho(s, q, r) <= sol$rho + 1e-9))
-    expect_equal(sol$cost, 1 + q * s$c_p + r * s$c_h)
-  }
 })
 
 test_that("particle steps are recorded at their marginal (worker CPU) cost", {
@@ -409,7 +388,6 @@ test_that("an unmeasured shear coordinate counts at its kind's measured factor",
                                       last = list(E = c(10, 0, 0, 0), n = c(10L, 0L, 0L, 0L),
                                                   moved = integer(4)))),
              alloc = list(window = NULL))
-  withr::local_options(list(emc2.shear_move = TRUE))
   local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
   g1 <- 1 - 1 / (2 * ms$g_var[1])
@@ -435,7 +413,6 @@ test_that("measured zero movement is a factor of exactly one, and buys nothing",
                                       last = list(E = c(0, 0, 0, 0), n = c(10L, 0L, 0L, 0L),
                                                   moved = integer(4)))),
              alloc = list(window = NULL))
-  withr::local_options(list(emc2.shear_move = TRUE))
   local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
   expect_identical(ms$g_fac[1], 1)
@@ -628,7 +605,6 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
                    theta_var = tv, alpha = array(a, c(p, 1, k))),
     shear = list(plan = list(dirs = diag(p), stage = stage, last = last)),
     alloc = list(window = NULL))
-  withr::local_options(list(emc2.shear_move = TRUE))
   local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
   n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
   # Mean direction 1: 50 rounds moving well; direction 2: 5 rounds that did
@@ -709,7 +685,7 @@ test_that("collapsed round allocations remain specific to each chain", {
   local_mocked_bindings(
     .emc_alloc_wanted = function(sampler) TRUE,
     .emc_prepare_chain_rng = function(emc) emc,
-    .emc_hmc_options = function() list(enabled = FALSE),
+    .emc_hmc_support = function(sampler) list(ok = FALSE),
     .emc_alloc_draws = function(ch, n) 1L,
     .emc_alloc_measure = function(emc, j, ...) {
       list(chain_id = j, shear = FALSE, g_rho = numeric(), g_fac = numeric(),
@@ -880,15 +856,15 @@ alloc_rand_subject <- function(k) {
 
 test_that("subjects priced together match each subject priced alone", {
   local_test_rng(21)
-  for (refresh in c(FALSE, TRUE)) for (trial in 1:10) {
+  for (trial in 1:20) {
     us <- c(list(list(kind = "shear", rho = 0.9, g = 0.6, cost = 0.05),
                  list(kind = "fixed", rho = 0.5, cost = 0)),
             lapply(stats::rpois(12, 2) + 1L, alloc_rand_subject))
     movable <- c(TRUE, FALSE, stats::runif(12) < 0.85)
     rs <- sort(c(stats::runif(25, 0.05, 1), 1, 0.999999))
-    got <- EMC2:::.emc_alloc_units_need(us, movable, rs, 4, refresh)
+    got <- EMC2:::.emc_alloc_units_need(us, movable, rs, 4)
     for (i in seq_along(us)) {
-      ref <- if (movable[i]) EMC2:::.emc_alloc_unit_need(us[[i]], rs, 4, refresh)
+      ref <- if (movable[i]) EMC2:::.emc_alloc_unit_need(us[[i]], rs, 4)
         else EMC2:::.emc_alloc_unit_still(us[[i]], length(rs))
       expect_equal(got[[i]]$cost, ref$cost, tolerance = 1e-12)
       ok <- is.finite(ref$cost)
@@ -1024,7 +1000,6 @@ test_that("chains measured from shared pooled covariances match direct variances
   emc <- list(chain(), chain())
   emc[[2]]$shear$plan$dirs <- emc[[1]]$shear$plan$dirs
   hst <- list(subjects = lapply(seq_len(n), function(s) list(W = matrix(stats::rnorm(p * p), p))))
-  withr::local_options(list(emc2.shear_move = TRUE))
   local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
   cache <- new.env()
   for (j in 1:2) {

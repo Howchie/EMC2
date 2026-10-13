@@ -83,10 +83,7 @@
 # for, which is solved again against keeping every particle step
 # (.emc_alloc_settle). A subject the
 # allocation would use without measured HMC moves first gets a bracketed
-# step size and pilot transitions on a private copy of its state. Under
-# emc2.alloc_subject_floor = "refresh" the particle step is not a floor: each
-# subject is refreshed once per iteration by the particle step or HMC
-# (q_s + r_s >= 1) and only has to meet the target. The
+# step size and pilot transitions on a private copy of its state. The
 # allocation changes only at rebuilds, as every adapted quantity does.
 
 .EMC_ALLOC_MAX_ROUNDS <- 4
@@ -106,8 +103,7 @@
 # latency): the same accounting for each.
 .EMC_ALLOC_FAMILIES <- c("shear", "collapsed", "hmc")
 .EMC_ALLOC_MIN_GAIN <- 0.9
-# Subject-HMC rates tried for every subject at once, for the group's credit
-# (emc2.alloc_hmc_regimes switches the search off).
+# Subject-HMC rates tried for every subject at once, for the group's credit.
 .EMC_ALLOC_HMC_REGIMES <- c(0.5, 1)
 # Particle rates the solver considers, highest first so that ties keep the
 # particle step.
@@ -125,11 +121,6 @@
   if (is.null(x)) 0 else x
 }
 
-.emc_cpu_children <- function() {
-  p <- proc.time()
-  p[["user.child"]] + p[["sys.child"]]
-}
-
 # Every cost the allocation compares is wall time on the cores the chain holds:
 # a move's computation in the chain's own process and its likelihood rounds'
 # round trips keep those cores as busy as they leave them.
@@ -139,7 +130,7 @@
 
 .emc_alloc_wanted <- function(sampler) {
   .emc_shear_active(sampler) || .emc_collapsed_active(sampler) ||
-    (isTRUE(.emc_hmc_options()$enabled) && isTRUE(.emc_hmc_support(sampler)$ok))
+    isTRUE(.emc_hmc_support(sampler)$ok)
 }
 
 .emc_alloc_lsd <- function(V) 0.5 * log(pmax(diag(as.matrix(V)), .Machine$double.xmin))
@@ -474,7 +465,6 @@
                              hmc_fixed = 0) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
-  refresh <- identical(getOption("emc2.alloc_subject_floor", "particle"), "refresh")
   moved_idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
   j_floor <- if (is.null(joint) || is.null(joint$floor)) 0 else min(joint$floor, joint$cap)
   xcs <- if (is.null(joint)) 0 else {
@@ -531,7 +521,7 @@
     tau_t <- .emc_alloc_tau(targets)
     still <- setdiff(seq_len(n_u), moved_idx)
     need_of <- function(us, movable, layout = NULL)
-      .emc_alloc_units_need(us, movable, targets, max_rounds, refresh, layout)
+      .emc_alloc_units_need(us, movable, targets, max_rounds, layout)
     # Every candidate's moved units differ from the units only in rho.
     moved_layout <- .emc_alloc_need_layout(units[moved_idx], max_rounds)
     need <- vector("list", n_u)
@@ -758,9 +748,8 @@
 }
 
 # A unit's allocation for each target rho* in rs: list(x, q, cost), with
-# cost Inf where the target is out of its reach. refresh: a subject's
-# particle step is not a floor, but it is refreshed once per iteration.
-.emc_alloc_unit_need <- function(u, rs, max_rounds, refresh = FALSE) {
+# cost Inf where the target is out of its reach.
+.emc_alloc_unit_need <- function(u, rs, max_rounds) {
   n_t <- length(rs)
   if (identical(u$kind, "fixed"))
     return(list(x = numeric(n_t), q = rep(1, n_t),
@@ -781,9 +770,9 @@
     return(list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)))
   }
   # Subject: for each particle rate q, the least HMC rate r with
-  # rho_i F(q, r) <= min(rho*, level_i) on every coordinate (<= rho* under
-  # refresh, with r >= 1 - q), F the kernels' joint factor under coupled
-  # selection (.emc_alloc_dev_factor); then the cheapest q. F falls linearly
+  # rho_i F(q, r) <= min(rho*, level_i) on every coordinate, F the kernels'
+  # joint factor under coupled selection (.emc_alloc_dev_factor); then the
+  # cheapest q. F falls linearly
   # in r at slope 1 - h_i while the kernels exclude each other (r <= 1 - q)
   # and at slope p_i (1 - h_i) once they overlap.
   rho <- u$rho
@@ -797,7 +786,7 @@
   r_need <- emc_alloc_subject_need_cpp(
     as.numeric(rho), if (is.null(u$p)) rep(1, length(rho)) else as.numeric(u$p),
     if (is.null(u$h)) NULL else as.numeric(u$h), as.numeric(level),
-    as.numeric(qs), as.numeric(rs), as.numeric(r_min), refresh)
+    as.numeric(qs), as.numeric(rs), as.numeric(r_min))
   r_need[r_need > 1 + 1e-9] <- Inf
   fin <- is.finite(r_need)
   r_need[fin] <- pmin(r_need[fin], 1)
@@ -833,7 +822,7 @@
 # movable shear units priced together in one call, and the movable subject
 # units in another. layout: .emc_alloc_need_layout(us), when the caller
 # prices units of the same layout repeatedly.
-.emc_alloc_units_need <- function(us, movable, rs, max_rounds, refresh = FALSE, layout = NULL) {
+.emc_alloc_units_need <- function(us, movable, rs, max_rounds, layout = NULL) {
   if (is.null(layout)) layout <- .emc_alloc_need_layout(us, max_rounds)
   out <- vector("list", length(us))
   shear <- movable & layout$shear
@@ -843,7 +832,7 @@
     out[fixed] <- emc_alloc_fixed_need_cpp(vapply(us[fixed], function(u) max(u$rho), numeric(1)),
                                            as.numeric(rs))
   for (i in which(!subj & !shear & !fixed)) out[[i]] <- if (movable[i])
-    .emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds, refresh = refresh)
+    .emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds)
     else .emc_alloc_unit_still(us[[i]], length(rs))
   sh <- which(shear)
   if (length(sh)) {
@@ -881,7 +870,7 @@
       vapply(us[idx], function(u) num(u$r_min, 0), numeric(1)),
       vapply(us[idx], function(u) num(pick_c(u, "c", c), num(u$c_p, 0)), numeric(1)),
       vapply(us[idx], function(u) num(u$c_h, 0), numeric(1)),
-      .EMC_ALLOC_PARTICLE_RATES, as.numeric(rs), refresh)
+      .EMC_ALLOC_PARTICLE_RATES, as.numeric(rs))
     m_c <- vapply(us[idx], function(u)
       if (is.null(u$cands)) NA_real_ else u$cands$m[min(c, length(u$cands$m))], numeric(1))
     got$m <- matrix(m_c, length(idx), length(rs))
@@ -1289,7 +1278,6 @@
 # useless fades with it.
 .emc_alloc_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
   n <- nrow(ms$s_rho)
-  opts <- .emc_hmc_options()
   bounds <- function(n_ev, iters) {
     if (is.null(B) || !is.finite(B) || B <= 0) return(list(floor = 0, cap = Inf))
     n0 <- .EMC_ALLOC_ROUND_EVIDENCE
@@ -1317,7 +1305,7 @@
     u <- list(kind = "subject", rho = ms$s_rho[s, ], p = NULL, c_p = 0, h = NULL, c_h = 0)
     if (isTRUE(sj$eligible)) {
       ev <- hmc_state$evidence[[s]]
-      h <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$s_var[s, ], opts$min_evidence)
+      h <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$s_var[s, ], .EMC_HMC_MIN_EVIDENCE)
       if (is.null(h) && optimistic) h <- numeric(length(ms$s_rho[s, ]))
       else if (!is.null(h)) u$h_n <- ev$n
       if (!is.null(h)) {
@@ -1329,7 +1317,7 @@
         u$c_h <- c_s
         # Its factor on the deviations, for the group's credit.
         if (!is.null(ms$d_var) && all(is.finite(ms$d_var[s, ]))) {
-          u$h_dev <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$d_var[s, ], opts$min_evidence)
+          u$h_dev <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$d_var[s, ], .EMC_HMC_MIN_EVIDENCE)
           if (is.null(u$h_dev)) u$h_dev <- h
         }
       }
@@ -1575,7 +1563,7 @@
   # priced with the group autocorrelations they imply. A coordinate a regime
   # lowers counts as movable.
   regimes <- list()
-  if (has_h && isTRUE(getOption("emc2.alloc_hmc_regimes", TRUE))) {
+  if (has_h) {
     levels0 <- .emc_alloc_range(u$units, .EMC_ALLOC_MAX_ROUNDS)$levels
     for (r in .EMC_ALLOC_HMC_REGIMES) {
       reg <- .emc_alloc_regime(u, r)
@@ -1654,62 +1642,55 @@
 .emc_alloc_rebuild <- function(emc, stage, n_cores, B) {
   if (identical(stage, "preburn") || !.emc_alloc_wanted(emc[[1L]])) return(emc)
   emc <- .emc_prepare_chain_rng(emc)
-  opts <- .emc_hmc_options()
-  hmc_on <- isTRUE(opts$enabled)
   nch <- length(emc)
   Vbar <- lapply(emc, function(ch) {
     k <- .emc_alloc_draws(ch, if (is.null(ch$alloc$window)) 200L else
       max(2L, ch$alloc$window$n))
     apply(ch$samples$theta_var[, , k, drop = FALSE], 1:2, mean)
   })
-  hst <- lapply(seq_len(nch), function(j)
-    if (hmc_on) .emc_hmc_plan_chain(emc[[j]], stage, Vbar[[j]]) else NULL)
+  hst <- lapply(seq_len(nch), function(j) .emc_hmc_plan_chain(emc[[j]], stage, Vbar[[j]]))
   stats_cache <- new.env()
   ms <- lapply(seq_len(nch), function(j)
     .emc_alloc_measure(emc, j, hst[[j]], Vbar[[j]], stage, cache = stats_cache))
   shear_on <- vapply(seq_len(nch), function(j) ms[[j]]$shear, logical(1))
   # Calibration for subjects the optimistic allocation would use but that
   # lack measured HMC moves.
-  if (hmc_on) {
-    jobs <- NULL
-    for (j in seq_len(nch)) {
-      if (!isTRUE(hst[[j]]$supported)) next
-      u <- .emc_alloc_units(ms[[j]], hst[[j]], shear_on[j], optimistic = TRUE, B = B)
-      sol <- .emc_alloc_solve_units(u)
-      x <- sol$x
-      regime <- if (is.null(sol$regime)) 0 else sol$regime
-      n_g <- length(ms[[j]]$g_rho)
-      for (s in seq_len(emc[[j]]$n_subjects)) {
-        sj <- hst[[j]]$subjects[[s]]
-        if (!isTRUE(sj$eligible) || isTRUE(sj$warmup)) next
-        wanted <- if (!is.null(opts$fixed_rate)) as.numeric(opts$fixed_rate) > 0 else
-          regime + x[n_g + s] > 0
-        if (!wanted) next
-        ev <- hst[[j]]$evidence[[s]]
-        lacking <- is.null(ev) || ev$n < opts$min_evidence
-        bracket <- is.null(opts$fixed_eps) && is.na(sj$eps)
-        pilots <- if (lacking && is.null(opts$fixed_rate)) opts$pilots else 0L
-        if (bracket || pilots > 0L)
-          jobs <- rbind(jobs, data.frame(chain = j, subject = s, bracket = bracket,
-                                         pilots = pilots))
-      }
+  jobs <- NULL
+  for (j in seq_len(nch)) {
+    if (!isTRUE(hst[[j]]$supported)) next
+    u <- .emc_alloc_units(ms[[j]], hst[[j]], shear_on[j], optimistic = TRUE, B = B)
+    sol <- .emc_alloc_solve_units(u)
+    x <- sol$x
+    regime <- if (is.null(sol$regime)) 0 else sol$regime
+    n_g <- length(ms[[j]]$g_rho)
+    for (s in seq_len(emc[[j]]$n_subjects)) {
+      sj <- hst[[j]]$subjects[[s]]
+      if (!isTRUE(sj$eligible) || isTRUE(sj$warmup)) next
+      if (regime + x[n_g + s] <= 0) next
+      ev <- hst[[j]]$evidence[[s]]
+      lacking <- is.null(ev) || ev$n < .EMC_HMC_MIN_EVIDENCE
+      bracket <- is.na(sj$eps)
+      pilots <- if (lacking) .EMC_HMC_PILOTS else 0L
+      if (bracket || pilots > 0L)
+        jobs <- rbind(jobs, data.frame(chain = j, subject = s, bracket = bracket,
+                                       pilots = pilots))
     }
-    if (!is.null(jobs)) {
-      res <- .emc_with_preserved_rng(auto_mclapply(seq_len(nrow(jobs)), function(k) {
-        j <- jobs$chain[k]
-        .emc_quiet_fork(.emc_hmc_calibrate(emc[[j]], hst[[j]], jobs$subject[k],
-                                           bracket = jobs$bracket[k],
-                                           pilots = jobs$pilots[k]))
-      }, mc.cores = min(nrow(jobs), max(1L, n_cores)), mc.set.seed = FALSE))
-      for (k in seq_len(nrow(jobs))) {
-        j <- jobs$chain[k]
-        s <- jobs$subject[k]
-        r <- res[[k]]
-        if (!is.list(r) || is.null(r$seed)) next
-        .emc_reject_add(r$rejects, "pilot")
-        emc[[j]]$rng$subjects[[s]] <- r$seed
-        hst[[j]] <- .emc_hmc_apply_calibration(hst[[j]], s, r)
-      }
+  }
+  if (!is.null(jobs)) {
+    res <- .emc_with_preserved_rng(auto_mclapply(seq_len(nrow(jobs)), function(k) {
+      j <- jobs$chain[k]
+      .emc_quiet_fork(.emc_hmc_calibrate(emc[[j]], hst[[j]], jobs$subject[k],
+                                         bracket = jobs$bracket[k],
+                                         pilots = jobs$pilots[k]))
+    }, mc.cores = min(nrow(jobs), max(1L, n_cores)), mc.set.seed = FALSE))
+    for (k in seq_len(nrow(jobs))) {
+      j <- jobs$chain[k]
+      s <- jobs$subject[k]
+      r <- res[[k]]
+      if (!is.list(r) || is.null(r$seed)) next
+      .emc_reject_add(r$rejects, "pilot")
+      emc[[j]]$rng$subjects[[s]] <- r$seed
+      hst[[j]] <- .emc_hmc_apply_calibration(hst[[j]], s, r)
     }
   }
   # One chain's plan; q_fixed holds its particle rates to the shared ones
@@ -1741,11 +1722,10 @@
     if (!is.null(st) && isTRUE(st$supported)) {
       for (s in seq_len(ch$n_subjects)) {
         sj <- st$subjects[[s]]
-        sj$rate <- if (!isTRUE(sj$eligible)) 0 else if (!is.null(opts$fixed_rate))
-          as.numeric(opts$fixed_rate) else if (isTRUE(sj$warmup))
-            .EMC_HMC_WARMUP_RATE else rate[s]
+        sj$rate <- if (!isTRUE(sj$eligible)) 0 else if (isTRUE(sj$warmup))
+          .EMC_HMC_WARMUP_RATE else rate[s]
         # The particle step stands down only for the rate chosen with it.
-        if (isTRUE(sj$eligible) && is.null(opts$fixed_rate) && !isTRUE(sj$warmup) &&
+        if (isTRUE(sj$eligible) && !isTRUE(sj$warmup) &&
             length(sol$q) >= n_g + s)
           q[s] <- sol$q[n_g + s]
         st$subjects[[s]] <- sj

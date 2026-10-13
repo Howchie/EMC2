@@ -65,7 +65,6 @@ test_that("the surrogate gradient matches finite differences", {
 })
 
 test_that("a skipped fractional collapsed move avoids rebuilding its context", {
-  withr::local_options(list(emc2.group_move = "shear", emc2.collapsed_move = TRUE))
   sampler <- list(type = "standard", nuisance = rep(FALSE, 4L), gd = NULL,
                   group_designs = list(), n_subjects = 5L, n_pars = 4L,
                   collapsed = list(iterations = 0L,
@@ -239,7 +238,6 @@ test_that("the collapsed move leaves the joint posterior invariant (diagonal-gam
       -0.5 * rowSums((dd %*% Si) * dd)
     },
     .package = "EMC2")
-  withr::local_options(list(emc2.collapsed_move = TRUE))
   pn <- c("x1", "x2")
   fits <- list(exact = lapply(seq_len(n), function(s)
                  list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
@@ -297,7 +295,6 @@ test_that("the collapsed move with transport walls leaves a bounded joint poster
   p <- h$p; n <- h$n; y <- h$y; Si <- h$Si
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) h$ll(proposals, dadm),
                         .package = "EMC2")
-  withr::local_options(list(emc2.collapsed_move = TRUE))
   pn <- c("x1", "x2")
   fits <- list(exact = lapply(seq_len(n), function(s)
                  list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check)),
@@ -372,7 +369,6 @@ test_that("the collapsed move keeps the joint distribution with a full covarianc
       -0.5 * rowSums((dd %*% Si) * dd)
     },
     .package = "EMC2")
-  withr::local_options(list(emc2.collapsed_move = TRUE))
   pn <- paste0("x", 1:p)
   base <- list(type = "standard", nuisance = rep(FALSE, p), n_subjects = n, n_pars = p,
                par_names = pn, is_blocked = c(TRUE, TRUE, FALSE), par_group = c(1, 1, 2),

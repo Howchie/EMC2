@@ -52,43 +52,6 @@ get_stop_criteria <- function(stage, stop_criteria, type){
   return(stop_criteria)
 }
 
-.EMC_PRODUCTION_OPTION_DEFAULTS <- list(
-  emc2.group_move = "shear", emc2.independent_chains = TRUE,
-  emc2.ensemble = TRUE, emc2.ensemble_pool = 32L, emc2.ensemble_rounds = 10L,
-  emc2.ensemble_cadence = 1L, emc2.ensemble_latent_weight = "conditional",
-  emc2.laplace_conditional = TRUE,
-  emc2.sample_rebuilds = "doubling",
-  emc2.pooled_candidates = 8L, emc2.iwish_rcond_tol = 1e-12,
-  emc2.subject_hmc = TRUE, emc2.subject_hmc_h = 1e-4, emc2.subject_hmc_pilots = 20L,
-  emc2.subject_hmc_min_evidence = 10L, emc2.collapsed_move = TRUE)
-
-# Production transition options travel with the checkpoint so a resumed run
-# uses the same kernel. Worker allocation and diagnostics remain session-local.
-.emc_record_production_options <- function(emc) {
-  recorded <- lapply(emc, `[[`, "production_options")
-  have <- !vapply(recorded, is.null, logical(1))
-  if (any(have)) {
-    settings <- recorded[[which(have)[1L]]]
-    if (!all(have) || !all(vapply(recorded, identical, logical(1), y = settings)))
-      stop("Chains have different recorded production options; resume each fit separately.",
-           call. = FALSE)
-    # Checkpoints created before an option was introduced inherit its package
-    # default, even if the caller's current session has a different option.
-    settings <- utils::modifyList(.EMC_PRODUCTION_OPTION_DEFAULTS, settings)
-  } else {
-    has_production <- vapply(emc, function(chain)
-      isTRUE(chain$sample_transitions > 0) || any(chain$samples$stage == "sample"), logical(1))
-    if (any(has_production))
-      warning("The production transition options were not recorded; continuation uses current session settings.",
-              call. = FALSE)
-    settings <- Map(function(name, default) getOption(name, default),
-                    names(.EMC_PRODUCTION_OPTION_DEFAULTS), .EMC_PRODUCTION_OPTION_DEFAULTS)
-    names(settings) <- names(.EMC_PRODUCTION_OPTION_DEFAULTS)
-    for (j in seq_along(emc)) emc[[j]]$production_options <- settings
-  }
-  list(emc = emc, options = settings)
-}
-
 #' Fine-Tuned Model Estimation
 #'
 #' Although typically users will rely on ``fit``, this function can be used for more fine-tuned specification of estimation needs.
@@ -149,12 +112,6 @@ run_emc <- function(emc, stage, stop_criteria,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc, warn = TRUE)
-  if (stage == "sample") {
-    recorded <- .emc_record_production_options(emc)
-    emc <- recorded$emc
-    previous_options <- options(recorded$options)
-    on.exit(options(previous_options), add = TRUE)
-  }
   emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
@@ -171,9 +128,9 @@ run_emc <- function(emc, stage, stop_criteria,
   cur_thin <- ifelse(is.numeric(thin), thin, 1)
   # Stall detection, counted in tries.  It lives here rather than in
   # run_stage() because run_stage() only ever sees ONE try: a counter there
-  # restarts every step_size iterations, so the limit could only ever be
-  # expressed in iterations -- and a 25-iteration limit aborted healthy burn-in
-  # on RDM, RDMGBM and LBA.  Preburn is exempt: it proposes from the prior, not
+  # restarts every step_size iterations, so the limit could only be expressed
+  # in iterations, which is too short for healthy burn-in on slow-moving
+  # models.  Preburn is exempt: it proposes from the prior, not
   # an adapted covariance, so long rejection runs there are ordinary.
   stall_limit <- .emc_stall_try_limit()
   check_stall <- !identical(stage, "preburn") && is.finite(stall_limit)
@@ -395,18 +352,11 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   !is.null(next_at) && !is.null(n_sample) && n_sample >= next_at
 }
 
-# Transition count of the next production rebuild after one at n_sample. By
-# default the stage is refreshed once it holds 100, 200, 400, ... transitions,
-# so adaptation becomes increasingly rare. numeric(0) freezes the proposals;
-# an explicit vector of transition counts gives a finite schedule.
+# Transition count of the next production rebuild after one at n_sample: the
+# stage is refreshed once it holds 100, 200, 400, ... transitions, so
+# adaptation becomes increasingly rare.
 .emc_next_sample_rebuild <- function(n_sample) {
-  at <- getOption("emc2.sample_rebuilds", "doubling")
-  if (identical(at, "doubling"))
-    return(if (n_sample < 100) 100L else 2L * as.integer(n_sample))
-  if (!is.numeric(at) || any(!is.finite(at)) || any(at < 1) || any(at != floor(at)))
-    stop("emc2.sample_rebuilds must contain finite positive integer transition counts.", call. = FALSE)
-  later <- sort(as.numeric(at))[as.numeric(at) > n_sample]
-  if (length(later)) as.integer(later[1L]) else Inf
+  if (n_sample < 100) 100L else 2L * as.integer(n_sample)
 }
 
 add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
@@ -418,7 +368,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
   sample_window <- NULL
   if (stage == "sample") {
     n_stored <- sum(emc[[1]]$samples$stage[seq_len(emc[[1]]$samples$idx)] == "sample")
-    # Checkpoints from before the counter existed resume from the stored count.
+    # A checkpoint without the counter resumes from the stored count.
     n_sample <- emc[[1]]$sample_transitions
     if (is.null(n_sample)) {
       n_sample <- as.integer(n_stored)
@@ -443,16 +393,9 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
     emc <- .emc_collapsed_set_plans(emc, sample_window, stage, n_cores)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
-        # Independent chains block on their own covariances only.
-        if (.emc_independent_chains() && length(emc) > 1L) {
-          for(i in seq_along(emc)){
-            attr(emc[[i]]$data, "components") <- sub_blocking(emc[i], n_blocks)
-          }
-        } else {
-          components <- sub_blocking(emc, n_blocks)
-          for(i in 1:length(emc)){
-            attr(emc[[i]]$data, "components") <- components
-          }
+        # Each chain blocks on its own covariances.
+        for(i in seq_along(emc)){
+          attr(emc[[i]]$data, "components") <- sub_blocking(emc[i], n_blocks)
         }
       }
     }
@@ -481,13 +424,8 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
               ncol(x) == chain$n_pars &&
               .emc_empirical_covariance_ok(x), logical(1)))
       }
-      ready <- all(vapply(emc, chain_ready, logical(1)))
-      # Independent chains each switch when their own proposals are ready.
-      if (.emc_independent_chains()) {
-        for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- chain_ready(emc[[j]])
-      } else {
-        for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- ready
-      }
+      # Each chain switches when its own proposals are ready.
+      for (j in seq_along(emc)) emc[[j]]$burn_eff_ready <- chain_ready(emc[[j]])
     }
   }
   if(stage == "sample"){
@@ -780,14 +718,9 @@ set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
 
 
 # Chains share nothing between them: each builds its proposals from its own
-# draws, and the burn mode start does not move a chain onto another chain's
-# mode. Chains are then independent replicates, which R-hat assumes.
-.emc_independent_chains <- function() {
-  isTRUE(getOption("emc2.independent_chains", TRUE))
-}
-
+# draws, so chains are independent replicates, which R-hat assumes.
 create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
-  if (.emc_independent_chains() && length(emc) > 1L) {
+  if (length(emc) > 1L) {
     for (i in seq_along(emc))
       emc[[i]] <- create_eff_proposals(list(emc[[i]]), n_cores, from_burn)[[1L]]
     return(emc)
@@ -799,12 +732,7 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
     st <- samples_merged$samples$stage
     pool <- which(st %in% c("burn", "adapt") &
                     seq_along(st) <= samples_merged$samples$idx)
-    # One chain (independent chains build their own) is a single block; cut()
-    # rejects a single interval.
-    per_chain <- if (length(emc) > 1L) {
-      split(pool, cut(pool, breaks = length(emc), labels = FALSE))
-    } else list(pool)
-    keep <- sort(unlist(lapply(per_chain, function(x) tail(x, 250L))))
+    keep <- tail(pool, 250L)
     test_samples <- filtered_samples(samples_merged, keep, type = samples_merged$type)
   } else
   test_samples <- extract_samples(samples_merged, stage = c("adapt", "sample"), max_n_sample = 750, n_chains = length(emc))
@@ -959,18 +887,6 @@ sub_blocking <- function(emc, n_blocks){
   samples_idx
 }
 
-.emc_proposal_filter_indices <- function(emc, samples_idx) {
-  # get_pars() first removes the init slot and any other stages outside this
-  # selection. Its filter is relative to that reduced history, while proposal
-  # windows use absolute positions in the sample store.
-  history <- emc[[1L]]$samples$stage
-  eligible <- which(history %in% c("preburn", "burn", "adapt", "sample") &
-                      seq_along(history) <= emc[[1L]]$samples$idx)
-  filter <- match(samples_idx, eligible)
-  if (anyNA(filter)) stop("Proposal window contains a non-sampling draw")
-  filter
-}
-
 create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
                                    stage){
   n_subjects <- emc[[1]]$n_subjects
@@ -978,20 +894,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
   n_pars <- emc[[1]]$n_pars
   stage <- match.arg(stage, c("burn", "adapt", "sample"))
   samples_idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
-  filter_idx <- .emc_proposal_filter_indices(emc, samples_idx)
-  independent <- .emc_independent_chains() && n_chains > 1L
-  if (!independent) {
-    alpha <- get_pars(emc, filter = filter_idx, selection = "alpha",
-                      stage = c('preburn', 'burn', 'adapt', 'sample'),
-                      by_subject = T, merge_chains = T, return_mcmc = F,
-                      remove_dup = F, remove_constants = F)
-    if (!is.null(emc[[1]]$pooled))
-      alpha <- alpha[emc[[1]]$par_names, , , drop = FALSE]
-  }
-
-  components <- attr(emc[[1]]$data, "components")
-  block_idx <- block_variance_idx(components)
-  # Posterior moments of each subject over the window, all chains: the plain
+  # Posterior moments of each subject over the chain's own window: the plain
   # mean and covariance. The covariance feeds an unscaled independence
   # proposal, whose efficiency depends on the correlations, so they are not
   # shrunk; a window that is not positive definite is regularised below.
@@ -1000,17 +903,10 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       rowMeans(matrix(a[, sub, ], nrow = n_pars))),
     cov = lapply(seq_len(n_subjects), function(sub)
       stats::cov(t(matrix(a[, sub, ], nrow = n_pars)))))
-  if (!independent) {
-    wm <- win_moments(alpha)
-    win_mu <- wm$mu; win_cov <- wm$cov
-  }
   for(j in 1:n_chains){
-    if (independent) {
-      own <- emc[[j]]$samples$alpha[, , samples_idx, drop = FALSE]
-      wm <- win_moments(own)
-      win_mu <- wm$mu; win_cov <- wm$cov
-      block_idx <- block_variance_idx(attr(emc[[j]]$data, "components"))
-    }
+    wm <- win_moments(emc[[j]]$samples$alpha[, , samples_idx, drop = FALSE])
+    win_mu <- wm$mu; win_cov <- wm$cov
+    block_idx <- block_variance_idx(attr(emc[[j]]$data, "components"))
     old_chains_var <- emc[[j]]$chains_var
     old_chains_mu <- emc[[j]]$chains_mu
     old_ensemble_q <- emc[[j]]$ensemble_q
@@ -1186,23 +1082,13 @@ reset_pm_settings <- function(emc, stage){
   return(emc)
 }
 
-update_epsilon_scale <- function(pmwgs, prop_var_ratio = NULL, reset = FALSE){
-  scale_bounds <- getOption("emc2.epsilon_scale_bounds", c(.25, 4))
-  epsilon_bounds <- getOption("emc2.epsilon_bounds", c(.05, 5))
-  if(length(scale_bounds) != 2L || any(!is.finite(scale_bounds)) ||
-     scale_bounds[1] <= 0 || scale_bounds[2] < scale_bounds[1]){
-    scale_bounds <- c(.25, 4)
-  }
-  if(length(epsilon_bounds) != 2L || any(!is.finite(epsilon_bounds)) ||
-     epsilon_bounds[1] <= 0 || epsilon_bounds[2] < epsilon_bounds[1]){
-    epsilon_bounds <- c(.05, 5)
-  }
+update_epsilon_scale <- function(pmwgs, prop_var_ratio = NULL){
+  scale_bounds <- c(.25, 4)
+  epsilon_bounds <- c(.05, 5)
   pm_settings <- attr(pmwgs$samples, "pm_settings")
   n_subjects <- length(pm_settings)
-  # Both arguments are per subject (length 1 is recycled).
-  reset <- rep_len(as.logical(reset), n_subjects)
-  reset[is.na(reset)] <- FALSE
-  # prop_var_ratio is a variance ratio, while epsilon multiplies a Cholesky
+  # prop_var_ratio is a per-subject variance ratio (length 1 is recycled),
+  # while epsilon multiplies a Cholesky
   # factor in particle_draws().  Convert variance scaling to standard-
   # deviation scaling before applying it, and bound the one-block jump.
   scale <- rep(1, n_subjects)
@@ -1215,15 +1101,7 @@ update_epsilon_scale <- function(pmwgs, prop_var_ratio = NULL, reset = FALSE){
     x <- pm_settings[[s]]
     for(i in seq_along(x)){
       epsilon <- x[[i]]$epsilon
-      if(reset[s]){
-        # The subject's own empirical covariance failed, so its proposal is the
-        # pooled fallback: not comparable with the old estimate (that
-        # comparison produced epsilon ~ 1e38 in a failed fit).  Restart this
-        # subject at the neutral multiplier; other subjects keep their scales.
-        epsilon <- rep(1, length(epsilon))
-      } else {
-        epsilon <- epsilon * scale[s]
-      }
+      epsilon <- epsilon * scale[s]
       epsilon[!is.finite(epsilon) | epsilon <= 0] <- 1
       x[[i]]$epsilon <- pmin(epsilon_bounds[2],
                              pmax(epsilon_bounds[1], epsilon))

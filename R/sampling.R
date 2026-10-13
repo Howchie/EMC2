@@ -795,9 +795,9 @@ run_stage <- function(pmwgs,
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                        r_cores = r_cores,
                                        total_cores = n_cores)
-  # Optional moves (R/move_allocation.R): the subject HMC plan is fixed for
+  # Allocated moves (R/move_allocation.R): the subject HMC plan is fixed for
   # the whole block, and the allocation's measurements are recorded every
-  # iteration while any optional move is on.
+  # iteration.
   hmc_plan <- if (stage == "preburn") NULL else .emc_hmc_worker_plan(pmwgs)
   alloc_on <- stage != "preburn" && .emc_alloc_wanted(pmwgs)
   # The allocation prices other particle counts from each step's own clouds.
@@ -940,7 +940,7 @@ run_stage <- function(pmwgs,
     ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
                                           if (is.null(ens_q)) chains_mu else ens_q$mu,
                                           if (is.null(ens_q)) chains_var else ens_q$var,
-                                          iteration = j, factors = ens_factors)
+                                          factors = ens_factors)
     if (!is.null(ens_pools) && is.null(ens_factors))
       ens_factors <- list(L = ens_pools$L, logdet = ens_pools$logdet)
     pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
@@ -1106,8 +1106,8 @@ run_stage <- function(pmwgs,
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
                               wpool_part, ens_pools)
     ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
-    # Then the shear (R/shear_move.R) when enabled: the non-centred move of
-    # the same group state.
+    # Then the shear (R/shear_move.R): the non-centred move of the same
+    # group state.
     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
     shear_build_el <- shear_ll_el <- 0
     shear_rounds <- 0L
@@ -1116,36 +1116,16 @@ run_stage <- function(pmwgs,
       shear_started <- .emc_cpu_self()
       shear_el0 <- proc.time()[["elapsed"]]
       sll_shear <- .emc_subject_ll_cpu()
-      # The rounds in K parts with a subject HMC round between parts, so
-      # the subjects re-equilibrate before the next rounds (emc2.shear_interleave).
-      K <- if (is.null(hmc_plan)) 1L else
-        max(1L, as.integer(getOption("emc2.shear_interleave", 1L)))
-      rounds_all <- ens$sampler$shear$plan$rounds
-      after <- identical(getOption("emc2.shear_interleave_mode", "between"), "after")
-      for (part in seq_len(K)) {
-        if (K > 1L) ens$sampler$shear$plan$rounds <- if (after) rounds_all * (part == 1L) else rounds_all / K
-        sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
-                              ens$wpool, wpool_part)
-        ens$sampler <- sh$sampler
-        ens$pars <- sh$pars
-        ens$proposals <- sh$proposals
-        ens$wpool <- sh$wpool
-        shear_rounds <- shear_rounds + (if (is.null(sh$rounds)) 0L else sh$rounds)
-        shear_round_el <- shear_round_el + (if (is.null(sh$round_el)) 0 else sh$round_el)
-        shear_build_el <- shear_build_el + (if (is.null(sh$build_el)) 0 else sh$build_el)
-        shear_ll_el <- shear_ll_el + (if (is.null(sh$ll_el)) 0 else sh$ll_el)
-        if (part < K) {
-          hr <- .emc_hmc_round(hmc_plan, ens$proposals, ens$pars, pmwgs$type, wpool_streams,
-                               data, pmwgs$model, wpool = ens$wpool,
-                               n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
-                               par_names = par_names)
-          ens$proposals <- hr$proposals
-          wpool_streams <- hr$streams
-          hmc_plan <- hr$plan
-          if (!is.null(ens$wpool) && !is.null(hr$pool)) ens$wpool$alive <- hr$pool$alive
-        }
-      }
-      if (K > 1L) ens$sampler$shear$plan$rounds <- rounds_all
+      sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
+                            ens$wpool, wpool_part)
+      ens$sampler <- sh$sampler
+      ens$pars <- sh$pars
+      ens$proposals <- sh$proposals
+      ens$wpool <- sh$wpool
+      shear_rounds <- if (is.null(sh$rounds)) 0L else sh$rounds
+      shear_round_el <- if (is.null(sh$round_el)) 0 else sh$round_el
+      shear_build_el <- if (is.null(sh$build_el)) 0 else sh$build_el
+      shear_ll_el <- if (is.null(sh$ll_el)) 0 else sh$ll_el
       shear_raw <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
       shear_el <- proc.time()[["elapsed"]] - shear_el0
       if (alloc_on) {
@@ -1153,8 +1133,8 @@ run_stage <- function(pmwgs,
         shear_round_cpu <- .emc_reserved_cost(shear_round_el, cores_it)
       }
     }
-    # Then the collapsed move (R/collapsed_move.R) when enabled: the whole
-    # group state with the subjects in their conditional frames.
+    # Then the collapsed move (R/collapsed_move.R): the whole group state
+    # with the subjects in their conditional frames.
     coll_cpu <- coll_el <- coll_round_cpu <- 0
     coll_moves <- 0L
     if (.emc_collapsed_active(ens$sampler)) {
@@ -1409,11 +1389,10 @@ reject_sample_iteration <- function(samples, j) {
     return(samples)
   }
   # `last_theta_var_inv` is the current Gibbs-state covariance inverse, not a
-  # draw history.  It is a square 2-D matrix, so treating every 2-D object as
-  # an iteration matrix silently overwrites its columns whenever a Gibbs
-  # update is rejected.  The resulting repeated-column matrix is neither a
-  # covariance nor a valid sample store and later makes `filter_obj()` try to
-  # reshape (p x p) values to (p x n_iter).
+  # draw history.  It is a square 2-D matrix that would pass for an
+  # iteration matrix, so only the per-iteration fields are rolled back here;
+  # rewriting its columns would leave neither a covariance nor a valid sample
+  # store.
   n_iter <- length(samples$stage)
   for (nm in names(samples)) {
     if (nm %in% .EMC_STATIC_SAMPLE_FIELDS) next
@@ -1441,7 +1420,7 @@ reject_sample_iteration <- function(samples, j) {
 .emc_attach_lik <- function(eff_mu, lik) {
   if (is.null(eff_mu)) return(eff_mu)
   for (s in seq_along(eff_mu)) attr(eff_mu[[s]], "lik") <- NULL
-  if (is.null(lik) || !isTRUE(getOption("emc2.laplace_conditional", TRUE))) return(eff_mu)
+  if (is.null(lik)) return(eff_mu)
   for (s in seq_along(eff_mu)) {
     if (!is.null(eff_mu[[s]]) && length(lik) >= s && is.list(lik[[s]]) &&
         !is.null(lik[[s]]$check) && !isTRUE(.emc_laplace_poor(lik[[s]]$check)))
@@ -1540,16 +1519,13 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
 # proposal matrix, matching each result to its subject by the tag
 # safe_new_particle() attaches.
 #
-# Matching by tag rather than by position is the whole point.  A worker that
-# dies below R level is not an R error -- mclapply drops its element and warns
-# "N function calls resulted in an error", nothing more.  The result therefore
-# comes back SHORT.  The previous code did
-#     array(unlist(proposals[1:2, ]), dim = c(n_pars + 1, n_subjects))
-# which silently RECYCLED the survivors to fill the gap, so one dead worker
-# handed another subject's parameters to the subject that lost, and the chain
-# wedged with no error raised.  Here a lost subject repeats its own previous
-# state -- exactly what safe_new_particle() does for an error it CAN catch --
-# and no other subject is touched.
+# Results are matched by tag rather than by position.  A worker that dies
+# below R level is not an R error -- mclapply drops its element and warns
+# "N function calls resulted in an error", nothing more -- so the result can
+# come back SHORT, and positional assembly would hand one subject's parameters
+# to another.  A lost subject repeats its own previous state -- exactly what
+# safe_new_particle() does for an error it CAN catch -- and no other subject
+# is touched.
 .emc_assemble_proposals <- function(raw, n_pars, n_subjects, prev_alpha,
                                     prev_ll, prev_pm, stage = NULL,
                                     iteration = NULL) {
@@ -2193,8 +2169,8 @@ update_epsilon_continuous <- function(
 numbers_from_proportion <- function(mix_proportion, n_particles = 1000) {
   # Plain multinomial allocation: the particles are then iid draws from the
   # mixture whose density weights them. Forcing a minimum of one particle per
-  # component (the old pmax(1, .)) over-samples low-weight components and
-  # biases the stationary distribution.
+  # component would over-sample low-weight components and bias the
+  # stationary distribution.
   return(as.vector(rmultinom(1, n_particles, mix_proportion)))
 }
 
@@ -2341,8 +2317,7 @@ check_epsilon <- function(epsilon, n_pars, mix) {
       epsilon <- .7
     }
   } else if(length(epsilon) < (length(mix) -1)){
-    # A stage can add more than one component (adapt now tunes the full
-    # production mixture), so pad to the full length.
+    # A stage can add more than one component, so pad to the full length.
     epsilon <- c(epsilon, rep(epsilon[length(epsilon)],
                               length(mix) - 1 - length(epsilon)))
   }

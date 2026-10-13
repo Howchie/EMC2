@@ -171,10 +171,11 @@ test_that("unsupported hierarchies take no HMC and a round without rates draws n
   expect_equal(EMC2:::.emc_hmc_plan_rates(NULL, 2), c(0, 0))
 })
 
-hmc_small_fit <- function(route = "static", stages = c(20, 50), seed = 17, hmc = TRUE,
-                          rate = 0.5) {
-  withr::local_options(emc2.subject_hmc = hmc, emc2.subject_hmc_rate = rate,
-                       emc2.worker_queue = route == "queued")
+# A small fit; with `rate` the allocation is fixed at that HMC rate for
+# every subject and no group moves, so the plan does not depend on timings.
+hmc_small_fit <- function(route = "static", stages = c(20, 50), seed = 17, rate = 0.5) {
+  withr::local_options(emc2.worker_queue = route == "queued")
+  if (!is.null(rate)) force_allocation(shear = 0, collapsed = 0, hmc = rate)
   if (route == "serial") local_mocked_bindings(.emc_wpool_start = function(...) NULL,
                                                .package = "EMC2")
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:4], ]
@@ -272,10 +273,9 @@ test_that("serial, static and queued HMC rounds give the same chain", {
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
-  # Keep the HMC kernel fixed across worker routes. The production allocator
-  # prices shear and collapsed moves from measured CPU time, so comparing full
-  # adaptive fits can select different move plans even with identical seeds.
-  withr::local_options(emc2.group_move = "none", emc2.collapsed_move = FALSE)
+  # hmc_small_fit fixes the allocation: the production allocator prices moves
+  # from measured CPU time, so adaptive fits can select different plans even
+  # with identical seeds.
   static <- hmc_small_fit("static")
   h <- static[[1]]$subject_hmc
   expect_true(h$supported)
@@ -297,7 +297,6 @@ test_that("a transition is a function of its input and RNG state", {
   local_rng_guard()
   emc <- hmc_small_fit("static")
   ch <- emc[[1]]
-  withr::local_options(emc2.subject_hmc = TRUE, emc2.subject_hmc_rate = 1)
   plan <- EMC2:::.emc_hmc_worker_plan(ch)
   s <- which(!vapply(plan, is.null, logical(1)))[1]
   skip_if(is.na(s), "no eligible subject")
@@ -323,14 +322,13 @@ test_that("a split run continues exactly and an old checkpoint starts without HM
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
-  # The continuation assertion is about saved HMC state and RNG streams.
-  # Keep CPU-priced group moves off so wall-time noise cannot change the
-  # transition plan between the whole and split runs.
-  withr::local_options(emc2.group_move = "none", emc2.collapsed_move = FALSE)
+  # The continuation assertion is about saved HMC state and RNG streams; the
+  # fixed allocation keeps wall-time noise from changing the transition plan
+  # between the whole and split runs.
   whole <- hmc_small_fit("static", stages = c(20, 50))
   half <- hmc_small_fit("static", stages = c(20, 25))
   half <- EMC2:::restore_duplicates(EMC2:::strip_duplicates(half))
-  withr::local_options(emc2.subject_hmc = TRUE, emc2.subject_hmc_rate = 0.5)
+  force_allocation(shear = 0, collapsed = 0, hmc = 0.5)
   rest <- suppressMessages(run_emc(half, stage = "burn", cores_for_chains = 1,
     cores_per_chain = 2, step_size = 25, max_tries = 1, verbose = FALSE,
     stop_criteria = list(iter = 25, max_gd = Inf, min_unique = 0, min_es = 0)))
@@ -341,16 +339,6 @@ test_that("a split run continues exactly and an old checkpoint starts without HM
   old <- half
   old[[1]]$subject_hmc <- NULL
   expect_null(EMC2:::.emc_hmc_worker_plan(old[[1]]))
-})
-
-test_that("the HMC switch and its tuning are recorded production options", {
-  withr::local_options(list(emc2.subject_hmc = TRUE, emc2.subject_hmc_h = 1e-5))
-  rec <- EMC2:::.emc_record_production_options(list(list(n_pars = 2L)))
-  expect_true(rec$options$emc2.subject_hmc)
-  expect_identical(rec$options$emc2.subject_hmc_h, 1e-5)
-  withr::local_options(list(emc2.subject_hmc = FALSE))
-  again <- EMC2:::.emc_record_production_options(rec$emc)
-  expect_true(again$options$emc2.subject_hmc)
 })
 
 test_that("step sizes stay in their bounds", {

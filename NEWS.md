@@ -1,6 +1,18 @@
 # EMC2 3.4.0
 ## Development
 
+-   **One sampler:** the ensemble group update, shear rounds (curved frames
+    and bound walls), the collapsed move, subject HMC and the move allocator
+    always run where the model supports them. The `emc2.*` options that
+    switched them off or changed their schedules (`emc2.ensemble*`,
+    `emc2.group_move*`, `emc2.shear_*`, `emc2.collapsed_move`,
+    `emc2.subject_hmc*`, `emc2.alloc_*`, `emc2.independent_chains`,
+    `emc2.sample_rebuilds`, `emc2.burn_mode_start`, `emc2.laplace_refresh`,
+    `emc2.laplace_conditional`, `emc2.pooled_candidates`,
+    `emc2.iwish_rcond_tol`, `emc2.epsilon_bounds`,
+    `emc2.epsilon_scale_bounds`) are removed and now have no effect. Worker, profiling and failure-policy
+    options are unchanged.
+
 -   **Collapsed transport surrogate:** empirical quadratic fits now remove
     linear slopes in directions with no positive fitted curvature. Mode-based
     and older saved fits receive the same safeguard before use. This prevents

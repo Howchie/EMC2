@@ -65,13 +65,7 @@
 .EMC_COLLAPSED_PILOT <- 40L
 .EMC_COLLAPSED_EPS_RANGE <- c(0.01, 1.5)
 
-.emc_collapsed_options <- function() {
-  list(enabled = isTRUE(getOption("emc2.collapsed_move", TRUE)))
-}
-
-.emc_collapsed_active <- function(sampler) {
-  .emc_collapsed_options()$enabled && .emc_shear_supported(sampler)
-}
+.emc_collapsed_active <- function(sampler) .emc_shear_supported(sampler)
 
 # Positions of the chart's coordinates for covariance prior spec.
 .emc_collapsed_chart <- function(spec, p) {
@@ -162,7 +156,7 @@
 # A fitted quadratic can have flat curvature after its negative eigenvalues
 # are projected away. A nonzero linear coefficient in that null space makes
 # its Gaussian integral unbounded as the group variance grows. Remove those
-# unsupported slopes in empirical fits and in older/mode-based fits.
+# unsupported slopes in both empirical and mode-based fits.
 .emc_collapsed_safe_fit <- function(fit) {
   if (is.null(fit)) return(NULL)
   H <- fit$prec

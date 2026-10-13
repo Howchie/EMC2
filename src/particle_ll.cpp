@@ -234,8 +234,8 @@ static void update_pt_only(ParamTable& param_table,
   // posttransform blocks below are all inert, and the design mask and postmap
   // spec list depend only on names (designs, split set, invariant set) — never
   // on parameter values.  The caller resolves them once per likelihood call,
-  // which removes the per-particle set-of-strings rebuild and the
-  // STRSXP -> std::string conversion filter_specs_by_param_set does per spec.
+  // so no particle rebuilds the name sets or pays the STRSXP -> std::string
+  // conversion filter_specs_by_param_set does per spec.
   if (!trend_runtime && planned_map_next && planned_postmap) {
     param_table.map_from_designs(designs, *planned_map_next);
     c_do_transform_pt(param_table, *planned_postmap);
@@ -442,7 +442,7 @@ static inline void configure_filter_defective(RaceModelAdapter& adapter,
 // built (must fully compute every parameter, including transforms of
 // constants); i > 0 may skip invariant designs/transforms.
 //
-// --- C11: owner and lifetime -----------------------------------------------
+// --- owner and lifetime ----------------------------------------------------
 //
 // The members below fall into two kinds, and the distinction is not cosmetic.
 //
@@ -451,9 +451,9 @@ static inline void configure_filter_defective(RaceModelAdapter& adapter,
 // made with the same inputs: `designs`, `bounds`, `minmax`, `mm_names`,
 // `keep_names`, `transform_specs`, the table's design plan, and the three
 // `plan_*` selections.  `invalidation_key()` below is what a cache of these
-// would have to compare, and it enumerates exactly what the audit says must
-// invalidate one: data, levels, design, constants, transforms, bounds, trends
-// and the guess window.
+// would have to compare, and it enumerates exactly what must invalidate one:
+// data, levels, design, constants, transforms, bounds, trends and the guess
+// window.
 //
 // PER-CALL STATE, TIED TO THE FIRST PARTICLE.  `particle_matrix_pt` holds THIS
 // call's proposals; `invariant_design_mask`, `invariant_param_names` and
@@ -463,14 +463,12 @@ static inline void configure_filter_defective(RaceModelAdapter& adapter,
 // call, and persisting any of it unchanged would not be a cache -- it would be
 // answering the next call with the previous call's first particle.
 //
-// So this type is NOT reused across calls today, deliberately.  The audit asks
-// for the lifetime to be explicit and per-worker, which it now is: one owner,
+// So this type is NOT reused across calls, deliberately: one owner,
 // constructed per call, nothing shared and nothing global.  An external pointer
 // to it is never serialised -- a spawned worker rebuilds from the context it
 // was given, because a pointer that survived a fork would not survive a spawn.
-// The measurement that says cross-call caching is not urgent is in
-// WorkingTests/bench_likelihood_prologue.R: building this is ~1% of a call, and
-// the staleness risk above is the whole of the other side of that trade.
+// Building it is a small share of a call, so cross-call caching would buy
+// little against the staleness risk above.
 struct PtMapper {
   NumericMatrix particle_matrix_pt;
   ParamTable table;
@@ -490,8 +488,8 @@ struct PtMapper {
   Rcpp::CharacterVector mm_names;
 
   // Reusable materialization: one NumericMatrix per likelihood call, refilled
-  // per particle (replaces a per-particle materialize_by_param_names R-heap
-  // allocation on the LogicalRules / mixed-race / pw hot paths).
+  // per particle, so the LogicalRules / mixed-race / pw hot paths allocate no
+  // R-heap matrix per particle.
   Rcpp::NumericMatrix mat_buf;
   std::vector<int> mat_base_idx;
   std::vector<int> mat_variant_cols;   // output columns that can change per particle
@@ -564,10 +562,8 @@ struct PtMapper {
       }
     }
     // A column that is about to be scalar-filled from the particle row does not
-    // need zeroing first: it appeared in BOTH lists, so every sampled
-    // parameter's column was memset to zero and then immediately overwritten in
-    // full. Build the fill list first and exclude its targets from the zero
-    // list.
+    // need zeroing first, so build the fill list first and exclude its targets
+    // from the zero list.
     plan_fill_pairs.clear();
     std::vector<char> is_filled_base(static_cast<size_t>(n_base), 0);
     for (std::size_t j = 0; j < pm_col_to_base_idx.size(); ++j) {
@@ -577,8 +573,8 @@ struct PtMapper {
       // Keep every writer, in particle-matrix order.  Constants can be
       // appended with a name that is also present in the sampled matrix; the
       // general refill path applies those duplicate columns in order, so the
-      // last value wins.  Dropping later writers silently replaced constants
-      // with sampled values (e.g. pContaminant/pGuess).
+      // last value wins; dropping later writers would replace constants with
+      // sampled values (e.g. pContaminant/pGuess).
       plan_fill_pairs.emplace_back(static_cast<int>(j), bidx);
     }
     plan_zero_base_idx.clear();
@@ -608,9 +604,9 @@ struct PtMapper {
     bound_seed = invariant_specs.empty()
       ? Rcpp::LogicalVector(table.n_trials, true)
       : c_do_bound_pt(table, invariant_specs);
-    // One buffer for every subsequent particle's verdict: c_do_bound_pt_from
-    // otherwise allocated an R LogicalVector and cloned the seed per particle.
-    // Safe because no caller holds on to a verdict across particles.
+    // One buffer for every subsequent particle's verdict, so
+    // c_do_bound_pt_from allocates no R LogicalVector per particle.  Safe
+    // because no caller holds on to a verdict across particles.
     bound_buf = Rcpp::LogicalVector(table.n_trials);
     bound_plan_ready = true;
   }
@@ -661,8 +657,7 @@ struct PtMapper {
       const int k = keep_names.size();
       mat_base_idx.resize(k);
       for (int j = 0; j < k; ++j) {
-        // base_index_for throws for unknown names, exactly like
-        // materialize_by_param_names did on this path.
+        // base_index_for throws for unknown names.
         mat_base_idx[j] = table.base_index_for(Rcpp::as<std::string>(keep_names[j]));
       }
       mat_buf = Rcpp::NumericMatrix(table.n_trials, k);
@@ -743,12 +738,10 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
   // particles after the first can skip re-mapping/re-transforming them.
   if (n_particles > 1 && !m.trend_runtime) {
     Rcpp::CharacterVector p_names = colnames(particle_matrix);
-    // C10.  A design was called invariant when none of its coefficients appear
-    // in the proposal matrix at all, which is a statement about NAMES.  Under a
-    // blocked proposal most of those named columns hold the current value
-    // repeated -- only the block's own coordinates vary -- and every design
-    // reading one of the repeated ones was being re-mapped per particle for
-    // nothing.
+    // Invariance is about which coordinates vary, not which are NAMED in the
+    // proposal matrix.  Under a blocked proposal most named columns hold the
+    // current value repeated -- only the block's own coordinates vary -- and a
+    // design reading only repeated ones need not be re-mapped per particle.
     //
     // The mask says which coordinates this call actually varies.  It is passed
     // in, never sniffed: inferring invariance from columns that happen to hold
@@ -908,7 +901,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                          Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue) {
   // -------------------------------------------------------------------------
   // Optional coherent marginalization of a shared subject-level parameter
-  // (Stage 1: the non-decision time t0 in race/GNG models). When `marginalise`
+  // (the non-decision time t0 in race/GNG models). When `marginalise`
   // is supplied we integrate ONE shared t0 out of the COMPLETE subject
   // likelihood via Gauss-Legendre quadrature on the log-t0 (sampled) axis:
   //     Lbar(theta) = int p(t0|eta) L(t0, theta) dt0,   log t0 ~ N(mu, sigma)
@@ -919,7 +912,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   // interval is clipped to where the likelihood is live: below the t0 lower
   // bound c_do_bound floors the whole subject to min_ll; above min(rt) a
   // response is infeasible. When `marginalise` is null this is a single branch
-  // test and the byte-identical existing path runs (zero cost to other models).
+  // test and the ordinary path runs unchanged.
   if (marginalise.isNotNull()) {
     return calc_ll_oo_marginal(particle_matrix, data, constants, designs, type, bounds,
                                transforms, pretransforms, p_types, min_ll, trend,
@@ -972,8 +965,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   bool ddm_raw_ready = true;
   std::vector<const double*> ddm_cols;
   // The adapter carries the model's two primitives, its column spec and its
-  // solve cache.  Built once per likelihood call; the Wiener default leaves the
-  // DDM on exactly the code it had before.
+  // solve cache.  Built once per likelihood call; the default is the Wiener
+  // DDM.
   DDMAdapter ddm_adapter = ddm_wien_adapter();
   if (is_bou_type) {
     ddm_adapter.d_raw = &bou::d_BOU_raw;
@@ -1160,8 +1153,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lr_capacity_counters().reset();
 
       // Column pointers into ParamTable base in p_types order; base column
-      // addresses are particle-invariant, so this replaces the per-particle
-      // materialization copy. Padded with nullptr slots for optional columns.
+      // addresses are particle-invariant, so no per-particle materialization
+      // copy is needed. Padded with nullptr slots for optional columns.
       const int n_par_lr = keep_names.size();
       std::vector<const double*> lr_cols(std::max(n_par_lr, 16), nullptr);
       for (int j = 0; j < n_par_lr; ++j) {
@@ -1238,7 +1231,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // Column pointers into ParamTable base, in p_types order (the layout the
     // raw kernels expect per src/col_registry.h). Base column addresses are
     // particle-invariant — prepare_particle refills values in place — so the
-    // pointer array is built once, replacing the old per-particle staging copy.
+    // pointer array is built once rather than staging a copy per particle.
     std::vector<const double*> race_cols;     // keep_names.size() pointers
     int fast_pc_col = -1;                     // keep_names position of pContaminant
     int fast_pg_col = -1;                     // keep_names position of pGuess
@@ -1948,7 +1941,7 @@ NumericVector get_pars_c_batch_wrapper_oo(NumericMatrix particle_matrix,
 
 
 // Main C++ function for censored/truncated race likelihood calculation
-// This function is now the unified entry point for all race models (LBA, RDM, LNR),
+// This function is the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
 // It uses batching for finite RTs and iterative processing for others (censored/NA RTs).
 double c_log_likelihood_race(
@@ -2001,10 +1994,10 @@ double c_log_likelihood_race(
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;   // try fixed-point QNG before adaptive QAG on finite intervals
   gsl_ctl.qag_key = GSL_INTEG_GAUSS21;  // fallback rule when QNG fails
-  // 1e-4 was enough for the integral itself but not for the log-likelihood SURFACE:
-  // the adaptive error estimate is optimistic on a peaked race integrand, so isolated
-  // parameter values came out ~1e-3 off and, once multiplied by a compressed dadm's
-  // trial counts, left visible roughness for any t0-scanning method to trip over.
+  // The tolerance targets the log-likelihood SURFACE, not just the integral: the
+  // adaptive error estimate is optimistic on a peaked race integrand, and an
+  // isolated error multiplied by a compressed dadm's trial counts leaves visible
+  // roughness for any t0-scanning method to trip over.
   gsl_ctl.rel_tol = 1e-5;
   int n_lR_j = n_lR;
   Rcpp::NumericVector rts_dadm = dadm["rt"];
@@ -2022,8 +2015,7 @@ double c_log_likelihood_race(
     lds_ptr = lds_local.data();
   }
   // If a RACE column exists, set parameters of accumulators not present on a
-  // given trial to NA so the density functions return zero for them. This
-  // mirrors logic from the old c_log_likelihood_race implementation.
+  // given trial to NA so the density functions return zero for them.
   bool has_RACE_col = dadm.containsElementNamed("RACE");
   Rcpp::IntegerVector RACE;
   Rcpp::LogicalVector RACE_mask;
@@ -2157,11 +2149,11 @@ double c_log_likelihood_race(
   const int n_par = pars.ncol();
   // Scratch buffers.
   //
-  // These were fixed stack arrays, which forced a size limit and made the
-  // frame ~280 kB.  `static thread_local` vectors -- the same idiom this
-  // function already uses for the GSL workspace -- keep their capacity for the
-  // life of the process, so the allocation is paid once rather than per call,
-  // the frame stays small, and there is no limit to hit.  That matters: n_par
+  // `static thread_local` vectors rather than fixed stack arrays -- the same
+  // idiom this function already uses for the GSL workspace -- keep their
+  // capacity for the life of the process, so the allocation is paid once rather
+  // than per call, the frame stays small, and there is no size limit to hit.
+  // That matters: n_par
   // is the number of model parameter *types* (v, B, A, t0, ... for a race),
   // which a trend model extends one name at a time via update_model_trend().
   //
@@ -2193,8 +2185,7 @@ double c_log_likelihood_race(
   // paths, but two of them hand the buffer to a lambda that outlives the
   // filling loop, so each site gets its own slot rather than sharing one.
   // Padded to at least 64 because a kernel may *fetch* (not dereference) an
-  // optional trailing column this model variant does not carry -- the fixed
-  // arrays these replace gave that slack implicitly.
+  // optional trailing column this model variant does not carry.
   const size_t par_row_width = static_cast<size_t>(std::max(n_par, 64));
 
   // fill_trial_buffers: copies one trial's params into row-major scratch (for GSL/rowmajor helpers).
@@ -2211,11 +2202,9 @@ double c_log_likelihood_race(
 
   // Fast path hint: computed once per calc_ll call (data-only), to avoid re-scanning per particle.
   const bool use_full_finite_batch = all_finite_trials;
-  // C11.  The three partitions below are data-only: they are decided once per
+  // The three partitions below are data-only: they are decided once per
   // likelihood call and read by every particle.  The shared state already owns
-  // them, and the comment on the branch below used to claim "no copy" while
-  // assigning three std::vectors -- on a censored fit that is three
-  // trial-length copies per call, for state that outlives the copy anyway.
+  // them, so they are viewed, not copied.
   //
   // Owner and lifetime, stated: `shared` owns them when it has them, the
   // `_owned` locals own them when they had to be derived here, and the
@@ -2811,8 +2800,8 @@ double c_log_likelihood_race(
     endpoint_cache->new_particle();
     auto batch_logS_at_t = [&](double t, const std::vector<int>& include_mask,
                                std::vector<double>& out) {
-      // RACE-column trials have varying active accumulator counts and remain on
-      // the existing scalar-safe path below.  Fixed-width race trials can be
+      // RACE-column trials have varying active accumulator counts and stay on
+      // the scalar-safe path below.  Fixed-width race trials can be
       // compacted by complete parameter-block key before calling the model
       // callback, so repeated design cells pay one endpoint calculation.
       if (has_RACE_col || logS_at_t == nullptr) return;
@@ -3383,10 +3372,10 @@ apply_trial_trunc:
   // A contaminant is an intrinsic omission that only manifests as a
   // never-responded (rt == +Inf) trial, so ONLY those trials pick up the
   // log(pC) mass; every trial is down-weighted by log(1 - pC). This must match
-  // the R reference (likelihood.R:372-374), which adds the omission mass solely
-  // when rt is +Inf — a left-censored (-Inf) or missing (NA) rt does NOT. One
-  // lambda applied in both the expand and compressed branches so they cannot
-  // drift apart again.
+  // the R reference likelihood, which adds the omission mass solely when rt is
+  // +Inf — a left-censored (-Inf) or missing (NA) rt does NOT. One lambda is
+  // applied in both the expand and compressed branches so they cannot drift
+  // apart.
   //
   // pGuess rides in the same lambda: a uniform density over the guess window,
   // for finite-rt trials only.  The one branch that reaches a finite rt with an
@@ -3550,7 +3539,7 @@ Rcpp::List bawl_corr_pair_probe(double t, double t01, double A1, double B1,
       Rcpp::Named("cause2_noise") = c2.noise);
 }
 
-// Test probes for the shared correlated-BAwL geometry (T1).  `B` is the
+// Test probes for the shared correlated-BAwL geometry.  `B` is the
 // relative threshold; the geometry consumes b = B + A like the raw kernels.
 // [[Rcpp::export]]
 Rcpp::List bawl_time_geometry_probe(double t, double t0, double A, double B,

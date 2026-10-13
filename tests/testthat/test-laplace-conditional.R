@@ -23,7 +23,6 @@ test_that("an indefinite likelihood Hessian is projected, and a missing one fall
   lik <- EMC2:::.emc_lik_canonical(H, c(0, 0, 0), diag(3), c(0, 0, 0))
   expect_equal(lik$prec, diag(c(2, 0, 0.5)))
   expect_null(EMC2:::.emc_laplace_conditional(c(0, 0, 0), list(mu = rep(0, 3), var = diag(3))))
-  old <- options(emc2.laplace_conditional = FALSE); on.exit(options(old))
   eff <- list(c(1, 2, 3))
   expect_null(attr(EMC2:::.emc_attach_lik(eff, list(lik))[[1]], "lik"))
 })
@@ -110,13 +109,10 @@ test_that("only checked likelihood fits replace the fitted conditional proposal"
   good <- fit; good$check <- list(pareto_k = 0, outside = 0, status = "ok")
   expect_identical(attr(EMC2:::.emc_attach_lik(eff, list(good))[[1]], "lik"), good)
   expect_null(attr(EMC2:::.emc_attach_lik(eff, NULL)[[1]], "lik"))
-  withr::local_options(list(emc2.laplace_conditional = FALSE))
-  expect_null(attr(EMC2:::.emc_attach_lik(eff, list(good))[[1]], "lik"))
 })
 
 test_that("likelihood checks score the actual fitted location and preserve caller RNG", {
   withr::local_seed(734)
-  withr::local_options(list(emc2.laplace_conditional = TRUE))
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) {
     -0.5 * rowSums(sweep(proposals, 2, dadm)^2)
   }, .package = "EMC2")
@@ -141,7 +137,6 @@ test_that("likelihood checks score the actual fitted location and preserve calle
 
 test_that("diagnostic probes checkpoint consumed subject variates even on failure", {
   withr::local_seed(735)
-  withr::local_options(list(emc2.laplace_refresh = TRUE))
   local_mocked_bindings(.emc_laplace_is_start = function(mode, ...) {
     rnorm(7L)
     if (mode[1L] > 5) stop("diagnostic failure after drawing")

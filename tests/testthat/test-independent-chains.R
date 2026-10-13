@@ -1,7 +1,6 @@
-# emc2.independent_chains: each chain's proposals AND sub-block partition come
-# from its own draws.
+# Each chain's proposals and sub-block partition come from its own draws.
 
-test_that("independent chains block on their own covariances", {
+test_that("chains block on their own covariances", {
   local_mocked_bindings(create_chain_proposals = function(emc, ...) emc,
                         .package = "EMC2")
   pn <- c("a", "b", "c", "d")
@@ -18,17 +17,12 @@ test_that("independent chains block on their own covariances", {
   }
   emc <- list(chain(cor_pairs(list(c("a", "b"), c("c", "d")))),
               chain(cor_pairs(list(c("a", "c"), c("b", "d")))))
-  withr::local_options(list(emc2.independent_chains = TRUE))
   out <- EMC2:::add_proposals(emc, "burn", 1, n_blocks = 2)
   c1 <- attr(out[[1]]$data, "components")
   c2 <- attr(out[[2]]$data, "components")
   expect_identical(unname(c1[["a"]] == c1[["b"]]), TRUE)
   expect_identical(unname(c2[["a"]] == c2[["c"]]), TRUE)
   expect_false(identical(unname(c1), unname(c2)))
-  withr::local_options(list(emc2.independent_chains = FALSE))
-  shared <- EMC2:::add_proposals(emc, "burn", 1, n_blocks = 2)
-  expect_identical(attr(shared[[1]]$data, "components"),
-                   attr(shared[[2]]$data, "components"))
 })
 
 test_that("the ensemble scratch store keeps static matrices whole", {
@@ -41,9 +35,7 @@ test_that("the ensemble scratch store keeps static matrices whole", {
   expect_identical(st$theta_mu, matrix(3:4, 2, 1))
 })
 
-test_that("chains build their own proposal windows by default", {
-  withr::local_options(list(emc2.independent_chains = NULL, emc2.group_move = "ensemble"))
-  expect_true(EMC2:::.emc_independent_chains())
+test_that("chains build their own proposal windows", {
   emc <- EMC2:::restore_duplicates(samples_LNR)
   for (j in seq_along(emc)) {
     emc[[j]]$samples$stage[] <- "sample"
@@ -61,7 +53,6 @@ test_that("chains build their own proposal windows by default", {
 })
 
 test_that("efficient proposals condition on the same chain's draws", {
-  withr::local_options(list(emc2.independent_chains = NULL))
   withr::local_seed(sum(utf8ToInt("independent-conditional-proposals")))
   emc <- EMC2:::restore_duplicates(samples_LNR)
   set.seed(sum(utf8ToInt("independent-conditional-proposals")))

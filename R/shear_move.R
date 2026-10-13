@@ -38,10 +38,9 @@
 # evaluated in one likelihood round, and one of the N + 1 points (the
 # current one is t_0 = 0) chosen with probability proportional to f(t_j).
 # Given t~ the N + 1 points are exchangeable, so the choice is a Gibbs step
-# on their index and leaves the posterior invariant. Per round, N = 8
-# candidates halve the autocorrelation time of a single Metropolis step at
-# about the same cost, because a likelihood call's fixed cost dwarfs its
-# extra rows.
+# on their index and leaves the posterior invariant. A likelihood call's
+# fixed cost dwarfs its extra rows, so N = 8 candidates per round cost about
+# as much as a single Metropolis step and move further.
 #
 # Which coordinates. Under the approximations the centred Gibbs step moves
 # the group mean as an autoregression with matrix
@@ -141,10 +140,6 @@
 .EMC_SHEAR_WIDTH_GRID <- seq(-3, 3, by = 0.5)
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
 
-.emc_shear_options <- function() {
-  list(enabled = identical(getOption("emc2.group_move", "shear"), "shear"))
-}
-
 .emc_shear_supported <- function(sampler) {
   isTRUE(sampler$type %in% c("standard", "diagonal-gamma")) &&
     !any(sampler$nuisance) &&
@@ -153,9 +148,9 @@
     isTRUE(sampler$n_subjects >= 2L)
 }
 
-.emc_shear_active <- function(sampler) {
-  .emc_shear_options()$enabled && .emc_shear_supported(sampler)
-}
+# Hierarchies the shear runs on; the collapsed move shares the structural
+# check (.emc_collapsed_active).
+.emc_shear_active <- function(sampler) .emc_shear_supported(sampler)
 
 # Each subject's likelihood approximation if it is finite, else NULL. The
 # particle step's Pareto check does not apply: it judges the Gaussian
@@ -237,7 +232,6 @@
 # subject with a half-space gets one. Columns of U are the unit normals,
 # b their offsets, Uperp an orthonormal basis of each normal's complement.
 .emc_shear_walls <- function(chain, idx) {
-  if (!isTRUE(getOption("emc2.shear_walls", TRUE))) return(NULL)
   support <- .emc_shear_support(chain)
   if (is.null(support)) return(NULL)
   n <- chain$n_subjects
@@ -624,7 +618,6 @@
 # width under the block's fits; it is repeated on a rebuild cadence while
 # the rounds stay ineffective. Once an atlas exists it is kept.
 .emc_shear_curve_wanted <- function(chain, idx, n_cores) {
-  if (!isTRUE(getOption("emc2.shear_curve", TRUE))) return(list(wanted = FALSE, ran = FALSE))
   q <- .emc_shear_curve_dirs(chain, idx)
   if (!length(q)) return(list(wanted = FALSE, ran = FALSE))
   pilot <- chain$shear$pilot
@@ -802,7 +795,6 @@
   for (j in seq_along(emc)) {
     ch <- emc[[j]]
     if (!is.list(ch$shear$plan)) next
-    if (!isTRUE(getOption("emc2.shear_curve", TRUE))) next
     atlas <- ch$shear$atlas
     # An atlas without stored log sds only ever followed the mean.
     if (!is.null(atlas) && is.null(atlas$mean)) {
@@ -903,7 +895,7 @@
     ch$shear$curve <- NULL
     plan <- ch$shear$plan
     atlas <- ch$shear$atlas
-    if (!isTRUE(getOption("emc2.shear_curve", TRUE)) || !is.list(plan) ||
+    if (!is.list(plan) ||
         !is.matrix(plan$dirs) || is.null(atlas$nodes)) {
       emc[[j]] <- ch
       next

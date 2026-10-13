@@ -1,12 +1,10 @@
 # What the sampler does when something fails, and why.
 #
-# This file is the policy, written down. It exists because the mechanism it
-# governs has already misled us once: a diverging PDE solve inside the RLF/FPE
-# corner wedged a sampler, and because every error on the particle path is
-# caught and answered by repeating the previous state, the fit looked like fast,
-# well-mixing sampling from the outside. Nothing was wrong with the catching --
-# it is what makes the sampler robust -- but with the policy left implicit there
-# was no way to tell a rejected proposal from a broken worker.
+# This file is the policy, written down. Every error on the particle path is
+# caught and answered by repeating the previous state; the catching is what
+# makes the sampler robust, but left implicit it cannot tell a rejected
+# proposal from a broken worker, and a wedged chain looks like fast,
+# well-mixing sampling from the outside.
 #
 # The particle path catches numerical proposal failures and repeats the
 # subject's previous state. Group-move candidate likelihood failures are also
@@ -20,7 +18,7 @@
 #
 # The particle catch can also swallow a failed allocation, a dead worker, a
 # missing file and a genuine bug in a model's R code, and answer all of them
-# the same way. C1 added the classification and counters; this file decides
+# the same way. The failures are classified and counted; this file decides
 # what to do with those proposal-path failures.
 #
 # --- the classes ------------------------------------------------------------
@@ -49,7 +47,7 @@
 #                   plausible-looking posterior from code that never ran.
 #
 #   unknown         everything else. Treated as suspicious, not as numerical:
-#                   assuming the benign class is how the first mistake happened.
+#                   assuming the benign class would hide a broken worker.
 #
 # --- the policy -------------------------------------------------------------
 #
@@ -65,9 +63,8 @@
 #                        still reject and continue; infrastructure,
 #                        programming and unknown failures are re-raised.
 #
-#   "silent"             The behaviour before C1: count, say nothing. For a
-#                        long production run whose failure modes are already
-#                        understood, and for reproducing an older result.
+#   "silent"             Count, say nothing. For a long production run whose
+#                        failure modes are already understood.
 #
 # The default is "report" for proposal failures. Group Gibbs errors are not
 # proposal rejections and are therefore fatal under every policy.
@@ -134,8 +131,7 @@
   opt
 }
 
-# "continue" repeats the previous state, which is what every caller did before
-# this file existed. "abort" re-raises at the catch site.
+# "continue" repeats the previous state. "abort" re-raises at the catch site.
 .emc_failure_action <- function(cls) {
   if (identical(cls, .EMC_FAILURE_BENIGN)) return("continue")
   if (identical(.emc_failure_policy(), "strict")) "abort" else "continue"
@@ -211,12 +207,9 @@
 # A forked particle worker that dies BELOW R level -- a segfault, or the OOM
 # killer -- never raises an R error, so `safe_new_particle`'s tryCatch cannot
 # see it.  `parallel::mclapply` then simply DROPS that element: the result comes
-# back short, with no indication of which subject is missing.  Assembling it
-# positionally therefore slid the survivors into the wrong subjects' slots, and
-# unlisting into a fixed-size array recycled a survivor into the gap -- one dead
-# worker silently overwrote another subject's draw and the chain wedged with
-# nothing reported.  `.emc_assemble_proposals()` matches results to subjects by
-# tag instead; this is the channel that says a worker was lost.
+# back short, with no indication of which subject is missing.
+# `.emc_assemble_proposals()` matches results to subjects by tag, so no other
+# subject's draw is touched; this is the channel that says a worker was lost.
 .emc_worker_loss <- function(lost, stage = NULL, iteration = NULL) {
   location <- paste0(
     if (!is.null(stage)) paste0(" stage=", stage) else "",
@@ -247,11 +240,10 @@
 # How many consecutive TRIES a chain may go without moving at all before the
 # fit is stopped -- the "[stage | try=N | ...]" blocks the console reports,
 # step_size iterations each.  Not iterations: burn-in routinely rejects for
-# tens of iterations in a row and then moves on (RDMGBM burn reached 32), and a
-# limit of 25 iterations killed RDM, RDMGBM and LBA fits that were about to
-# recover.  A healthy chain moves many times within one try -- 0/12 healthy
-# fits tripped even a ONE-try limit -- so three whole tries without a single
-# accepted move only happens to a chain that is genuinely stuck.
+# tens of iterations in a row and then moves on, so an iteration limit kills
+# fits that are about to recover.  A healthy chain moves many times within one
+# try, so three whole tries without a single accepted move only happens to a
+# chain that is genuinely stuck.
 # Inf disables the check.
 .emc_stall_try_limit <- function() {
   lim <- getOption("emc2.stall_try_limit", 3L)

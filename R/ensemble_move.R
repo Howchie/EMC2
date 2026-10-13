@@ -13,7 +13,7 @@
 # conditionals are
 #   k_s | h, A  propto  L_s(a_sj) g(a_sj | h) / q_s(a_sj)          (reselection)
 #   h   | k, A  propto  p(h) prod_s g(a_{s,k_s} | h)               (group Gibbs)
-# and the second is exactly the existing conjugate group Gibbs step with the
+# and the second is exactly the conjugate group Gibbs step with the
 # selected subject states. Alternating the two for several rounds is a Gibbs
 # sampler on pi~(h, k | A): the group moves as if each subject could be any of
 # its pool members, which is what lets it leave the centred Gibbs step's
@@ -40,28 +40,15 @@
 # and in sampling on the increasingly-rare schedule of add_proposals() (after
 # 100, 200, 400, ... production transitions).
 
+# Pool size M, number of Gibbs rounds per sweep, and the defensive t
+# component of q_s (mixture weight, degrees of freedom, scale excess).
 .emc_ensemble_options <- function() {
-  int_opt <- function(name, default) {
-    x <- suppressWarnings(as.integer(getOption(name, default)))
-    if (length(x) != 1L || is.na(x) || x < 1L) default else x
-  }
-  # Latent-factor hierarchies: weight pool members by the subject prior
-  # conditional on the factor scores ("conditional") or with the scores
-  # integrated out ("marginal"). Conditional weights retain the joint
-  # dependence between subject parameters and factor scores.
-  latent <- getOption("emc2.ensemble_latent_weight", "conditional")
-  if (!identical(latent, "marginal")) latent <- "conditional"
-  list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
-       pool = max(2L, int_opt("emc2.ensemble_pool", 32L)),
-       rounds = int_opt("emc2.ensemble_rounds", 10L),
-       cadence = int_opt("emc2.ensemble_cadence", 1L),
-       latent_weight = latent,
-       tail_weight = 0.25, tail_df = 4, tail_excess = 3)
+  list(pool = 32L, rounds = 10L, tail_weight = 0.25, tail_df = 4, tail_excess = 3)
 }
 
 # Supported hierarchies: those whose group Gibbs step and subject prior are
 # already used by the particle update. Nuisance coordinates have their own
-# samplers and are not yet covered. A marginalised coordinate is stored as a
+# samplers and are not covered. A marginalised coordinate is stored as a
 # draw from its conditional posterior, so the subject states the move sees
 # are complete.
 .emc_ensemble_supported <- function(sampler) {
@@ -129,15 +116,13 @@
 
 # Subject prior of every subject under one group state h, as a p x n matrix of
 # means and one covariance shared by all subjects. For the latent-factor
-# hierarchies h contains the factor scores eta, and there are two valid
-# weights:
-#   conditional: a_s | h ~ N(mu + K x_s + Lambda eta_s, Sigma_err), which is
-#     the density the group Gibbs step conditions on;
-#   marginal: eta_s integrated out, a_s | h ~ N(mu + (K + Lambda B0^-1 G) x_s,
-#     Lambda B0^-1 Delta^-1 B0^-T Lambda' + Sigma_err). Factor scores are
-#     redrawn conditional on the selected subjects before saving the joint state.
+# hierarchies h contains the factor scores eta, and the prior is conditional
+# on them: a_s | h ~ N(mu + K x_s + Lambda eta_s, Sigma_err), the density the
+# group Gibbs step conditions on. `weight = "marginal"` (SEM only, used by
+# the burn mode start) integrates eta_s out instead:
+#   a_s | h ~ N(mu + (K + Lambda B0^-1 G) x_s, Lambda B0^-1 Delta^-1 B0^-T Lambda' + Sigma_err).
 # Factor and infinite-factor models have no covariates (K = G = 0, B = 0).
-.emc_ensemble_subject_prior <- function(pars, sampler, n, weight) {
+.emc_ensemble_subject_prior <- function(pars, sampler, n, weight = "conditional") {
   type <- sampler$type
   rep_mu <- function(m) matrix(as.numeric(m), length(m), n)
   if (type == "standard" && is.matrix(pars$subj_mu))
@@ -167,7 +152,6 @@
     return(list(mean = mu + (K + A %*% G) %*% t(x),
                 var = A %*% solve(matrix(pars$delta_inv, nf, nf)) %*% t(A) + diag(eps_var, p)))
   }
-  if (weight == "marginal") return(list(mean = rep_mu(mu), var = pars$tvar))
   if (type == "factor") {
     lam <- matrix(pars$lambda_untransf, p)
     eps_var <- 1 / as.numeric(pars$sig_err_inv)
@@ -179,7 +163,7 @@
        dvar = eps_var)
 }
 
-# Restore the joint subject-score distribution after an eta-marginal update.
+# Factor scores drawn from their full conditional given the subject states.
 .emc_ensemble_refresh_scores <- function(pars, sampler, alpha) {
   type <- sampler$type
   if (!type %in% c("factor", "infnt_factor", "SEM")) return(pars)
@@ -209,8 +193,8 @@
 }
 
 # Subject prior log densities of every pool member under one group state.
-.emc_ensemble_log_g <- function(pool_stack, subj_of_row, pars, sampler, n, weight) {
-  sp <- .emc_ensemble_subject_prior(pars, sampler, n, weight)
+.emc_ensemble_log_g <- function(pool_stack, subj_of_row, pars, sampler, n) {
+  sp <- .emc_ensemble_subject_prior(pars, sampler, n)
   if (!is.null(sp$dvar)) {                     # diagonal covariance: no factorisation
     z <- (t(pool_stack) - sp$mean[, subj_of_row, drop = FALSE]) / sqrt(sp$dvar)
     return(-0.5 * (length(sp$dvar) * log(2 * pi) + sum(log(sp$dvar)) + colSums(z^2)))
@@ -218,11 +202,6 @@
   L <- t(chol(sp$var))
   z <- forwardsolve(L, t(pool_stack) - sp$mean[, subj_of_row, drop = FALSE])
   -0.5 * (nrow(L) * log(2 * pi) + 2 * sum(log(diag(L))) + colSums(z^2))
-}
-
-.emc_ensemble_select <- function(lw) {
-  w <- exp(lw - max(lw))
-  sample.int(length(w), 1L, prob = w)
 }
 
 # One categorical draw per column of log-weights, all columns at once: the
@@ -237,17 +216,15 @@
 # alone, never from the current state, so they can be drawn before the subject
 # step and their likelihoods computed in the same worker round trip as the
 # particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
-# when the update does not run this iteration. The draws and their proposal
+# when the update does not run (preburn, unsupported hierarchy, no proposals). The draws and their proposal
 # densities come from one C++ call (src/ensemble_move.cpp). `factors` (the
 # proposals' Cholesky factors and log determinants, from
 # emc_ensemble_factors_cpp) can be passed in, since the proposals are frozen
 # within a block; without them they are computed here.
 .emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var,
-                                     iteration = 0L, factors = NULL) {
+                                     factors = NULL) {
   cfg <- .emc_ensemble_options()
-  if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler) ||
-      iteration %% cfg$cadence != 0L)
-    return(NULL)
+  if (stage == "preburn" || !.emc_ensemble_supported(sampler)) return(NULL)
   n <- sampler$n_subjects
   if (length(chains_mu) != n || length(chains_var) != n ||
       any(vapply(chains_mu, is.null, logical(1))) ||
@@ -370,8 +347,8 @@
                           j = 1L, n_pars = n_pars, type = sampler$type)
     tmp$samples <- store
     pars <- gibbs_step(tmp, alpha_k, sampler$type)
-    lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
-                                                  n, cfg$latent_weight), nrow = M)
+    lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler, n),
+                     nrow = M)
     selected <- .emc_ensemble_select_all(lw_all)
     if (r == cfg$rounds) {
       w <- exp(sweep(lw_all, 2, apply(lw_all, 2, max)))
@@ -418,8 +395,6 @@
   proposals[seq_len(n_pars), ] <- t(pool_stack[offset + selected, , drop = FALSE])
   proposals[n_pars + 1L, ] <- st$ll_stack[offset + selected]
   pars$alpha <- proposals[seq_len(n_pars), , drop = FALSE]
-  if (cfg$latent_weight == "marginal")
-    pars <- .emc_ensemble_refresh_scores(pars, sampler, pars$alpha)
 
   st <- sampler$ensemble_stats
   if (is.null(st) || is.null(st$subj_moved))
@@ -432,22 +407,4 @@
   sampler$ensemble_stats <- st
   sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
   list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
-}
-
-#' Ensemble-move diagnostics
-#'
-#' Mean share of subjects whose state changed per ensemble sweep, and the mean
-#' normalised weight ESS of the pools under the final group state.
-#' @param emc An emc object.
-#' @return A data frame with one row per chain.
-#' @noRd
-ensemble_diagnostics <- function(emc) {
-  emc <- restore_duplicates(emc)
-  do.call(rbind, lapply(seq_along(emc), function(i) {
-    st <- emc[[i]]$ensemble_stats
-    if (is.null(st) || !st$sweeps) return(data.frame(chain = i, sweeps = 0L,
-                                                     moved = NA_real_, weight_ess = NA_real_))
-    data.frame(chain = i, sweeps = st$sweeps, moved = st$moved / st$sweeps,
-               weight_ess = st$wess / st$sweeps)
-  }))
 }

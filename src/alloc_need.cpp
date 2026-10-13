@@ -17,7 +17,7 @@ Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
                                                const Rcpp::NumericVector& level,
                                                const Rcpp::NumericVector& qs,
                                                const Rcpp::NumericVector& rs,
-                                               double r_min, bool refresh) {
+                                               double r_min) {
   const int n_i = rho.size(), n_q = qs.size(), n_t = rs.size();
   const bool has_h = h_.isNotNull();
   Rcpp::NumericVector h = has_h ? Rcpp::NumericVector(h_) : Rcpp::NumericVector(0);
@@ -26,9 +26,9 @@ Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
   for (int t = 0; t < n_t; ++t) {
     for (int a = 0; a < n_q; ++a) {
       const double q = qs[a];
-      double rn = std::max(r_min, refresh ? 1.0 - q : 0.0);
+      double rn = r_min;
       for (int i = 0; i < n_i; ++i) {
-        const double K = refresh ? rs[t] : std::min(rs[t], level[i]);
+        const double K = std::min(rs[t], level[i]);
         const double P = p[i];
         const double alone = 1.0 - q * (1.0 - P);
         if (!(rho[i] * alone > K * (1.0 + 1e-12))) continue;
@@ -71,7 +71,7 @@ Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
                                        const Rcpp::NumericVector& c_p,
                                        const Rcpp::NumericVector& c_h,
                                        const Rcpp::NumericVector& q_grid,
-                                       const Rcpp::NumericVector& rs, bool refresh) {
+                                       const Rcpp::NumericVector& rs) {
   const int n_u = has_p.size(), n_t = rs.size();
   const double inf = std::numeric_limits<double>::infinity();
   Rcpp::NumericMatrix X(n_u, n_t), Q(n_u, n_t), C(n_u, n_t);
@@ -93,7 +93,7 @@ Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
     for (int i = off[u]; i < off[u + 1]; ++i) top = std::max(top, level[i]);
     int first_top = -1;
     for (int t = 0; t < n_t; ++t) {
-      if (!refresh && rs[t] >= top) {
+      if (rs[t] >= top) {
         if (first_top >= 0) {
           X(u, t) = X(u, first_top);
           Q(u, t) = Q(u, first_top);
@@ -104,9 +104,9 @@ Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
       }
       for (int a = 0; a < n_q; ++a) {
         const double q = qs[a];
-        double r = std::max(rmin, refresh ? 1.0 - q : 0.0);
+        double r = rmin;
         for (int i = off[u]; i < off[u + 1]; ++i) {
-          const double K = refresh ? rs[t] : std::min(rs[t], level[i]);
+          const double K = std::min(rs[t], level[i]);
           const double P = p[i];
           const double alone = 1.0 - q * (1.0 - P);
           if (!(rho[i] * alone > K * (1.0 + 1e-12))) continue;

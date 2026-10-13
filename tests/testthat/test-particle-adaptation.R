@@ -237,17 +237,12 @@ test_that("the efficient proposal mean follows the current group mean", {
 
 test_that("window covariances keep the posterior correlations", {
   # The chain proposal is an unscaled independence proposal: its covariance
-  # must be the window's own, correlations included. Independent chains use
-  # their own window; otherwise the window pools every chain.
+  # must be the chain's own window covariance, correlations included.
   emc <- samples_LNR
   for (j in seq_along(emc)) emc[[j]]$samples$stage[] <- "adapt"
-  own <- lapply(emc, function(ch) ch$samples$alpha[, 1, 1:50])
-  for (independent in c(TRUE, FALSE)) {
-    withr::local_options(list(emc2.independent_chains = independent))
-    out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50, stage = "adapt",
-                                          do_block = FALSE)
-    a <- if (independent) own[[1]] else do.call(cbind, own)
-    expect_equal(out[[1]]$chains_var[[1]], stats::cov(t(a)), ignore_attr = TRUE)
-    expect_equal(out[[1]]$ensemble_q$var[[1]], stats::cov(t(a)), ignore_attr = TRUE)
-  }
+  own <- emc[[1]]$samples$alpha[, 1, 1:50]
+  out <- EMC2:::create_chain_proposals(emc, samples_idx = 1:50, stage = "adapt",
+                                        do_block = FALSE)
+  expect_equal(out[[1]]$chains_var[[1]], stats::cov(t(own)), ignore_attr = TRUE)
+  expect_equal(out[[1]]$ensemble_q$var[[1]], stats::cov(t(own)), ignore_attr = TRUE)
 })

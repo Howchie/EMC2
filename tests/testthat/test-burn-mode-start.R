@@ -45,24 +45,6 @@ test_that("the second burn proposal window excludes every pre-mode draw", {
     chains, samples_idx = 45:75, stage = "sample"), 45:75)
 })
 
-test_that("proposal window indices select those exact stored draws", {
-  chain <- list(type = "single", samples = list(
-    stage = c("init", rep("preburn", 50L), rep("burn", 100L)),
-    subj_ll = matrix(seq_len(151L), nrow = 1L), idx = 151L))
-  filter <- EMC2:::.emc_proposal_filter_indices(list(chain), 51:151)
-  expect_identical(filter, 50:150)
-  actual <- EMC2::get_pars(list(chain), selection = "LL",
-                           stage = c("preburn", "burn"),
-                           filter = filter, merge_chains = TRUE,
-                           return_mcmc = FALSE)
-  expect_identical(as.numeric(actual), as.numeric(51:151))
-  trimmed <- chain
-  trimmed$samples$stage <- trimmed$samples$stage[-1L]
-  trimmed$samples$idx <- 150L
-  expect_identical(EMC2:::.emc_proposal_filter_indices(
-    list(trimmed), 50:150), 50:150)
-})
-
 test_that("production entry preserves the adapted epsilon for every subject", {
   pm <- lapply(seq_len(3L), function(s)
     list(list(epsilon = c(0.003 * s, 0.04 * s),
@@ -283,26 +265,6 @@ test_that("Laplace importance starts are posterior draws with a Pareto diagnosti
     post_mode, post_var, prior, function(x) rep(-Inf, NROW(x)))
   expect_null(none$start)
   expect_identical(none$status, "support")
-})
-
-test_that("a chain leaves a local mode only for a far better one", {
-  jobs <- expand.grid(chain = 1:3, subject = 1L)
-  mode <- function(a) list(alpha = a, ll = -10, covariance = matrix(1))
-  # Chain 3 widened its group variance around its own mode, which wins under
-  # its own group state but not averaged over all three.
-  priors_at <- function(trap) list(list(mu = 0, var = matrix(1)),
-                                   list(mu = 0, var = matrix(1)),
-                                   list(mu = trap, var = matrix(25)))
-  sources <- function(trap) EMC2:::.emc_mode_share_sources(
-    jobs, list(mode(0), mode(0), mode(trap)), priors_at(trap))
-  expect_equal(sources(-9), c(NA, NA, 1L))
-  expect_equal(sources(-3), rep(NA_integer_, 3L))
-  # A chain without a usable mode takes one; one without a prior is skipped.
-  expect_equal(EMC2:::.emc_mode_share_sources(
-    jobs, list(mode(0), NULL, mode(0)), priors_at(0)), c(NA, 1L, NA))
-  expect_equal(EMC2:::.emc_mode_share_sources(
-    jobs, list(mode(0), NULL, mode(0)),
-    replace(priors_at(0), 2L, list(NULL))), rep(NA_integer_, 3L))
 })
 
 test_that("Laplace gate treats infinite, missing and outside-support checks as poor", {
