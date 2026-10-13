@@ -1147,6 +1147,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     })
     emc[[j]]$ensemble_q <- list(mu = lapply(ens_q, `[[`, "mu"),
                                 var = lapply(ens_q, `[[`, "var"))
+    emc[[j]] <- .emc_ensemble_plan_update(emc[[j]])
     emc[[j]]$burn_mode_mu <- NULL
   }
 

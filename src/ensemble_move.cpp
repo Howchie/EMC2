@@ -362,7 +362,9 @@ Rcpp::List emc_ensemble_stack_cpp(const Rcpp::List& rows, const Rcpp::List& lq,
 // hierarchy (state: tvinv, a_half; prior: theta_mu_invar, theta_mu_mean, v,
 // A), type 1 the diagonal-gamma hierarchy (state: tvinv as a vector; prior:
 // theta_mu_invar, theta_mu_mean, shape, rate). Returns the final selection,
-// the group state and the pools' weight ESS under it.
+// the group state, the pools' weight ESS under it, the fresh members' mean
+// weight relative to the carried state's, and the group means and log sds
+// after every round.
 // [[Rcpp::export]]
 Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec& base_w,
                                    const Rcpp::IntegerVector& k0, int M, int rounds,
@@ -406,7 +408,8 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
   std::vector<int> selected(n);
   for (int s = 0; s < n; ++s) selected[s] = k0[s] - 1;
   arma::mat alpha(p, n);
-  arma::vec lw(nM), wess(n, arma::fill::zeros);
+  arma::vec lw(nM), wess(n, arma::fill::zeros), eff(n, arma::fill::zeros);
+  arma::mat traj_mu(p, rounds), traj_lsd(p, rounds);
   const arma::mat stack_t = pool_stack.t();
   for (int r = 1; r <= rounds; ++r) {
     for (int s = 0; s < n; ++s) alpha.col(s) = stack_t.col(s * M + selected[s]);
@@ -433,6 +436,9 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
         lw(i) = base_w(i) - 0.5 * (norm + q);
       }
     }
+    traj_mu.col(r - 1) = tmu;
+    if (type == 0) traj_lsd.col(r - 1) = 0.5 * arma::log(arma::vec(tvar.diag()));
+    else traj_lsd.col(r - 1) = -0.5 * arma::log(tvinv_d);
     for (int s = 0; s < n; ++s) {
       const int off = s * M;
       int best = 0;
@@ -455,6 +461,13 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
           sw2 += w * w;
         }
         wess(s) = sw * sw / sw2;
+        // Mean weight of the fresh members relative to the carried state's:
+        // the per-row chance of displacing it.
+        const double lw_sel = lw(off + selected[s]);
+        double se = 0.0;
+        for (int j = 0; j < M; ++j)
+          if (j != selected[s]) se += std::exp(lw(off + j) - lw_sel);
+        eff(s) = M > 1 ? se / (M - 1) : 0.0;
       }
     }
   }
@@ -462,7 +475,10 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
   for (int s = 0; s < n; ++s) sel[s] = selected[s] + 1;
   Rcpp::List out = Rcpp::List::create(Rcpp::Named("selected") = sel,
                                       Rcpp::Named("tmu") = as_vector(tmu),
-                                      Rcpp::Named("wess") = as_vector(wess));
+                                      Rcpp::Named("wess") = as_vector(wess),
+                                      Rcpp::Named("eff") = as_vector(eff),
+                                      Rcpp::Named("traj_mu") = traj_mu,
+                                      Rcpp::Named("traj_lsd") = traj_lsd);
   if (type == 0) {
     out["tvar"] = tvar;
     out["tvinv"] = tvinv;

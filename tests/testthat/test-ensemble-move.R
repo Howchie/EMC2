@@ -6,7 +6,9 @@ ens_mock_ll <- function(props, data, model, marginalise = NULL) {
   -0.5 * rowSums((r %*% data$prec) * r)
 }
 
-ens_chain <- function(type, y, obs_prec, iters, ensemble, seed) {
+# plan_schedule: pool sizes and rounds applied in turn, one per 50 iterations,
+# as the between-block plan would set them.
+ens_chain <- function(type, y, obs_prec, iters, ensemble, seed, plan_schedule = NULL) {
   set.seed(seed)
   p <- nrow(y); n <- ncol(y); pn <- rownames(y)
   s <- list(type = type, n_pars = p, n_subjects = n, par_names = pn,
@@ -32,6 +34,8 @@ ens_chain <- function(type, y, obs_prec, iters, ensemble, seed) {
     for (k in seq_len(n)) alpha[, k] <- Vs %*% (Pv %*% sm[, k] + obs_prec %*% y[, k]) +
       Ls %*% rnorm(p)
     if (ensemble) {
+      if (!is.null(plan_schedule))
+        s$ensemble_plan <- plan_schedule[[1L + ((t - 1L) %/% 50L) %% length(plan_schedule)]]
       ll <- vapply(seq_len(n), function(k) ens_mock_ll(t(alpha[, k]), s$data[[k]]), 0)
       s$rng$gibbs <- NULL
       pools <- EMC2:::.emc_ensemble_draw_pools(s, "sample", chains_mu, chains_var)
@@ -75,6 +79,28 @@ test_that("ensemble group update leaves the joint posterior invariant", {
         sqrt(ens_bm_se((ens[, k] - mean(ens[, k]))^2)^2 + ens_bm_se((ref[, k] - mean(ref[, k]))^2)^2)
       expect_lt(abs(zv), 4.5, label = paste(type, "column", k, "variance z"))
     }
+  }
+})
+
+test_that("the joint posterior is invariant when the pool and rounds change between blocks", {
+  skip_model_validation()
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, model, ...)
+    ens_mock_ll(proposals, dadm, model), .package = "EMC2")
+  withr::local_options(list(emc2.ensemble = TRUE, emc2.ensemble_pool = 16L,
+                            emc2.ensemble_rounds = 5L))
+  set.seed(3)
+  y <- rbind(a = rnorm(6, 0, 0.8), b = rnorm(6, 0, 0.8))
+  obs_prec <- solve(matrix(c(1.5, 1, 1, 1.5), 2))
+  schedule <- list(list(pool = 2L, rounds = 2L), list(pool = 8L, rounds = 3L),
+                   list(pool = 24L, rounds = 6L), list(pool = 4L, rounds = 2L))
+  ref <- ens_chain("standard", y, obs_prec, 60000, FALSE, 1)[-(1:5000), ]
+  ens <- ens_chain("standard", y, obs_prec, 12000, TRUE, 4, plan_schedule = schedule)[-(1:1000), ]
+  for (k in 1:5) {
+    z <- (mean(ens[, k]) - mean(ref[, k])) / sqrt(ens_bm_se(ens[, k])^2 + ens_bm_se(ref[, k])^2)
+    expect_lt(abs(z), 4.5, label = paste("column", k, "mean z"))
+    zv <- (var(ens[, k]) - var(ref[, k])) /
+      sqrt(ens_bm_se((ens[, k] - mean(ens[, k]))^2)^2 + ens_bm_se((ref[, k] - mean(ref[, k]))^2)^2)
+    expect_lt(abs(zv), 4.5, label = paste("column", k, "variance z"))
   }
 })
 
@@ -210,6 +236,9 @@ test_that("ensemble pool likelihoods give the same fit serially, split, or queue
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:5], ]
   dat$subjects <- droplevels(dat$subjects)
   des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  # The between-block plan prices pool members and rounds by wall time, so
+  # it is held fixed here: the question is the worker split alone.
+  local_mocked_bindings(.emc_ensemble_plan_update = function(sampler) sampler, .package = "EMC2")
   fit_on <- function(cores, queue) {
     withr::local_options(list(emc2.worker_queue = queue, emc2.ensemble = TRUE,
                               emc2.ensemble_pool = 8L))
@@ -227,7 +256,8 @@ test_that("ensemble pool likelihoods give the same fit serially, split, or queue
   for (other in list(fit_on(2, FALSE), fit_on(3, TRUE))) {
     expect_identical(serial[[1]]$samples$alpha, other[[1]]$samples$alpha)
     expect_identical(serial[[1]]$samples$theta_mu, other[[1]]$samples$theta_mu)
-    expect_identical(serial[[1]]$ensemble_stats, other[[1]]$ensemble_stats)
+    no_times <- function(st) st[setdiff(names(st), "block")]
+    expect_identical(no_times(serial[[1]]$ensemble_stats), no_times(other[[1]]$ensemble_stats))
   }
 })
 
