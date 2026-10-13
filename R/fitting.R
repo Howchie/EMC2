@@ -411,7 +411,8 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
 
 add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
   prof <- .emc_profile_enabled()
-  split <- c(chain = NA_real_, eff = NA_real_)
+  split <- c(chain = 0, eff = 0)
+  proposal_started <- if (prof) proc.time()[["elapsed"]] else NA_real_
   # Production proposal refreshes follow the transition counter, independent
   # of thinning and trimming. Mixture weights and scales remain fixed.
   sample_window <- NULL
@@ -433,7 +434,6 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
                                seq_along(emc[[1]]$samples$stage) <= emc[[1]]$samples$idx)
   }
   if(stage != "preburn"){
-    t0 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_chain_proposals(
       emc, samples_idx = sample_window, do_block = stage != "sample",
       stage = stage)
@@ -457,9 +457,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
       }
     }
   }
-  if(stage != "preburn" && prof) {
-    split[["chain"]] <- proc.time()[["elapsed"]] - t0
-  }
+  eff_started <- if (prof) proc.time()[["elapsed"]] else NA_real_
   if(stage == "adapt"){
     emc <- create_eff_proposals(emc, n_cores, from_burn = TRUE)
   }
@@ -493,18 +491,20 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
     }
   }
   if(stage == "sample"){
-    t1 <- if (prof) proc.time()[["elapsed"]] else NA_real_
     emc <- create_eff_proposals(emc, n_cores)
-    if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - t1
     next_at <- .emc_next_sample_rebuild(n_sample)
     for (j in seq_along(emc)) emc[[j]]$sample_proposals_next <- next_at
     block_iter <- next_at - n_sample
   }
+  if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - eff_started
   # Shear rounds and subject HMC rates (R/move_allocation.R) on the same
   # rebuild clock, after the likelihood fits are checked and the shear plans
   # built; block_iter transitions run before the next.
   emc <- .emc_alloc_rebuild(emc, stage, n_cores, block_iter)
-  if (prof) .emc_profile_state$proposal_split <- split
+  if (prof) {
+    split[["chain"]] <- proc.time()[["elapsed"]] - proposal_started - split[["eff"]]
+    .emc_profile_state$proposal_split <- split
+  }
   return(emc)
 }
 
