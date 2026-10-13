@@ -264,8 +264,8 @@ reports the run's own process-tree CPU (used for the ablation).
 
 lba7r (200 iterations asked; the stop rule's tries gave 400 draws/chain): (32,10) worst
 coordinate mu_v.g_lure, ESS 63, 0.011 per CPU-s, 0.08 per wall-s, lag-1 0.92, wall 791 s. The
-first-version rule arm was still running at the time of writing; (2,2) dropped as clearly
-worse.
+first-version rule arm was stopped after 31 minutes (2.4x the fixed arm, no result; that rule is
+superseded); (2,2) dropped as clearly worse.
 
 The first-version rule cut M to 2 on every chain of both fixtures at the first rebuild. On
 Forstmann that cost a third of the worst coordinate's ESS per CPU-s: log sd(t0) slows (lag-1
