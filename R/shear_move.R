@@ -861,13 +861,15 @@
   }
   if (!length(jobs)) return(emc)
   emc <- .emc_prepare_chain_rng(emc)
-  fits <- .emc_with_preserved_rng(auto_mclapply(seq_along(jobs), function(k) {
+  cost <- .emc_subject_cost(emc[[1L]]$data)
+  job_cost <- vapply(jobs, function(jb) cost[jb$subject], numeric(1))
+  fits <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_along(jobs), function(k) {
     jb <- jobs[[k]]
     ch <- emc[[jb$chain]]
     .emc_quiet_fork(.emc_shear_node_fit(
       ch, jb$subject, jb$state$mu, jb$state$V,
       as.numeric(ch$samples$alpha[, jb$subject, jb$state$draw])))
-  }, mc.cores = max(1L, min(length(jobs), n_cores)), mc.set.seed = FALSE))
+  }, n_cores = n_cores, order = order(job_cost, decreasing = TRUE)))
   for (j in chains) {
     nodes <- emc[[j]]$shear$atlas$nodes
     for (k in which(vapply(jobs, function(jb) jb$chain == j, logical(1)))) {
