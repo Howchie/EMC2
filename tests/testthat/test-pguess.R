@@ -370,7 +370,7 @@ test_that("guess_exclude validation rejects bad inputs", {
 
 
 test_that("guess_exclude removes excluded levels during simulation", {
-  set.seed(42)
+  local_test_rng(42)
   n <- 500
   d <- data.frame(subjects = factor(1),
                   R = factor(sample(c("a", "b", "c"), n, replace = TRUE),
@@ -398,7 +398,8 @@ test_that("guess_exclude removes excluded levels during simulation", {
   p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(0.999))
   sim_dat <- make_data(p, des, n_trials = 200)
   slow_guesses <- sim_dat[sim_dat$rt >= 2 & sim_dat$rt <= 4, ]
-  expect_gt(nrow(slow_guesses), 150)
+  # About 160 of the 400 trials, sd about 10.
+  expect_gt(nrow(slow_guesses), 120)
   expect_true(all(slow_guesses$R == "left"))
 })
 
