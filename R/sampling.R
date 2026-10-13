@@ -1810,29 +1810,31 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       for (k in aux_k) {
         mus_i[[k]] <- particle_draws(1L, ref, covar = NULL, R = Rs[[k]])[1L, ]
       }
-      proposals <- vector("list", length(ks) + 1L)
-      proposals[[1]] <- matrix(ref, nrow = 1L)
-      for (j in seq_along(ks)) {
-        k <- ks[j]
-        if (p_idx > 0) {
-          proposals[[j + 1]] <- particle_draws(
-            particle_numbers[k], mus_i[[k]], covar = NULL, R = Rs[[k]])
-        } else {
-          proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[k], ncol = 0L)
+      n_rows <- 1L + sum(particle_numbers[ks])
+      proposal_cols <- which(idx)
+      if (any(!idx)) {
+        # Fill the unchanged coordinates directly. `matrix(..., byrow=TRUE)`
+        # avoids first allocating the repeated full-state vector.
+        proposals <- matrix(subj_mu, nrow = n_rows, ncol = length(subj_mu),
+                            byrow = TRUE)
+      } else {
+        proposals <- matrix(NA_real_, nrow = n_rows, ncol = p_idx)
+      }
+      if (p_idx > 0L) proposals[1L, proposal_cols] <- ref
+      next_row <- 2L
+      for (k in ks) {
+        n_k <- particle_numbers[k]
+        if (n_k > 0L && p_idx > 0L) {
+          rows <- next_row + seq_len(n_k) - 1L
+          proposals[rows, proposal_cols] <- particle_draws(
+            n_k, mus_i[[k]], covar = NULL, R = Rs[[k]])
         }
+        next_row <- next_row + n_k
       }
-      proposals <- do.call(rbind, proposals)
-
-      if(any(!idx)){
-        proposals_full <- matrix(rep(subj_mu, each = nrow(proposals)),
-                                  nrow = nrow(proposals),
-                                  ncol = length(subj_mu))
-        proposals_full[, idx] <- proposals
-        colnames(proposals_full) <- names(subj_mu)
-        proposals <- proposals_full
-      } else{
-        colnames(proposals) <- names(subj_mu)
-      }
+      colnames(proposals) <- names(subj_mu)
+      # Density calculations repeatedly need the same active coordinates.
+      # Materialize that subset once for this conditional-IS cloud.
+      proposals_idx <- proposals[, idx, drop = FALSE]
 
       if (is.null(marginalise)) {
         comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
@@ -1846,7 +1848,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                          data, model, comp_arg)
       }
       lp <- if (p_idx > 0) {
-        fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
+        fast_dmvnorm_rooti(x = proposals_idx, mean = group_mu[idx],
                            rooti = rootis[[1]], log_const = log_consts[[1]])
       } else rep(0, nrow(proposals))
       if(length(unq_components) > 1){
@@ -1884,11 +1886,15 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         k <- ks[j]
         log_mix_comps[, j] <- log(mix_i[k]) + if (k == 1L) lp else if (p_idx > 0) {
           fast_dmvnorm_rooti(
-            x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
+            x = proposals_idx, mean = mus_i[[k]],
             rooti = rootis[[k]], log_const = log_consts[[k]])
         } else 0
       }
-      max_log <- apply(log_mix_comps, 1L, max)
+      max_log <- log_mix_comps[, 1L]
+      if (ncol(log_mix_comps) > 1L) {
+        for (j in 2L:ncol(log_mix_comps))
+          max_log <- pmax(max_log, log_mix_comps[, j])
+      }
       lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
       infnt_idx <- is.infinite(lm) | is.na(lm)
       if (any(infnt_idx)) {
@@ -1898,7 +1904,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       aux_density <- numeric(nrow(proposals))
       for (k in aux_k) {
         aux_density <- aux_density + fast_dmvnorm_rooti(
-          x = proposals[, idx, drop = FALSE], mean = mus_i[[k]],
+          x = proposals_idx, mean = mus_i[[k]],
           rooti = rootis[[k]], log_const = log_consts[[k]])
       }
       if (!is.null(marginalise)) {
