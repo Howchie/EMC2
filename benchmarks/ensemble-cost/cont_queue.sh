@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Continuation arms, one fit at a time, 3 chains x 9 cores.
+# Continuation arms, one fit at a time, 3 chains x 3 cores pinned to 9 CPUs.
 cd /data/work/EMC2_ws5
 export EMC_LIB=/data/work/EMC2_ws5_libs/p2 R_LIBS=/data/work/EMC2_ws5_libs/p2
 out=/data/work/EMC2_ws5_libs/cont; mkdir -p $out

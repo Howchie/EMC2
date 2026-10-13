@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Paired per-part ensemble profiles, base and head alternating, under the lock.
+# Paired per-part ensemble profiles, base and head alternating, pinned to 9 CPUs.
 cd /data/work/EMC2_ws5
 out=/data/work/EMC2_ws5_libs/prof; mkdir -p $out
 fixtures="forstmann:/data/work/EMC2_workstreams/fixtures/forstmann_full_fit.rds:200 T30:/data/work/EMC2_ws5_libs/ckpt/T30_seed1_emc.rds:200 lba7r:/data/work/EMC2_workstreams/fixtures/lba7r_sample_stage.rds:100"
