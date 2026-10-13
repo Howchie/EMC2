@@ -36,3 +36,17 @@ test_that("single-core and short rebuilds keep the serial path", {
 })
 
 
+test_that("direct array slices match the split index implementation", {
+  previous <- function(a, n) setNames(lapply(
+    split(a, arrayInd(seq_along(a), dim(a))[, n]),
+    array, dim = dim(a)[-n], dimnames(a)[-n]), dimnames(a)[[n]])
+  for (dims in list(c(3L, 4L), c(2L, 3L, 5L), c(1L, 4L, 2L), c(2L, 1L, 3L, 4L))) {
+    a <- array(seq_len(prod(dims)), dims)
+    for (named in c(FALSE, TRUE)) {
+      if (named) dimnames(a) <- lapply(dims, function(n) paste0("x", seq_len(n)))
+      for (n in seq_along(dims)) expect_identical(split_along_dim(a, n), previous(a, n))
+    }
+  }
+  a <- array(c(NA_real_, NaN, Inf, -Inf, -0, 1), c(1L, 2L, 3L))
+  for (n in 1:3) expect_identical(split_along_dim(a, n), previous(a, n))
+})
