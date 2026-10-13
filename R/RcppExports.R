@@ -55,6 +55,26 @@ emc_pt_cell_budget <- function(bytes = NULL) {
     .Call(`_EMC2_emc_pt_cell_budget`, bytes)
 }
 
+emc_gibbs_standard_cpp <- function(alpha, tvinv0, a_half0, prior, is_blocked, par_group) {
+    .Call(`_EMC2_emc_gibbs_standard_cpp`, alpha, tvinv0, a_half0, prior, is_blocked, par_group)
+}
+
+emc_gibbs_diag_gamma_cpp <- function(alpha, tvinv0, prior) {
+    .Call(`_EMC2_emc_gibbs_diag_gamma_cpp`, alpha, tvinv0, prior)
+}
+
+emc_ensemble_draw_pools_cpp <- function(mu, var, M1, tail_weight, tail_df, tail_excess, par_names) {
+    .Call(`_EMC2_emc_ensemble_draw_pools_cpp`, mu, var, M1, tail_weight, tail_df, tail_excess, par_names)
+}
+
+emc_ensemble_stack_cpp <- function(rows, lq, ll_new, proposals, k0, L, mu, logdet, c, tail_weight, tail_df) {
+    .Call(`_EMC2_emc_ensemble_stack_cpp`, rows, lq, ll_new, proposals, k0, L, mu, logdet, c, tail_weight, tail_df)
+}
+
+emc_ensemble_rounds_cpp <- function(pool_stack, base_w, k0, M, rounds, type, state, prior, is_blocked, par_group) {
+    .Call(`_EMC2_emc_ensemble_rounds_cpp`, pool_stack, base_w, k0, M, rounds, type, state, prior, is_blocked, par_group)
+}
+
 sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm) {
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
