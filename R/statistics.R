@@ -1036,7 +1036,8 @@ get_posterior_quantiles <- function(x, probs = c(0.025, .5, .975)){
   summ <- summary(x, probs)
   q <- summ$quantiles
   # coda drops a single variable's quantiles to a vector.
-  if (!is.matrix(q)) q <- matrix(q, nrow = 1, dimnames = list(coda::varnames(x), names(q)))
+  if (!is.matrix(q) && coda::nvar(x) == 1L && length(probs) > 1L)
+    q <- matrix(q, nrow = 1, dimnames = list(coda::varnames(x), names(q)))
   return(q)
 }
 
