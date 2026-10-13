@@ -20,7 +20,13 @@ Phase 1 is done and verified. Phase 2's rule is withdrawn (see "A between-block 
 withdrawn"): it valued the pool only by the group state's displacement inside one move and so
 cut the pool to two members, losing a third of the worst coordinate's ESS per CPU-s on
 Forstmann. The defaults stay M = 32, R = 10, now with measured support (see "Rounds" and "Pool
-size: cost and sensitivity"). nback31 was not run (its checkpoint build was stopped to release the shared
+size: cost and sensitivity").
+
+Tests on the final code (1eeac033, library `final2`, CPUs 23-31): full level test-ensemble-cpp,
+-move, -pool-ll, -latent-output; default level test-subject-hmc, -shear-move,
+-shear-standard-invariance, -collapsed-move, -move-allocation, -sampling-rejection,
+-sample-proposal-schedule, -sampler-guards, -sample-store-inplace, -fit, -refit-alpha: no
+failures, no errors (skips are the level-gated tests). nback31 was not run (its checkpoint build was stopped to release the shared
 lock). Latent-factor hierarchies and standard ones with group designs keep the R rounds. The
 `add_proposals()` hook the rule added is gone with it, so WS2's between-block code is untouched.
 
