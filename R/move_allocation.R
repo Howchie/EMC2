@@ -166,7 +166,7 @@
        A = replicate(n, matrix(0, p, p), simplify = FALSE),
        D = replicate(n, matrix(0, p, p), simplify = FALSE),
        cpu_rest = 0, fam = .emc_alloc_fam_empty(),
-       cpu_hmc = numeric(n), hmc_att = integer(n),
+       cpu_hmc = numeric(n), hmc_att = integer(n), rows_hmc = numeric(n),
        P = replicate(n, matrix(0, p, p), simplify = FALSE), nP = integer(n),
        cpu_part = numeric(n))
 }
@@ -196,6 +196,13 @@
   }
   sampler$alloc$window <- w
   sampler
+}
+
+# A subject's data rows (a joint model's data is a list of data frames).
+.emc_alloc_data_rows <- function(d) {
+  if (is.data.frame(d)) return(as.numeric(nrow(d)))
+  if (is.list(d)) return(sum(vapply(d, .emc_alloc_data_rows, numeric(1))))
+  1
 }
 
 .emc_alloc_window <- function(sampler) {
@@ -279,6 +286,8 @@
     c_s <- if (!is.null(tk$work)) tk$work else if (!is.null(tk$cost)) tk$cost else tk$cpu
     w$cpu_hmc[s] <- w$cpu_hmc[s] + c_s
     w$hmc_att[s] <- w$hmc_att[s] + 1L
+    if (is.null(w$rows_hmc)) w$rows_hmc <- numeric(length(tasks))
+    w$rows_hmc[s] <- w$rows_hmc[s] + if (is.null(tk$rows)) 0 else tk$rows
     work <- work + c_s
     attempts <- attempts + 1L
   }
@@ -1024,6 +1033,16 @@
     sum(w$cpu_part[is.finite(c_part)])
   C_rest <- if (!stored && w$n > 0 && w$cpu_rest > part_in_rest)
     (w$cpu_rest - part_in_rest) / w$n else NA_real_
+  # HMC's worker CPU per likelihood row per data row, from the block's
+  # transitions, else carried from the last rebuild: it prices a subject
+  # without transitions in the block by the rows its transitions evaluate,
+  # so no rebuild depends on the time its own pilots took.
+  data_rows <- vapply(ch$data, .emc_alloc_data_rows, numeric(1))
+  hmc_rows <- if (!stored && length(w$rows_hmc) == n) sum(w$rows_hmc * data_rows) else 0
+  hmc_row_cpu <- if (hmc_rows > 0) sum(w$cpu_hmc) / hmc_rows else {
+    carried <- ch$alloc$last$hmc_row_cpu
+    if (isTRUE(is.finite(carried))) carried else NA_real_
+  }
   # Each move family's marginal and fixed costs, carried over where the
   # window holds too few iterations of it.
   marg <- stats::setNames(lapply(.EMC_ALLOC_FAMILIES, function(f)
@@ -1048,6 +1067,7 @@
        shear_fixed = marg$shear$fixed,
        c_hmc = if (!stored) ifelse(w$hmc_att > 0, w$cpu_hmc / pmax(1L, w$hmc_att), NA_real_)
                else rep(NA_real_, n),
+       data_rows = data_rows, hmc_row_cpu = hmc_row_cpu,
        hmc_fixed = marg$hmc$fixed,
        fixed = list(shear = marg$shear$fixed, collapsed = marg$collapsed$fixed,
                     hmc = marg$hmc$fixed))
@@ -1102,7 +1122,9 @@
       if (is.null(h) && optimistic) h <- numeric(length(ms$s_rho[s, ]))
       else if (!is.null(h)) u$h_n <- ev$n
       if (!is.null(h)) {
-        c_s <- if (is.finite(ms$c_hmc[s])) ms$c_hmc[s] else if (!is.null(ev) && ev$n > 0 &&
+        c_s <- if (is.finite(ms$c_hmc[s])) ms$c_hmc[s] else if (!is.null(ev) && length(ev$arows) &&
+          isTRUE(is.finite(ms$hmc_row_cpu)) && !is.null(ms$data_rows))
+          mean(ev$arows) * ms$data_rows[s] * ms$hmc_row_cpu else if (!is.null(ev) && ev$n > 0 &&
           ev$cpu > 0) ev$cpu / ev$n else 3 * C_iter / n
         u$h <- h
         u$c_h <- c_s
@@ -1512,7 +1534,8 @@
       transitions = if (is.null(ch$sample_transitions)) NA_integer_ else
         as.integer(ch$sample_transitions),
       stored = m$stored, pairs = m$pairs, C_rest = u$C_rest, c_round = u$c_round,
-      c_hmc = m$c_hmc, c_part = m$c_part, hmc_fixed = u$hmc_fixed, shear_fixed = u$shear_fixed,
+      c_hmc = m$c_hmc, hmc_row_cpu = m$hmc_row_cpu, c_part = m$c_part,
+      hmc_fixed = u$hmc_fixed, shear_fixed = u$shear_fixed,
       fixed = m$fixed,
       tau = sol$tau, tau0 = sol$tau0,
       tau0_all = sol$tau0_all, cost = sol$cost,

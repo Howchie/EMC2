@@ -323,6 +323,11 @@ test_that("HMC transitions cost their worker CPU and the round a fixed cost", {
   w <- s$alloc$window
   expect_equal(w$cpu_hmc, c(1, 0, 2))
   expect_identical(w$hmc_att, c(1L, 0L, 1L))
+  # Tasks without rows (frame failures) count none.
+  expect_equal(w$rows_hmc, c(0, 0, 0))
+  s2 <- EMC2:::.emc_alloc_record_cost(list(n_pars = 2, n_subjects = 3), 0.5,
+    list(list(cpu = 1.5, work = 1, rows = 12), NULL, list(cpu = 2.5, work = 2, rows = 30)))
+  expect_equal(s2$alloc$window$rows_hmc, c(12, 0, 30))
   expect_identical(w$fam$hmc$iters, 1L)
   expect_identical(w$fam$hmc$moves, 2L)
   expect_equal(c(w$fam$hmc$cpu, w$fam$hmc$own), c(7, 3))
@@ -521,6 +526,27 @@ test_that("subject HMC factors weigh their transitions against the subjects' poo
   # Decay halves a subject's evidence at a production rebuild.
   d <- EMC2:::.emc_hmc_decay_evidence(ev(10, 16))
   expect_equal(c(d$n, d$M[1], d$cpu), EMC2:::.EMC_ALLOC_EVIDENCE_DECAY * c(10, 16, 0.1))
+})
+
+test_that("a subject without HMC in the block is priced by the rows its transitions evaluate", {
+  ms <- list(s_rho = matrix(0.9, 2, 1), g_rho = 0.5, g_fac = 0.5, g_measured = FALSE,
+             C_rest = 1, c_round = 0.1, coll = FALSE, W = list(diag(1), diag(1)),
+             s_var = matrix(1, 2, 1), c_hmc = c(0.1, NA), c_part = c(NA, NA), hmc_fixed = 0,
+             data_rows = c(100, 300), hmc_row_cpu = 2e-6)
+  ev <- function(cpu) list(n = 10, M = matrix(8), cpu = cpu, arows = c(20, 40))
+  st <- list(supported = TRUE, subjects = list(list(eligible = TRUE), list(eligible = TRUE)),
+             evidence = list(ev(1), ev(7)))
+  u <- EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)
+  # Measured in the block: its own cost. Otherwise mean rows per transition
+  # x data rows x the chain's time per row, whatever its pilots' CPU was.
+  expect_equal(u$units[[2]]$c_h, 0.1)
+  expect_equal(u$units[[3]]$c_h, 30 * 300 * 2e-6)
+  st$evidence[[2]]$cpu <- 99
+  expect_equal(EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)$units[[3]]$c_h, 30 * 300 * 2e-6)
+  # Without a time per row, the evidence's own CPU.
+  ms$hmc_row_cpu <- NA_real_
+  expect_equal(EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)$units[[3]]$c_h, 99 / 10)
+  expect_equal(EMC2:::.emc_alloc_data_rows(list(data.frame(x = 1:3), data.frame(x = 1:2))), 5)
 })
 
 test_that("a move earns its evidence at an exploration rate and runs no faster than its evidence allows", {
