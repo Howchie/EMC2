@@ -440,7 +440,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
     emc <- .emc_check_likelihood_fits(emc, n_cores)
     # The shear plan uses only checked fits, so it is built after the checks.
     emc <- .emc_shear_set_plans(emc, sample_window, stage, n_cores)
-    emc <- .emc_collapsed_set_plans(emc, sample_window, stage)
+    emc <- .emc_collapsed_set_plans(emc, sample_window, stage, n_cores)
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
         # Independent chains block on their own covariances only.
