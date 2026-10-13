@@ -1,0 +1,13 @@
+"fixture","rep","wall","master_cpu","worker_cpu","master_rss_kb","fds","idle_core_seconds"
+"lba7r_sample_stage.rds",1,3.431,1.047,10.417,604272,6,19.415
+"lba7r_sample_stage.rds",2,3.103,0.812,9.76,598120,6,17.355
+"lba7r_sample_stage.rds",3,2.944,0.825,9.699,607532,6,15.972
+"lba7r_sample_stage.rds",4,3.301,0.811,10.25,607532,6,18.648
+"lba7r_sample_stage.rds",5,3.551,1.005,10.649,607060,6,20.305
+"lba7r_sample_stage.rds",6,3.17,0.827,9.862,636724,6,17.841
+"lba7r_sample_stage.rds",7,3.186,0.835,10.044,567732,6,17.795
+"lba7r_sample_stage.rds",8,3.075,0.825000000000001,9.94600000000001,618296,6,16.904
+"lba7r_sample_stage.rds",9,3.14,0.829000000000001,10.02,618296,6,17.411
+"lba7r_sample_stage.rds",10,3.70699999999999,1.025,10.221,562392,6,22.1169999999999
+"lba7r_sample_stage.rds",11,3.078,0.819,9.94800000000001,618296,6,16.935
+"lba7r_sample_stage.rds",12,3.007,0.835,9.818,618296,6,16.41

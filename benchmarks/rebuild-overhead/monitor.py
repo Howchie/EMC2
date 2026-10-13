@@ -1,6 +1,5 @@
-"""Record per-process RSS during a locked benchmark command (Linux)."""
+"""Record per-process RSS during a benchmark command (Linux)."""
 import csv
-import os
 from pathlib import Path
 import subprocess
 import sys

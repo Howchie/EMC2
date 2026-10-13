@@ -1,0 +1,5 @@
+"fixture","rep","build","wall","master_cpu","worker_cpu","idle_core_seconds"
+"forstmann_sample_next_route",1,"base",3.202,1.25,8.696,18.872
+"forstmann_sample_next_route",1,"new",3.259,1.2,8.84799999999999,19.284
+"forstmann_sample_next_route",2,"base",3.347,1.23,8.73999999999999,20.154
+"forstmann_sample_next_route",2,"new",3.355,1.246,9.38899999999999,19.561

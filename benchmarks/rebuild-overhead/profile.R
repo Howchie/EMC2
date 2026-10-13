@@ -90,15 +90,33 @@ assignInNamespace(".emc_block_record", function(...) {
 }, ns)
 input <- Sys.getenv("EMC_IN"); stage <- Sys.getenv("STAGE", "burn")
 emc <- ns$restore_custom_kernel_pointers(ns$restore_duplicates(readRDS(input)), quiet = TRUE)
+if (!isTRUE(emc[[1L]]$init) || is.null(emc[[1L]]$samples$idx))
+  stop("Input has no initialized sampler history; run preburn first")
 rows <- list(); jobs <- list(); worker_total <- 0
-seed <- as.integer(Sys.getenv("SEED", "1")); cores <- as.integer(Sys.getenv("CORES", "27"))
+seed <- as.integer(Sys.getenv("SEED", "1")); cores <- as.integer(Sys.getenv("CORES", "9"))
 set.seed(seed)
 mode <- Sys.getenv("MODE", "rebuild")
+# Force a saved-state sample rebuild for profiling without collecting new draws.
+# "first" uses the stage-entry history; "next" uses stored sample draws.
+sample_rebuild <- Sys.getenv("SAMPLE_REBUILD", "")
+if (mode == "rebuild" && stage == "sample" && nzchar(sample_rebuild)) {
+  stopifnot(sample_rebuild %in% c("first", "next"))
+  for (j in seq_along(emc)) {
+    if (sample_rebuild == "first") {
+      emc[[j]]$sample_proposals_next <- NULL
+    } else {
+      at <- emc[[j]]$sample_proposals_next
+      if (is.null(at)) at <- 100L
+      emc[[j]]$sample_transitions <- at
+      emc[[j]]$sample_proposals_next <- at
+    }
+  }
+}
 if (mode == "run") {
   n <- as.integer(Sys.getenv("ITER", "20")); step <- as.integer(Sys.getenv("STEP", "2"))
-  result <- run_emc(emc, stage, list(iter = n, selection = c("mu", "lsd", "alpha")),
+  result <- run_emc(emc, stage, list(iter = n, selection = c("mu", "sigma2", "alpha")),
     step_size = step, max_tries = 20, cores_for_chains = min(3L, length(emc)),
-    cores_per_chain = max(1L, cores %/% min(3L, length(emc))), verbose = TRUE)
+    cores_per_chain = max(1L, cores %/% min(3L, length(emc))), trim = FALSE, verbose = TRUE)
 } else {
   result <- ns$.emc_laplace_refresh(emc, cores)
   result <- ns$add_proposals(result, stage, cores, NULL, block_iter = 100L)
