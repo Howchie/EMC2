@@ -95,39 +95,24 @@ last_sample_diag_gamma <- function(store) {
 }
 
 
+# Means from their normal conditional (independent across parameters when the
+# prior precision is diagonal, joint otherwise), then each precision from its
+# gamma conditional, in C++ (src/ensemble_move.cpp, the kernel the ensemble
+# rounds share).
 gibbs_step_diag_gamma <- function(sampler, alpha){
-  # Gibbs step for diagonal only
-  # Get single iter versions, tmu = theta_mu, tvar = theta_var
   last <- last_sample_diag_gamma(sampler$samples)
-  hyper <- attributes(sampler)
-  prior <- sampler$prior
-  last$tvinv <- diag(last$tvinv)
   n_pars <- sum(!sampler$nuisance)
   alpha <- as.matrix(alpha)
-  #Mu
+  prior <- sampler$prior
   P0 <- prior$theta_mu_invar
-  if (!is.matrix(P0)) P0 <- diag(as.numeric(P0), n_pars)
-  # (ginv() can leave rounding-level off-diagonals on a diagonal prior.)
-  if (all(abs(P0[row(P0) != col(P0)]) <= 1e-12 * max(abs(diag(P0))))) {
-    var_mu = 1.0 / (sampler$n_subjects * last$tvinv + diag(P0))
-    mean_mu = var_mu * ((rowSums(alpha) * last$tvinv + prior$theta_mu_mean * diag(P0)))
-    tmu <- rnorm(n_pars, mean_mu, sd = sqrt(var_mu))
-  } else {
-    # A correlated prior on mu couples the coordinates, so draw them jointly.
-    prec <- P0 + diag(sampler$n_subjects * last$tvinv, n_pars)
-    b <- rowSums(alpha) * last$tvinv + drop(P0 %*% prior$theta_mu_mean)
-    R_post <- chol(prec)
-    tmu <- backsolve(R_post, forwardsolve(t(R_post), b) + rnorm(n_pars))
+  if (!is.matrix(P0)) {
+    prior$theta_mu_invar <- diag(as.numeric(P0), n_pars)
   }
+  res <- emc_gibbs_diag_gamma_cpp(alpha, diag(last$tvinv), prior)
+  tmu <- res$tmu
   names(tmu) <- sampler$par_names[!sampler$nuisance]
-
-
-  # InvGamma alternative (probably inferior) prior
-  shape = prior$shape + sampler$n_subjects / 2
-  rate = prior$rate + rowSums( (alpha-tmu)^2 ) / 2
-  tvinv = rgamma(n=sampler$n_pars, shape=shape, rate=rate)
-  tvar = 1/tvinv
-  return(list(tmu = tmu, tvar = diag(tvar, n_pars), tvinv = diag(tvinv, n_pars), alpha = alpha))
+  return(list(tmu = tmu, tvar = diag(1 / res$tvinv, n_pars), tvinv = diag(res$tvinv, n_pars),
+              alpha = alpha))
 }
 
 

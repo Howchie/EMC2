@@ -36,6 +36,41 @@ ens_draw_pools_ref <- function(sampler, chains_mu, chains_var) {
   list(q = q, rows = rows, lq = lq)
 }
 
+# gibbs_step_diag_gamma's arithmetic in R: the normal conditional of the means
+# (independent when the prior precision is diagonal, joint otherwise), then a
+# gamma per precision.
+ens_gibbs_diag_gamma_ref <- function(sampler, alpha) {
+  last <- EMC2:::last_sample_diag_gamma(sampler$samples)
+  prior <- sampler$prior
+  tvinv <- diag(last$tvinv)
+  n_pars <- sum(!sampler$nuisance)
+  n <- sampler$n_subjects
+  P0 <- prior$theta_mu_invar
+  if (all(abs(P0[row(P0) != col(P0)]) <= 1e-12 * max(abs(diag(P0))))) {
+    var_mu <- 1 / (n * tvinv + diag(P0))
+    mean_mu <- var_mu * (rowSums(alpha) * tvinv + prior$theta_mu_mean * diag(P0))
+    tmu <- rnorm(n_pars, mean_mu, sd = sqrt(var_mu))
+  } else {
+    prec <- P0 + diag(n * tvinv, n_pars)
+    b <- rowSums(alpha) * tvinv + drop(P0 %*% prior$theta_mu_mean)
+    R_post <- chol(prec)
+    tmu <- backsolve(R_post, forwardsolve(t(R_post), b) + rnorm(n_pars))
+  }
+  names(tmu) <- sampler$par_names[!sampler$nuisance]
+  shape <- prior$shape + n / 2
+  rate <- prior$rate + rowSums((alpha - tmu)^2) / 2
+  tvinv <- rgamma(n_pars, shape = shape, rate = rate)
+  list(tmu = tmu, tvar = diag(1 / tvinv, n_pars), tvinv = diag(tvinv, n_pars), alpha = alpha)
+}
+
+# The group update in R for both hierarchies, for a reference free of C++.
+ens_with_r_gibbs <- function(expr) {
+  testthat::local_mocked_bindings(gibbs_step_standard = EMC2:::.gibbs_step_standard_r,
+                                  gibbs_step_diag_gamma = ens_gibbs_diag_gamma_ref,
+                                  .package = "EMC2")
+  expr
+}
+
 ens_cpp_case <- function(type, p, n, par_groups = NULL, seed = 1) {
   set.seed(seed)
   s <- ens_cpp_sampler(type, p, n, par_groups)
@@ -98,7 +133,7 @@ test_that("C++ Gibbs rounds reproduce the R rounds for every covered hierarchy",
                                         cfg$tail_weight, cfg$tail_df)
     stack <- st$pool_stack; colnames(stack) <- s$par_names
     set.seed(7)
-    r_ref <- EMC2:::.emc_ensemble_rounds_r(s, cs$pars, stack, st$base_w, k0, M, cfg)
+    r_ref <- ens_with_r_gibbs(EMC2:::.emc_ensemble_rounds_r(s, cs$pars, stack, st$base_w, k0, M, cfg))
     seed_ref <- .Random.seed
     set.seed(7)
     r_cpp <- EMC2:::.emc_ensemble_rounds_cpp(s, cs$pars, stack, st$base_w, k0, M, cfg)
@@ -133,3 +168,43 @@ test_that("the R rounds remain the path for hierarchies the C++ rounds do not co
   expect_false(EMC2:::.emc_ensemble_rounds_in_cpp(s))
 })
 
+test_that("the C++ group updates reproduce the R updates draw for draw", {
+  cases <- list(list("standard", 3, 6, NULL), list("standard", 4, 7, c(1, 1, 2, 2)),
+                list("standard", 5, 5, c(1, 2, 1, 3, 2)), list("diagonal-gamma", 3, 6, NULL))
+  for (cse in cases) {
+    cs <- ens_cpp_case(cse[[1]], cse[[2]], cse[[3]], cse[[4]])
+    s <- cs$s
+    # Start from a state the update has already visited once.
+    s$samples$theta_mu[, 1] <- cs$pars$tmu
+    s$samples$theta_var[, , 1] <- cs$pars$tvar
+    s$samples$last_theta_var_inv <- cs$pars$tvinv
+    if (!is.null(cs$pars$a_half)) s$samples$a_half[, 1] <- cs$pars$a_half
+    set.seed(13)
+    ref <- if (cse[[1]] == "standard") EMC2:::.gibbs_step_standard_r(s, cs$alpha) else
+      ens_gibbs_diag_gamma_ref(s, cs$alpha)
+    seed_ref <- .Random.seed
+    set.seed(13)
+    out <- EMC2:::gibbs_step(s, cs$alpha, cse[[1]])
+    label <- paste(cse[[1]], paste(cse[[4]], collapse = ""))
+    expect_identical(.Random.seed, seed_ref, label = paste(label, "rng"))
+    expect_identical(names(out), names(ref))
+    expect_equal(out$tmu, ref$tmu, tolerance = 1e-8, ignore_attr = TRUE)
+    expect_identical(names(out$tmu), names(ref$tmu))
+    expect_equal(out$tvar, ref$tvar, tolerance = 1e-8, ignore_attr = TRUE)
+    expect_equal(out$tvinv, ref$tvinv, tolerance = 1e-8, ignore_attr = TRUE)
+    if (cse[[1]] == "standard") {
+      expect_equal(out$a_half, ref$a_half, tolerance = 1e-8)
+      expect_equal(out$subj_mu, ref$subj_mu, tolerance = 1e-8, ignore_attr = TRUE)
+    }
+    expect_identical(out$alpha, ref$alpha)
+  }
+  # A correlated prior on the diagonal-gamma means takes the joint draw.
+  cs <- ens_cpp_case("diagonal-gamma", 3, 6)
+  s <- cs$s
+  s$prior$theta_mu_invar <- matrix(c(2, 0.5, 0, 0.5, 2, 0.3, 0, 0.3, 2), 3)
+  set.seed(17); ref <- ens_gibbs_diag_gamma_ref(s, cs$alpha); seed_ref <- .Random.seed
+  set.seed(17); out <- EMC2:::gibbs_step(s, cs$alpha, "diagonal-gamma")
+  expect_identical(.Random.seed, seed_ref)
+  expect_equal(out$tmu, ref$tmu, tolerance = 1e-8)
+  expect_equal(out$tvinv, ref$tvinv, tolerance = 1e-8)
+})
