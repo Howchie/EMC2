@@ -871,6 +871,33 @@ test_that("subjects priced together match each subject priced alone", {
   }
 })
 
+test_that("shear coordinates priced together match each priced alone, bit for bit", {
+  local_test_rng(23)
+  rand_shear <- function() {
+    g <- sample(c(stats::runif(1, 0.05, 0.98), 0, 1, 1 - 1e-10), 1, prob = c(0.85, 0.05, 0.05, 0.05))
+    u <- list(kind = "shear", rho = stats::runif(1, 0.05, 0.999), g = g,
+              cost = stats::runif(1, 0.01, 0.2))
+    r <- stats::runif(1)
+    if (r < 0.4) u$a <- g * stats::runif(1)
+    else if (r < 0.5) u$a <- -0.1
+    else if (r < 0.7) u$a <- g
+    if (stats::runif(1) < 0.5) u$cap <- stats::runif(1, 0, 4)
+    if (stats::runif(1) < 0.4) u$floor <- stats::runif(1, 0, 0.5)
+    u
+  }
+  for (trial in 1:20) {
+    us <- replicate(15, rand_shear(), simplify = FALSE)
+    movable <- stats::runif(15) < 0.9
+    rs <- sort(c(stats::runif(40, 0, 1), 0, 1))
+    got <- EMC2:::.emc_alloc_units_need(us, movable, rs, 4)
+    for (i in seq_along(us)) {
+      ref <- if (movable[i]) EMC2:::.emc_alloc_unit_need(us[[i]], rs, 4)
+        else EMC2:::.emc_alloc_unit_still(us[[i]], length(rs))
+      expect_identical(got[[i]], ref)
+    }
+  }
+})
+
 test_that("a plan's predicted autocorrelations are those it was solved for", {
   local_test_rng(22)
   for (trial in 1:15) {

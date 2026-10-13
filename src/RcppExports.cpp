@@ -66,6 +66,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_shears_need_cpp
+Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& rs);
+RcppExport SEXP _EMC2_emc_alloc_shears_need_cpp(SEXP rhoSEXP, SEXP gSEXP, SEXP aSEXP, SEXP costSEXP, SEXP capSEXP, SEXP floorSEXP, SEXP rsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type g(gSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cost(costSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cap(capSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type floor(floorSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_shears_need_cpp(rho, g, a, cost, cap, floor, rs));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bou_pdf_cdf_vec
 Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R, NumericVector v, NumericVector a, NumericVector Z, NumericVector sv, NumericVector SZ, NumericVector t0, NumericVector st0, NumericVector s, NumericVector beta, int bkind, NumericVector aInf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade, int n_sv, int n_sz, int n_st0, bool anchor_at_z, double anchor_fix, bool want_cdf);
 RcppExport SEXP _EMC2_bou_pdf_cdf_vec(SEXP rtSEXP, SEXP RSEXP, SEXP vSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP svSEXP, SEXP SZSEXP, SEXP t0SEXP, SEXP st0SEXP, SEXP sSEXP, SEXP betaSEXP, SEXP bkindSEXP, SEXP aInfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP n_svSEXP, SEXP n_szSEXP, SEXP n_st0SEXP, SEXP anchor_at_zSEXP, SEXP anchor_fixSEXP, SEXP want_cdfSEXP) {
@@ -3616,6 +3633,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
     {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},
+    {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 7},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},

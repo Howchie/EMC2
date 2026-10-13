@@ -94,8 +94,8 @@ ws1_install_trace <- function(out_dir, save_states = TRUE) {
     ws1_capture_add("rebuild_input", list(stage = stage, n_cores = n_cores, B = B))
     orig(emc, stage, n_cores, B)
   })
-  wrap(".emc_alloc_measure", function(orig) function(emc, j, hmc_state, Vbar, stage = NULL) {
-    ms <- orig(emc, j, hmc_state, Vbar, stage)
+  wrap(".emc_alloc_measure", function(orig) function(emc, j, hmc_state, Vbar, stage = NULL, ...) {
+    ms <- orig(emc, j, hmc_state, Vbar, stage, ...)
     ws1_capture_add("measure", list(j = j, ms = ms, dirs = emc[[j]]$shear$plan$dirs,
                                     pool_G = emc[[j]]$alloc$pool))
     ms

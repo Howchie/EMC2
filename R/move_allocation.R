@@ -488,7 +488,10 @@
     targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), lv)))
     tau_t <- .emc_alloc_tau(targets)
     still <- setdiff(seq_len(n_u), moved_idx)
-    need_of <- function(us, movable) .emc_alloc_units_need(us, movable, targets, max_rounds, refresh)
+    need_of <- function(us, movable, layout = NULL)
+      .emc_alloc_units_need(us, movable, targets, max_rounds, refresh, layout)
+    # Every candidate's moved units differ from the units only in rho.
+    moved_layout <- .emc_alloc_need_layout(units[moved_idx], max_rounds)
     need <- vector("list", n_u)
     need[still] <- need_of(units[still], r0$movable[still])
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
@@ -505,7 +508,7 @@
     act_held <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
       if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
     for (c in seq_along(xcs)) {
-      nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx])
+      nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx], moved_layout)
       need_c <- need
       need_c[moved_idx] <- nm
       act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
@@ -713,15 +716,41 @@
   list(x = r_need[pick] - r_min, q = qs[k], cost = cost[pick])
 }
 
+# The units' kinds and their shear coordinates' fixed fields (all but rho),
+# for pricing them together; units that differ only in rho share it.
+.emc_alloc_need_layout <- function(us, max_rounds) {
+  kind <- vapply(us, function(u) u$kind, character(1))
+  shear <- kind == "shear" & lengths(lapply(us, `[[`, "rho")) == 1L
+  sh <- us[shear]
+  field <- function(f, d) vapply(sh, function(u) if (is.null(u[[f]])) d else
+    as.numeric(u[[f]]), numeric(1))
+  list(kind = kind, shear = shear, g = field("g", NA_real_),
+       a = vapply(sh, function(u) as.numeric(if (is.null(u$a)) u$g else u$a), numeric(1)),
+       cost = field("cost", NA_real_), cap = field("cap", max_rounds), floor = field("floor", 0))
+}
+
 # Every unit's allocation at each target (.emc_alloc_unit_need), with the
-# movable subject units priced together in one call.
-.emc_alloc_units_need <- function(us, movable, rs, max_rounds, refresh = FALSE) {
+# movable shear units priced together in one call, and the movable subject
+# units in another. layout: .emc_alloc_need_layout(us), when the caller
+# prices units of the same layout repeatedly.
+.emc_alloc_units_need <- function(us, movable, rs, max_rounds, refresh = FALSE, layout = NULL) {
+  if (is.null(layout)) layout <- .emc_alloc_need_layout(us, max_rounds)
   out <- vector("list", length(us))
-  subj <- vapply(seq_along(us), function(i)
-    movable[i] && identical(us[[i]]$kind, "subject"), logical(1))
-  for (i in which(!subj)) out[[i]] <- if (movable[i])
+  shear <- movable & layout$shear
+  subj <- movable & layout$kind == "subject"
+  for (i in which(!subj & !shear)) out[[i]] <- if (movable[i])
     .emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds, refresh = refresh)
     else .emc_alloc_unit_still(us[[i]], length(rs))
+  sh <- which(shear)
+  if (length(sh)) {
+    k <- match(sh, which(layout$shear))
+    got <- emc_alloc_shears_need_cpp(as.numeric(unlist(lapply(us[sh], `[[`, "rho"))),
+                                     layout$g[k], layout$a[k], layout$cost[k], layout$cap[k],
+                                     layout$floor[k], as.numeric(rs))
+    q1 <- rep(1, length(rs))
+    for (j in seq_along(sh))
+      out[[sh[j]]] <- list(x = got$x[j, ], q = q1, cost = got$cost[j, ])
+  }
   idx <- which(subj)
   if (!length(idx)) return(out)
   num <- function(x, d) if (is.null(x)) d else as.numeric(x)

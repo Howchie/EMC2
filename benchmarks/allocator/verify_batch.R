@@ -10,8 +10,8 @@ batched <- exists(".emc_alloc_units_need", envir = ns, inherits = FALSE)
 stats <- new.env(); stats$calls <- 0L; stats$max_rel <- 0; stats$q_diff <- 0L; stats$fin_diff <- 0L
 if (batched) {
   orig <- ns$.emc_alloc_units_need
-  chk <- function(us, movable, rs, max_rounds, refresh = FALSE) {
-    new <- orig(us, movable, rs, max_rounds, refresh)
+  chk <- function(us, movable, rs, max_rounds, refresh = FALSE, layout = NULL) {
+    new <- orig(us, movable, rs, max_rounds, refresh, layout)
     old <- lapply(seq_along(us), function(i)
       if (movable[i]) ns$.emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds, refresh = refresh)
       else ns$.emc_alloc_unit_still(us[[i]], length(rs)))

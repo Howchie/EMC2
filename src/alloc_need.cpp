@@ -165,3 +165,70 @@ Rcpp::NumericVector emc_alloc_act_term_cpp(const Rcpp::NumericMatrix& X,
   }
   return out;
 }
+
+// The shear pricing below reproduces R's arithmetic exactly: no fused
+// multiply-adds or fast-math rewrites, which the package flags allow.
+#pragma GCC push_options
+#pragma GCC optimize("no-fast-math", "fp-contract=off")
+
+// R's x^y, which is R_pow (std::pow differs in the last bit).
+static inline double alloc_r_pow(double x, double y) { return R_pow(x, y); }
+
+// .emc_alloc_factor_k for one k.
+static inline double alloc_factor_k(double g, double a, double k) {
+  if (a < g - 1e-12) return 1.0 - (1.0 - g) / (1.0 - a) * (1.0 - alloc_r_pow(a, k));
+  return alloc_r_pow(g, k);
+}
+
+// .emc_alloc_factor_inverse for one target t < 1, given the move's g < 1.
+static inline double alloc_factor_inverse(double g, double a, double t) {
+  const double inf = std::numeric_limits<double>::infinity();
+  double m;
+  if (a >= g - 1e-12) {
+    if (!(t > 0)) return inf;
+    m = std::ceil(std::log(t) / std::log(g) - 1e-9);
+  } else {
+    const double c = (1.0 - g) / (1.0 - a);
+    const double s = 1.0 - (1.0 - t) / c;
+    if (!(s > 0)) return inf;
+    m = a <= 0 ? 1.0 : std::ceil(std::log(s) / std::log(a) - 1e-9);
+  }
+  if (!(m >= 1.0)) m = 1.0;
+  const double f0 = alloc_factor_k(g, a, m - 1.0), f1 = alloc_factor_k(g, a, m);
+  double v = (f0 - t) / (f0 - f1);
+  if (!std::isnan(v)) v = std::min(1.0, std::max(0.0, v));
+  return (m - 1.0) + v;
+}
+
+// Every shear unit's rounds and cost at each target rs (rows: units), as
+// .emc_alloc_unit_need prices one: the floor where the coordinate already
+// meets the target, else the least rounds that reach it, raised to the floor
+// and Inf beyond the cap.
+// [[Rcpp::export]]
+Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
+                                     const Rcpp::NumericVector& g,
+                                     const Rcpp::NumericVector& a,
+                                     const Rcpp::NumericVector& cost,
+                                     const Rcpp::NumericVector& cap,
+                                     const Rcpp::NumericVector& floor,
+                                     const Rcpp::NumericVector& rs) {
+  const int n_u = rho.size(), n_t = rs.size();
+  const double inf = std::numeric_limits<double>::infinity();
+  Rcpp::NumericMatrix X(n_u, n_t), C(n_u, n_t);
+  for (int i = 0; i < n_u; ++i) {
+    const bool reach = g[i] < 1 - 1e-9;
+    for (int t = 0; t < n_t; ++t) {
+      double x = floor[i];
+      if (rho[i] > rs[t]) {
+        x = reach ? alloc_factor_inverse(g[i], a[i], rs[t] / rho[i]) : inf;
+        if (!std::isnan(x) && x < floor[i]) x = floor[i];
+        if (!std::isfinite(x) || x > cap[i] + 1e-9) x = inf;
+      }
+      X(i, t) = x;
+      C(i, t) = std::isfinite(x) ? x * cost[i] : inf;
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("cost") = C);
+}
+
+#pragma GCC pop_options
