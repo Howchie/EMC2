@@ -338,6 +338,57 @@ test_that("a plan pays the HMC round's fixed cost only if it uses HMC", {
   expect_equal(sol$objective0, EMC2:::.emc_alloc_tau(0.95 * 0.6) * 3)
 })
 
+test_that("particle rates held below one keep the plan with HMC", {
+  fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
+  subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
+               h = c(0.5, 0.5), c_h = 0.2)
+  u <- list(units = list(fixed, subj, subj), C_rest = 1, joint = NULL, hmc_fixed = 50)
+  # Unheld, the dear round is not run and every particle step is kept.
+  expect_identical(EMC2:::.emc_alloc_solve_units(u)$choice, "none")
+  # Held at the rates shared across chains, the plan without HMC cannot run
+  # them, so HMC makes up the subjects' movement.
+  u$units[2:3] <- lapply(u$units[2:3], function(x) c(x, q_fixed = 0.5))
+  sol <- EMC2:::.emc_alloc_solve_units(u)
+  expect_false(identical(sol$choice, "none"))
+  expect_identical(sol$options[["none"]], Inf)
+  expect_equal(sol$q[2:3], c(0.5, 0.5))
+  expect_true(all(sol$x[2:3] > 0))
+})
+
+test_that("every chain runs the HMC choice with the least summed objective", {
+  opts <- list(c(none = 10, "0" = 9, "1" = 9.5), c(none = 10, "0" = 9.6, "1" = 9),
+               c(none = 10, "0" = 9.6, "1" = 9.1))
+  local_mocked_bindings(
+    .emc_alloc_wanted = function(sampler) TRUE,
+    .emc_prepare_chain_rng = function(emc) emc,
+    .emc_hmc_support = function(sampler) list(ok = FALSE),
+    .emc_alloc_draws = function(ch, n) 1L,
+    .emc_alloc_measure = function(emc, j, ...) {
+      list(chain_id = j, shear = FALSE, g_rho = numeric(), coll = FALSE,
+           s_rho = matrix(0.5, 1L, 1L), p_fac = matrix(1, 1L, 1L), c_part = 0.1,
+           c_hmc = NA_real_, stored = 0L, pairs = 0L, C_rest = 1, pool = NULL)
+    },
+    .emc_alloc_units = function(ms, ...) {
+      list(chain_id = ms$chain_id, units = list(list(h = NULL)), C_rest = 1, hmc_fixed = 0)
+    },
+    .emc_alloc_solve_units = function(u) {
+      o <- opts[[u$chain_id]]
+      choice <- if (is.null(u$regime_fixed)) names(o)[which.min(o)] else u$regime_fixed
+      list(x = 0, joint = 0, tau = 1, tau0 = 1, cost = 1, objective = o[[choice]],
+           objective0 = 10, options = o, choice = choice)
+    },
+    .package = "EMC2")
+  chain <- function() list(
+    n_pars = 1L, n_subjects = 1L,
+    samples = list(theta_var = array(1, c(1L, 1L, 1L))),
+    alloc = list(window = NULL, history = list()))
+  out <- EMC2:::.emc_alloc_rebuild(list(chain(), chain(), chain()), "sample", 1L, 10L)
+  # Chain 1's own choice (regime 0) is outvoted by the summed objectives.
+  expect_identical(out[[1]]$alloc$history[[1]]$choice, "0")
+  expect_identical(vapply(out, function(ch) ch$alloc$last$choice, ""), rep("1", 3))
+  expect_true(out[[1]]$alloc$last$choice_fixed)
+})
+
 test_that("production measurements use every production draw and pool the stage's jumps", {
   local_test_rng(5)
   p <- 1; n <- 1; burn <- 100; m <- 400; w_n <- 99L

@@ -81,7 +81,10 @@
 # one (.emc_alloc_dev_ratio): HMC regimes, the plan without HMC, and a plan
 # whose chosen particle rates move the subjects less than it was credited
 # for, which is solved again against keeping every particle step
-# (.emc_alloc_settle). A subject the
+# (.emc_alloc_settle). Chains run one HMC choice (a regime, the rates the
+# solver picks, or no HMC), the one with the least objective summed over the
+# chains, and each subject's particle rate is the largest any chain chose;
+# a plan holding particle rates below one keeps HMC. A subject the
 # allocation would use without measured HMC moves first gets a bracketed
 # step size and pilot transitions on a private copy of its state. The
 # allocation changes only at rebuilds, as every adapted quantity does.
@@ -489,8 +492,11 @@
                objective = .emc_alloc_tau(r00$hi) * (C_rest + c_p0 + c_f0),
                joint = j_floor)
   lo <- min(vapply(ranges, `[[`, numeric(1), "lo"))
-  best <- zero
-  if (r0$hi > lo + 1e-12 || c_p0 > 0) {
+  # The plan with nothing chosen runs every particle step, so particle rates
+  # held below one leave it as the reference only.
+  held <- .emc_alloc_particle_held(units)
+  best <- if (held) list(objective = Inf) else zero
+  if (r0$hi > lo + 1e-12 || c_p0 > 0 || held) {
     tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(r0$hi)),
                         length.out = 400L))
     lv <- unlist(lapply(ranges, function(r) r$levels[r$levels >= r$lo & r$levels <= r$hi]))
@@ -544,7 +550,8 @@
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
   # its moves.
-  if (best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective) best <- zero
+  if (is.null(best$x) || !held && best$objective > .EMC_ALLOC_MIN_GAIN * zero$objective)
+    best <- zero
   best$objective0 <- zero$objective
   best$tau0 <- zero$tau
   # The slowest coordinate of all, moved or not.
@@ -1330,6 +1337,7 @@
   ratio <- .emc_alloc_dev_ratio(units, rates$q, rates$r)
   if (!is.finite(ratio) || ratio <= credit * (1 + 1e-6)) return(sol)
   n_g <- length(u$g_floor)
+  held <- .emc_alloc_particle_held(units)
   raw <- u$units
   hold <- function(us, q, r) {
     for (i in seq_along(us)) {
@@ -1344,6 +1352,12 @@
   own <- units
   own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio)
   own <- solve(hold(own, rates$q, rates$r))
+  # Particle rates held below one (shared across chains) rule out keeping
+  # every particle step.
+  if (held) {
+    own$regime <- sol$regime
+    return(own)
+  }
   # Every particle step kept, the group credited at those rates and the
   # plan's HMC rates (keeping the particle steps need not make up for HMC
   # the plan stood down).
@@ -1356,6 +1370,14 @@
   best <- if (isTRUE(own$objective < kept$objective)) own else kept
   best$regime <- sol$regime
   best
+}
+
+# Whether any subject's particle rate is held below one (the rates shared
+# across chains): a plan without HMC runs every particle step, so it cannot
+# run those rates.
+.emc_alloc_particle_held <- function(units) {
+  any(vapply(units, function(x) identical(x$kind, "subject") && !is.null(x$q_fixed) &&
+               is.finite(x$q_fixed) && x$q_fixed < 1, logical(1)))
 }
 
 # The allocation with the HMC round's fixed cost: the best plan that runs the
@@ -1440,32 +1462,49 @@
   }
   without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable,
                               shear_fixed = shear_act)
-  if (!has_h) return(without)
-  with <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint, movable = movable,
-                           shear_fixed = shear_act, hmc_fixed = hmc_fixed)
-  with$regime <- 0
-  used <- list(units = u$units, credit = 1, C_rest = u$C_rest)
-  for (reg in regimes) {
-    cand <- .emc_alloc_solve(reg$units, u$C_rest + reg$cost, joint = u$joint,
-                             movable = movable, shear_fixed = shear_act,
-                             hmc_fixed = hmc_fixed)
-    if (isTRUE(cand$objective < with$objective)) {
-      cand$regime <- reg$r
-      with <- cand
-      used <- list(units = reg$units, credit = reg$credit, C_rest = u$C_rest + reg$cost)
-    }
-  }
-  if (!is.null(u$g_floor))
-    with <- .emc_alloc_settle(u, with, used$units, used$credit, used$C_rest, movable,
-                              shear_act, hmc_fixed)
-  if (isTRUE(with$objective < without$objective &&
-             with$objective <= .EMC_ALLOC_MIN_GAIN * without$objective0)) {
-    with$objective0 <- without$objective0
-    with$tau0 <- without$tau0
-    return(with)
-  }
   without$regime <- 0
-  without
+  if (!has_h) return(without)
+  # Every HMC regime's plan, settled: the plan at the rates the solver picks
+  # (regime 0) and each regime that has deviation measurements.
+  settle <- function(sol, used) {
+    if (is.null(u$g_floor)) return(sol)
+    .emc_alloc_settle(u, sol, used$units, used$credit, used$C_rest, movable,
+                      shear_act, hmc_fixed)
+  }
+  plans <- list()
+  sol <- .emc_alloc_solve(u$units, u$C_rest, joint = u$joint, movable = movable,
+                          shear_fixed = shear_act, hmc_fixed = hmc_fixed)
+  sol$regime <- 0
+  plans[["0"]] <- settle(sol, list(units = u$units, credit = 1, C_rest = u$C_rest))
+  for (reg in regimes) {
+    sol <- .emc_alloc_solve(reg$units, u$C_rest + reg$cost, joint = u$joint,
+                            movable = movable, shear_fixed = shear_act,
+                            hmc_fixed = hmc_fixed)
+    sol$regime <- reg$r
+    plans[[as.character(reg$r)]] <- settle(sol, list(units = reg$units, credit = reg$credit,
+                                                     C_rest = u$C_rest + reg$cost))
+  }
+  # Each choice's objective, for the choice shared across chains: a plan
+  # with HMC must clear the minimum gain against the iteration without any
+  # moves; held particle rates rule out the plan without HMC.
+  held <- .emc_alloc_particle_held(u$units)
+  gain_ok <- function(x) isTRUE(x$objective <= .EMC_ALLOC_MIN_GAIN * without$objective0)
+  options <- c(none = if (held) Inf else without$objective,
+               vapply(plans, function(x) if (held || gain_ok(x)) x$objective else Inf, numeric(1)))
+  choice <- u$regime_fixed
+  if (is.null(choice) || !(choice %in% names(options)))
+    choice <- names(options)[which.min(options)]
+  if (identical(choice, "none") || !is.finite(options[[choice]]) && !held) {
+    without$options <- options
+    without$choice <- "none"
+    return(without)
+  }
+  out <- plans[[choice]]
+  out$objective0 <- without$objective0
+  out$tau0 <- without$tau0
+  out$options <- options
+  out$choice <- choice
+  out
 }
 
 # Rebuild every chain's shear rounds and HMC rates (in add_proposals(), after
@@ -1525,10 +1564,10 @@
       hst[[j]] <- .emc_hmc_apply_calibration(hst[[j]], s, r)
     }
   }
-  # One chain's plan; q_fixed holds its particle rates to the shared ones
-  # (second pass), so its HMC rates and predictions are solved for the plan
-  # it runs.
-  plan_chain <- function(j, q_fixed = NULL) {
+  # One chain's plan; choice holds its HMC regime to the shared one and
+  # q_fixed its particle rates to the shared ones, so its HMC rates and
+  # predictions are solved for the plan it runs.
+  plan_chain <- function(j, choice = NULL, q_fixed = NULL) {
     ch <- emc[[j]]
     m <- ms[[j]]
     st <- hst[[j]]
@@ -1545,6 +1584,7 @@
       if (!is.null(u$units[[k]]$p) && !is.null(u$units[[k]]$h))
         u$units[[k]]$q_fixed <- q_fixed[s]
     }
+    u$regime_fixed <- choice
     sol <- .emc_alloc_solve_units(u)
     if (shear_on[j]) ch$shear$plan$rounds <- sol$x[seq_len(n_g)]
     if (isTRUE(m$coll)) ch$collapsed$plan$rounds <- sol$joint
@@ -1573,7 +1613,7 @@
       fixed = m$fixed,
       tau = sol$tau, tau0 = sol$tau0,
       tau0_all = sol$tau0_all, cost = sol$cost,
-      regime = regime, r_bar = m$r_bar,
+      regime = regime, choice = sol$choice, options = sol$options, r_bar = m$r_bar,
       objective = sol$objective, objective0 = sol$objective0,
       # Predicted lag-one rho per coordinate under the plan, and the rest of
       # the iteration's with nothing bought (subjects under their particle
@@ -1596,7 +1636,7 @@
       rate = if (is.null(st$subjects)) numeric(ch$n_subjects) else
         vapply(st$subjects, function(x) x$rate, numeric(1)),
       particle_rate = q,
-      particle_fixed = !is.null(q_fixed),
+      particle_fixed = !is.null(q_fixed), choice_fixed = !is.null(choice),
       particle_p = apply(m$p_fac, 1L, function(x) if (all(is.finite(x))) max(x) else NA_real_),
       eps = if (is.null(st$subjects)) rep(NA_real_, ch$n_subjects) else
         vapply(st$subjects, function(x) x$eps, numeric(1)),
@@ -1612,12 +1652,27 @@
     ch
   }
   for (j in seq_len(nch)) emc[[j]] <- plan_chain(j)
+  # One HMC regime for every chain: the choice with the least objective
+  # summed over the chains, so chains carry the same work and the choice
+  # rests on every chain's measurements rather than on one chain's near-tie.
+  # A chain that chose otherwise is solved again at the shared choice.
+  opts <- lapply(emc, function(ch) ch$alloc$last$options)
+  choice <- NULL
+  if (all(lengths(opts) > 0L)) {
+    keys <- Reduce(intersect, lapply(opts, names))
+    if (length(keys)) {
+      tot <- Reduce(`+`, lapply(opts, function(o) o[keys]))
+      choice <- keys[which.min(tot)]
+      for (j in seq_len(nch))
+        if (!identical(emc[[j]]$alloc$last$choice, choice)) emc[[j]] <- plan_chain(j, choice)
+    }
+  }
   # One particle rate per subject for every chain, the largest any chain's
-  # allocation chose, so chains carry the same work; a chain whose own rates
-  # were lower is solved again at the shared ones.
+  # allocation chose; a chain whose own rates were lower is solved again at
+  # the shared ones.
   q <- do.call(pmax, lapply(emc, function(ch) ch$alloc$particle$rate))
   for (j in seq_len(nch))
-    if (any(emc[[j]]$alloc$particle$rate < q - 1e-9)) emc[[j]] <- plan_chain(j, q_fixed = q)
+    if (any(emc[[j]]$alloc$particle$rate < q - 1e-9)) emc[[j]] <- plan_chain(j, choice, q_fixed = q)
   for (j in seq_len(nch)) {
     emc[[j]]$alloc$particle$rate <- q
     emc[[j]]$alloc$last$particle_shared <- q
