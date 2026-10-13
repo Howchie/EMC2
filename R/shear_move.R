@@ -436,14 +436,17 @@
     }
   }
   if (!length(jobs)) return(emc)
-  widths <- .emc_with_preserved_rng(auto_mclapply(seq_along(jobs), function(m) {
+  contexts <- vector("list", length(emc))
+  for (j in unique(vapply(jobs, `[[`, integer(1), "chain")))
+    contexts[[j]] <- .emc_shear_context(emc[[j]])
+  widths <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_along(jobs), function(m) {
     jb <- jobs[[m]]
     ch <- emc[[jb$chain]]
-    ctx <- .emc_shear_context(ch)
+    ctx <- contexts[[jb$chain]]
     tryCatch(.emc_shear_orbit_width(ch, idx, jb$k,
                                     function(st) .emc_shear_fits_at(ctx, st$mu, st$V), jb$s0),
              error = function(e) NA_real_)
-  }, mc.cores = max(1L, min(length(jobs), n_cores)), mc.set.seed = FALSE))
+  }, n_cores = n_cores))
   for (m in seq_along(jobs)) {
     jb <- jobs[[m]]
     w <- widths[[m]]
