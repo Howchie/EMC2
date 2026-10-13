@@ -159,45 +159,22 @@
        cpu_rest = 0, fam = .emc_alloc_fam_empty(),
        cpu_hmc = numeric(n), hmc_att = integer(n), rows_hmc = numeric(n),
        P = replicate(n, matrix(0, p, p), simplify = FALSE), nP = integer(n),
-       cpu_part = numeric(n),
-       K = matrix(0, n, length(.EMC_COUNT_FRACTIONS)), nK = integer(n),
-       row_xx = matrix(0, 2L, 2L), row_xy = numeric(2L), row_n = 0L)
+       cpu_part = numeric(n))
 }
 
 # The particle step's own jumps and cost. A subject's cost is its marginal
 # one, its worker CPU `times`: the round runs every iteration for the
 # ensemble candidates too, so its latency and idle cores stay in the
 # rest-of-iteration cost. Without worker times, `cost` (the step's wall time
-# on the chain's cores) is shared equally. `pm` carries each step's evidence
-# for other particle counts (new_particle's count_ev): its expected squared
-# jump at fractions of its count, and its likelihood calls' rows and seconds,
-# whose regression on rows times the subject's data rows gives the cost of a
-# likelihood row.
-.emc_alloc_record_particle <- function(sampler, before, after, ran, cost, times,
-                                       pm = NULL) {
+# on the chain's cores) is shared equally.
+.emc_alloc_record_particle <- function(sampler, before, after, ran, cost, times) {
   w <- .emc_alloc_window(sampler)
   if (is.null(w$nP)) {
     e <- .emc_alloc_empty_window(sampler$n_subjects, sampler$n_pars)
     w$P <- e$P; w$nP <- e$nP; w$cpu_part <- e$cpu_part
   }
-  if (is.null(w$nK)) {
-    e <- .emc_alloc_empty_window(sampler$n_subjects, sampler$n_pars)
-    w$K <- e$K; w$nK <- e$nK; w$row_xx <- e$row_xx; w$row_xy <- e$row_xy; w$row_n <- e$row_n
-  }
   idx <- which(ran)
   if (!length(idx)) return(sampler)
-  if (length(pm) == sampler$n_subjects) for (s in idx) {
-    ev <- pm[[s]][[1L]]$count_ev
-    if (is.null(ev) || length(ev$curve) != ncol(w$K) || !all(is.finite(ev$curve))) next
-    w$K[s, ] <- w$K[s, ] + ev$curve
-    w$nK[s] <- w$nK[s] + 1L
-    ok <- is.finite(ev$rows) & is.finite(ev$secs) & ev$secs > 0
-    if (!any(ok)) next
-    x <- ev$rows[ok] * .emc_alloc_data_rows(sampler$data[[s]])
-    w$row_xx <- w$row_xx + matrix(c(sum(ok), sum(x), sum(x), sum(x^2)), 2L)
-    w$row_xy <- w$row_xy + c(sum(ev$secs[ok]), sum(x * ev$secs[ok]))
-    w$row_n <- w$row_n + sum(ok)
-  }
   t_ran <- pmax(0, times[idx])
   share <- if (sum(t_ran) > 0) t_ran / sum(t_ran) else rep(1 / length(idx), length(idx))
   for (k in seq_along(idx)) {
@@ -563,8 +540,6 @@
       need[moved_idx] <- best_nm
       best$x <- vapply(need, function(z) z$x[best_k], numeric(1))
       best$q <- vapply(need, function(z) z$q[best_k], numeric(1))
-      best$m <- vapply(need, function(z) if (is.null(z$m)) NA_real_ else z$m[best_k],
-                       numeric(1))
     }
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
@@ -601,8 +576,7 @@
         q <- if (is.null(u$p) || length(sol$q) < i) 1 else sol$q[i]
         r <- if (is.null(u$h)) 0 else
           min(1, x + (if (is.null(u$r_min)) 0 else u$r_min))
-        p <- .emc_alloc_count_p(u, if (length(sol$m) >= i) sol$m[i] else NA_real_)
-        rho * .emc_alloc_dev_factor(q, r, if (is.null(p)) 1 else p,
+        rho * .emc_alloc_dev_factor(q, r, if (is.null(u$p)) 1 else u$p,
                                     if (is.null(u$h)) 1 else u$h)
       },
       rho)
@@ -724,19 +698,6 @@
 # A subject's rho under its particle step alone (before any HMC).
 .emc_alloc_subject_base <- function(u) if (is.null(u$p)) u$rho else u$rho * u$p
 
-# The rho no plan may leave a subject's coordinates above: its particle step
-# alone at its given count.
-.emc_alloc_subject_floor <- function(u)
-  if (is.null(u$p_level)) .emc_alloc_subject_base(u) else u$rho * u$p_level
-
-# A subject's particle factors at count multiplier m (its measured ones
-# without candidates or at an unknown m).
-.emc_alloc_count_p <- function(u, m, field = "p") {
-  k <- if (is.null(u$cands) || !is.finite(m)) NA_integer_ else
-    which(abs(u$cands$m - m) < 1e-9)[1L]
-  if (is.na(k)) u[[field]] else u$cands[[field]][[k]]
-}
-
 # A unit's rho with nothing allocated: subjects run their particle step and
 # any HMC rate a regime holds them to.
 .emc_alloc_level <- function(u) {
@@ -779,7 +740,7 @@
   # The floor is the subject's particle step alone: a regime's HMC rate is
   # bought for the group, and with it a subject may stand its particle step
   # down where the HMC moves it at least as well.
-  level <- .emc_alloc_subject_floor(u)
+  level <- .emc_alloc_subject_base(u)
   qs <- if (is.null(u$p) || is.null(u$h)) 1 else if (!is.null(u$q_fixed)) u$q_fixed else
     .EMC_ALLOC_PARTICLE_RATES
   r_min <- if (is.null(u$h) || is.null(u$r_min)) 0 else u$r_min
@@ -848,39 +809,20 @@
   k <- lengths(rho)
   has_p <- vapply(us[idx], function(u) !is.null(u$p), logical(1))
   has_h <- vapply(us[idx], function(u) !is.null(u$h), logical(1))
-  # Each candidate particle count is priced as its own step (a subject
-  # without candidates repeats its measured one), and every subject takes
-  # its cheapest count at each target; ties keep the measured count.
-  n_c <- vapply(us[idx], function(u) if (is.null(u$cands)) 1L else length(u$cands$m),
-                integer(1))
-  pick_c <- function(u, field, c) {
-    if (is.null(u$cands)) return(u[[field]])
-    u$cands[[field]][[min(c, length(u$cands$m))]]
-  }
-  best <- NULL
-  for (c in seq_len(max(n_c))) {
-    got <- emc_alloc_subjects_need_cpp(
-      unlist(rho),
-      unlist(lapply(seq_along(idx), function(j) num(pick_c(us[[idx[j]]], "p", c), rep(1, k[j])))),
-      unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$h, rep(1, k[j])))),
-      unlist(lapply(us[idx], function(u) as.numeric(.emc_alloc_subject_floor(u)))),
-      c(0L, cumsum(k)), has_p, has_h,
-      vapply(us[idx], function(u) num(u$q_fixed, NA_real_), numeric(1)),
-      vapply(us[idx], function(u) num(u$r_fixed, NA_real_), numeric(1)),
-      vapply(us[idx], function(u) num(u$r_min, 0), numeric(1)),
-      vapply(us[idx], function(u) num(pick_c(u, "c", c), num(u$c_p, 0)), numeric(1)),
-      vapply(us[idx], function(u) num(u$c_h, 0), numeric(1)),
-      .EMC_ALLOC_PARTICLE_RATES, as.numeric(rs))
-    m_c <- vapply(us[idx], function(u)
-      if (is.null(u$cands)) NA_real_ else u$cands$m[min(c, length(u$cands$m))], numeric(1))
-    got$m <- matrix(m_c, length(idx), length(rs))
-    if (is.null(best)) { best <- got; next }
-    better <- got$cost < best$cost
-    for (f in c("x", "q", "cost", "m")) best[[f]][better] <- got[[f]][better]
-  }
+  got <- emc_alloc_subjects_need_cpp(
+    unlist(rho),
+    unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$p, rep(1, k[j])))),
+    unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$h, rep(1, k[j])))),
+    unlist(lapply(us[idx], function(u) as.numeric(.emc_alloc_subject_base(u)))),
+    c(0L, cumsum(k)), has_p, has_h,
+    vapply(us[idx], function(u) num(u$q_fixed, NA_real_), numeric(1)),
+    vapply(us[idx], function(u) num(u$r_fixed, NA_real_), numeric(1)),
+    vapply(us[idx], function(u) num(u$r_min, 0), numeric(1)),
+    vapply(us[idx], function(u) num(u$c_p, 0), numeric(1)),
+    vapply(us[idx], function(u) num(u$c_h, 0), numeric(1)),
+    .EMC_ALLOC_PARTICLE_RATES, as.numeric(rs))
   for (j in seq_along(idx))
-    out[[idx[j]]] <- list(x = best$x[j, ], q = best$q[j, ], cost = best$cost[j, ],
-                          m = best$m[j, ])
+    out[[idx[j]]] <- list(x = got$x[j, ], q = got$q[j, ], cost = got$cost[j, ])
   out
 }
 
@@ -1120,7 +1062,6 @@
       c_part[s] <- prev$cost[s]
     }
   }
-  counts <- .emc_alloc_count_measure(ch, w, stored, nP, prev)
   q_old <- if (is.null(prev$rate)) rep(1, n) else prev$rate
   r_old <- ch$alloc$last$rate
   if (length(r_old) != n || !all(is.finite(r_old))) r_old <- numeric(n)
@@ -1169,101 +1110,12 @@
        c_hmc = if (!stored) ifelse(w$hmc_att > 0, w$cpu_hmc / pmax(1L, w$hmc_att), NA_real_)
                else rep(NA_real_, n),
        data_rows = data_rows, hmc_row_cpu = hmc_row_cpu,
-       counts = counts,
        hmc_fixed = marg$hmc$fixed,
        fixed = list(shear = marg$shear$fixed, collapsed = marg$collapsed$fixed,
                     hmc = marg$hmc$fixed))
 }
 
 # HMC factors h for subject s from its evidence; NULL without enough.
-# Particle counts. Each subject's count is a multiplier m of the count it was
-# given (`base`, per parameter block), chosen at every rebuild with its
-# particle and HMC rates. A step measured at multiplier m0 moves coordinate i
-# by 1 - p_i of its lag-one rho; at m it moves kappa(m / m0) as much, where
-# kappa is the ratio of the step's expected squared jump at the two counts,
-# measured from its clouds at fractions of their size (new_particle) and
-# extended above the measured count at the slope of its upper half. The step
-# costs its measured cost plus the likelihood rows it adds, at the chain's
-# cost per row of data. Counts stay within [min(25, base), 2 base] per
-# block.
-.EMC_COUNT_STEPS <- c(1, sqrt(0.5), 0.5, sqrt(2))
-.EMC_COUNT_MAX <- 2
-
-.emc_alloc_count_rows <- function(base, m) {
-  sum(pmin(.EMC_COUNT_MAX * base, pmax(pmin(25, base), round(base * m))))
-}
-
-# kappa(f) from a measured curve (expected squared jumps at
-# .EMC_COUNT_FRACTIONS of the count, relative to the full count): log-linear
-# between the measured fractions, extended beyond them at the end slopes,
-# which are held in [0, 1] (a jump cannot grow faster than the count).
-.emc_alloc_kappa <- function(curve, f) {
-  lf <- log(.EMC_COUNT_FRACTIONS)
-  lk <- log(pmax(curve / curve[length(curve)], .Machine$double.xmin))
-  n <- length(lf)
-  slope <- function(a, b) min(1, max(0, (lk[b] - lk[a]) / (lf[b] - lf[a])))
-  x <- log(f)
-  out <- if (x >= lf[n]) lk[n] + slope(n - 1L, n) * (x - lf[n]) else
-    if (x <= lf[1L]) lk[1L] + slope(1L, 2L) * (x - lf[1L]) else
-      stats::approx(lf, lk, x)$y
-  exp(out)
-}
-
-.emc_alloc_count_measure <- function(ch, w, stored, nP, prev) {
-  n <- ch$n_subjects
-  pm <- attr(ch$samples, "pm_settings")
-  if (length(pm) != n) return(NULL)
-  state <- ch$alloc$count
-  base <- if (is.list(state$base) && length(state$base) == n) state$base else
-    lapply(pm, function(x) vapply(x, function(b) as.numeric(b$n_particles), numeric(1)))
-  m_now <- if (length(state$m) == n) state$m else rep(1, n)
-  for (s in seq_len(n)) {
-    cur <- vapply(pm[[s]], function(b) as.numeric(b$n_particles), numeric(1))
-    if (length(base[[s]]) != length(cur)) base[[s]] <- cur / m_now[s]
-  }
-  # The fresh window measured the counts in force; carried measurements keep
-  # the multiplier they were taken at.
-  fresh <- !stored & !is.null(w$nK) & nP >= .EMC_ALLOC_MIN_PAIRS
-  m_meas <- if (length(prev$m) == n) prev$m else m_now
-  curve <- if (is.matrix(prev$curve) && nrow(prev$curve) == n) prev$curve else
-    matrix(NA_real_, n, length(.EMC_COUNT_FRACTIONS))
-  for (s in which(fresh)) {
-    m_meas[s] <- m_now[s]
-    curve[s, ] <- if (w$nK[s] >= .EMC_ALLOC_MIN_PAIRS && w$K[s, ncol(w$K)] > 0)
-      w$K[s, ] / w$nK[s] else NA_real_
-  }
-  row_cpu <- if (!stored && !is.null(w$row_n) && w$row_n >= 2L * .EMC_ALLOC_MIN_PAIRS)
-    tryCatch(solve(w$row_xx, w$row_xy)[2L], error = function(e) NA_real_) else NA_real_
-  if (!isTRUE(row_cpu > 0)) row_cpu <- if (isTRUE(prev$row_cpu > 0)) prev$row_cpu else NA_real_
-  list(base = base, m_now = m_now, m_meas = m_meas, curve = curve, row_cpu = row_cpu)
-}
-
-# A priced subject unit's candidate counts: multipliers, the step's factors
-# on the subject's and the deviations' coordinates, and its cost, the
-# measured count first so that ties keep it. p_level is the step's factor at
-# the given count, the floor no plan may leave the subject slower than; the
-# given count is always a candidate, so the floor stays attainable however far
-# earlier plans moved the count from it.
-.emc_alloc_count_candidates <- function(u, counts, s, data_rows) {
-  curve <- counts$curve[s, ]
-  m0 <- counts$m_meas[s]
-  if (is.null(u$p) || !all(is.finite(curve)) || !is.finite(m0)) return(u)
-  base <- counts$base[[s]]
-  lo <- max(pmin(25, base) / base)
-  m <- unique(pmin(.EMC_COUNT_MAX, pmax(lo, c(m0 * .EMC_COUNT_STEPS, 1))))
-  rows0 <- .emc_alloc_count_rows(base, m0)
-  scale <- function(fac, k) if (is.null(fac)) NULL else pmin(1, pmax(0, 1 - k * (1 - fac)))
-  kap <- vapply(m, function(x) .emc_alloc_kappa(curve, x / m0), numeric(1))
-  dr <- vapply(m, function(x) .emc_alloc_count_rows(base, x) - rows0, numeric(1))
-  cost <- if (is.finite(counts$row_cpu)) u$c_p + counts$row_cpu * data_rows * dr else
-    u$c_p * (rows0 + dr) / rows0
-  u$cands <- list(m = m, p = lapply(kap, function(k) scale(u$p, k)),
-                  p_dev = lapply(kap, function(k) scale(u$p_dev, k)),
-                  c = pmax(cost, 0.05 * u$c_p))
-  u$p_level <- scale(u$p, .emc_alloc_kappa(curve, 1 / m0))
-  u
-}
-
 .emc_alloc_hmc_factor <- function(ev, W, var, min_n) {
   if (is.null(ev) || ev$n < min_n) return(NULL)
   esjd <- rowSums((W %*% ev$M) * W) / ev$n
@@ -1334,8 +1186,6 @@
       u$rho <- ms$t_rho[s, ]
       u$p <- ms$p_fac[s, ]
       u$c_p <- ms$c_part[s]
-      if (!is.null(ms$counts))
-        u <- .emc_alloc_count_candidates(u, ms$counts, s, ms$data_rows[s])
     }
     units[[length(units) + 1L]] <- u
   }
@@ -1618,26 +1468,6 @@
   without
 }
 
-# Sets every subject's particle counts from its multiplier; the allocation
-# then owns them, so the weight-ESS count rule (update_pm_settings) stands
-# down.
-.emc_alloc_apply_counts <- function(ch) {
-  cnt <- ch$alloc$count
-  pm <- attr(ch$samples, "pm_settings")
-  if (is.null(cnt) || length(pm) != length(cnt$m)) return(ch)
-  for (s in seq_along(pm)) {
-    base <- cnt$base[[s]]
-    if (length(base) != length(pm[[s]])) next
-    for (i in seq_along(pm[[s]])) {
-      pm[[s]][[i]]$n_particles <-
-        min(.EMC_COUNT_MAX * base[i], max(min(25, base[i]), round(base[i] * cnt$m[s])))
-      pm[[s]][[i]]$count_managed <- TRUE
-    }
-  }
-  attr(ch$samples, "pm_settings") <- pm
-  ch
-}
-
 # Rebuild every chain's shear rounds and HMC rates (in add_proposals(), after
 # the likelihood fits are checked and the shear plans built). B is the number
 # of transitions until the next rebuild.
@@ -1733,14 +1563,6 @@
         st$subjects[[s]] <- sj
       }
     }
-    # Each priced subject's particle count multiplier as solved; a subject
-    # the plan leaves alone keeps its count.
-    cnt <- m$counts
-    m_new <- cnt$m_now
-    if (length(sol$m) >= n_g + ch$n_subjects) {
-      chosen <- sol$m[n_g + seq_len(ch$n_subjects)]
-      m_new[is.finite(chosen)] <- chosen[is.finite(chosen)]
-    }
     rec <- list(
       stage = stage, B = B, iteration = ch$samples$idx,
       transitions = if (is.null(ch$sample_transitions)) NA_integer_ else
@@ -1774,8 +1596,6 @@
       rate = if (is.null(st$subjects)) numeric(ch$n_subjects) else
         vapply(st$subjects, function(x) x$rate, numeric(1)),
       particle_rate = q,
-      particle_count = m_new,
-      particle_row_cpu = cnt$row_cpu,
       particle_fixed = !is.null(q_fixed),
       particle_p = apply(m$p_fac, 1L, function(x) if (all(is.finite(x))) max(x) else NA_real_),
       eps = if (is.null(st$subjects)) rep(NA_real_, ch$n_subjects) else
@@ -1784,9 +1604,7 @@
         sum(vapply(st$subjects, function(x) x$calib_cpu, numeric(1))))
     ch$alloc <- list(window = .emc_alloc_empty_window(ch$n_subjects, ch$n_pars),
                      stage = stage, pool = m$pool, last = rec, history = c(ch$alloc$history, list(rec)),
-                     particle = list(rate = q, fac = m$p_fac, fac_dev = m$p_dev, cost = m$c_part,
-                                     m = cnt$m_meas, curve = cnt$curve, row_cpu = cnt$row_cpu),
-                     count = list(base = cnt$base, m = m_new))
+                     particle = list(rate = q, fac = m$p_fac, fac_dev = m$p_dev, cost = m$c_part))
     if (!is.null(st)) {
       st$alloc <- rec
       ch$subject_hmc <- st
@@ -1800,19 +1618,12 @@
   q <- do.call(pmax, lapply(emc, function(ch) ch$alloc$particle$rate))
   for (j in seq_len(nch))
     if (any(emc[[j]]$alloc$particle$rate < q - 1e-9)) emc[[j]] <- plan_chain(j, q_fixed = q)
-  # Particle counts likewise: the largest any chain chose, applied to every
-  # parameter block's count for the next block of iterations.
-  m_count <- do.call(pmax, lapply(emc, function(ch) ch$alloc$count$m))
   for (j in seq_len(nch)) {
     emc[[j]]$alloc$particle$rate <- q
     emc[[j]]$alloc$last$particle_shared <- q
-    emc[[j]]$alloc$count$m <- m_count
-    emc[[j]]$alloc$last$particle_count_shared <- m_count
     h <- emc[[j]]$alloc$history
     h[[length(h)]]$particle_shared <- q
-    h[[length(h)]]$particle_count_shared <- m_count
     emc[[j]]$alloc$history <- h
-    emc[[j]] <- .emc_alloc_apply_counts(emc[[j]])
   }
   # Collapsed rounds are allocated from each chain's own measured movement
   # and cost. Keep those rates local: chains have independent transition
