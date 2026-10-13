@@ -63,8 +63,12 @@ emc_gibbs_diag_gamma_cpp <- function(alpha, tvinv0, prior) {
     .Call(`_EMC2_emc_gibbs_diag_gamma_cpp`, alpha, tvinv0, prior)
 }
 
-emc_ensemble_draw_pools_cpp <- function(mu, var, M1, tail_weight, tail_df, tail_excess, par_names) {
-    .Call(`_EMC2_emc_ensemble_draw_pools_cpp`, mu, var, M1, tail_weight, tail_df, tail_excess, par_names)
+emc_ensemble_factors_cpp <- function(var) {
+    .Call(`_EMC2_emc_ensemble_factors_cpp`, var)
+}
+
+emc_ensemble_draw_pools_cpp <- function(mu, L, logdet, M1, tail_weight, tail_df, tail_excess, par_names) {
+    .Call(`_EMC2_emc_ensemble_draw_pools_cpp`, mu, L, logdet, M1, tail_weight, tail_df, tail_excess, par_names)
 }
 
 emc_ensemble_stack_cpp <- function(rows, lq, ll_new, proposals, k0, L, mu, logdet, c, tail_weight, tail_df) {

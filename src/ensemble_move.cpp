@@ -22,17 +22,25 @@ inline Rcpp::NumericVector as_vector(const arma::vec& x) {
 
 // Pool proposal density from a squared Mahalanobis distance: the mixture of
 // N(mu, V) and a Student-t with scale matrix c V, both sharing V's factor.
-inline double log_q_m2(double m2, int p, double logdet, double c,
-                       double tail_weight, double tail_df) {
-  const double nu = tail_df;
-  const double a = std::log1p(-tail_weight) - 0.5 * (p * LOG_2PI + logdet + m2);
-  const double b = std::log(tail_weight) + R::lgammafn((nu + p) / 2.0) -
-    R::lgammafn(nu / 2.0) -
-    0.5 * (p * std::log(nu * M_PI) + logdet + p * std::log(c)) -
-    (nu + p) / 2.0 * std::log1p(m2 / (c * nu));
-  const double m = std::max(a, b);
-  return m + std::log(std::exp(a - m) + std::exp(b - m));
-}
+// The terms that depend only on the dimension and the mixture are fixed per
+// call.
+struct LogQ {
+  double a0, b0, c_nu, half_nu_p;
+  LogQ(int p, double c, double tail_weight, double tail_df) {
+    const double nu = tail_df;
+    a0 = std::log1p(-tail_weight) - 0.5 * p * LOG_2PI;
+    b0 = std::log(tail_weight) + R::lgammafn((nu + p) / 2.0) - R::lgammafn(nu / 2.0) -
+      0.5 * (p * std::log(nu * M_PI) + p * std::log(c));
+    c_nu = c * nu;
+    half_nu_p = (nu + p) / 2.0;
+  }
+  double operator()(double m2, double logdet) const {
+    const double a = a0 - 0.5 * (logdet + m2);
+    const double b = b0 - 0.5 * logdet - half_nu_p * std::log1p(m2 / c_nu);
+    const double m = std::max(a, b);
+    return m + std::log(std::exp(a - m) + std::exp(b - m));
+  }
+};
 
 // Covariance blocks of the standard hierarchy: the parameters sharing a group
 // label, in the order the labels first appear, each block's parameters in
@@ -68,9 +76,15 @@ BlockPlan block_plan(const Rcpp::LogicalVector& is_blocked,
 }
 
 // One inverse-Wishart draw with scale S and df degrees of freedom: a Wishart
-// draw with scale S^-1 through its Bartlett factor (diagonal chi-squares,
-// then the upper triangle's normals column by column), inverted.
-arma::mat riwish(double df, arma::mat S, const char* context) {
+// draw W with scale S^-1 through its Bartlett factor (diagonal chi-squares,
+// then the upper triangle's normals column by column), inverted. W = U'U with
+// U = Z C upper triangular (both factors are), so U is the draw's precision
+// factor and W its precision.
+struct IWishDraw {
+  arma::mat Sigma, W, U;
+};
+
+IWishDraw riwish(double df, arma::mat S, const char* context) {
   const arma::uword d = S.n_rows;
   S = 0.5 * (S + S.t());
   if (!S.is_finite())
@@ -85,21 +99,22 @@ arma::mat riwish(double df, arma::mat S, const char* context) {
   for (arma::uword i = 0; i < d; ++i) Z(i, i) = std::sqrt(R::rchisq(df - static_cast<double>(i)));
   for (arma::uword j = 1; j < d; ++j)
     for (arma::uword i = 0; i < j; ++i) Z(i, j) = R::norm_rand();
-  const arma::mat ZC = Z * CC;
-  const arma::mat W = ZC.t() * ZC;
-  arma::mat Sigma;
-  if (!arma::inv_sympd(Sigma, W))
+  IWishDraw out;
+  out.U = arma::trimatu(Z * CC);
+  out.W = out.U.t() * out.U;
+  if (!arma::inv_sympd(out.Sigma, out.W))
     Rcpp::stop("%s: inverse-Wishart draw is singular", context);
-  return Sigma;
+  return out;
 }
 
 // Conjugate group update of the standard hierarchy without group designs:
 // the joint normal draw of the means, an inverse-Wishart per covariance
-// block, a gamma per unblocked variance, then the half-t scales.
+// block, a gamma per unblocked variance, then the half-t scales. When `U` is
+// given it receives each block's precision factor, in plan order.
 void gibbs_standard(const arma::mat& alpha, const arma::mat& P0, const arma::vec& m0,
                     double v, const arma::vec& A_inv2, const BlockPlan& plan,
                     arma::vec& tmu, arma::mat& tvar, arma::mat& tvinv,
-                    arma::vec& a_half) {
+                    arma::vec& a_half, std::vector<arma::mat>* U = nullptr) {
   const arma::uword p = alpha.n_rows, n = alpha.n_cols;
   const arma::mat prec_post = P0 + static_cast<double>(n) * tvinv;
   const arma::vec b_post = P0 * m0 + tvinv * arma::sum(alpha, 1);
@@ -119,12 +134,10 @@ void gibbs_standard(const arma::mat& alpha, const arma::mat& P0, const arma::vec
     arma::mat S = rb * rb.t();
     for (arma::uword k = 0; k < d; ++k) S(k, k) += 2.0 * v / a_half(idx(k));
     const double df = v + static_cast<double>(d) - 1.0 + static_cast<double>(n);
-    const arma::mat Sigma = riwish(df, S, "standard Gibbs covariance block");
-    arma::mat Sigma_inv;
-    if (!arma::inv_sympd(Sigma_inv, Sigma))
-      Rcpp::stop("standard Gibbs covariance block: draw could not be inverted (chol)");
-    tvar_new(idx, idx) = Sigma;
-    tvinv_new(idx, idx) = Sigma_inv;
+    IWishDraw draw = riwish(df, S, "standard Gibbs covariance block");
+    tvar_new(idx, idx) = draw.Sigma;
+    tvinv_new(idx, idx) = draw.W;
+    if (U) U->push_back(std::move(draw.U));
   }
   const double shape_u = v / 2.0 + static_cast<double>(n) / 2.0;
   for (arma::uword i : plan.unblocked) {
@@ -139,8 +152,8 @@ void gibbs_standard(const arma::mat& alpha, const arma::mat& P0, const arma::vec
     const double rate = v * tvinv_new(i, i) + A_inv2(i);
     a_half(i) = 1.0 / R::rgamma(shape, 1.0 / rate);
   }
-  tvar = tvar_new;
-  tvinv = tvinv_new;
+  tvar = std::move(tvar_new);
+  tvinv = std::move(tvinv_new);
 }
 
 // Conjugate group update of the diagonal-gamma hierarchy: independent normal
@@ -253,51 +266,68 @@ Rcpp::List emc_gibbs_diag_gamma_cpp(const arma::mat& alpha, const arma::vec& tvi
                             Rcpp::Named("tvinv") = as_vector(tvinv));
 }
 
-// Fresh pool members for every subject from its frozen proposal
-// (1 - w) N(mu, V) + w t_df(mu, c V): per subject the normals of the M1
-// draws, then their component uniforms, then a chi-square per tail draw.
-// Returns the draws (rows per subject), their log proposal densities, and
-// the factors the current state's density needs later.
+// Factors of the frozen pool proposals: per subject the lower Cholesky
+// factor of V and log det V. The proposals change only between blocks, so a
+// block computes these once.
 // [[Rcpp::export]]
-Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const Rcpp::List& var,
-                                       int M1, double tail_weight, double tail_df,
-                                       double tail_excess,
-                                       const Rcpp::CharacterVector& par_names) {
-  const int n = mu.size();
+Rcpp::List emc_ensemble_factors_cpp(const Rcpp::List& var) {
+  const int n = var.size();
   if (n < 1) Rcpp::stop("ensemble pools need at least one subject");
-  const int p = Rcpp::as<arma::vec>(mu[0]).n_elem;
-  const double c = 1.0 + tail_excess / std::sqrt(static_cast<double>(p));
-  Rcpp::List rows(n), lq(n);
+  const int p = Rcpp::as<arma::mat>(var[0]).n_rows;
   arma::cube L(p, p, n);
-  arma::mat mus(p, n);
   arma::vec logdet(n);
-  arma::mat z(p, M1), X(M1, p);
-  arma::vec scale(M1), lqs(M1);
   for (int s = 0; s < n; ++s) {
-    const arma::vec m = Rcpp::as<arma::vec>(mu[s]);
     const arma::mat V = Rcpp::as<arma::mat>(var[s]);
-    if (static_cast<int>(m.n_elem) != p || static_cast<int>(V.n_rows) != p ||
-        static_cast<int>(V.n_cols) != p)
+    if (static_cast<int>(V.n_rows) != p || static_cast<int>(V.n_cols) != p)
       Rcpp::stop("ensemble proposal for subject %d has the wrong dimension", s + 1);
     arma::mat Ls;
     if (!arma::chol(Ls, V, "lower"))
       Rcpp::stop("ensemble proposal covariance for subject %d is not positive definite (chol)", s + 1);
     L.slice(s) = Ls;
-    mus.col(s) = m;
     logdet(s) = 2.0 * arma::sum(arma::log(Ls.diag()));
+  }
+  return Rcpp::List::create(Rcpp::Named("L") = L, Rcpp::Named("logdet") = as_vector(logdet));
+}
+
+// Fresh pool members for every subject from its frozen proposal
+// (1 - w) N(mu, V) + w t_df(mu, c V), V = L L': per subject the normals of
+// the M1 draws, then their component uniforms, then a chi-square per tail
+// draw. Returns the draws (rows per subject), their log proposal densities,
+// and the factors the current state's density needs later.
+// [[Rcpp::export]]
+Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const arma::cube& L,
+                                       const arma::vec& logdet, int M1, double tail_weight,
+                                       double tail_df, double tail_excess,
+                                       const Rcpp::CharacterVector& par_names) {
+  const int n = mu.size();
+  if (n < 1) Rcpp::stop("ensemble pools need at least one subject");
+  const int p = L.n_rows;
+  if (static_cast<int>(L.n_slices) != n || static_cast<int>(logdet.n_elem) != n)
+    Rcpp::stop("ensemble pools: proposal factors do not match the subjects");
+  const double c = 1.0 + tail_excess / std::sqrt(static_cast<double>(p));
+  const LogQ log_q(p, c, tail_weight, tail_df);
+  Rcpp::List rows(n), lq(n);
+  arma::mat mus(p, n);
+  arma::mat z(p, M1), X(M1, p);
+  arma::vec scale(M1), lqs(M1);
+  for (int s = 0; s < n; ++s) {
+    const arma::vec m = Rcpp::as<arma::vec>(mu[s]);
+    if (static_cast<int>(m.n_elem) != p)
+      Rcpp::stop("ensemble proposal for subject %d has the wrong dimension", s + 1);
+    mus.col(s) = m;
     for (int j = 0; j < M1; ++j)
       for (int i = 0; i < p; ++i) z(i, j) = R::norm_rand();
     for (int j = 0; j < M1; ++j) scale(j) = R::runif(0.0, 1.0) < tail_weight ? -1.0 : 1.0;
     for (int j = 0; j < M1; ++j)
       if (scale(j) < 0) scale(j) = std::sqrt(c * tail_df / R::rchisq(tail_df));
-    const arma::mat Lz = Ls * z;
+    const arma::mat Lz = L.slice(s) * z;
     for (int j = 0; j < M1; ++j) {
       double m2 = 0.0;
       for (int i = 0; i < p; ++i) {
         X(j, i) = m(i) + Lz(i, j) * scale(j);
         m2 += z(i, j) * z(i, j);
       }
-      lqs(j) = log_q_m2(scale(j) * scale(j) * m2, p, logdet(s), c, tail_weight, tail_df);
+      lqs(j) = log_q(scale(j) * scale(j) * m2, logdet(s));
     }
     Rcpp::NumericMatrix Xr = Rcpp::wrap(X);
     Rcpp::colnames(Xr) = par_names;
@@ -305,8 +335,7 @@ Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const Rcpp::List& v
     lq[s] = as_vector(lqs);
   }
   return Rcpp::List::create(Rcpp::Named("rows") = rows, Rcpp::Named("lq") = lq,
-                            Rcpp::Named("L") = L, Rcpp::Named("mu") = mus,
-                            Rcpp::Named("logdet") = as_vector(logdet), Rcpp::Named("c") = c);
+                            Rcpp::Named("mu") = mus, Rcpp::Named("c") = c);
 }
 
 // The stacked pools: subject s occupies rows (s - 1) M + 1 .. s M, its current
@@ -325,6 +354,7 @@ Rcpp::List emc_ensemble_stack_cpp(const Rcpp::List& rows, const Rcpp::List& lq,
   if (static_cast<int>(proposals.n_rows) != p + 1 || static_cast<int>(proposals.n_cols) != n ||
       static_cast<int>(ll_new.n_cols) != n || k0.size() != n)
     Rcpp::stop("ensemble stack: inconsistent dimensions");
+  const LogQ log_q(p, c, tail_weight, tail_df);
   arma::mat stack(n * M, p);
   arma::vec ll(n * M), base_w(n * M);
   for (int s = 0; s < n; ++s) {
@@ -338,7 +368,7 @@ Rcpp::List emc_ensemble_stack_cpp(const Rcpp::List& rows, const Rcpp::List& lq,
     const int off = s * M;
     const arma::vec x = proposals.col(s).head(p);
     const arma::vec zc = arma::solve(arma::trimatl(L.slice(s)), x - mu.col(s));
-    const double lq_cur = log_q_m2(arma::dot(zc, zc), p, logdet(s), c, tail_weight, tail_df);
+    const double lq_cur = log_q(arma::dot(zc, zc), logdet(s));
     stack.row(off + kc) = x.t();
     ll(off + kc) = proposals(p, s);
     base_w(off + kc) = ll(off + kc) - lq_cur;
@@ -408,17 +438,33 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
   arma::mat alpha(p, n);
   arma::vec lw(nM), wess(n, arma::fill::zeros);
   const arma::mat stack_t = pool_stack.t();
+  arma::mat D(p, nM);
+  arma::vec m2(nM);
+  std::vector<arma::mat> U;
   for (int r = 1; r <= rounds; ++r) {
     for (int s = 0; s < n; ++s) alpha.col(s) = stack_t.col(s * M + selected[s]);
     if (type == 0) {
-      gibbs_standard(alpha, P0, m0, v, A_inv2, plan, tmu, tvar, tvinv, a_half);
-      arma::mat Lg;
-      if (!arma::chol(Lg, tvar, "lower"))
-        Rcpp::stop("ensemble rounds: group covariance is not positive definite (chol)");
-      const arma::mat Z = arma::solve(arma::trimatl(Lg), stack_t.each_col() - tmu);
-      const double norm = p * LOG_2PI + 2.0 * arma::sum(arma::log(Lg.diag()));
-      for (arma::uword i = 0; i < nM; ++i)
-        lw(i) = base_w(i) - 0.5 * (norm + arma::dot(Z.col(i), Z.col(i)));
+      U.clear();
+      gibbs_standard(alpha, P0, m0, v, A_inv2, plan, tmu, tvar, tvinv, a_half, &U);
+      // The group density through the block precision factors: block b adds
+      // |U_b (x_b - mu_b)|^2 and -2 sum log diag U_b, an unblocked parameter
+      // its precision times the squared deviation and -log precision.
+      D = stack_t;
+      D.each_col() -= tmu;
+      m2.zeros();
+      double logdet_var = 0.0;
+      for (std::size_t b = 0; b < plan.blocks.size(); ++b) {
+        const arma::uvec idx(plan.blocks[b]);
+        const arma::mat Zb = U[b] * D.rows(idx);
+        m2 += arma::sum(arma::square(Zb), 0).t();
+        logdet_var -= 2.0 * arma::sum(arma::log(arma::abs(U[b].diag())));
+      }
+      for (arma::uword i : plan.unblocked) {
+        m2 += tvinv(i, i) * arma::square(D.row(i)).t();
+        logdet_var -= std::log(tvinv(i, i));
+      }
+      const double norm = p * LOG_2PI + logdet_var;
+      for (arma::uword i = 0; i < nM; ++i) lw(i) = base_w(i) - 0.5 * (norm + m2(i));
     } else {
       gibbs_diag_gamma(alpha, P0, m0, shape0, rate0, tmu, tvinv_d);
       const arma::vec dvar = 1.0 / tvinv_d;

@@ -208,20 +208,32 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_ensemble_factors_cpp
+Rcpp::List emc_ensemble_factors_cpp(const Rcpp::List& var);
+RcppExport SEXP _EMC2_emc_ensemble_factors_cpp(SEXP varSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type var(varSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_factors_cpp(var));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_ensemble_draw_pools_cpp
-Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const Rcpp::List& var, int M1, double tail_weight, double tail_df, double tail_excess, const Rcpp::CharacterVector& par_names);
-RcppExport SEXP _EMC2_emc_ensemble_draw_pools_cpp(SEXP muSEXP, SEXP varSEXP, SEXP M1SEXP, SEXP tail_weightSEXP, SEXP tail_dfSEXP, SEXP tail_excessSEXP, SEXP par_namesSEXP) {
+Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const arma::cube& L, const arma::vec& logdet, int M1, double tail_weight, double tail_df, double tail_excess, const Rcpp::CharacterVector& par_names);
+RcppExport SEXP _EMC2_emc_ensemble_draw_pools_cpp(SEXP muSEXP, SEXP LSEXP, SEXP logdetSEXP, SEXP M1SEXP, SEXP tail_weightSEXP, SEXP tail_dfSEXP, SEXP tail_excessSEXP, SEXP par_namesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Rcpp::List& >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type var(varSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type L(LSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type logdet(logdetSEXP);
     Rcpp::traits::input_parameter< int >::type M1(M1SEXP);
     Rcpp::traits::input_parameter< double >::type tail_weight(tail_weightSEXP);
     Rcpp::traits::input_parameter< double >::type tail_df(tail_dfSEXP);
     Rcpp::traits::input_parameter< double >::type tail_excess(tail_excessSEXP);
     Rcpp::traits::input_parameter< const Rcpp::CharacterVector& >::type par_names(par_namesSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_ensemble_draw_pools_cpp(mu, var, M1, tail_weight, tail_df, tail_excess, par_names));
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_draw_pools_cpp(mu, L, logdet, M1, tail_weight, tail_df, tail_excess, par_names));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3675,7 +3687,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_pt_cell_budget", (DL_FUNC) &_EMC2_emc_pt_cell_budget, 1},
     {"_EMC2_emc_gibbs_standard_cpp", (DL_FUNC) &_EMC2_emc_gibbs_standard_cpp, 6},
     {"_EMC2_emc_gibbs_diag_gamma_cpp", (DL_FUNC) &_EMC2_emc_gibbs_diag_gamma_cpp, 3},
-    {"_EMC2_emc_ensemble_draw_pools_cpp", (DL_FUNC) &_EMC2_emc_ensemble_draw_pools_cpp, 7},
+    {"_EMC2_emc_ensemble_factors_cpp", (DL_FUNC) &_EMC2_emc_ensemble_factors_cpp, 1},
+    {"_EMC2_emc_ensemble_draw_pools_cpp", (DL_FUNC) &_EMC2_emc_ensemble_draw_pools_cpp, 8},
     {"_EMC2_emc_ensemble_stack_cpp", (DL_FUNC) &_EMC2_emc_ensemble_stack_cpp, 11},
     {"_EMC2_emc_ensemble_rounds_cpp", (DL_FUNC) &_EMC2_emc_ensemble_rounds_cpp, 10},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},

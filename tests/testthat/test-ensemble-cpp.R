@@ -96,8 +96,15 @@ test_that("pool draws from C++ match the R reference draw for draw", {
     expect_equal(pools$rows[[k]], ref$rows[[k]], tolerance = 1e-12)
     expect_equal(pools$lq[[k]], ref$lq[[k]], tolerance = 1e-10)
     expect_equal(pools$L[, , k], ref$q[[k]]$L, tolerance = 1e-12, ignore_attr = TRUE)
-    expect_equal(pools$q[[k]]$logdet, ref$q[[k]]$logdet, tolerance = 1e-12)
+    expect_equal(pools$logdet[k], ref$q[[k]]$logdet, tolerance = 1e-12)
   }
+  # Factors computed once and passed in give the same draws.
+  set.seed(11)
+  again <- EMC2:::.emc_ensemble_draw_pools(cs$s, "sample", cs$chains_mu, cs$chains_var,
+                                          factors = list(L = pools$L, logdet = pools$logdet))
+  expect_identical(.Random.seed, seed_cpp)
+  expect_identical(again$rows, pools$rows)
+  expect_identical(again$lq, pools$lq)
   # The stack carries the current state's density from the same proposal.
   ll <- rnorm(cs$s$n_subjects)
   ll_new <- matrix(rnorm(11 * cs$s$n_subjects), 11)

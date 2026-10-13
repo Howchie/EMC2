@@ -237,12 +237,13 @@
 # alone, never from the current state, so they can be drawn before the subject
 # step and their likelihoods computed in the same worker round trip as the
 # particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
-# when the update does not run this iteration. The draws, their proposal
-# densities and the proposal factors come from one C++ call
-# (src/ensemble_move.cpp); q keeps the per-subject proposal in the form
-# .emc_ensemble_log_q() reads.
+# when the update does not run this iteration. The draws and their proposal
+# densities come from one C++ call (src/ensemble_move.cpp). `factors` (the
+# proposals' Cholesky factors and log determinants, from
+# emc_ensemble_factors_cpp) can be passed in, since the proposals are frozen
+# within a block; without them they are computed here.
 .emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var,
-                                     iteration = 0L) {
+                                     iteration = 0L, factors = NULL) {
   cfg <- .emc_ensemble_options()
   if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler) ||
       iteration %% cfg$cadence != 0L)
@@ -252,15 +253,12 @@
       any(vapply(chains_mu, is.null, logical(1))) ||
       any(vapply(chains_var, is.null, logical(1))))
     return(NULL)
-  pn <- sampler$par_names
-  d <- emc_ensemble_draw_pools_cpp(lapply(chains_mu, as.numeric),
-                                   lapply(chains_var, as.matrix), cfg$pool - 1L,
-                                   cfg$tail_weight, cfg$tail_df, cfg$tail_excess, pn)
-  p <- nrow(d$mu)
-  q <- lapply(seq_len(n), function(s)
-    list(mu = d$mu[, s], L = d$L[, , s], logdet = d$logdet[s], p = p, c = d$c))
-  list(q = q, rows = d$rows, lq = d$lq, ll = NULL, L = d$L, mu = d$mu,
-       logdet = d$logdet, c = d$c)
+  if (is.null(factors)) factors <- emc_ensemble_factors_cpp(lapply(chains_var, as.matrix))
+  d <- emc_ensemble_draw_pools_cpp(lapply(chains_mu, as.numeric), factors$L, factors$logdet,
+                                   cfg$pool - 1L, cfg$tail_weight, cfg$tail_df,
+                                   cfg$tail_excess, sampler$par_names)
+  list(rows = d$rows, lq = d$lq, ll = NULL, L = factors$L, mu = d$mu,
+       logdet = factors$logdet, c = d$c)
 }
 
 # Log-likelihoods of a matrix of candidate states for one subject. A failure

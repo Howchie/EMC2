@@ -747,6 +747,7 @@ run_stage <- function(pmwgs,
   if(is.null(chains_mu)) chains_mu <- vector("list", pmwgs$n_subjects)
   if(is.null(eff_var)) eff_var <- vector("list", pmwgs$n_subjects)
   if(is.null(chains_var)) chains_var <- vector("list", pmwgs$n_subjects)
+  ens_factors <- NULL
   if (verboseProgress) {
     pb <- accept_progress_bar(min = 0, max = iter)
   }
@@ -904,11 +905,15 @@ run_stage <- function(pmwgs,
     # Ensemble pool members come from the group-step stream and depend only on
     # the frozen proposals, so their likelihoods ride along with the subject
     # step below.
+    # The proposals are frozen for this call, so their factors from the first
+    # draw serve the rest.
     ens_q <- pmwgs$ensemble_q
     ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
                                           if (is.null(ens_q)) chains_mu else ens_q$mu,
                                           if (is.null(ens_q)) chains_var else ens_q$var,
-                                          iteration = j)
+                                          iteration = j, factors = ens_factors)
+    if (!is.null(ens_pools) && is.null(ens_factors))
+      ens_factors <- list(L = ens_pools$L, logdet = ens_pools$logdet)
     pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
     gibbs_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - gibbs_started
