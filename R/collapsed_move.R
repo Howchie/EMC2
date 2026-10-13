@@ -270,8 +270,12 @@
   # Wide quadratic regressions justify forking; small regressions stay in
   # the caller to avoid paying process overhead for a few matrix operations.
   d <- p + if (is.null(pooled)) 0L else ncol(pooled)
-  enough <- length(idx) * length(emc) >= 2L * (1L + d + d * (d + 1L) / 2L)
-  cores <- if (d >= 8L && enough && ch$n_subjects > 2L * n_cores) n_cores else 1L
+  coefficients <- 1L + d + d * (d + 1L) / 2L
+  draws <- length(idx) * length(emc)
+  enough <- draws >= 2L * coefficients
+  work <- draws * coefficients^2 * ch$n_subjects
+  cores <- if (d >= 8L && enough && ch$n_subjects >= 8L && work >= 1e8)
+    min(n_cores, ch$n_subjects %/% 2L) else 1L
   .emc_rebuild_lapply(seq_len(ch$n_subjects), function(s) {
     A <- do.call(rbind, lapply(emc, function(c) t(matrix(c$samples$alpha[, s, idx], p))))
     y <- unlist(lapply(emc, function(c) c$samples$subj_ll[s, idx]))
