@@ -1068,8 +1068,10 @@ run_stage <- function(pmwgs,
 
     # Ensemble group update (R/ensemble_move.R): after the subject step, so the
     # group Gibbs rounds and the final reselection close the sweep.
+    ens_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
                               wpool_part, ens_pools)
+    ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
     # Then the shear (R/shear_move.R) when enabled: the non-centred move of
     # the same group state.
     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
@@ -1295,6 +1297,8 @@ run_stage <- function(pmwgs,
         degraded = pp$degraded,
         shear_rounds = shear_rounds, shear_cpu = shear_raw,
         shear_elapsed = shear_el, shear_build = shear_build_el, shear_ll = shear_ll_el,
+        ensemble_elapsed = ens_elapsed,
+        collapsed_elapsed = coll_el, collapsed_moves = coll_moves,
         hmc_elapsed = hmc_el,
         hmc_task_cpu_max = max(c(0, vapply(hmc_tasks, function(x)
           if (is.null(x) || is.null(x$work)) 0 else x$work, numeric(1)))),
