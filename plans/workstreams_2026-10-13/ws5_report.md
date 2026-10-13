@@ -4,6 +4,25 @@ Branch `ws5/ensemble-cost` (worktree `/data/work/EMC2_ws5`), from `playground` a
 Private libraries under `/data/work/EMC2_ws5_libs/` (`base` = unchanged `0a5773dd`; `new*` = this branch).
 Harness scripts in `/data/work/EMC2_ws5_libs/h/` (copied into `benchmarks/ensemble-cost/` on the branch).
 
+Status (2026-10-13):
+
+| Commit | Content |
+|---|---|
+| 7d875047 | Ensemble update in C++ (pool draws, stacked pools, Gibbs rounds), RNG-identical |
+| ad3183b4 | Main group Gibbs step (standard, diagonal-gamma) in C++ |
+| 873c734a | Iteration profile: `ensemble_elapsed`, `collapsed_elapsed`, `collapsed_moves` |
+| c910a3c4 | Between-block pool/rounds rule, first version (hook in `add_proposals()`: WS2) |
+| 141df019 | Rule revised: measured pool-row CPU as the member price, slowest coordinate as the objective |
+| others | this report and `benchmarks/ensemble-cost/` |
+
+Phase 1 is done and verified. The first-version rule lost efficiency on Forstmann (see Check);
+the revised rule is unit-tested only. Pending, queued in `h/queue_g.sh`
+(= `benchmarks/ensemble-cost/ablation_forstmann.sh`): a Forstmann ablation of the two revisions
+(3 seeds), then the test suites on build `final` (141df019). Whether the rule stays the
+default, or (32,10) does, waits on that ablation; the rule is only to be run on T30 and lba7r
+if Forstmann shows a gain. nback31 was not run (its checkpoint build was stopped to release the
+shared lock). Latent-factor hierarchies and standard ones with group designs keep the R rounds.
+
 ## Phase 1: what the move computes, and what was ported
 
 ### The arithmetic per iteration (step 2)
@@ -228,7 +247,9 @@ bought G = 0.44 of displacement inside the move; a round about 5e-5 s.
 Continuations from saved states (`cont_queue.sh`, build `p2` = the first-version rule), 3
 chains x 3 cores pinned to 9 CPUs, rebuilds every 100 transitions, one seed: indicative, and
 only comparisons between arms are meaningful. Worst coordinate's ESS (bulk, over the group
-means, log sds and subject parameters' worst group coordinate) and per CPU-s:
+means and log sds) and per CPU-s. The CPU figure is the session cgroup's, which other
+sessions share, so it may include their work; wall times are clean. The harness now also
+reports the run's own process-tree CPU (used for the ablation).
 
 | Fixture, 400 it | arm | worst coordinate | worst ESS | per CPU-s | lag-1 of worst | wall s |
 |---|---|---|---|---|---|---|
@@ -241,7 +262,10 @@ means, log sds and subject parameters' worst group coordinate) and per CPU-s:
 | T30 | (8,3) | lsd_v_lMTRUE:Eaccuracy | 152 | 0.33 | 0.35 | 121 |
 | T30 | (2,2) | lsd_B_Eaccuracy | 54 | 0.12 | 1.07 | 122 |
 
-(lba7r: pending; (2,2) dropped as clearly worse.)
+lba7r (200 iterations asked; the stop rule's tries gave 400 draws/chain): (32,10) worst
+coordinate mu_v.g_lure, ESS 63, 0.011 per CPU-s, 0.08 per wall-s, lag-1 0.92, wall 791 s. The
+first-version rule arm was still running at the time of writing; (2,2) dropped as clearly
+worse.
 
 The first-version rule cut M to 2 on every chain of both fixtures at the first rebuild. On
 Forstmann that cost a third of the worst coordinate's ESS per CPU-s: log sd(t0) slows (lag-1
@@ -274,4 +298,10 @@ Tests (`test-ensemble-plan.R`): rounds grow / drop a round that adds nothing / f
 gain; the pool falls monotonically with the member's price and doubles when members are cheap;
 a slow coordinate that the reselections move keeps the pool, while gains confined to already
 fast coordinates cut it to one fresh member (the case the averaged objective got wrong); pool
-CPU is spread over the chain's cores. Continuations of the revised rule: not yet run.
+CPU is spread over the chain's cores.
+
+Check of the revision (queued, `ablation_forstmann.sh`): Forstmann continuations, 400
+iterations, 3 seeds, one fit at a time on CPUs 23-31: fixed (32,10) and the first rule (build
+`p2`), the price change alone (`abl_price`: 141df019 with the first-version objective), the
+objective change alone (`abl_obj`: 141df019 with the row-share price), and both (`final` =
+141df019). Results in `/data/work/EMC2_ws5_libs/abl/`. Not yet run.
