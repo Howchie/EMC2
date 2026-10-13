@@ -1034,7 +1034,10 @@ get_summary_stat <- function(emc, selection = "mu", fun, stat = NULL,
 
 get_posterior_quantiles <- function(x, probs = c(0.025, .5, .975)){
   summ <- summary(x, probs)
-  return(summ$quantiles)
+  q <- summ$quantiles
+  # coda drops a single variable's quantiles to a vector.
+  if (!is.matrix(q)) q <- matrix(q, nrow = 1, dimnames = list(coda::varnames(x), names(q)))
+  return(q)
 }
 
 #' Model Averaging

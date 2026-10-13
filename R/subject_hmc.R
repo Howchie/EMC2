@@ -321,7 +321,7 @@
     k <- match(ss, subs)
     list(kind = "hmc", subs = ss, notify = FALSE, pooled = pooled,
          alpha = proposals[seq_len(p), ss, drop = FALSE], ll = proposals[p + 1L, ss],
-         mu = vapply(gl[k], function(g) as.numeric(g$mu), numeric(p)),
+         mu = matrix(vapply(gl[k], function(g) as.numeric(g$mu), numeric(p)), p),
          var = as.matrix(gl[[1L]]$var), seeds = streams[ss],
          eps = vapply(ss, function(s) plan[[s]]$eps, numeric(1)))
   }

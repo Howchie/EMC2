@@ -1488,7 +1488,7 @@
     # A subject whose particle step the allocation skipped this iteration
     # (R/move_allocation.R) keeps its state.
     out <- if (isTRUE(msg$skip[k])) {
-      reject_particle(msg$alpha[, k], msg$prev_ll[k], msg$pm[[k]])
+      reject_particle(.emc_subject_col(msg$alpha, k), msg$prev_ll[k], msg$pm[[k]])
     } else safe_new_particle(
       s = s, data = data_s, pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
@@ -1497,7 +1497,7 @@
       stage = ctx$stage, type = ctx$type, tune = ctx$tune,
       marginalise = ctx$marginalise, r_cores = ctx$r_cores,
       chol_cache = ctx$chol_caches[[s]], group_chol = group_chol,
-      current_alpha = msg$alpha[, k],
+      current_alpha = .emc_subject_col(msg$alpha, k),
       population_mu = msg$population_mu[, k],
       population_var = shared$group_var
     )
@@ -1757,11 +1757,11 @@
   cpu_total <- 0
   extra_ll <- if (is.null(extra)) NULL else vector("list", n_subjects)
 
-  population_mu <- vapply(seq_len(n_subjects), function(s) {
+  population_mu <- matrix(vapply(seq_len(n_subjects), function(s) {
     as.numeric(get_group_level(pars, s, ctx$type)$mu)
-  }, numeric(ctx$n_pars))
-  rownames(population_mu) <- rownames(pars$alpha)
-  alpha <- pars$alpha
+  }, numeric(ctx$n_pars)), ctx$n_pars, n_subjects)
+  alpha <- matrix(pars$alpha, ctx$n_pars, n_subjects, dimnames = dimnames(pars$alpha))
+  rownames(population_mu) <- rownames(alpha)
   shared_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   shared <- list(group_var = group_chol$ref, idx_list = group_chol$idx_list,
                  marginal_idx = group_chol$marginal_idx,

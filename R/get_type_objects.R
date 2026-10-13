@@ -171,7 +171,7 @@ get_objects_standard <- function(selection, sample_prior, return_prior, design =
 }
 
 implied_mean <- function(sampler, idx){
-  beta <- sampler$samples$theta_mu[,idx]
+  beta <- sampler$samples$theta_mu[,idx, drop = F]
   N <- ncol(beta)
   group_des <- sampler$group_designs
   par_names <- sampler$par_names
@@ -507,8 +507,8 @@ get_base <- function(sampler, idx, selection){
   } else if(selection == "sigma2"){
     return(lapply(sampler, FUN = function(x){
       out <- x$samples$theta_var[,,idx, drop = F]
-      out <- apply(out,3,diag)
-      return(out)
+      return(matrix(apply(out, 3, diag), nrow = dim(out)[1],
+                    dimnames = dimnames(out)[c(1, 3)]))
     }))
   }
   else if(selection == "Sigma"){
@@ -516,7 +516,7 @@ get_base <- function(sampler, idx, selection){
   }
   else if(selection == "correlation"){
     return(suppressWarnings(lapply(sampler, FUN = function(x) return(
-      array(apply(x$samples$theta_var[,,idx],3,cov2cor),dim=dim(x$samples$theta_var[,,idx, drop = F]),
+      array(apply(x$samples$theta_var[,,idx, drop = F],3,cov2cor),dim=dim(x$samples$theta_var[,,idx, drop = F]),
             dimnames=dimnames(x$samples$theta_var))))))
   }
 }

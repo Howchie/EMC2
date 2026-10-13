@@ -101,3 +101,27 @@ test_that("a one-parameter prior keeps its supplied mean variance", {
     expect_equal(pr$theta_mu_var[1, 1], 2.25)
   }
 })
+
+test_that("a one-parameter hierarchy runs its group update", {
+  des <- suppressMessages(design(data = dat, model = LNR, matchfun = matchfun,
+                                 formula = list(m ~ 1, s ~ 1, t0 ~ 1),
+                                 constants = c(s = log(0.5), t0 = log(0.2))))
+  for (type in c("diagonal-gamma", "standard")) {
+    set.seed(11)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 1L, type = type))
+    emc <- suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 1,
+      cores_per_chain = 1, step_size = 5, max_tries = 1, verbose = FALSE,
+      verboseProgress = FALSE,
+      stop_criteria = list(iter = 5, max_gd = Inf, min_unique = 0, min_es = 0)))
+    s <- emc[[1]]$samples
+    expect_equal(s$idx, 6)
+    expect_true(all(is.finite(s$theta_mu[1, seq_len(s$idx)])))
+    expect_gt(length(unique(s$theta_mu[1, seq_len(s$idx)])), 1L)
+    for (sel in c("mu", "sigma2")) {
+      draws <- get_pars(emc, selection = sel, stage = "preburn")
+      expect_identical(ncol(as.matrix(draws[[1]])), 1L)
+      utils::capture.output(sm <- summary(emc, selection = sel, stage = "preburn"))
+      expect_equal(dim(sm[[1]]), c(1L, 5L))
+    }
+  }
+})

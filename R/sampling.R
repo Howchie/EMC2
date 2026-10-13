@@ -898,8 +898,11 @@ run_stage <- function(pmwgs,
 
     assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
     gibbs_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
+    # Parameters x subjects, kept a matrix with one parameter or one subject.
+    alpha_prev <- matrix(pmwgs$samples$alpha[, , j - 1], nrow = dim(pmwgs$samples$alpha)[1],
+                         dimnames = dimnames(pmwgs$samples$alpha)[1:2])
     pars_attempt <- tryCatch(
-      gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type),
+      gibbs_step(pmwgs, alpha_prev[!nuisance, , drop = FALSE], pmwgs$type),
       error = identity
     )
     if (inherits(pars_attempt, c("error", "try-error"))) {
@@ -909,7 +912,7 @@ run_stage <- function(pmwgs,
     pars <- pars_comb <- pars_attempt
     if(any(nuisance)){
       pars_nuis_attempt <- tryCatch(
-        gibbs_step(pmwgs$sampler_nuis, pmwgs$samples$alpha[nuisance,,j-1], pmwgs$sampler_nuis$type),
+        gibbs_step(pmwgs$sampler_nuis, alpha_prev[nuisance, , drop = FALSE], pmwgs$sampler_nuis$type),
         error = identity
       )
       if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
@@ -1453,6 +1456,10 @@ reject_sample_iteration <- function(samples, j) {
   list(mu = m, var = (Sig + t(Sig)) / 2)
 }
 
+# Subject s's column of a parameters x subjects matrix as a named vector; a
+# one-parameter matrix would otherwise lose the name.
+.emc_subject_col <- function(m, s) stats::setNames(m[, s], rownames(m))
+
 safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                eff_var = NULL, chains_mu = NULL,
                                chains_var = NULL, prev_ll,
@@ -1479,7 +1486,7 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     if (identical(.emc_failure_action(cls), "abort")) {
       .emc_failure_abort(cls, "particle", attempt)
     }
-    old <- if (is.null(current_alpha)) parameters$alpha[, s] else current_alpha
+    old <- if (is.null(current_alpha)) .emc_subject_col(parameters$alpha, s) else current_alpha
     attempt <- reject_particle(old, prev_ll, pm_settings)
   }
   # Tag the subject this result belongs to.  parallel::mclapply DROPS the
@@ -1679,7 +1686,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   proposal_out <- numeric(length(group_pars$mu))
   group_mu <- group_pars$mu
   group_var <- group_pars$var
-  subj_mu <- if (direct_state) current_alpha else parameters$alpha[,s]
+  subj_mu <- if (direct_state) current_alpha else .emc_subject_col(parameters$alpha, s)
   marg_cond <- NULL
   marg_pred <- NULL
   marginal_idx <- rep(FALSE, length(subj_mu))
@@ -1848,7 +1855,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       if (is.null(marginalise)) {
         comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
         lw <- tryCatch(
-          calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+          calc_ll_pooled(proposals[, is_shared, drop = FALSE], dadm = data, model,
                          component = comp_arg, r_cores = r_cores, s = s,
                          varying = idx[is_shared]),
           error = identity)
