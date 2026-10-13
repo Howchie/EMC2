@@ -1,11 +1,12 @@
-# First-pass fit test for the ensemble group update on data from
+# Fit tests of the sampler on data from
 # WorkingTests/generate_correlated_group_rdm_fixture.R (RDM with A = 0, 13 coefficients, match drift ratio 1.5, 100 trials per cell, group SDs x3 so every SD is >= 1.4x the per-subject SE).
 #
 #   Rscript fixture_fits.R fit <lib> <case> <arm> <seed>
 #   Rscript fixture_fits.R summarize
 #
-# <arm> is "ensemble" (emc2.ensemble = TRUE) or "baseline" (FALSE); both use the
-# same build <lib>, so the only difference is the ensemble update. Package
+# <arm> is a label for the output file; every fit runs the package's sampler
+# from <lib>. `summarize` pairs fits labelled "ensemble" or "ensemble_marg" with
+# "baseline" fits of the same case and seed when both exist. Package
 # defaults for preburn/burn/adapt, then 1,500 fixed production iterations,
 # 3 chains x 9 cores. Fixtures are generated once per case by the fixture
 # script with the case's settings and cached.
@@ -84,13 +85,6 @@ if (args[1] == "fit") {
     list(data = get(cs$data, asNamespace("EMC2")),
          settings = list(formula = list(v ~ lM * E, B ~ E * lR, t0 ~ 1),
                          constants = c(s = log(1), A = log(0))))
-  options(emc2.ensemble = arm %in% c("ensemble", "ensemble_marg"),
-          emc2.ensemble_latent_weight = if (arm == "ensemble_marg") "marginal" else "conditional")
-  # Extra internal options for design experiments, e.g.
-  # EMC2_OPTS="emc2.ensemble_rounds=5,emc2.ensemble_pool=16".
-  for (kv in strsplit(strsplit(Sys.getenv("EMC2_OPTS"), ",")[[1]], "=")) {
-    if (length(kv) == 2L) options(stats::setNames(list(type.convert(kv[2], as.is = TRUE)), kv[1]))
-  }
   des <- suppressMessages(design(data = fx$data, model = RDM,
     matchfun = function(d) d$S == d$lR, formula = fx$settings$formula,
     constants = fx$settings$constants))
@@ -146,7 +140,6 @@ if (args[1] == "fit") {
     lapply(emc, function(ch) ch$samples$alpha[, , idx, drop = FALSE])
   saveRDS(list(case = case, arm = arm, seed = seed, timing = timing,
                particle_factor = as.numeric(Sys.getenv("PARTICLE_FACTOR", "50")),
-               emc2_opts = Sys.getenv("EMC2_OPTS"),
                iters = iters,
                draws = draws, alpha_ess = alpha_ess, alpha_rhat = alpha_rhat,
                library = find.package("EMC2"), ens = ens, ens_subj = ens_subj,

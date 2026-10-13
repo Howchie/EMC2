@@ -5,7 +5,7 @@ suppressPackageStartupMessages(library(EMC2, lib.loc = Sys.getenv("EMC_LIB")))
 cat("EMC2 from", find.package("EMC2"), "\n")
 ns <- asNamespace("EMC2")
 post <- readRDS(args[1])
-options(post$options)
+
 # A saved state's custom kernels have dead pointers: without restoring them,
 # every pilot likelihood call reloads the kernel, which inflates the time and
 # races on Rcpp's build cache when pilots fork.

@@ -6,7 +6,6 @@ out <- Sys.getenv("MODE_START_OUT", "benchmarks/mode-start/results")
 dir.create(out, recursive = TRUE, showWarnings = FALSE)
 cat("EMC2 from", find.package("EMC2"), "\n")
 ns <- asNamespace("EMC2"); for (f in c(".emc_burn_ll_batch", ".emc_optimize_subject", ".emc_gradient_difference_hessian")) assign(f, get(f, ns))
-options(emc2.burn_mode_start = FALSE, emc2.laplace_refresh = FALSE)
 set.seed(3)
 dat <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ]
 dat$subjects <- droplevels(dat$subjects)

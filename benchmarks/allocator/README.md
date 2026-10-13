@@ -17,9 +17,12 @@ copies instead.
 ## Pipeline
 
 1. **Calibration run**:
-   `calibrate.R <ckpt.rds> <out_dir> <seed>`.
+   `calibrate.R <ckpt.rds> <out_dir> <seed>` (removed: it set the production
+   rebuild schedule through an option the package no longer has, so it
+   cannot run against the current sampler; the steps below describe the
+   runs it produced).
    - Continues a sample-stage checkpoint for `ITERS` production iterations
-     (default 500), applying the checkpoint's recorded `production_options`.
+     (default 500).
    - Forces a rebuild at the start, then rebuilds at the offsets in
      `REBUILDS` (default `100,300`), giving blocks of 100 and 200.
    - Sources `trace.R`, which records each rebuild's inputs and outputs

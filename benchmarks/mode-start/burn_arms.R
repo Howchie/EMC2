@@ -3,7 +3,7 @@
 # STOP=fixed runs 500 burn iterations; otherwise the default burn stopping rule
 # (mean R-hat < 1.1 on alpha and mu, max_tries 10) decides.
 suppressPackageStartupMessages(library(EMC2, lib.loc = Sys.getenv("EMC_LIB", .libPaths()[1])))
-# EMC2_OPTS: extra options() for this arm, e.g. "emc2.independent_chains = TRUE".
+# EMC2_OPTS: extra options() for this run, e.g. "emc2.sampler_profile = TRUE".
 if (nzchar(Sys.getenv("EMC2_OPTS")))
   eval(parse(text = paste0("options(", Sys.getenv("EMC2_OPTS"), ")")))
 out <- Sys.getenv("MODE_START_OUT", "benchmarks/mode-start/results")

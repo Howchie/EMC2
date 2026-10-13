@@ -31,8 +31,6 @@ actual <- readRDS(file.path(run_dir, sprintf("alloc_%02d.rds", k)))
 emc0 <- ns$restore_custom_kernel_pointers(pre$emc, quiet = TRUE)
 traces <- lapply(emc0, `[[`, "ws1_trace")
 for (j in seq_along(emc0)) emc0[[j]]$ws1_trace <- NULL
-# A resumed production fit runs under the options its chains recorded.
-options(ns$.emc_record_production_options(emc0)$options)
 
 # The state the allocator receives: add_proposals() as the run made it, with
 # the rebuild itself captured instead of run.

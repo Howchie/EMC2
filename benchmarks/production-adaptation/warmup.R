@@ -1,5 +1,5 @@
-# Burn + adapt from a saved preburn state with the default stopping rules, so
-# every production arm of one (case, seed) starts from the same state.
+# Burn + adapt from a saved preburn state with the default stopping rules;
+# records burn convergence and per-stage cost, and saves the warmed-up state.
 #   CASE=wide15 SEED=1 EMC_LIB=<lib> Rscript benchmarks/production-adaptation/warmup.R
 # Preburn states: benchmarks/mode-start/results/preburn_<case>.rds (setup.R).
 suppressPackageStartupMessages(library(EMC2, lib.loc = Sys.getenv("EMC_LIB", .libPaths()[1])))
@@ -11,10 +11,6 @@ case <- Sys.getenv("CASE")
 seed <- as.integer(Sys.getenv("SEED", "1"))
 cores <- as.integer(Sys.getenv("CORES_PER_CHAIN", "2"))
 emc <- readRDS(file.path(src, paste0("preburn_", case, ".rds")))
-# INDEP=1 runs the chains fully independently from burn onwards.
-if (Sys.getenv("INDEP", "0") == "1") options(emc2.independent_chains = TRUE)
-# GROUP_MOVE=shear adds the shear after the ensemble group update.
-options(emc2.group_move = Sys.getenv("GROUP_MOVE", "ensemble"))
 set.seed(1000L * seed + 7L)
 # Seed 1 keeps the chain streams stored with the preburn; other seeds replace them.
 if (seed != 1L) for (j in seq_along(emc)) emc[[j]]$rng <- NULL

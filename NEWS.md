@@ -98,7 +98,7 @@
     iteration it is combined with the current group mean and covariance, so the
     efficient proposal is the subject's conditional at the current group state
     instead of a regression fitted to earlier draws, which lagged behind the
-    chain. `options(emc2.laplace_conditional = FALSE)` restores the regression.
+    chain.
 
 -   **Default sampler:** every hierarchical fit now runs one architecture:
     the ensemble group update, shear rounds, subject Hamiltonian Monte Carlo
@@ -124,9 +124,6 @@
     step and redrawn after it, so a weakly informed group sd is no longer
     held in place by it. Standard (no group designs) and diagonal-gamma
     hierarchies; others keep the ensemble update.
-
--   **Bug fix:** with `options(emc2.independent_chains = TRUE)`, the efficient
-    proposal built at the end of burn failed on the one-chain window.
 
 -   **Bug fixes (hierarchy Gibbs steps):** factor and SEM loading rows that
     mix free and fixed entries now regress on the response net of the fixed
@@ -155,8 +152,8 @@
     parameter units. Window covariances are no longer shrunk towards a
     diagonal (Schafer-Strimmer): the shrinkage removed most correlations at
     p of about 70, so every production rebuild of the chain proposal cut
-    subject move rates by more than half and never recovered. Independent chains (`emc2.independent_chains`) also
-    sub-block on their own covariances. Production proposal rebuilds count
+    subject move rates by more than half and never recovered.
+    Production proposal rebuilds count
     transitions rather than stored draws, and the schedule is documented as
     adaptation at increasingly rare times (Chimisov, Latuszynski & Roberts
     2018), not diminishing adaptation.
@@ -228,7 +225,7 @@
     default `min_unique` is 150 whether or not `stop_criteria` is supplied.
 -   **Removed (group moves):** the interweaving group move (legacy, regularized
     adaptive Metropolis and robust adaptive Metropolis variants), its options
-    (`emc2.group_move*`) and `group_move_diagnostics()`. The ensemble update
+    and `group_move_diagnostics()`. The ensemble update
     replaces it: at realistic dimension a rigid group translation gained
     nothing over the Gibbs step.
 

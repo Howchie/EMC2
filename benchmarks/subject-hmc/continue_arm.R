@@ -9,10 +9,6 @@
 # stored one, with fit()'s particle_factor set to match so the adaptation's
 # bounds follow it); ARM_R (an R file defining arm_options(), a list passed to
 # options(), and/or arm_hook(emc) returning the emc to continue).
-# CALIBRATE (e.g. "100,300"): production rebuilds at these transition offsets
-# after the start, so the allocator reprices from its own measured costs before
-# the scored window, then the doubling schedule's next rebuild (twice the last
-# calibration point), beyond the run. DISCARD defaults to the last offset.
 # The seed reseeds every chain's RNG streams; the state is the checkpoint's.
 # A production rebuild is forced at the start so each arm allocates under its
 # own kernel from its first block.
@@ -24,11 +20,8 @@ ckpt <- args[1]; label <- args[2]; seed <- as.integer(args[3]); iters <- as.inte
 ns <- asNamespace("EMC2")
 `%||%` <- function(a, b) if (is.null(a)) b else a
 cores_per_chain <- as.integer(Sys.getenv("CORES_PER_CHAIN", "9"))
-calibrate <- Sys.getenv("CALIBRATE", "")
-calibrate <- if (nzchar(calibrate)) as.integer(strsplit(calibrate, ",")[[1]]) else integer(0)
-stopifnot(all(is.finite(calibrate)), all(calibrate > 0), !is.unsorted(calibrate, strictly = TRUE))
 discard <- Sys.getenv("DISCARD", "")
-discard <- if (nzchar(discard)) as.integer(discard) else if (length(calibrate)) max(calibrate) else 100L
+discard <- if (nzchar(discard)) as.integer(discard) else 100L
 n_particles <- Sys.getenv("N_PARTICLES", "")
 arm_file <- Sys.getenv("ARM_R", "")
 # PROFILE=1 records fit()'s per-iteration and per-block timings (see fit_arm.R).
@@ -87,20 +80,6 @@ for (j in seq_along(emc)) {
     attr(emc[[j]]$samples, "pm_settings") <- pm
   }
 }
-# A checkpoint carries its production options and a resumed fit uses those,
-# not the session's, so the arm's production options and the calibration
-# schedule go into every chain's record.
-prod_opts <- opts[intersect(names(opts), names(ns$.EMC_PRODUCTION_OPTION_DEFAULTS))]
-if (length(calibrate)) {
-  n_tr <- emc[[1]]$sample_transitions
-  prod_opts$emc2.sample_rebuilds <- c(n_tr + calibrate, 2L * (n_tr + max(calibrate)))
-  cat("Calibration rebuilds at transitions", n_tr + calibrate, "then", 2L * (n_tr + max(calibrate)), "\n")
-}
-if (length(prod_opts)) {
-  do.call(options, prod_opts)
-  for (j in seq_along(emc)) if (!is.null(emc[[j]]$production_options))
-    emc[[j]]$production_options[names(prod_opts)] <- prod_opts
-}
 particle_factor <- if (nzchar(n_particles)) as.numeric(n_particles) / sqrt(p) else 50
 emc <- arm_hook(emc)
 n0 <- emc[[1]]$samples$idx
@@ -147,7 +126,7 @@ pm <- attr(emc[[1]]$samples, "pm_settings")
 np <- unlist(lapply(pm, function(s) lapply(s, function(k) k$n_particles)))
 last_plan <- lapply(emc, function(ch) { h <- ch$alloc$history; if (length(h)) h[[length(h)]] else NULL })
 res <- list(ckpt = ckpt, label = label, seed = seed, iters = iters, discard = discard, scored = length(score),
-            calibrate = calibrate, alloc_history = lapply(emc, function(ch) ch$alloc$history),
+            alloc_history = lapply(emc, function(ch) ch$alloc$history),
             lib = find.package("EMC2"), cpu = cpu, elapsed = el[["elapsed"]],
             cpu_per_iter_chain = cpu / iters / length(emc), n_particles = range(np),
             dirs = d_dirs, mu = d_mu, lsd = d_lsd, alpha = d_alpha, dir_rho = dirs$rho,

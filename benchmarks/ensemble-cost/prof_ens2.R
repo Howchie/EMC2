@@ -9,8 +9,9 @@ chain <- as.integer(Sys.getenv("CHAIN", "1"))
 emc <- emc[chain]; class(emc) <- "emc"
 iter <- as.integer(Sys.getenv("ITER", "200"))
 s <- emc[[1]]
+ens_cfg <- ns$.emc_ensemble_options()
 cat(sprintf("type %s p %d subjects %d pool %s rounds %s\n", s$type, s$n_pars, s$n_subjects,
-            s$production_options$emc2.ensemble_pool, s$production_options$emc2.ensemble_rounds))
+            ens_cfg$pool, ens_cfg$rounds))
 fns <- c(".emc_ensemble_move", ".emc_ensemble_draw_pools", ".emc_ensemble_draw_q",
          ".emc_ensemble_log_q", ".emc_ensemble_log_q_m2", ".emc_ensemble_pool_ll",
          ".emc_ensemble_store", ".emc_ensemble_subject_prior", ".emc_ensemble_log_g",

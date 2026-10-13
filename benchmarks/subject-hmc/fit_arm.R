@@ -1,10 +1,10 @@
-# One default fit() arm of the optional-moves panel.
+# One default fit() of a benchmark case with the canonical sampler.
 #   EMC_LIB=<lib> Rscript benchmarks/subject-hmc/fit_arm.R <case> <arm> <seed> <out.rds>
 # case: T30 | corr15 | lbaA | lbaT | lbaE | forstmann | T30m | T30p (T30 with t0 drawn
 #   independently of the other effects / shared by all subjects; read from
 #   FIXTURE_DIR, default benchmarks/subject-hmc/fixtures)
-# arm: base (ensemble only) | shear | hmc | full (ensemble + shear + subject HMC)
-#   | fullc (full + collapsed group move).
+# arm: a label recorded in the result and printed with it; it does not change
+#   the sampler.
 # Chains 3 x CORES_PER_CHAIN cores (default 5). CPU is measured outside, from
 # the run's cgroup.
 # FEATURE=marginalise|pooled applies to FEATURE_PAR (default t0).
@@ -15,9 +15,6 @@ lib <- Sys.getenv("EMC_LIB")
 suppressPackageStartupMessages({ library(EMC2, lib.loc = lib); library(posterior) })
 cat("EMC2 from", find.package("EMC2"), "\n")
 case <- args[1]; arm <- args[2]; seed <- as.integer(args[3]); out <- args[4]
-options(emc2.subject_hmc = arm %in% c("hmc", "full", "fullc"),
-        emc2.group_move = if (arm %in% c("shear", "full", "fullc")) "shear" else "ensemble",
-        emc2.collapsed_move = arm == "fullc")
 # PROFILE=1 records fit()'s per-block timings (prepare, proposals, sampling,
 # concat, check_progress) into the result.
 if (Sys.getenv("PROFILE") == "1") options(emc2.sampler_profile = TRUE)

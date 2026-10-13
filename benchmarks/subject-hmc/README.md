@@ -5,8 +5,7 @@ under Design. Code: `R/subject_hmc.R` (kernel, warmup, step-size updates),
 `R/shear_move.R` (shear rounds), `R/move_allocation.R` (measurement and the
 solver), wired into `run_stage()` (`R/sampling.R`), the worker pool
 (`R/chain_pool.R`) and `add_proposals()` (`R/fitting.R`). Committed in
-`e43fdc30` on `playground`. The collapsed transport is enabled by default and
-can be disabled with `options(emc2.collapsed_move = FALSE)`.
+`e43fdc30` on `playground`. The collapsed transport is always on.
 
 ## Design
 
@@ -271,8 +270,7 @@ control), and serial/static/queued identity under a forced allocation.
 
 Adaptation. Plans change only at the proposal rebuilds: every block in burn
 and adapt (discarded stages), and in production at 100, 200, 400, ...
-transitions (or an explicit schedule; `emc2.sample_rebuilds = numeric(0)`
-freezes the first production plan). This is the increasingly rare
+transitions. This is the increasingly rare
 adaptation of AirMCMC (Chimisov, Latuszynski and Roberts, 2018): the
 adapted parameter at each rebuild is a function of the history only, and
 the gaps between rebuilds grow. In production the likelihood fits are not
@@ -291,6 +289,4 @@ production proposal refreshes, which rely on the same schedule. Compactness
 of the tuning set, bounded pilot work and the retained particle kernel are
 restrictions that such a proof would use; they do not by themselves
 establish containment. The adaptive production method is therefore
-experimental and off by default. The exactly valid control is a frozen
-production plan (`emc2.sample_rebuilds = numeric(0)`), under which
-production runs one fixed pi-invariant kernel.
+experimental.

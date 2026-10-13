@@ -12,11 +12,8 @@ Scripts behind the 2026-09-27/28 evaluation of the ensemble group update
   tight, wide, forstmann, corr_factor, corr_infnt, strong_long.
   `Rscript fixture_fits.R fit <lib> <case> <arm> <seed>`, then `summarize`
   (`FIXTURE_ROOT` selects the results folder).
-* `applied.R` -- the N-back witness fit (a saved unfitted emc).
-  `Rscript applied.R <lib> <arm> <seed> <emc0.rds> <outdir>`;
-  `NBACK_SAMPLE` sets the production length.
-
-Arms are `baseline` and `ensemble` (fixture_fits.R also has `ensemble_marg`,
-the latent-factor marginal reselection weight). The earlier interweaving
+The `baseline`, `ensemble` and `ensemble_marg` arms of that evaluation were
+set by sampler options that no longer exist; `fixture_fits.R` now runs the
+package's one sampler and `<arm>` only labels the output. The earlier interweaving
 group move (legacy / AM / RAM) and its benchmarks were removed after commit
 ac3e4d36; see that commit for them.
