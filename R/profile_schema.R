@@ -487,14 +487,17 @@
 }
 
 .emc_reject_record <- function(cond, source = "particle") {
-  cls <- .emc_classify_failure(cond)
+  .emc_reject_count(.emc_classify_failure(cond), source, cond)
+}
+
+.emc_reject_count <- function(cls, source, cond, n = 1L) {
   counts <- .emc_profile_state$rejects
   if (is.null(counts)) counts <- list()
   cur <- counts[[source]]
   if (is.null(cur)) {
     cur <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES)
   }
-  cur[[cls]] <- cur[[cls]] + 1L
+  cur[[cls]] <- cur[[cls]] + as.integer(n)
   counts[[source]] <- cur
   .emc_profile_state$rejects <- counts
   # Keep the first message per (source, class) so a nonzero count can be chased
@@ -511,6 +514,19 @@
   # caller can count a failure without the policy having seen it.
   .emc_failure_announce(cls, source, cond)
   invisible(cls)
+}
+
+# A tally a worker returned instead of counting it, because a forked process's
+# counters and warnings end with it: `counts` per class and the first message
+# of each.  Counted here exactly as a failure caught in this process would be.
+.emc_reject_add <- function(tally, source) {
+  for (cls in names(tally$counts)) {
+    n <- as.integer(tally$counts[[cls]])
+    if (n < 1L) next
+    msg <- tally$msgs[[cls]]
+    .emc_reject_count(cls, source, simpleError(if (is.null(msg)) "" else msg), n)
+  }
+  invisible(NULL)
 }
 
 .emc_reject_counts <- function(source = "particle") {

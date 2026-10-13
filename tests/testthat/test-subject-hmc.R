@@ -231,6 +231,43 @@ test_that("the first burn block moves every eligible subject while its step size
   }
 })
 
+test_that("a pilot's failed likelihood is counted and follows the failure policy", {
+  skip_on_os("windows")
+  skip_on_cran()
+  local_rng_guard()
+  fit <- hmc_small_fit("static", stages = c(20, 45), rate = NULL)
+  ch <- fit[[1]]
+  h <- ch$subject_hmc
+  s <- which(vapply(h$subjects, function(x) isTRUE(x$eligible), logical(1)))[1]
+  st <- EMC2:::.emc_profile_state
+  saved <- mget(c("announced", "rejects", "reject_msgs"), envir = st,
+                ifnotfound = list(NULL))
+  on.exit(for (nm in names(saved)) assign(nm, saved[[nm]], envir = st), add = TRUE)
+  st$announced <- NULL
+  st$rejects <- NULL
+  st$reject_msgs <- NULL
+  calibrate <- function(msg) {
+    with_mocked_bindings(
+      EMC2:::.emc_hmc_calibrate(ch, h, s, bracket = TRUE, pilots = 2L),
+      calc_ll_manager = function(...) stop(msg), .package = "EMC2")
+  }
+
+  withr::local_options(emc2.failure_policy = "report")
+  r <- calibrate("cannot open connection")
+  n <- r$rejects$counts[["infrastructure"]]
+  expect_gt(n, 0L)
+  expect_identical(r$rejects$msgs$infrastructure, "cannot open connection")
+  expect_warning(EMC2:::.emc_reject_add(r$rejects, "pilot"), "tuning pilot")
+  expect_identical(EMC2:::.emc_reject_counts("pilot")[["infrastructure"]], n)
+
+  # Under strict an infrastructure failure stops the fit; a proposal with no
+  # density is still only a rejected step.
+  withr::local_options(emc2.failure_policy = "strict")
+  expect_error(calibrate("cannot open connection"), class = "emc_failure_infrastructure")
+  r <- calibrate("chol(): matrix is not positive definite")
+  expect_gt(r$rejects$counts[["numerical"]], 0L)
+})
+
 test_that("serial, static and queued HMC rounds give the same chain", {
   skip_on_os("windows")
   skip_on_cran()
