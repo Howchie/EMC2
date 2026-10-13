@@ -537,7 +537,8 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     omit_mpsrf = stop_criteria[["omit_mpsrf"]],
     n_blocks = n_blocks,
     rhat_version = rhat_version,
-    truncate = truncate_gd
+    truncate = truncate_gd,
+    n_cores = n_cores
   )
   iter_done <- ifelse(is.null(iter) || length(iter) == 0, TRUE, total_iters_stage >= iter)
   if (min_es == 0) {
@@ -546,8 +547,9 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     class(emc) <- "emc"
     curr_min_es <- Inf
     for(select in selection){
-      curr_min_es <- min(c(ess_summary(emc, selection = select,
-                                                stage = stage, stat_only = TRUE), curr_min_es))
+      es <- ess_summary(emc, selection = select, stage = stage,
+                         stat_only = TRUE, n_cores = n_cores)
+      curr_min_es <- min(c(es, curr_min_es))
     }
     es_done <- ifelse(!emc[[1]]$init, FALSE, curr_min_es >
                         min_es)
@@ -697,13 +699,13 @@ check_progress <- function (emc, stage, iter, stop_criteria,
 
 check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
                      selection, iter, n_blocks = 1, rhat_version = "old",
-                     truncate = TRUE)
+                     truncate = TRUE, n_cores = 1L)
 {
   get_gds <- function(emc, selection) {
     gds <- lapply(selection, function(select) {
       gd <- unlist(gd_summary.emc(emc, selection = select, stage = stage,
                                   omit_mpsrf = omit_mpsrf, stat = NULL,
-                                  version = rhat_version))
+                                  version = rhat_version, n_cores = n_cores))
       gd[is.na(gd)] <- Inf
       gd
     })
