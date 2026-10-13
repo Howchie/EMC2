@@ -803,3 +803,46 @@ test_that("a subject's rates are priced as the kernels are selected, jointly", {
   expect_identical(held$x[1], 0.5)
   expect_identical(held$cost[2:3], c(Inf, Inf))
 })
+
+test_that("the solver's objective is the model's objective at the plan it returns", {
+  local_test_rng(23)
+  subj <- function() {
+    list(kind = "subject", rho = stats::runif(1, 0.3, 0.98), p = stats::runif(1, 0.1, 0.9),
+         c_p = stats::runif(1, 0.05, 0.4), h = stats::runif(1, 0, 0.9),
+         c_h = stats::runif(1, 0.02, 0.4), d_rho = stats::runif(1, 0.1, 0.9),
+         p_dev = stats::runif(1, 0.1, 0.9), h_dev = stats::runif(1, 0.2, 1),
+         q_old = 1, r_old = 0)
+  }
+  tau <- EMC2:::.emc_alloc_tau
+  for (trial in 1:25) {
+    rho_g <- stats::runif(1, 0.5, 0.99)
+    u <- list(units = list(list(kind = "shear", rho = rho_g, g = stats::runif(1, 0.2, 0.95),
+                                cost = stats::runif(1, 0.01, 0.2)), subj(), subj()),
+              C_rest = 1, joint = NULL, hmc_fixed = stats::runif(1, 0, 0.2),
+              g_floor = stats::runif(1, 0, rho_g))
+    sol <- EMC2:::.emc_alloc_solve_units(u)
+    rates <- EMC2:::.emc_alloc_plan_rates(u$units, sol)
+    q <- rates$q; r <- rates$r
+    reg <- if (is.null(sol$regime)) 0 else sol$regime
+    r[2:3] <- pmin(1, r[2:3] + reg)
+    # The group coordinate is credited at the rates the plan runs.
+    R <- EMC2:::.emc_alloc_dev_ratio(u$units, q, r)
+    g <- EMC2:::.emc_alloc_credit(u$units[1], u$g_floor, R)[[1]]
+    rho <- g$rho * EMC2:::.emc_alloc_factor(g$g, sol$x[1], g$g)
+    for (i in 2:3) {
+      s <- u$units[[i]]
+      rho_s <- alloc_subject_rho(s, q[i], r[i])
+      # No subject coordinate slower than under its particle step alone.
+      expect_lte(rho_s, s$rho * s$p + 1e-9)
+      rho <- max(rho, rho_s)
+    }
+    cost <- 1 + sol$x[1] * u$units[[1]]$cost +
+      sum(vapply(2:3, function(i) q[i] * u$units[[i]]$c_p + r[i] * u$units[[i]]$c_h, 0)) +
+      u$hmc_fixed * (1 - prod(1 - r[2:3]))
+    # The solver reports its target, which the rates meet: never below the
+    # model's objective, and above it only by the target's resolution.
+    expect_gte(sol$objective, tau(rho) * cost * (1 - 1e-9))
+    expect_lte(sol$objective, tau(rho) * cost * (1 + 1e-3))
+    expect_lte(sol$objective, sol$objective0 * (1 + 1e-12))
+  }
+})

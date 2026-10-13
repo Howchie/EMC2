@@ -1164,7 +1164,8 @@
   }
   off <- lapply(u$units, function(x) {
     if (identical(x$kind, "hmc")) x <- .emc_alloc_as_subject(x)
-    if (identical(x$kind, "subject")) x$h <- NULL
+    # Kept as a NULL element: removing it would let `x$h` partially match h_dev.
+    if (identical(x$kind, "subject")) x["h"] <- list(NULL)
     x
   })
   movable <- if (!is.null(u$movable)) u$movable else
