@@ -5,6 +5,10 @@ emc_alloc_subject_need_cpp <- function(rho, p, h_, level, qs, rs, r_min, refresh
     .Call(`_EMC2_emc_alloc_subject_need_cpp`, rho, p, h_, level, qs, rs, r_min, refresh)
 }
 
+emc_alloc_subjects_need_cpp <- function(rho, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs, refresh) {
+    .Call(`_EMC2_emc_alloc_subjects_need_cpp`, rho, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs, refresh)
+}
+
 bou_pdf_cdf_vec <- function(rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 256L, dt_target = 1e-3, grade = 1.0, tgrade = 8.0, n_sv = 5L, n_sz = 5L, n_st0 = 7L, anchor_at_z = FALSE, anchor_fix = NA_real_, want_cdf = TRUE) {
     .Call(`_EMC2_bou_pdf_cdf_vec`, rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, bkind, aInf, tau, pw, nx, dt_target, grade, tgrade, n_sv, n_sz, n_st0, anchor_at_z, anchor_fix, want_cdf)
 }

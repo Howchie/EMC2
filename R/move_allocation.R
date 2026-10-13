@@ -464,10 +464,7 @@
     targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), lv)))
     tau_t <- .emc_alloc_tau(targets)
     still <- setdiff(seq_len(n_u), moved_idx)
-    need_of <- function(us, movable) lapply(seq_along(us), function(i)
-      if (movable[i]) .emc_alloc_unit_need(us[[i]], rs = targets, max_rounds = max_rounds,
-                                           refresh = refresh)
-      else .emc_alloc_unit_still(us[[i]], length(targets)))
+    need_of <- function(us, movable) .emc_alloc_units_need(us, movable, targets, max_rounds, refresh)
     need <- vector("list", n_u)
     need[still] <- need_of(units[still], r0$movable[still])
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
@@ -670,6 +667,39 @@
   k <- max.col(t(-cost), ties.method = "first")
   pick <- cbind(k, seq_len(n_t))
   list(x = r_need[pick] - r_min, q = qs[k], cost = cost[pick])
+}
+
+# Every unit's allocation at each target (.emc_alloc_unit_need), with the
+# movable subject units priced together in one call.
+.emc_alloc_units_need <- function(us, movable, rs, max_rounds, refresh = FALSE) {
+  out <- vector("list", length(us))
+  subj <- vapply(seq_along(us), function(i)
+    movable[i] && identical(us[[i]]$kind, "subject"), logical(1))
+  for (i in which(!subj)) out[[i]] <- if (movable[i])
+    .emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds, refresh = refresh)
+    else .emc_alloc_unit_still(us[[i]], length(rs))
+  idx <- which(subj)
+  if (!length(idx)) return(out)
+  num <- function(x, d) if (is.null(x)) d else as.numeric(x)
+  rho <- lapply(us[idx], function(u) as.numeric(u$rho))
+  k <- lengths(rho)
+  has_p <- vapply(us[idx], function(u) !is.null(u$p), logical(1))
+  has_h <- vapply(us[idx], function(u) !is.null(u$h), logical(1))
+  got <- emc_alloc_subjects_need_cpp(
+    unlist(rho),
+    unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$p, rep(1, k[j])))),
+    unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$h, rep(1, k[j])))),
+    unlist(lapply(us[idx], function(u) as.numeric(.emc_alloc_subject_base(u)))),
+    c(0L, cumsum(k)), has_p, has_h,
+    vapply(us[idx], function(u) num(u$q_fixed, NA_real_), numeric(1)),
+    vapply(us[idx], function(u) num(u$r_fixed, NA_real_), numeric(1)),
+    vapply(us[idx], function(u) num(u$r_min, 0), numeric(1)),
+    vapply(us[idx], function(u) num(u$c_p, 0), numeric(1)),
+    vapply(us[idx], function(u) num(u$c_h, 0), numeric(1)),
+    .EMC_ALLOC_PARTICLE_RATES, as.numeric(rs), refresh)
+  for (j in seq_along(idx))
+    out[[idx[j]]] <- list(x = got$x[j, ], q = got$q[j, ], cost = got$cost[j, ])
+  out
 }
 
 # The last m stored draws of a chain (at least two).

@@ -29,6 +29,31 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_subjects_need_cpp
+Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& p, const Rcpp::NumericVector& h, const Rcpp::NumericVector& level, const Rcpp::IntegerVector& off, const Rcpp::LogicalVector& has_p, const Rcpp::LogicalVector& has_h, const Rcpp::NumericVector& q_fixed, const Rcpp::NumericVector& r_fixed, const Rcpp::NumericVector& r_min, const Rcpp::NumericVector& c_p, const Rcpp::NumericVector& c_h, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs, bool refresh);
+RcppExport SEXP _EMC2_emc_alloc_subjects_need_cpp(SEXP rhoSEXP, SEXP pSEXP, SEXP hSEXP, SEXP levelSEXP, SEXP offSEXP, SEXP has_pSEXP, SEXP has_hSEXP, SEXP q_fixedSEXP, SEXP r_fixedSEXP, SEXP r_minSEXP, SEXP c_pSEXP, SEXP c_hSEXP, SEXP q_gridSEXP, SEXP rsSEXP, SEXP refreshSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type p(pSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type h(hSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type level(levelSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type off(offSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has_p(has_pSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has_h(has_hSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_fixed(q_fixedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type r_fixed(r_fixedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type r_min(r_minSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type c_p(c_pSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type c_h(c_hSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_grid(q_gridSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    Rcpp::traits::input_parameter< bool >::type refresh(refreshSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_subjects_need_cpp(rho, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs, refresh));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bou_pdf_cdf_vec
 Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R, NumericVector v, NumericVector a, NumericVector Z, NumericVector sv, NumericVector SZ, NumericVector t0, NumericVector st0, NumericVector s, NumericVector beta, int bkind, NumericVector aInf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade, int n_sv, int n_sz, int n_st0, bool anchor_at_z, double anchor_fix, bool want_cdf);
 RcppExport SEXP _EMC2_bou_pdf_cdf_vec(SEXP rtSEXP, SEXP RSEXP, SEXP vSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP svSEXP, SEXP SZSEXP, SEXP t0SEXP, SEXP st0SEXP, SEXP sSEXP, SEXP betaSEXP, SEXP bkindSEXP, SEXP aInfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP n_svSEXP, SEXP n_szSEXP, SEXP n_st0SEXP, SEXP anchor_at_zSEXP, SEXP anchor_fixSEXP, SEXP want_cdfSEXP) {
@@ -3577,6 +3602,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
+    {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},

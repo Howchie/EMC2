@@ -804,6 +804,39 @@ test_that("a subject's rates are priced as the kernels are selected, jointly", {
   expect_identical(held$cost[2:3], c(Inf, Inf))
 })
 
+# A subject unit with every optional field drawn at random.
+alloc_rand_subject <- function(k) {
+  u <- list(kind = "subject", rho = stats::runif(k, 0.3, 0.999),
+            p = stats::runif(k, 0.05, 0.95), c_p = stats::runif(1, 0.05, 0.5),
+            h = stats::runif(k, 0, 1.1), c_h = stats::runif(1, 0.02, 0.5))
+  if (stats::runif(1) < 0.15) u$p <- NULL
+  if (stats::runif(1) < 0.15) u$h <- NULL
+  if (stats::runif(1) < 0.2) u$q_fixed <- sample(EMC2:::.EMC_ALLOC_PARTICLE_RATES, 1)
+  if (stats::runif(1) < 0.2) u$r_fixed <- stats::runif(1)
+  if (stats::runif(1) < 0.3) u$r_min <- sample(c(0.5, 1), 1)
+  u
+}
+
+test_that("subjects priced together match each subject priced alone", {
+  local_test_rng(21)
+  for (refresh in c(FALSE, TRUE)) for (trial in 1:10) {
+    us <- c(list(list(kind = "shear", rho = 0.9, g = 0.6, cost = 0.05),
+                 list(kind = "fixed", rho = 0.5, cost = 0)),
+            lapply(stats::rpois(12, 2) + 1L, alloc_rand_subject))
+    movable <- c(TRUE, FALSE, stats::runif(12) < 0.85)
+    rs <- sort(c(stats::runif(25, 0.05, 1), 1, 0.999999))
+    got <- EMC2:::.emc_alloc_units_need(us, movable, rs, 4, refresh)
+    for (i in seq_along(us)) {
+      ref <- if (movable[i]) EMC2:::.emc_alloc_unit_need(us[[i]], rs, 4, refresh)
+        else EMC2:::.emc_alloc_unit_still(us[[i]], length(rs))
+      expect_equal(got[[i]]$cost, ref$cost, tolerance = 1e-12)
+      ok <- is.finite(ref$cost)
+      expect_equal(got[[i]]$x[ok], ref$x[ok], tolerance = 1e-12)
+      if (!is.null(ref$q)) expect_identical(got[[i]]$q[ok], ref$q[ok])
+    }
+  }
+})
+
 test_that("a plan's predicted autocorrelations are those it was solved for", {
   local_test_rng(22)
   for (trial in 1:15) {
