@@ -23,6 +23,8 @@ for (j in seq_along(emc)) {
   emc[[j]]$production_options$emc2.ensemble_rounds <- R
   emc[[j]]$sample_proposals_next <- n0 + 100L
   emc[[j]]$ensemble_stats <- NULL
+  # Fresh chain streams from the global seed, so seeds replicate.
+  emc[[j]]$rng <- NULL
 }
 # Checkpoint variance of the group coordinates over all chains' sample draws.
 coord_draws <- function(ch, w) rbind(ch$samples$theta_mu[, w, drop = FALSE],

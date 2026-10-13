@@ -13,14 +13,14 @@ Status (2026-10-13):
 | 873c734a | Iteration profile: `ensemble_elapsed`, `collapsed_elapsed`, `collapsed_moves` |
 | c910a3c4, 141df019 | Between-block pool/rounds rule, two versions: **reverted** (07a5cf11, 37ba83dc) |
 | 369ef06d | Proposal factors once per block; the inverse-Wishart draw's own precision factor; constant terms of the proposal density hoisted (RNG-identical) |
-| 1bb98ee6 | Three ensemble rounds by default (was ten) |
+| 1bb98ee6 | Three ensemble rounds by default: **reverted** (1eeac033), ten stays |
 | others | this report and `benchmarks/ensemble-cost/` |
 
 Phase 1 is done and verified. Phase 2's rule is withdrawn (see "A between-block rule: tried and
 withdrawn"): it valued the pool only by the group state's displacement inside one move and so
 cut the pool to two members, losing a third of the worst coordinate's ESS per CPU-s on
-Forstmann. The pool size stays a fixed option (32) pending the measurements in "Pool size: cost
-and sensitivity". nback31 was not run (its checkpoint build was stopped to release the shared
+Forstmann. The defaults stay M = 32, R = 10, now with measured support (see "Rounds" and "Pool
+size: cost and sensitivity"). nback31 was not run (its checkpoint build was stopped to release the shared
 lock). Latent-factor hierarchies and standard ones with group designs keep the R rounds. The
 `add_proposals()` hook the rule added is gone with it, so WS2's between-block code is untouched.
 
@@ -265,16 +265,64 @@ failing with the smaller pool, i.e. a mixing loss, not a cost one.
 
 ### Rounds
 
-Three rounds by default (1bb98ee6). Round 1 is the main Gibbs step's draw again; one or two
-reselections capture the in-move group gain on both fixtures. Where pools are inefficient the
-refresh share still grows with the rounds; whether that matters is checked by (32,3) against
-(32,10) below. Checkpoints keep the rounds they were recorded with (`production_options`), so a
-resumed fit from before this commit still runs ten.
+Ten rounds stay the default. A three-round default (1bb98ee6) was committed on the strength
+of the in-move group displacement and reverted (1eeac033) once continuations showed the loss.
+Forstmann, M = 32, exactly 400 iterations, 3 chains x 3 cores, 4 seeds per arm (fresh chain
+streams per seed; SE of the worst ESS about 20-30), build `cpp2`:
+
+| R | worst ESS (log sd t0) | lag-1 of worst | alpha min ESS | CPU s |
+|---|---|---|---|---|
+| 3 | 865 | 0.14 | 875 | 92.7 |
+| 5 | 1031 | 0.06 | 943 | 92.5 |
+| 10 | 994 | 0.03 | 895 | 92.1 |
+| 20 | 1077 | 0.03 | 922 | 92.0 |
+| 40 | 1014 | 0.06 | 909 | 95.6 |
+
+The benefit settles between three and five rounds; from five to forty the arms are within about
+two SE, the lag-1 of the slowest coordinate bottoms out by ten, and forty starts to cost CPU.
+The rounds are Gibbs on the group state and the selections given the pools, so as R grows the
+move tends to an exact draw given the pools and the gain is bounded, while the serial cost
+(about 0.1 ms per round on Forstmann at M = 32, 0.2-0.5 ms on T30) grows linearly. Ten keeps
+a margin over the settling point at a cost of about 2% of a Forstmann iteration. Checkpoints
+carry their recorded rounds in `production_options`.
 
 ### Pool size: cost and sensitivity
 
-(pending: `h/queue_m.sh`, harness `cont_m.R`, build `cpp2` = 1bb98ee6; fixed (M, R)
-continuations, exactly 400 iterations (`max_tries = 1`), 3 chains x 3 cores on CPUs 23-31, one
-fit at a time, each in its own systemd scope so the cgroup CPU is the fit's own. Forstmann M in
-{2, 8, 19 = n, 32, 64} at R = 3 and (32,10), 3 seeds; T30 M in {2, 8, 32, 64} at R = 3 and
-(32,10), 2 seeds; lba7r M in {2, 32, 106 = n} at R = 3, 100 iterations, cost only.)
+Benefit. The move's product is the share of subjects it refreshes, m(M) = mean_s (M-1) e_s /
+(1 + (M-1) e_s), with e_s the fresh members' weight odds against the carried state, i.e. how
+well the frozen proposal matches the subject's conditional posterior. It saturates once M - 1
+exceeds about 1/e_s, so the useful M is set by the proposals' efficiency, not by the number of
+subjects. Forstmann (e about 0.9), exactly 400 iterations, 3 seeds (2 for (32,10), (64,10)):
+
+| M | refreshed per move | worst ESS, R = 3 | worst ESS, R = 10 | CPU s (R = 10) |
+|---|---|---|---|---|
+| 2 | 0.42 | 682 | 596 | 86.4 |
+| 8 | 0.84 | 812 | 936 | 86.7 |
+| 19 (= n) | 0.93 | 714 | 1003 | 88.8 |
+| 32 | 0.96 | 859 | 957 | 93.0 |
+| 64 | 0.98 | 866 | 1088 | 103.2 |
+
+M = 2 is clearly worse; from M = 8 up the differences are within noise (replicate SD about
+50). On T30 (e about 1e-3) even M = 128 refreshes 20-43% of the subjects (sweep above), and no
+practical pool fixes proposals that poor.
+
+Cost. Each iteration evaluates M - 1 fresh members per subject, one likelihood row each, in the
+workers' particle round. Single-core timing of that call (`pool_cost.R`, rows from the
+subject's own posterior draws), against the CPU of one chain iteration from the continuations:
+
+| Fixture | n, p | per subject call: fixed + per row | pool CPU per iteration, M = 8 / 32 / n | share of iteration CPU, M = 32 / n |
+|---|---|---|---|---|
+| Forstmann | 19, 4 | 0.13 ms + 0.008 ms | 3.4 / 7.2 / 5.1 ms | 9% / 7% |
+| T30 | 40, 13 | 0.30 ms + 0.017 ms | 16 / 32 / 37 ms | 8% / 10% |
+| lba7r | 106, 20 | 0.85 ms + 0.19 ms | 0.21 / 0.69 / 2.16 s | 15% / 46% |
+
+The cost is n x (fixed call + (M - 2) x row): linear in M per subject, and the fixed per-call
+part dominates below about 15-20 rows on the cheap models (batching the pool rows into the
+particle step's likelihood call would remove it). Wall time hid this cost at 3 cores per chain
+(Forstmann wall flat at 20-22 s from M = 2 to 64) because the workers have slack; the CPU is
+real. M = n is not a good rule: n does not enter what a subject gains, while the cost becomes
+quadratic in n (lba7r: M = 106 would add about 1.5 s of CPU per chain iteration over M = 32).
+M = 32 is past saturation on efficient proposals at a cost of 8-15% of the iteration on these
+fixtures. A pool sized by the measured e_s (M - 1 a few times 1/median e_s, capped) is the
+principled refinement, left for later; on poor proposals (T30) it would hit the cap and buy
+little, so the cap is what would matter.
