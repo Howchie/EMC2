@@ -11,7 +11,11 @@
 #   all    all of them, from the same resampled iterations.
 # Also replays the rebuild once without resampling and checks that it
 # reproduces the plan the run made (replay determinism).
-# Writes <run_dir>/boot_<k>.rds.
+# REGRET=1 also scores every resampled plan under the full-evidence model
+# (oracle.R's objective on the replay's production units), relative to the
+# full-evidence plan: what a plan's sampling noise costs by the model's own
+# reckoning. The column `regret` is that ratio minus one.
+# Writes <run_dir>/boot_<k>.rds (boot_<k>_regret.rds with REGRET=1).
 args <- commandArgs(TRUE)
 suppressPackageStartupMessages(library(EMC2, lib.loc = Sys.getenv("EMC_LIB")))
 cat("EMC2 from", find.package("EMC2"), "\n")
@@ -43,10 +47,38 @@ utils::assignInNamespace(".emc_alloc_rebuild", orig_rebuild, ns)
 post <- captured
 seed_post <- get(".Random.seed", envir = globalenv())
 
+regret_on <- nzchar(Sys.getenv("REGRET"))
+if (regret_on) source(file.path(dirname(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))), "oracle.R"))
+# The production (non-optimistic) units each chain is solved on, in order:
+# every chain once, then again for the chains re-solved at the shared
+# particle rates. A chain's units are told apart by its measurements.
+units_log <- NULL
+if (regret_on) {
+  orig_units <- ns$.emc_alloc_units
+  log_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
+    u <- orig_units(ms, hmc_state, shear_on, optimistic, B)
+    if (!optimistic) units_log[[length(units_log) + 1L]] <<- list(u = u, key = ms$g_rho)
+    u
+  }
+  environment(log_units) <- list2env(list(orig_units = orig_units), parent = environment())
+  utils::assignInNamespace(".emc_alloc_units", log_units, ns)
+}
 solve_plan <- function(emc) {
   assign(".Random.seed", seed_post, envir = globalenv())
+  units_log <<- NULL
   out <- ns$.emc_alloc_rebuild(emc, post$stage, post$n_cores, post$B)
   lapply(out, function(ch) ch$alloc$last)
+}
+# A plan's objective under units u: group rounds, collapsed rate, and each
+# subject's particle rate and total HMC rate as the chain runs them.
+plan_objective <- function(u, r) {
+  n_g <- length(r$rounds)
+  movable <- ns$.emc_alloc_movable(u$units, ns$.EMC_ALLOC_MAX_ROUNDS, u$joint)
+  # A resampled plan can break the particle floor under the full evidence:
+  # it is scored anyway, with the subjects that break it counted.
+  ws1_model_objective(u, r$rounds, r$particle_rate, r$rate,
+                      xc = if (is.null(r$collapsed_rounds)) 0 else r$collapsed_rounds,
+                      movable = movable, floor = FALSE)
 }
 summ <- function(recs) do.call(rbind, lapply(seq_along(recs), function(j) {
   r <- recs[[j]]
@@ -60,6 +92,21 @@ summ <- function(recs) do.call(rbind, lapply(seq_along(recs), function(j) {
 
 # Replay determinism: the same input, the same plan.
 replay <- solve_plan(post$emc)
+if (regret_on) {
+  nch <- length(replay)
+  if (length(units_log) < nch) stop("expected a production unit set per chain")
+  keys <- lapply(units_log[seq_len(nch)], `[[`, "key")
+  u_full <- lapply(units_log[seq_len(nch)], `[[`, "u")
+  for (e in units_log[-seq_len(nch)]) {
+    j <- which(vapply(keys, identical, logical(1), e$key))
+    if (length(j) != 1L) stop("cannot tell which chain a unit set belongs to")
+    u_full[[j]] <- e$u
+  }
+  obj_full <- vapply(seq_along(replay), function(j) plan_objective(u_full[[j]], replay[[j]]), 0)
+  # How well the scoring reproduces the solver's own claim on its plan.
+  cat("full-evidence plan: scored / solver objective per chain:",
+      round(obj_full / vapply(replay, function(r) r$objective, 0), 4), "\n")
+}
 same <- vapply(seq_along(replay), function(j) {
   a <- actual$records[[j]]; b <- replay[[j]]
   isTRUE(all.equal(a$rounds, b$rounds)) && isTRUE(all.equal(a$rate, b$rate)) &&
@@ -268,7 +315,13 @@ for (v in variants) {
     assign(".Random.seed", boot_seed, envir = globalenv())
     idx <- lapply(traces, function(tr) mbb(length(tr$cost)))
     boot_seed <<- get(".Random.seed", envir = globalenv())
-    s <- summ(solve_plan(boot_state(idx, v)))
+    recs <- solve_plan(boot_state(idx, v))
+    s <- summ(recs)
+    if (regret_on) {
+      ob <- lapply(seq_along(recs), function(j) plan_objective(u_full[[j]], recs[[j]]))
+      s$regret <- vapply(seq_along(recs), function(j) as.numeric(ob[[j]]) / obj_full[j] - 1, 0)
+      s$floor_broken <- vapply(ob, function(o) attr(o, "floor"), 0)
+    }
     s$rep <- b
     s
   })
@@ -276,7 +329,7 @@ for (v in variants) {
   cat("variant", v, "done\n")
 }
 res$same <- same
-saveRDS(res, file.path(run_dir, sprintf("boot_%02d.rds", k)))
+saveRDS(res, file.path(run_dir, sprintf(if (regret_on) "boot_%02d_regret.rds" else "boot_%02d.rds", k)))
 base <- res$base
 for (v in variants) {
   r <- res[[v]]
@@ -290,6 +343,10 @@ for (v in variants) {
                hmc_n = b$hmc_n, hmc_q = paste(round(quantile(x$hmc_n, c(.1, .9))), collapse = "-"),
                regime_flip = mean(x$regime != b$regime), q_n = b$q_n,
                q_q = paste(round(quantile(x$q_n, c(.1, .9))), collapse = "-"),
-               bind_same = mean(x$bind == b$bind))
+               bind_same = mean(x$bind == b$bind),
+               regret_q = if (is.null(x$regret)) NA_character_ else
+                 paste(round(quantile(x$regret, c(.5, .9, 1)), 3), collapse = "/"),
+               floor_broken = if (is.null(x$floor_broken)) NA_character_ else
+                 paste(range(x$floor_broken), collapse = "-"))
   })), digits = 3)
 }

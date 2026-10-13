@@ -6,6 +6,10 @@ cat("EMC2 from", find.package("EMC2"), "\n")
 ns <- asNamespace("EMC2")
 post <- readRDS(args[1])
 options(post$options)
+# A saved state's custom kernels have dead pointers: without restoring them,
+# every pilot likelihood call reloads the kernel, which inflates the time and
+# races on Rcpp's build cache when pilots fork.
+post$emc <- ns$restore_custom_kernel_pointers(post$emc, quiet = TRUE)
 reps <- if (length(args) >= 2) as.integer(args[2]) else 2L
 run <- function() { assign(".Random.seed", post$seed, envir = globalenv())
   ns$.emc_alloc_rebuild(post$emc, post$stage, post$n_cores, post$B) }

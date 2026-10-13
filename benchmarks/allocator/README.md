@@ -65,7 +65,10 @@ copies instead.
    - Reruns the rebuild after each resample and writes `boot_<k>.rds`. The
      spread of tau, regime, rounds and HMC counts across replicates is the
      plan's sampling noise, attributed to each input set.
-5. **Exact inputs and cost**:
+5. **Exact inputs and cost** (any script that replays a saved state must
+   pass it through `restore_custom_kernel_pointers()` first; otherwise every
+   likelihood call reloads a custom kernel, which inflates times and, when
+   pilots fork, races on Rcpp's build cache so that calls fail at random):
    - `capture_post.R <pre_k.rds> <post_k.rds> [n_cores]` captures the exact
      state `.emc_alloc_rebuild()` receives, including seed and options.
    - `prof_rebuild.R <post.rds> [reps]` times and profiles one rebuild on that

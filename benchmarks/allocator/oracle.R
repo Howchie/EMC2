@@ -10,7 +10,10 @@ ws1_ns <- function() asNamespace("EMC2")
 # returns them (shear/fixed group units first, then subjects); u carries
 # g_floor, joint, shear_fixed, hmc_fixed, C_rest. movable: the coordinates the
 # minimax ranges over (default: every coordinate some move or credit lowers).
-ws1_model_objective <- function(u, x, q, r, xc = 0, movable = NULL, credit = TRUE) {
+# floor = FALSE scores a plan that breaks the particle-step floor instead of
+# rejecting it, with the number of subjects that break it in attr "floor".
+ws1_model_objective <- function(u, x, q, r, xc = 0, movable = NULL, credit = TRUE,
+                                floor = TRUE) {
   ns <- ws1_ns()
   units <- u$units
   n_u <- length(units)
@@ -28,9 +31,13 @@ ws1_model_objective <- function(u, x, q, r, xc = 0, movable = NULL, credit = TRU
   pred <- ns$.emc_alloc_predict(lapply(units, function(z) { z$r_min <- NULL; z }), sol, u$joint)
   rho <- unlist(pred[if (is.null(movable)) seq_len(n_u) else which(movable)])
   # The particle-step floor: no subject coordinate slower than its step alone.
+  broken <- 0L
   for (i in sidx) {
     z <- units[[i]]
-    if (!is.null(z$p) && any(pred[[i]] > z$rho * z$p + 1e-9)) return(Inf)
+    if (!is.null(z$p) && any(pred[[i]] > z$rho * z$p + 1e-9)) {
+      if (floor) return(Inf)
+      broken <- broken + 1L
+    }
   }
   cost <- u$C_rest
   for (k in seq_len(n_g)) if (identical(units[[k]]$kind, "shear")) cost <- cost + x[k] * units[[k]]$cost
@@ -44,7 +51,7 @@ ws1_model_objective <- function(u, x, q, r, xc = 0, movable = NULL, credit = TRU
   hf <- if (is.null(u$hmc_fixed)) 0 else u$hmc_fixed
   if (sf > 0) cost <- cost + sf * (1 - prod(1 - pmin(1, x[vapply(units[seq_len(n_g)], function(z) identical(z$kind, "shear"), logical(1))])))
   if (hf > 0 && n_u > n_g) cost <- cost + hf * (1 - prod(1 - pmin(1, rr[sidx])))
-  ns$.emc_alloc_tau(max(rho)) * cost
+  structure(ns$.emc_alloc_tau(max(rho)) * cost, floor = broken)
 }
 
 # Grid oracle over the group units' common rounds x, the collapsed rate and

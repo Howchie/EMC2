@@ -30,18 +30,26 @@ Read the evidence with these limits in mind:
    - the binding coordinate is often a different one (near-ties in a flat minimax);
    - regimes never flipped.
    Smoothing, if wanted, belongs on the move-factor evidence, not on the window of the rest of the iteration.
-4. **Plans are not exactly reproducible when HMC pilots fork across cores.** Pilot CPU times feed the HMC cost, and something else in multi-core pilot runs changes the HMC factors from run to run. With one core and the pilot CPU fixed, plans are deterministic.
-5. Latent issues (spec S1 and S2):
-   - **S1:** production evidence caps allow only about 1.33× growth per rebuild.
-   - **S2:** the confidence bound applies to the rest of the iteration only, which makes the plan's predictions as solved optimistic: by up to 0.05 on group coordinates and by 0.07–0.12 on subjects, whose windows are not pooled. This is deliberate protection against max-of-noise, and it does not change rankings.
+4. **In a live fit, plans vary run to run only through the pilots' measured CPU time, which feeds the HMC cost.** An earlier draft reported a second, unexplained source in multi-core replays. It was an artifact of my replay scripts: they replayed saved states without restoring the custom kernels' pointers. Every pilot likelihood call then rebuilt the kernel through Rcpp's on-disk cache, and concurrent forks raced on that cache. Calls failed at random (`load(index_file)`: zero-byte input; duplicate definitions in the generated source), and the pilots' `tryCatch` turned each failure into an HMC abort. With the pointers restored, a four-core replay is bit-identical across runs, pilots and plans included. Live fits restore pointers on load. The pilots' silent conversion of likelihood errors into aborts still hides failures like this one; that belongs to the HMC code (WS2).
+5. **The evidence cap read the evidence against the wrong block (spec S1). Fixed in `a488164e`.** The cap was 2 n_ev / B, with B the next block's length. On the doubling production schedule it allowed about 1.5× the rate the evidence was gathered at, not 2×. I had called this latent. It isn't:
+   - a shear cap above the exploration floor binds on at most one coordinate per plan, but that is often the coordinate the minimax binds on;
+   - T30's collapsed cap binds too;
+   - replayed on captured rebuilds, the fix lowers the plans' modelled tau on 6 of 15 chains (section 7).
+6. **S2:** the confidence bound applies to the rest of the iteration only, which makes the plan's predictions as solved optimistic: by up to 0.05 on group coordinates and by 0.07–0.12 on subjects, whose windows are not pooled. This is deliberate protection against max-of-noise. Whether it changes which plan wins was not tested; an earlier draft said it does not, which was unverified.
 
-**What was fixed or made faster:** six commits, listed in section 1. The allocator's main-process time per rebuild went from 3.45 s to an estimated 1.6 s on lba7r: the solve fell 1.9 → 0.75 s, and measurement fell 1.0 → 0.29 s. Results are equal to rounding.
+**What was fixed or made faster:** eight commits, listed in section 1. Six of them change no plan, either bit for bit or to rounding. The S1 fix changes plans by design, and the h fix (commit 1) changes the optimistic pass. On the four-core lba7r input, main-process time per rebuild went from 3.45 s to an estimated 1.6 s:
+- solve: 1.9 → 0.75 s;
+- measurement: 1.0 → 0.29 s.
+
+The activation fix then takes a further quarter off lba7r's solve (one-core input: 1.25 → 0.94 s).
+
+T30 was the costliest solve, and the first draft understated it by quoting lba7r alone. Activation was recomputed at every collapsed rate, 2,880 times per rebuild, and took 3.9 of the 8.0 s. That is fixed in `89d574e9`: T30's solve is now 4.5 s, and lbaE's fell 0.84 → 0.61 s.
 
 **What remains**
-- Bootstrap of lba7r's last block, and a burn-stage rebuild profile (both running at the time of writing).
+- T30's remaining 4.5 s solve, which is per-unit R pricing of the shear coordinates repeated for each collapsed rate (section 6).
+- A burn-stage rebuild profile. The capture script failed (`seq.int` given a vector `from`) and was not pursued.
 - Known-answer oracle tests for the collapsed joint grid and for `MIN_GAIN` as separate cases. The new honesty test covers credit, regime, particle floor and activation; the existing tests cover the rest only partly.
 - Multi-seed counterfactuals.
-- The run-to-run variation in multi-core pilots (item 4).
 - The unbought-coordinate baseline (section 3, last point).
 - A coarse regime grid ({0.5, 1} for every subject).
 
@@ -65,7 +73,9 @@ No constant or branch was removed. Calibration on single seeds is not enough to 
 | `513f5e96` | Movable subject units priced in one C++ call (`emc_alloc_subjects_need_cpp`), with the allocation copied across targets above every level. | Batched pricing equals per-unit pricing, including absent p/h, held q/r, r_min and refresh. Verified on every call of 15 captured rebuilds: 8,826 calls, q identical, x and cost within 2.2e-16. |
 | `0df29a3e` | Measurement: row variances via rowSums, log sds by one indexed read, subject draws permuted once. | Row variance and indexed log sd match `stats::var` and the per-draw log sd, including draws = array rank, a bug the test caught before commit. |
 | `1295e040` | Pooled draw covariances computed once per rebuild and shared by the chains (`diag(A S A')` per chain). | Shared-cache measurements equal uncached ones and equal the directly transformed draws. |
-| (this commit) | Harness, spec and this report. | n/a |
+| `6b7bcfec` | Harness, spec and this report. | n/a |
+| `89d574e9` | A family's activation term is computed once per solve unless the collapsed move shifts one of its units (only the HMC subjects' term was hoisted, since the collapsed move shifts the shear units). Column products are in C++ with long-double accumulation, like R's `prod`. | The compiled product is `identical()` to the R expression, including non-finite rates. Plans are `identical()` on the five captured inputs replayed with deterministic pilots. |
+| `a488164e` | Spec S1: shear and collapsed records carry the iterations their evidence spans, discounted with it, and the cap is 2 n_ev / iters. Records without a span keep the old reading. | Steady rate over doubling blocks gives a cap of exactly twice the rate. Without a span, the old reading. The span of a closing block is the window's iteration count. |
 
 Verification of the two measurement commits on six captured production inputs (Forstmann, T30, lbaE, nback31, lba7r ×2):
 - measurements agree to about 1e-15;
@@ -168,7 +178,7 @@ All-inputs variant (10–90% range across replicates; plan value in brackets):
 | lbaE block 2 | 1.55–1.83 / 12.6–14.6 | 0.18–0.60 (0.21–0.48) | 1.9–3.5 (3.1–3.2) | 0–0.04 | 8–16 (17) on one chain | 0 | 8–83% |
 | nback31 block 3 | 0.44–0.83 / 12.4–14.7 | 1.0–1.6 (1.1–1.6) | 0.26 (0.26) | 0.03–0.05 | 0–4 (0–1) | 0 | 50–100% |
 | forstmann block 3 | 0.06–0.12 / 1.2–1.5 | 0.16–0.20 (0.18) | 0.02–0.06 (0.03) | 0–0.06 | 0–9 (0) | 0 | 8–17% |
-| lba7r block 3 | running | | | | | | |
+| lba7r block 3 | 0.13–1.15 / 6.8–7.2 | 2.0–3.8 (3.2–3.4) | 0.32–0.52 (0.41–0.48) | 0.04–0.05 | 86–89 (88–89) | 0 | 58–75% |
 
 Attribution, comparing the variants:
 - **Costs** move little: tau SD is at most 0.24, and rounds vary only on one T30 chain.
@@ -178,7 +188,25 @@ Attribution, comparing the variants:
 Material flips:
 - T30's log-sd rounds range 0.9–6.1 across resamples.
 - On lbaE chain 1, HMC switches between 8 and 16 subjects.
+- lba7r is stable except on chain 3, where the moves' evidence alone spreads mean-direction rounds over 2.0–4.2 and gives tau an SD of 1.4. About 89 subjects take HMC in every replicate.
 - On T30 block 3 chain 3, the plan's own value (7.8 log-sd rounds) lies outside the all-inputs resample range (2.8–6.1) and the moves-only range (3.8–6.9). The plan sat at the edge of what its own move evidence supports.
+
+**What the flips cost (regret).** Each resampled plan was scored under the model built from the block's full evidence, relative to the plan that evidence gives (`REGRET=1`). The scoring reproduces the solver's own objective on its plan (ratio 1.000 on five chains, 0.999 on one).
+
+| Run | Variant | Regret median / 90% / max |
+|---|---|---|
+| lbaE block 3 | moves | 6–7% / 12–13% / 12–13% |
+| lbaE block 3 | all | 5–6% / 10–13% / 17–20% |
+| lba7r block 3 | moves | 4–7% / 7–11% / 11% |
+| lba7r block 3 | all | 5–6% / 9–10% / 10–15% |
+
+Both runs used the current library, with the S1 fix.
+
+So a plan made from one block's noisy move evidence typically costs 5–7% of the efficiency the model says the full evidence would buy. That is several times the solver's gap to the oracle (section 5).
+
+On lba7r, a resampled plan also gives 22–50 subjects a particle and HMC rate pair that the full evidence predicts is slower than the particle step alone. The objective hides this, because group coordinates bind.
+
+These figures are the most smoothing of the move evidence (review Op 4) could recover by the model's own reckoning, before smoothing's own lag costs. Evidence is already pooled with decay 0.5. Whether a longer memory, or hysteresis on the plan, recovers a useful share needs a fit-level comparison; it is not done here.
 
 A flat objective near its minimum makes the binding coordinate change often, while tau typically varies 5–15% (3.5–34% across chains). The rounds bought on the non-binding coordinates are what flips, and they cost little at the margin.
 
@@ -194,17 +222,46 @@ lba7r sample-stage rebuild input, 3 chains, captured with 4 cores (timing on 9 c
 
 | | Rebuild elapsed | Main-process CPU | Solve | Measure |
 |---|---|---|---|---|
-| `0a5773dd` (per-unit pricing) | 6.6–7.2 s | 3.45 s | 1.9 s | 1.05 s |
+| `0a5773dd` (per-unit pricing) | 6.6–7.2 s* | 3.45 s | 1.9 s | 1.05 s |
 | `513f5e96` (batched pricing) | 5.4–6.0 s | 2.32 s | 0.75–0.79 s | 1.06 s |
 | `1295e040` (shared measurement) | not re-timed | about 1.6 s (estimate) | 0.75 s | 0.29 s (same core, 3 chains) |
 
-Measurement per rebuild on the six captured inputs went from 0.27–1.01 s to 0.03–0.29 s. The remaining elapsed time, about 3 s (elapsed minus main-process CPU), is inferred to be mostly the forked HMC pilot runs. These were not profiled separately. The pilot code lives in `subject_hmc.R`, so speeding it up is a WS2 matter. A burn-stage rebuild profile is running; burn rebuilds come every 100 iterations, so their split matters more than the sample stage's.
+Solve time per rebuild across fixtures, one core, deterministic pilots, from captured inputs (the lba7r rows above used a four-core input):
+
+| Fixture | Rebuild elapsed | Solve before `89d574e9` | of which activation | Solve after |
+|---|---|---|---|---|
+| T30 | 8.8 → 4.8 s | 8.0 s | 3.9 s (2,880 calls) | 4.5 s |
+| lbaE | 2.3 → 2.0 s | 0.84 s | 0.25 s | 0.61 s |
+| lba7r | 6.2 s (after) | 1.25 s | 0.35 s | 0.94 s |
+| nback31 | 3.9 s (after) | 0.42 s | 0.09 s | 0.40 s |
+
+Elapsed time is with custom kernels restored. Without restoring, lba7r's rebuild measures 10.4 s and nback31's 5.7 s, because every pilot likelihood call reloads the kernel (item 4).
+
+T30's remaining solve is mostly R-level pricing of the shear units: those units are re-priced at each of about 40 collapsed rates, in each of 72 solves. A C++ port like the subject batch would remove most of it; that is not done.
+
+Measurement per rebuild on the six captured inputs went from 0.27–1.01 s to 0.03–0.29 s. \* These elapsed times, and the roughly 3 s of elapsed time not spent in the main process, were measured on saved states whose custom kernels were not restored. They include a kernel reload on every pilot likelihood call (item 4), so they overstate a live rebuild. The main-process CPU, solve and measurement columns are unaffected. The remaining time is mostly the forked HMC pilot runs, which were not profiled separately. The pilot code lives in `subject_hmc.R`, so speeding it up is a WS2 matter. A burn-stage rebuild profile was attempted, and its capture failed. Burn rebuilds come every 100 iterations, so their split matters more than the sample stage's.
 
 ## 7. Other findings
 
-- **Evidence caps (spec S1).** Shear caps bind on at most one coordinate per plan, so the 1.33× growth limit is latent. T30's collapsed cap, max(4, 2 × rate), does bind; T30 plans run 3–6 collapsed moves.
+- **Evidence caps (spec S1), fixed in `a488164e`.** Replay on the five captured inputs with the next block twice the last (the production schedule), with deterministic pilots:
+  - **Shear caps:** a cap above the exploration floor binds on at most one coordinate per plan. Many more coordinates (up to 10 on nback31) sit at a cap equal to their exploration floor, which is evidence collection, not S1.
+  - **Collapsed cap:** binds on T30.
+  - **Effect:** the plans' modelled tau falls on 6 of 15 chains:
+    - lba7r: 8.21 → 7.47 and 5.96 → 5.39;
+    - nback31: 15.1 → 14.2;
+    - T30: 4.35 → 4.18, 5.60 → 5.03 and 4.27 → 3.61.
+  - **No chain gets worse** beyond 0.04 (lbaE chain 3).
+  - **Next-block length:** under the fix, the plans are the same whether the next block is 200 or 400 iterations; before it, they changed with it.
+  - **Not measured:** realised mixing.
+  - **Cross-chain pooling, unchanged:** a log-sd coordinate's evidence still pools across chains, while its span is the chain's own. The log-sd cap therefore scales with the number of chains, as it did before.
+- **Which coordinate sets the target (review Op 3, empirical-Bayes shrinkage of subject rho).** Across the 45 calibration plans, a subject coordinate binds the minimax in 11. Nine of those are Forstmann, where tau is about 1.2 and the binding coordinate barely matters. On the four fixtures with tau above 2, subjects bind 2 of 36 plans:
+  - T30 block 3 chain 3: predicted 0.47, realised 0.41;
+  - lba7r block 1 chain 2: predicted 0.74, realised 0.64.
+
+  Group coordinates set the target everywhere else. Shrinking subject estimates would therefore rarely move tau. It could only change which subjects buy HMC to meet a target the group sets, and the counterfactuals (section 3) found the declined HMC correctly declined. Not implemented: no plan in these runs shows the noise-chasing the review describes.
 - **Exploration floors persist in production.** Steady evidence is about 13.3 against a target of 20 under decay 0.5, so unbought coordinates keep about 6.7 exploration rounds per block. Under the doubling schedule that cost per iteration halves at each rebuild.
 - **The particle rate (WS3 interaction).** On lba7r, q is about 0.16 with r about 0.38 for about 90 subjects (q + r < 1). The allocator relies on the particle step's measured factor p, so any WS3 change to the particle step feeds through automatically.
+- **Pricing pilots by work (review Op 7).** In a live fit, the pilots' measured CPU is the only run-to-run variation (verdict item 4). It prices HMC only for subjects with no HMC transitions in the block just finished, through `ev$cpu / ev$n`. Subjects with production transitions are priced from the window's worker CPU, which the trace fixes. Pricing pilots as rows × a per-row HMC time would make rebuilds deterministic, but the window records HMC CPU per subject, not rows, so that per-row time would need recording first. Not implemented.
 - **Regime coarseness.** The regime grid is {0.5, 1} applied to every subject. This causes the oracle's worst gaps. It also produced the one regime switch seen in calibration: at lbaE's first rebuild, one chain put all 80 subjects on HMC while the other chains put 0 and 49.
 
 ## 8. Reproducing
