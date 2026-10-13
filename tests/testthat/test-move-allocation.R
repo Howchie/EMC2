@@ -916,3 +916,46 @@ test_that("measurement variances and log sds match their per-draw definitions", 
   ref <- vapply(k, function(t) EMC2:::.emc_alloc_lsd(V[, , t]), numeric(p))
   expect_identical(EMC2:::.emc_alloc_lsd_draws(V, k), ref)
 })
+
+test_that("chains measured from shared pooled covariances match direct variances", {
+  local_test_rng(25)
+  p <- 3; n <- 4; k <- 40
+  chain <- function() {
+    a <- array(stats::rnorm(p * n * k), c(p, n, k))
+    mu <- matrix(stats::rnorm(p * k), p)
+    tv <- array(0, c(p, p, k)); for (t in seq_len(k)) tv[, , t] <- diag(exp(stats::rnorm(p)))
+    list(n_pars = p, n_subjects = n, type = "diagonal-gamma", par_names = c("x", "y", "z"),
+         lik_laplace = vector("list", n),
+         samples = list(idx = k, stage = rep("sample", k), theta_mu = mu, theta_var = tv, alpha = a),
+         shear = list(plan = list(dirs = matrix(stats::rnorm(p * p), p) + diag(2, p),
+                                  stage = "sample",
+                                  last = list(E = numeric(2 * p), n = numeric(2 * p),
+                                              moved = integer(2 * p)))),
+         alloc = list(window = NULL))
+  }
+  emc <- list(chain(), chain())
+  emc[[2]]$shear$plan$dirs <- emc[[1]]$shear$plan$dirs
+  hst <- list(subjects = lapply(seq_len(n), function(s) list(W = matrix(stats::rnorm(p * p), p))))
+  withr::local_options(list(emc2.shear_move = TRUE))
+  local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
+  cache <- new.env()
+  for (j in 1:2) {
+    shared <- EMC2:::.emc_alloc_measure(emc, j, hst, diag(p), "sample", cache = cache)
+    alone <- EMC2:::.emc_alloc_measure(emc, j, hst, diag(p), "sample")
+    expect_equal(shared, alone, tolerance = 1e-12)
+  }
+  # Against the variances of the transformed draws themselves.
+  mu <- do.call(cbind, lapply(emc, function(ch) ch$samples$theta_mu))
+  lsd <- do.call(cbind, lapply(emc, function(ch)
+    vapply(seq_len(k), function(t) EMC2:::.emc_alloc_lsd(ch$samples$theta_var[, , t]), numeric(p))))
+  Dinv <- solve(emc[[1]]$shear$plan$dirs)
+  expect_equal(unname(shared$g_var), apply(rbind(Dinv %*% mu, lsd), 1L, stats::var), tolerance = 1e-12)
+  for (s in seq_len(n)) {
+    x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, s, ]))
+    expect_equal(shared$s_var[s, ], apply(hst$subjects[[s]]$W %*% x, 1L, stats::var), tolerance = 1e-12)
+  }
+  # The deviations' covariance, computed once the window asks for it.
+  st <- EMC2:::.emc_alloc_draw_stats(emc, lapply(emc, function(ch) seq_len(k)), TRUE)
+  x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, 2, ]))
+  expect_equal(st$d_cov[[2]], stats::cov(t(x - mu)), tolerance = 1e-12)
+})

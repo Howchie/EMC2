@@ -725,8 +725,52 @@
   seq.int(max(1L, i - max(2L, m) + 1L), i)
 }
 
+# Pooled sample covariance of the columns of x (rows are coordinates).
+.emc_alloc_cov <- function(x) {
+  if (ncol(x) < 2L) return(matrix(NA_real_, nrow(x), nrow(x)))
+  xc <- x - rowMeans(x)
+  tcrossprod(xc) / (ncol(x) - 1L)
+}
+
+# Diagonal of A S A', the variances of A x for x with covariance S.
+.emc_alloc_quad_diag <- function(A, S) rowSums((A %*% S) * A)
+
+# The draws' statistics every chain's measurement shares: the pooled
+# covariances of mu, of each subject's alpha and (dev) of alpha minus mu,
+# and the variances of the log group sds. Each chain then needs only its own
+# directions and whitening. `cache` (an environment made for one rebuild,
+# whose draws do not change) holds them per set of draw indices, so the
+# rebuild computes them once.
+.emc_alloc_draw_stats <- function(emc, vdraws, dev, cache = NULL) {
+  st <- if (!is.null(cache) && identical(cache$vdraws, vdraws)) cache$stats else NULL
+  if (is.null(st)) {
+    p <- emc[[1L]]$n_pars
+    mu <- do.call(cbind, lapply(seq_along(emc), function(i)
+      emc[[i]]$samples$theta_mu[, vdraws[[i]], drop = FALSE]))
+    lsd <- do.call(cbind, lapply(seq_along(emc), function(i)
+      .emc_alloc_lsd_draws(emc[[i]]$samples$theta_var, vdraws[[i]])))
+    # Every chain's draws, one contiguous p x draws slice per subject.
+    al <- lapply(seq_along(emc), function(i)
+      aperm(emc[[i]]$samples$alpha[, , vdraws[[i]], drop = FALSE], c(1L, 3L, 2L)))
+    st <- list(mu = mu, mu_cov = .emc_alloc_cov(mu), lsd_var = .emc_alloc_row_var(lsd), al = al,
+               a_cov = lapply(seq_len(dim(al[[1L]])[3L]), function(s)
+                 .emc_alloc_cov(do.call(cbind, lapply(al, function(a) matrix(a[, , s], p))))))
+  }
+  if (dev && is.null(st$d_cov)) {
+    p <- nrow(st$mu)
+    st$d_cov <- lapply(seq_along(st$a_cov), function(s)
+      .emc_alloc_cov(do.call(cbind, lapply(st$al, function(a) matrix(a[, , s], p))) - st$mu))
+  }
+  if (!is.null(cache)) {
+    cache$vdraws <- vdraws
+    cache$stats <- st
+  }
+  st
+}
+
 # A chain's measurements at a rebuild, against every chain's window draws.
-.emc_alloc_measure <- function(emc, j, hmc_state, Vbar, stage = NULL) {
+.emc_alloc_measure <- function(emc, j, hmc_state, Vbar, stage = NULL,
+                               cache = NULL) {
   ch <- emc[[j]]
   p <- ch$n_pars
   n <- ch$n_subjects
@@ -786,12 +830,9 @@
     Dinv <- diag(p)
   }
   T_g <- rbind(cbind(Dinv, matrix(0, p, p)), cbind(matrix(0, p, p), diag(p)))
-  gx <- do.call(cbind, lapply(seq_along(emc), function(i) {
-    s <- emc[[i]]$samples
-    rbind(Dinv %*% s$theta_mu[, vdraws[[i]], drop = FALSE],
-          .emc_alloc_lsd_draws(s$theta_var, vdraws[[i]]))
-  }))
-  g_var <- .emc_alloc_row_var(gx)
+  has_D <- !stored && !is.null(w$D) && w$nA > 0
+  ds <- .emc_alloc_draw_stats(emc, vdraws, has_D, cache)
+  g_var <- c(.emc_alloc_quad_diag(Dinv, ds$mu_cov), ds$lsd_var)
   g_esjd <- if (w$nG > 0) rowSums((T_g %*% w$G) * T_g) / w$nG else rep(0, 2L * p)
   g_rho <- if (w$nG > 0) .emc_alloc_rho_lo(g_esjd, g_var, w$nG) else rep(0, 2L * p)
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
@@ -874,19 +915,12 @@
   # under the subject kernels as run (the particle step and any HMC).
   d_var <- matrix(NA_real_, n, p)
   d_rho <- matrix(NA_real_, n, p)
-  has_D <- !stored && !is.null(w$D) && w$nA > 0
-  # Every chain's variance draws, one contiguous p x draws slice per subject.
-  al <- lapply(seq_along(emc), function(i)
-    aperm(emc[[i]]$samples$alpha[, , vdraws[[i]], drop = FALSE], c(1L, 3L, 2L)))
-  mu_v <- if (has_D) do.call(cbind, lapply(seq_along(emc), function(i)
-    emc[[i]]$samples$theta_mu[, vdraws[[i]], drop = FALSE]))
   for (s in seq_len(n)) {
-    xs <- do.call(cbind, lapply(al, function(a) matrix(a[, , s], p)))
-    s_var[s, ] <- .emc_alloc_row_var(W[[s]] %*% xs)
+    s_var[s, ] <- .emc_alloc_quad_diag(W[[s]], ds$a_cov[[s]])
     if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho_lo(
       rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ], w$nA)
     if (has_D) {
-      d_var[s, ] <- .emc_alloc_row_var(W[[s]] %*% (xs - mu_v))
+      d_var[s, ] <- .emc_alloc_quad_diag(W[[s]], ds$d_cov[[s]])
       d_rho[s, ] <- .emc_alloc_rho_lo(
         rowSums((W[[s]] %*% w$D[[s]]) * W[[s]]) / w$nA, d_var[s, ], w$nA)
     }
@@ -1324,8 +1358,9 @@
   })
   hst <- lapply(seq_len(nch), function(j)
     if (hmc_on) .emc_hmc_plan_chain(emc[[j]], stage, Vbar[[j]]) else NULL)
+  stats_cache <- new.env()
   ms <- lapply(seq_len(nch), function(j)
-    .emc_alloc_measure(emc, j, hst[[j]], Vbar[[j]], stage))
+    .emc_alloc_measure(emc, j, hst[[j]], Vbar[[j]], stage, cache = stats_cache))
   shear_on <- vapply(seq_len(nch), function(j) ms[[j]]$shear, logical(1))
   # Calibration for subjects the optimistic allocation would use but that
   # lack measured HMC moves.
