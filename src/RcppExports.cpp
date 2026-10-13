@@ -66,6 +66,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_act_term_list_cpp
+Rcpp::NumericVector emc_alloc_act_term_list_cpp(const Rcpp::List& xs, const Rcpp::NumericVector& add);
+RcppExport SEXP _EMC2_emc_alloc_act_term_list_cpp(SEXP xsSEXP, SEXP addSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type xs(xsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type add(addSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_act_term_list_cpp(xs, add));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_shears_need_cpp
 Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& rs);
 RcppExport SEXP _EMC2_emc_alloc_shears_need_cpp(SEXP rhoSEXP, SEXP gSEXP, SEXP aSEXP, SEXP costSEXP, SEXP capSEXP, SEXP floorSEXP, SEXP rsSEXP) {
@@ -80,6 +92,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type floor(floorSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
     rcpp_result_gen = Rcpp::wrap(emc_alloc_shears_need_cpp(rho, g, a, cost, cap, floor, rs));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_alloc_fixed_need_cpp
+Rcpp::List emc_alloc_fixed_need_cpp(const Rcpp::NumericVector& rho_max, const Rcpp::NumericVector& rs);
+RcppExport SEXP _EMC2_emc_alloc_fixed_need_cpp(SEXP rho_maxSEXP, SEXP rsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rho_max(rho_maxSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_fixed_need_cpp(rho_max, rs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3633,7 +3657,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
     {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},
+    {"_EMC2_emc_alloc_act_term_list_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_list_cpp, 2},
     {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 7},
+    {"_EMC2_emc_alloc_fixed_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_fixed_need_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},

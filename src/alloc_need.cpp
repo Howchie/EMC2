@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 // The least HMC rate a subject needs, for each particle rate qs[a] (rows) and
 // target rs[t] (columns): the largest over coordinates i of the rate at which
@@ -166,6 +167,29 @@ Rcpp::NumericVector emc_alloc_act_term_cpp(const Rcpp::NumericMatrix& X,
   return out;
 }
 
+// emc_alloc_act_term_cpp with the rows given as a list of vectors.
+// [[Rcpp::export]]
+Rcpp::NumericVector emc_alloc_act_term_list_cpp(const Rcpp::List& xs,
+                                                const Rcpp::NumericVector& add) {
+  const int n_r = xs.size();
+  if (!n_r) return Rcpp::NumericVector(0);
+  std::vector<Rcpp::NumericVector> rows(n_r);
+  for (int i = 0; i < n_r; ++i) rows[i] = Rcpp::as<Rcpp::NumericVector>(xs[i]);
+  const int n_t = rows[0].size();
+  const double inf = std::numeric_limits<double>::infinity();
+  Rcpp::NumericVector out(n_t);
+  for (int t = 0; t < n_t; ++t) {
+    long double s = 1.0L;
+    for (int i = 0; i < n_r; ++i) {
+      double v = rows[i][t] + add[i];
+      if (std::isnan(v) || v == -inf || v > 1.0) v = 1.0;
+      s *= static_cast<long double>(1.0 - v);
+    }
+    out[t] = 1.0 - static_cast<double>(s);
+  }
+  return out;
+}
+
 // The shear pricing below reproduces R's arithmetic exactly: no fused
 // multiply-adds or fast-math rewrites, which the package flags allow.
 #pragma GCC push_options
@@ -200,10 +224,10 @@ static inline double alloc_factor_inverse(double g, double a, double t) {
   return (m - 1.0) + v;
 }
 
-// Every shear unit's rounds and cost at each target rs (rows: units), as
-// .emc_alloc_unit_need prices one: the floor where the coordinate already
-// meets the target, else the least rounds that reach it, raised to the floor
-// and Inf beyond the cap.
+// Every shear unit's rounds and cost at each target rs, as
+// .emc_alloc_unit_need prices one (a list per unit: x, q, cost): the floor
+// where the coordinate already meets the target, else the least rounds that
+// reach it, raised to the floor and Inf beyond the cap.
 // [[Rcpp::export]]
 Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
                                      const Rcpp::NumericVector& g,
@@ -214,9 +238,10 @@ Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
                                      const Rcpp::NumericVector& rs) {
   const int n_u = rho.size(), n_t = rs.size();
   const double inf = std::numeric_limits<double>::infinity();
-  Rcpp::NumericMatrix X(n_u, n_t), C(n_u, n_t);
+  Rcpp::List out(n_u);
   for (int i = 0; i < n_u; ++i) {
     const bool reach = g[i] < 1 - 1e-9;
+    Rcpp::NumericVector X(n_t), C(n_t), Q(n_t, 1.0);
     for (int t = 0; t < n_t; ++t) {
       double x = floor[i];
       if (rho[i] > rs[t]) {
@@ -224,11 +249,30 @@ Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
         if (!std::isnan(x) && x < floor[i]) x = floor[i];
         if (!std::isfinite(x) || x > cap[i] + 1e-9) x = inf;
       }
-      X(i, t) = x;
-      C(i, t) = std::isfinite(x) ? x * cost[i] : inf;
+      X[t] = x;
+      C[t] = std::isfinite(x) ? x * cost[i] : inf;
     }
+    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
+                                Rcpp::Named("cost") = C);
   }
-  return Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("cost") = C);
+  return out;
+}
+
+// Every fixed unit's allocation at each target: nothing to buy, and out of
+// reach wherever its rho (largest coordinate rho_max) is above the target.
+// [[Rcpp::export]]
+Rcpp::List emc_alloc_fixed_need_cpp(const Rcpp::NumericVector& rho_max,
+                                    const Rcpp::NumericVector& rs) {
+  const int n_u = rho_max.size(), n_t = rs.size();
+  const double inf = std::numeric_limits<double>::infinity();
+  Rcpp::List out(n_u);
+  for (int i = 0; i < n_u; ++i) {
+    Rcpp::NumericVector X(n_t), C(n_t), Q(n_t, 1.0);
+    for (int t = 0; t < n_t; ++t) C[t] = rho_max[i] > rs[t] ? inf : 0.0;
+    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
+                                Rcpp::Named("cost") = C);
+  }
+  return out;
 }
 
 #pragma GCC pop_options

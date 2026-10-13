@@ -466,8 +466,18 @@
       moved[[moved_idx[i]]]$rho <- moved[[moved_idx[i]]]$rho * fac[i]
     moved
   })
-  if (is.null(movable)) movable <- .emc_alloc_movable(units, max_rounds, joint)
-  ranges <- lapply(cand, .emc_alloc_range, max_rounds = max_rounds, movable = movable)
+  # Only the moved units' levels change with the collapsed rate.
+  parts0 <- .emc_alloc_range_parts(units, max_rounds)
+  if (is.null(movable)) movable <- .emc_alloc_movable(units, max_rounds, joint, parts0)
+  moved_parts <- .emc_alloc_scaled_parts(units[moved_idx], max_rounds)
+  ranges <- lapply(seq_along(cand), function(c) {
+    if (xcs[c] == 0 || !length(moved_idx)) return(.emc_alloc_range_of(parts0, movable))
+    pm <- moved_parts(cand[[c]][moved_idx])
+    pc <- parts0
+    pc$levels[moved_idx] <- pm$levels
+    pc$best[moved_idx] <- pm$best
+    .emc_alloc_range_of(pc, movable)
+  })
   r0 <- ranges[[1L]]
   c_p0 <- sum(vapply(units, function(u)
     if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
@@ -512,10 +522,12 @@
     act_part <- function(nd, f) {
       rows <- act_rows[[f]]
       if (act_fixed[[f]] <= 0 || !length(rows)) return(NULL)
-      .emc_alloc_act_part(do.call(rbind, lapply(nd[rows], `[[`, "x")), act_add[[f]], act_fixed[[f]])
+      act_fixed[[f]] * emc_alloc_act_term_list_cpp(lapply(nd[rows], `[[`, "x"),
+                                                   rep_len(as.numeric(act_add[[f]]), length(rows)))
     }
     act_held <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
       if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
+    best_k <- NULL
     for (c in seq_along(xcs)) {
       nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx], moved_layout)
       need_c <- need
@@ -528,11 +540,16 @@
       obj <- tau_t * cost
       k <- which.min(obj)
       if (!length(k) || !is.finite(obj[k]) || obj[k] >= best$objective * (1 - 1e-9)) next
-      need[moved_idx] <- nm
-      best <- list(x = vapply(need, function(z) z$x[k], numeric(1)),
-                   q = vapply(need, function(z) z$q[k], numeric(1)),
-                   rho = targets[k], tau = tau_t[k], cost = cost[k],
+      best_nm <- nm
+      best_k <- k
+      best <- list(x = NULL, q = NULL, rho = targets[k], tau = tau_t[k], cost = cost[k],
                    objective = obj[k], joint = xcs[c])
+    }
+    # The winning plan's allocation, read once.
+    if (!is.null(best_k)) {
+      need[moved_idx] <- best_nm
+      best$x <- vapply(need, function(z) z$x[best_k], numeric(1))
+      best$q <- vapply(need, function(z) z$q[best_k], numeric(1))
     }
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
@@ -613,15 +630,49 @@
 # The unallocated rho of each unit, the least rho* it can reach, and whether
 # any move lowers it at all; the range of targets is over the units that
 # can be moved.
-.emc_alloc_range <- function(units, max_rounds, movable = NULL) {
-  levels <- vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1))
-  best_rho <- vapply(units, function(u) switch(u$kind,
+.emc_alloc_range <- function(units, max_rounds, movable = NULL)
+  .emc_alloc_range_of(.emc_alloc_range_parts(units, max_rounds), movable)
+
+# Each unit's unallocated rho (levels) and least reachable rho (best).
+.emc_alloc_range_parts <- function(units, max_rounds) list(
+  levels = vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1)),
+  best = vapply(units, function(u) switch(u$kind,
     fixed = max(u$rho),
     shear = u$rho * .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap,
                                       if (is.null(u$a)) u$g else u$a),
     subject = max(if (is.null(u$h)) .emc_alloc_level(u) else
-                    .emc_alloc_subject_base(u) * u$h)), numeric(1))
-  if (is.null(movable) || length(movable) != length(units))
+                    .emc_alloc_subject_base(u) * u$h)), numeric(1)))
+
+# .emc_alloc_range_parts for units that differ from `units` only in a scalar
+# rho, as a function of those units: a shear coordinate's factors at its
+# floor and cap do not depend on rho. Falls back to the full computation
+# for any other units.
+.emc_alloc_scaled_parts <- function(units, max_rounds) {
+  kind <- vapply(units, function(u) u$kind, character(1))
+  if (!all(kind %in% c("shear", "fixed")) || any(lengths(lapply(units, `[[`, "rho")) != 1L))
+    return(function(us) .emc_alloc_range_parts(us, max_rounds))
+  sh <- kind == "shear"
+  a_of <- function(u) if (is.null(u$a)) u$g else u$a
+  f_floor <- vapply(units, function(u) if (identical(u$kind, "shear") && !is.null(u$floor) &&
+    u$floor > 0) .emc_alloc_factor(u$g, u$floor, a_of(u)) else NA_real_, numeric(1))
+  f_cap <- vapply(units, function(u) if (identical(u$kind, "shear"))
+    .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap, a_of(u)) else NA_real_,
+    numeric(1))
+  floored <- !is.na(f_floor)
+  function(us) {
+    rho <- as.numeric(unlist(lapply(us, `[[`, "rho")))
+    levels <- rho
+    levels[floored] <- rho[floored] * f_floor[floored]
+    best <- rho
+    best[sh] <- rho[sh] * f_cap[sh]
+    list(levels = levels, best = best)
+  }
+}
+
+.emc_alloc_range_of <- function(parts, movable = NULL) {
+  levels <- parts$levels
+  best_rho <- parts$best
+  if (is.null(movable) || length(movable) != length(levels))
     movable <- best_rho < levels - 1e-9
   list(levels = levels, best = best_rho, movable = movable,
        hi = if (any(movable)) max(levels[movable], 0) else 0,
@@ -630,8 +681,9 @@
 }
 
 # Which units a move can lower: by their own moves, or by the joint move.
-.emc_alloc_movable <- function(units, max_rounds, joint = NULL) {
-  movable <- .emc_alloc_range(units, max_rounds)$movable
+.emc_alloc_movable <- function(units, max_rounds, joint = NULL, parts = NULL) {
+  if (is.null(parts)) parts <- .emc_alloc_range_parts(units, max_rounds)
+  movable <- .emc_alloc_range_of(parts)$movable
   if (!is.null(joint)) {
     idx <- as.integer(joint$idx)
     g <- rep_len(joint$g, length(idx))
@@ -747,18 +799,19 @@
   out <- vector("list", length(us))
   shear <- movable & layout$shear
   subj <- movable & layout$kind == "subject"
-  for (i in which(!subj & !shear)) out[[i]] <- if (movable[i])
+  fixed <- movable & layout$kind == "fixed"
+  if (any(fixed))
+    out[fixed] <- emc_alloc_fixed_need_cpp(vapply(us[fixed], function(u) max(u$rho), numeric(1)),
+                                           as.numeric(rs))
+  for (i in which(!subj & !shear & !fixed)) out[[i]] <- if (movable[i])
     .emc_alloc_unit_need(us[[i]], rs = rs, max_rounds = max_rounds, refresh = refresh)
     else .emc_alloc_unit_still(us[[i]], length(rs))
   sh <- which(shear)
   if (length(sh)) {
     k <- match(sh, which(layout$shear))
-    got <- emc_alloc_shears_need_cpp(as.numeric(unlist(lapply(us[sh], `[[`, "rho"))),
-                                     layout$g[k], layout$a[k], layout$cost[k], layout$cap[k],
-                                     layout$floor[k], as.numeric(rs))
-    q1 <- rep(1, length(rs))
-    for (j in seq_along(sh))
-      out[[sh[j]]] <- list(x = got$x[j, ], q = q1, cost = got$cost[j, ])
+    out[sh] <- emc_alloc_shears_need_cpp(as.numeric(unlist(lapply(us[sh], `[[`, "rho"))),
+                                         layout$g[k], layout$a[k], layout$cost[k],
+                                         layout$cap[k], layout$floor[k], as.numeric(rs))
   }
   idx <- which(subj)
   if (!length(idx)) return(out)

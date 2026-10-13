@@ -13,8 +13,16 @@ emc_alloc_act_term_cpp <- function(X, add) {
     .Call(`_EMC2_emc_alloc_act_term_cpp`, X, add)
 }
 
+emc_alloc_act_term_list_cpp <- function(xs, add) {
+    .Call(`_EMC2_emc_alloc_act_term_list_cpp`, xs, add)
+}
+
 emc_alloc_shears_need_cpp <- function(rho, g, a, cost, cap, floor, rs) {
     .Call(`_EMC2_emc_alloc_shears_need_cpp`, rho, g, a, cost, cap, floor, rs)
+}
+
+emc_alloc_fixed_need_cpp <- function(rho_max, rs) {
+    .Call(`_EMC2_emc_alloc_fixed_need_cpp`, rho_max, rs)
 }
 
 bou_pdf_cdf_vec <- function(rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 256L, dt_target = 1e-3, grade = 1.0, tgrade = 8.0, n_sv = 5L, n_sz = 5L, n_st0 = 7L, anchor_at_z = FALSE, anchor_fix = NA_real_, want_cdf = TRUE) {
