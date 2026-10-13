@@ -901,3 +901,18 @@ test_that("the solver's objective is the model's objective at the plan it return
     expect_lte(sol$objective, sol$objective0 * (1 + 1e-12))
   }
 })
+
+test_that("measurement variances and log sds match their per-draw definitions", {
+  local_test_rng(24)
+  x <- matrix(stats::rnorm(5 * 40, sd = 3), 5)
+  x[2, 7] <- NA
+  expect_equal(EMC2:::.emc_alloc_row_var(x), apply(x, 1L, stats::var), tolerance = 1e-12)
+  expect_identical(EMC2:::.emc_alloc_row_var(x[, 1, drop = FALSE]), rep(NA_real_, 5))
+  p <- 3
+  V <- array(0, c(p, p, 6), dimnames = list(c("a", "b", "c"), c("a", "b", "c"), NULL))
+  for (t in 1:6) V[, , t] <- crossprod(matrix(stats::rnorm(p * p), p))
+  V[2, 2, 4] <- 0
+  k <- c(2L, 4L, 5L)
+  ref <- vapply(k, function(t) EMC2:::.emc_alloc_lsd(V[, , t]), numeric(p))
+  expect_identical(EMC2:::.emc_alloc_lsd_draws(V, k), ref)
+})

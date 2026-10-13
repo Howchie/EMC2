@@ -144,6 +144,23 @@
 
 .emc_alloc_lsd <- function(V) 0.5 * log(pmax(diag(as.matrix(V)), .Machine$double.xmin))
 
+# .emc_alloc_lsd of draws k of a p x p x T variance array, as a p x length(k)
+# matrix.
+.emc_alloc_lsd_draws <- function(V, k) {
+  p <- dim(V)[1L]
+  # A plain vector index: an index matrix with as many columns as V has
+  # dimensions would be read as array subscripts.
+  idx <- c(outer(seq_len(p) + (seq_len(p) - 1L) * p, (k - 1) * p * p, "+"))
+  matrix(0.5 * log(pmax(V[idx], .Machine$double.xmin)), p,
+         dimnames = list(dimnames(V)[[1L]], NULL))
+}
+
+# Each row's sample variance (stats::var), NA with fewer than two columns.
+.emc_alloc_row_var <- function(x) {
+  if (ncol(x) < 2L) return(rep(NA_real_, nrow(x)))
+  rowSums((x - rowMeans(x))^2) / (ncol(x) - 1L)
+}
+
 .emc_alloc_empty_window <- function(n, p) {
   list(n = 0L, nG = 0L, G = matrix(0, 2L * p, 2L * p), nA = 0L,
        A = replicate(n, matrix(0, p, p), simplify = FALSE),
@@ -771,10 +788,10 @@
   T_g <- rbind(cbind(Dinv, matrix(0, p, p)), cbind(matrix(0, p, p), diag(p)))
   gx <- do.call(cbind, lapply(seq_along(emc), function(i) {
     s <- emc[[i]]$samples
-    vapply(vdraws[[i]], function(t) c(drop(Dinv %*% s$theta_mu[, t]),
-                                     .emc_alloc_lsd(s$theta_var[, , t])), numeric(2L * p))
+    rbind(Dinv %*% s$theta_mu[, vdraws[[i]], drop = FALSE],
+          .emc_alloc_lsd_draws(s$theta_var, vdraws[[i]]))
   }))
-  g_var <- apply(gx, 1L, stats::var)
+  g_var <- .emc_alloc_row_var(gx)
   g_esjd <- if (w$nG > 0) rowSums((T_g %*% w$G) * T_g) / w$nG else rep(0, 2L * p)
   g_rho <- if (w$nG > 0) .emc_alloc_rho_lo(g_esjd, g_var, w$nG) else rep(0, 2L * p)
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
@@ -858,17 +875,18 @@
   d_var <- matrix(NA_real_, n, p)
   d_rho <- matrix(NA_real_, n, p)
   has_D <- !stored && !is.null(w$D) && w$nA > 0
+  # Every chain's variance draws, one contiguous p x draws slice per subject.
+  al <- lapply(seq_along(emc), function(i)
+    aperm(emc[[i]]$samples$alpha[, , vdraws[[i]], drop = FALSE], c(1L, 3L, 2L)))
+  mu_v <- if (has_D) do.call(cbind, lapply(seq_along(emc), function(i)
+    emc[[i]]$samples$theta_mu[, vdraws[[i]], drop = FALSE]))
   for (s in seq_len(n)) {
-    ax <- do.call(cbind, lapply(seq_along(emc), function(i)
-      W[[s]] %*% matrix(emc[[i]]$samples$alpha[, s, vdraws[[i]]], p)))
-    s_var[s, ] <- apply(ax, 1L, stats::var)
+    xs <- do.call(cbind, lapply(al, function(a) matrix(a[, , s], p)))
+    s_var[s, ] <- .emc_alloc_row_var(W[[s]] %*% xs)
     if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho_lo(
       rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ], w$nA)
     if (has_D) {
-      dx <- do.call(cbind, lapply(seq_along(emc), function(i)
-        W[[s]] %*% (matrix(emc[[i]]$samples$alpha[, s, vdraws[[i]]], p) -
-                      emc[[i]]$samples$theta_mu[, vdraws[[i]], drop = FALSE])))
-      d_var[s, ] <- apply(dx, 1L, stats::var)
+      d_var[s, ] <- .emc_alloc_row_var(W[[s]] %*% (xs - mu_v))
       d_rho[s, ] <- .emc_alloc_rho_lo(
         rowSums((W[[s]] %*% w$D[[s]]) * W[[s]]) / w$nA, d_var[s, ], w$nA)
     }
