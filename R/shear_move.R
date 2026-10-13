@@ -545,17 +545,20 @@
       out$n[got] <- rec$n[match[got]]
       out$moved[got] <- rec$moved[match[got]]
       out$N[got] <- rec$N[match[got]] * scale[got]^2
+      out$iters[got] <- rec$iters[match[got]]
       out$K <- matrix(0L, 2L * p, ncol(rec$K))
       out$K[got, ] <- rec$K[match[got], ]
       out
     }
     recent <- carry(blk)
+    recent$iters[got] <- .emc_alloc_block_iters(chain)
     if (pooled) {
       prev <- carry(old$pool)
       d <- .EMC_ALLOC_EVIDENCE_DECAY
       plan$pool <- list(E = d * prev$E + recent$E, n = d * prev$n + recent$n,
                         moved = d * prev$moved + recent$moved, N = d * prev$N + recent$N,
-                        K = .emc_alloc_khist_sum(d * prev$K, recent$K))
+                        K = .emc_alloc_khist_sum(d * prev$K, recent$K),
+                        iters = d * prev$iters + recent$iters)
     }
   }
   # The allocation measures a coordinate's rounds from the pooled production
@@ -1046,14 +1049,16 @@
 }
 
 # A block's round record: per coordinate the selection-weighted squared
-# moves E over n rounds (moved of them moving), and the net squared move N of
-# its rounds per iteration with K the iterations' round counts. Fills in the
-# net-move fields a record made without them lacks.
+# moves E over n rounds (moved of them moving), the net squared move N of
+# its rounds per iteration with K the iterations' round counts, and the
+# iterations the record spans (iters, zero where unknown). Fills in the
+# fields a record made without them lacks.
 .emc_shear_record <- function(rec, p) {
   if (is.null(rec))
     rec <- list(E = numeric(2L * p), n = integer(2L * p), moved = integer(2L * p))
   if (is.null(rec$N)) rec$N <- numeric(2L * p)
   if (is.null(rec$K)) rec$K <- matrix(0L, 2L * p, 1L)
+  if (is.null(rec$iters)) rec$iters <- numeric(2L * p)
   rec
 }
 

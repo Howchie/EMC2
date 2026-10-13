@@ -364,6 +364,13 @@
   K
 }
 
+# Iterations in the block that just ended: the allocation window is reset
+# only after the move plans have closed their blocks.
+.emc_alloc_block_iters <- function(chain) {
+  n <- chain$alloc$window$n
+  if (is.null(n) || !is.finite(n)) 0 else as.numeric(n)
+}
+
 .emc_alloc_khist_sum <- function(A, B) {
   if (is.null(A)) return(B)
   if (is.null(B)) return(A)
@@ -882,6 +889,7 @@
     # rounds shade the reference rather than replace it (see the header).
     nk <- last$n
     last_n <- nk
+    last_iters <- last$iters
     g_measured <- nk > 0
     g_obs <- ifelse(g_measured,
                     pmin(1, pmax(0, 1 - (last$E / pmax(nk, 1e-12)) / (2 * g_var))), NA_real_)
@@ -995,7 +1003,9 @@
        shear = shear,
        g_rho = g_rho, g_var = g_var, g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
        g_n = if (shear) last_n else numeric(2L * p),
+       g_iters = if (shear) last_iters else numeric(2L * p),
        c_n = if (coll && c_measured) last$n else 0,
+       c_iters = if (coll && c_measured) last$iters else 0,
        coll = coll, c_fac = c_fac, c_sat = c_sat, c_measured = c_measured,
        c_coll = if (stored) NA_real_ else marg$collapsed$c,
        coll_fixed = marg$collapsed$fixed,
@@ -1026,15 +1036,18 @@
 # B: transitions until the next rebuild. A move with fewer than
 # .EMC_ALLOC_ROUND_EVIDENCE moves behind it runs at the exploration rate that
 # collects the rest by then, and no move runs faster than twice the rate its
-# evidence was gathered at: trust grows with evidence, and a move measured
-# as useless fades with it.
+# evidence was gathered at (its moves over the iterations they span, both
+# discounted alike): trust grows with evidence, and a move measured as
+# useless fades with it.
 .emc_alloc_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
   n <- nrow(ms$s_rho)
   opts <- .emc_hmc_options()
-  bounds <- function(n_ev) {
+  bounds <- function(n_ev, iters) {
     if (is.null(B) || !is.finite(B) || B <= 0) return(list(floor = 0, cap = Inf))
     n0 <- .EMC_ALLOC_ROUND_EVIDENCE
-    list(floor = max(0, n0 - n_ev) / B, cap = max(max(0, n0 - n_ev), 2 * n_ev) / B)
+    floor <- max(0, n0 - n_ev) / B
+    span <- if (length(iters) && is.finite(iters) && iters > 0) iters else B
+    list(floor = floor, cap = max(floor, 2 * n_ev / span))
   }
   C_rest <- if (is.finite(ms$C_rest)) ms$C_rest else 1
   # Unmeasured costs are guessed against the whole iteration's.
@@ -1042,7 +1055,8 @@
   c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_iter
   units <- lapply(seq_along(ms$g_rho), function(k)
     if (shear_on && is.finite(ms$g_fac[k])) {
-      b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k])
+      b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
+                  if (is.null(ms$g_iters)) 0 else ms$g_iters[k])
       list(kind = "shear", rho = ms$g_rho[k], g = ms$g_fac[k],
            a = if (is.null(ms$g_sat)) ms$g_fac[k] else ms$g_sat[k], cost = c_round,
            floor = min(b$floor, .EMC_ALLOC_MAX_ROUNDS), cap = min(b$cap, .EMC_ALLOC_MAX_ROUNDS))
@@ -1084,7 +1098,7 @@
     units[[length(units) + 1L]] <- u
   }
   joint <- if (isTRUE(ms$coll)) {
-    b <- bounds(if (is.null(ms$c_n)) 0 else ms$c_n)
+    b <- bounds(if (is.null(ms$c_n)) 0 else ms$c_n, if (is.null(ms$c_iters)) 0 else ms$c_iters)
     list(idx = seq_along(ms$g_rho), g = ms$c_fac,
          a = if (is.null(ms$c_sat)) ms$c_fac else ms$c_sat,
          cost = if (is.finite(ms$c_coll)) ms$c_coll else 0.1 * C_iter,

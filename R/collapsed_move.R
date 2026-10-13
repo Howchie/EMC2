@@ -350,13 +350,14 @@
   # Production blocks run settled kernels on a stationary chain, so their
   # measurements pool over the sample stage.
   blk <- .emc_collapsed_record(if (is.list(old$block)) old$block, p)
+  blk$iters <- .emc_alloc_block_iters(chain)
   pooled <- identical(stage, "sample") && identical(old$stage, "sample")
   pool <- if (pooled) {
     prev <- .emc_collapsed_record(if (is.list(old$pool)) old$pool, p)
     d <- .EMC_ALLOC_EVIDENCE_DECAY
     list(E = d * prev$E + blk$E, n = d * prev$n + blk$n, acc = d * prev$acc + blk$acc,
          moved = d * prev$moved + blk$moved, N = d * prev$N + blk$N,
-         K = .emc_alloc_khist_sum(d * prev$K, blk$K))
+         K = .emc_alloc_khist_sum(d * prev$K, blk$K), iters = d * prev$iters + blk$iters)
   } else zero
   last <- if (pooled) pool else blk
   if (last$n < 5L) {
@@ -373,11 +374,13 @@
 # A block's move record: the acceptance-weighted squared jumps E of its n
 # moves (acceptance sum acc, moved of them moving), and the crossproduct N of
 # each iteration's net jump over its moves with K the iterations' move counts
-# (one row). Fills in the net-jump fields a record made without them lacks.
+# (one row), and the iterations the record spans (iters, zero where
+# unknown). Fills in the fields a record made without them lacks.
 .emc_collapsed_record <- function(rec, p) {
   if (is.null(rec)) rec <- list(E = matrix(0, 2L * p, 2L * p), n = 0L, acc = 0, moved = 0L)
   if (is.null(rec$N)) rec$N <- matrix(0, 2L * p, 2L * p)
   if (is.null(rec$K)) rec$K <- matrix(0L, 1L, 1L)
+  if (is.null(rec$iters)) rec$iters <- 0
   rec
 }
 

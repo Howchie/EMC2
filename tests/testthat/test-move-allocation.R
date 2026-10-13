@@ -553,6 +553,31 @@ test_that("a move earns its evidence at an exploration rate and runs no faster t
   expect_gte(sol$cost, 1 + n0 / B * (0.05 + 0.1) - 1e-9)
 })
 
+test_that("the evidence cap is twice the rate over the iterations the evidence spans", {
+  # A move run at a steady rate over production blocks that double, its
+  # evidence and the iterations behind it discounted alike: the cap is twice
+  # that rate whatever the next block's length.
+  d <- EMC2:::.EMC_ALLOC_EVIDENCE_DECAY
+  x <- 0.3
+  iters <- 200 + d * 100
+  ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.99, 0.6), g_fac = c(0.5, 0.9),
+             g_measured = c(TRUE, TRUE), g_n = c(x * iters, 400), g_iters = c(iters, 0),
+             C_rest = 1, c_round = 0.05, coll = TRUE, c_fac = rep(0.5, 2), c_measured = TRUE,
+             c_n = x * iters, c_iters = iters, c_coll = 0.1, c_rate = 0, W = list(diag(1)),
+             s_var = matrix(1, 1, 1), c_hmc = NA_real_)
+  u <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = 400)
+  expect_equal(u$units[[1]]$cap, 2 * x)
+  expect_equal(u$joint$cap, 2 * x)
+  # Without the span the evidence is read against the next block.
+  expect_equal(u$units[[2]]$cap, 2 * 400 / 400)
+  ms$g_iters <- NULL
+  expect_equal(EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = 400)$units[[1]]$cap,
+               2 * x * iters / 400)
+  # The span of a closing block is the allocation window's iteration count.
+  expect_equal(EMC2:::.emc_alloc_block_iters(list(alloc = list(window = list(n = 37L)))), 37)
+  expect_equal(EMC2:::.emc_alloc_block_iters(list()), 0)
+})
+
 test_that("a chain held to shared particle rates is solved at those rates", {
   fixed <- list(kind = "fixed", rho = 0.2, cost = 0)
   subj <- list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5), c_p = 1,
