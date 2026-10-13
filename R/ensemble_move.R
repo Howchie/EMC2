@@ -53,7 +53,7 @@
   if (!identical(latent, "marginal")) latent <- "conditional"
   list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
        pool = max(2L, int_opt("emc2.ensemble_pool", 32L)),
-       rounds = int_opt("emc2.ensemble_rounds", 3L),
+       rounds = int_opt("emc2.ensemble_rounds", 10L),
        cadence = int_opt("emc2.ensemble_cadence", 1L),
        latent_weight = latent,
        tail_weight = 0.25, tail_df = 4, tail_excess = 3)
