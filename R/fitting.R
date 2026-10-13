@@ -977,12 +977,15 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
   stage <- match.arg(stage, c("burn", "adapt", "sample"))
   samples_idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
   filter_idx <- .emc_proposal_filter_indices(emc, samples_idx)
-  alpha <- get_pars(emc, filter = filter_idx, selection = "alpha",
-                    stage = c('preburn', 'burn', 'adapt', 'sample'),
-                    by_subject = T, merge_chains = T, return_mcmc = F,
-                    remove_dup = F, remove_constants = F)
-  if (!is.null(emc[[1]]$pooled))
-    alpha <- alpha[emc[[1]]$par_names, , , drop = FALSE]
+  independent <- .emc_independent_chains() && n_chains > 1L
+  if (!independent) {
+    alpha <- get_pars(emc, filter = filter_idx, selection = "alpha",
+                      stage = c('preburn', 'burn', 'adapt', 'sample'),
+                      by_subject = T, merge_chains = T, return_mcmc = F,
+                      remove_dup = F, remove_constants = F)
+    if (!is.null(emc[[1]]$pooled))
+      alpha <- alpha[emc[[1]]$par_names, , , drop = FALSE]
+  }
 
   components <- attr(emc[[1]]$data, "components")
   block_idx <- block_variance_idx(components)
@@ -995,7 +998,6 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       rowMeans(matrix(a[, sub, ], nrow = n_pars))),
     cov = lapply(seq_len(n_subjects), function(sub)
       stats::cov(t(matrix(a[, sub, ], nrow = n_pars)))))
-  independent <- .emc_independent_chains() && n_chains > 1L
   if (!independent) {
     wm <- win_moments(alpha)
     win_mu <- wm$mu; win_cov <- wm$cov
@@ -1018,6 +1020,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     laplace_poor <- .emc_laplace_poor(mode_stats)
     chains_var <- vector("list", n_subjects)
     chains_mu <- vector("list", n_subjects)
+    window_informative <- window_ok <- logical(n_subjects)
     for(sub in 1:n_subjects){
       emp_covs <- win_cov[[sub]]
       chains_mu[[sub]] <- win_mu[[sub]]
@@ -1027,6 +1030,8 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
         all(is.finite(emp_covs)) &&
         any(diag(emp_covs) > 0)
       raw_ok <- informative && .emc_empirical_covariance_ok(emp_covs, subject = sub)
+      window_informative[sub] <- informative
+      window_ok[sub] <- raw_ok
       old_ok <- length(old_chains_var) >= sub &&
         is.matrix(old_chains_var[[sub]]) &&
         nrow(old_chains_var[[sub]]) == n_pars &&
@@ -1037,7 +1042,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
         emp_covs <- .emc_regularize_covariance(emp_covs)
       }
       if(informative && !keep_old &&
-         .emc_empirical_covariance_ok(emp_covs, subject = sub)){
+         (raw_ok || .emc_empirical_covariance_ok(emp_covs, subject = sub))){
         chains_var[[sub]] <- emp_covs
       } else if(old_ok){
         # An empty or unusable window should not replace a working proposal.
@@ -1112,10 +1117,9 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     ens_q <- lapply(seq_len(n_subjects), function(sub) {
       v <- win_cov[[sub]]
       if (do_block) v[block_idx] <- 0
-      informative <- is.matrix(v) && nrow(v) == n_pars &&
-        ncol(v) == n_pars &&
-        all(is.finite(v)) && any(diag(v) > 0)
-      raw_ok <- informative && .emc_empirical_covariance_ok(v, subject = sub)
+      # The chain and ensemble proposals use the same blocked window matrix.
+      informative <- window_informative[sub]
+      raw_ok <- window_ok[sub]
       if (stage == "burn" && length(burn_mode_var) >= sub &&
           is.matrix(burn_mode_var[[sub]]) &&
           length(burn_mode_mu) >= sub &&
@@ -1140,7 +1144,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
       }
       if (stage == "sample" && !raw_ok && old_ok) return(old_q)
       if (informative && !raw_ok) v <- .emc_regularize_covariance(v)
-      if (informative && .emc_empirical_covariance_ok(v, subject = sub))
+      if (informative && (raw_ok || .emc_empirical_covariance_ok(v, subject = sub)))
         return(list(mu = m, var = v))
       if (old_ok) return(old_q)
       list(mu = m, var = chains_var[[sub]])
