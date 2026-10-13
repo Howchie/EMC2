@@ -613,6 +613,33 @@ check_tune_settings <- function(tune, n_pars, stage, particles){
   return(tune)
 }
 
+# Fractions of a particle step's count at which each step measures its
+# expected squared jump, for the allocation's choice of count
+# (R/move_allocation.R).
+.EMC_COUNT_FRACTIONS <- c(0.5, sqrt(0.5), 1)
+
+# Elapsed seconds at sub-millisecond resolution.
+.emc_clock <- function() as.numeric(Sys.time())
+
+# A conditional-IS cloud's expected squared jump, averaged over its selection,
+# at fractions of its size: the reference has weight w0, the particles
+# weights w and squared jumps d, drawn as consecutive blocks of `sizes` iid
+# draws per proposal component. The first m_k draws of each component are
+# distributed as a cloud of the smaller size with the same mixture, so each
+# fraction keeps the same share of every component's leading draws. No random
+# numbers are drawn, so measuring leaves the transition unchanged.
+.emc_count_prefix_curve <- function(w0, w, d, sizes, fractions = .EMC_COUNT_FRACTIONS) {
+  sizes <- sizes[sizes > 0]
+  if (!length(w) || !is.finite(w0) || sum(sizes) != length(w))
+    return(numeric(length(fractions)))
+  starts <- cumsum(c(0L, sizes))[seq_along(sizes)]
+  vapply(fractions, function(f) {
+    keep <- unlist(lapply(seq_along(sizes), function(k)
+      starts[k] + seq_len(max(1L, round(f * sizes[k])))))
+    sum(w[keep] * d[keep]) / (w0 + sum(w[keep]))
+  }, numeric(1))
+}
+
 check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
   for(i in 1:length(pm_settings)){
     pm_settings[[i]]$mix <- check_mix(pm_settings[[i]]$mix, stage)
@@ -773,6 +800,8 @@ run_stage <- function(pmwgs,
   # iteration while any optional move is on.
   hmc_plan <- if (stage == "preburn") NULL else .emc_hmc_worker_plan(pmwgs)
   alloc_on <- stage != "preburn" && .emc_alloc_wanted(pmwgs)
+  # The allocation prices other particle counts from each step's own clouds.
+  tune$count_evidence <- alloc_on
   wpool_ctx <- list(
     data = data, model = .emc_wpool_slim_model(pmwgs$model),
     stage = stage, type = pmwgs$type,
@@ -1068,7 +1097,7 @@ run_stage <- function(pmwgs,
         proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
         if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip,
         part_cpu_share * .emc_reserved_cost(proc.time()[["elapsed"]] - part_started, cores_it),
-        if (is.null(wpool)) NULL else it$times)
+        if (is.null(wpool)) NULL else it$times, pm_settings)
     }
 
     # Ensemble group update (R/ensemble_move.R): after the subject step, so the
@@ -1726,6 +1755,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     state_centred <- c(FALSE, TRUE, FALSE, FALSE)
   }
   n_proposals <- length(Mus)
+  count_ev <- isTRUE(tune$count_evidence)
+  ev_curve <- numeric(length(.EMC_COUNT_FRACTIONS))
+  ev_rows <- ev_secs <- numeric(0)
   cache_ok <- function(cache, ref_name, ref, idx) {
     !is.null(cache) && !is.null(cache[[ref_name]]) &&
       identical(cache[[ref_name]], ref) &&
@@ -1836,6 +1868,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       # Materialize that subset once for this conditional-IS cloud.
       proposals_idx <- proposals[, idx, drop = FALSE]
 
+      if (count_ev) ll_started <- .emc_clock()
       if (is.null(marginalise)) {
         comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
         lw <- tryCatch(
@@ -1846,6 +1879,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         if (inherits(lw, "error"))
           lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
                                          data, model, comp_arg)
+        if (count_ev) {
+          ev_rows <- c(ev_rows, nrow(proposals))
+          ev_secs <- c(ev_secs, .emc_clock() - ll_started)
+        }
       }
       lp <- if (p_idx > 0) {
         fast_dmvnorm_rooti(x = proposals_idx, mean = group_mu[idx],
@@ -1913,9 +1950,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         marg_spec <- .marginal_batch_spec(marginalise, marg_cond, proposals,
                                           pm_settings[[i]]$marg_state, marg_pred)
         marg_spec$log_offset <- prior_density + aux_density - lm
+        if (count_ev) ll_started <- .emc_clock()
         marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
                                            data, model, marg_spec,
                                            r_cores = r_cores)
+        if (count_ev) {
+          ev_rows <- c(ev_rows, nrow(proposals))
+          ev_secs <- c(ev_secs, .emc_clock() - ll_started)
+        }
         lw <- marginal_ll_from_grid(marg_grid)
         marg_seen[[length(marg_seen) + 1L]] <- list(
           mode = marg_grid$mode, sd = marg_grid$sd, x = proposals)
@@ -1923,6 +1965,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       lw_total <- lw + ref_ll - lw[1]
       l <- lw_total + prior_density + aux_density - lm
       weights <- exp(l - max(l))
+      if (count_ev && !is.null(jump_rooti) && nrow(proposals) > 1L) {
+        moved <- proposals_idx[-1L, , drop = FALSE] -
+          rep(proposals_idx[1L, ], each = nrow(proposals) - 1L)
+        ev_curve <- ev_curve + .emc_count_prefix_curve(
+          weights[1L], weights[-1L], rowSums((moved %*% jump_rooti)^2),
+          particle_numbers[ks])
+      }
       idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
       if (!is.null(marginalise)) {
         # A rejected step keeps the current state, as if the reference
@@ -2003,6 +2052,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     }
   }
   names(proposal_out) <- names(subj_mu)
+  pm_settings[[1L]]$count_ev <- if (count_ev)
+    list(curve = ev_curve, rows = ev_rows, secs = ev_secs)
   ll_out <- sum(ll_shared)
   if (!is.null(marg_cond)) {
     # The stored log-likelihood is the complete vector's, like every other
@@ -2057,7 +2108,8 @@ update_pm_settings <- function(pm_settings, better, particle_numbers,
       }
     }
 
-    if (length(pm_settings$mix) > 3 && pm_settings$gd_good && weight_ess > 0) {
+    if (!isTRUE(pm_settings$count_managed) &&
+        length(pm_settings$mix) > 3 && pm_settings$gd_good && weight_ess > 0) {
       ess <- weight_ess
       desired_ess <- tune$target_ESS
       scale_factor <- (desired_ess / ess)^tune$ESS_scale

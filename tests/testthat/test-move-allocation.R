@@ -617,6 +617,7 @@ test_that("a chain held to shared particle rates is solved at those rates", {
 })
 
 test_that("a few rounds shade a coordinate's factor towards its kind's, and log-sd rounds pool across chains", {
+  local_test_rng(31)
   p <- 2; n <- 1; k <- 50
   a <- matrix(stats::rnorm(p * k), p)
   tv <- array(0, c(p, p, k)); for (t in seq_len(k)) tv[, , t] <- diag(exp(stats::rnorm(p)))
