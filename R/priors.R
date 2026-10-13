@@ -86,7 +86,7 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
                                                               updated_flags[names(updated_flags) %in% do_ask],
                                                               descriptions[names(descriptions) %in% do_ask])
   if(!is.null(input$theta_mu_var)){
-    if(!is.matrix(input$theta_mu_var) & is.matrix(orig$theta_mu_var)) input$theta_mu_var <- diag(input$theta_mu_var)
+    if(!is.matrix(input$theta_mu_var) & is.matrix(orig$theta_mu_var)) input$theta_mu_var <- diag(input$theta_mu_var, nrow = length(input$theta_mu_var))
   }
   prior <- get_objects(design = design, type = type, prior = input, ...)$prior
   attr(prior, "pooled") <- .pooled_prior(design, type, update, args)

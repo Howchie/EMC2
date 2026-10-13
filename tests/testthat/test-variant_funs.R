@@ -90,3 +90,14 @@ test_that("run_single", {
     variant = Sys.info()[1]
   )
 })
+
+test_that("a one-parameter prior keeps its supplied mean variance", {
+  des <- suppressMessages(design(data = dat, model = LNR, matchfun = matchfun,
+                                 formula = list(m ~ 1, s ~ 1, t0 ~ 1),
+                                 constants = c(s = log(0.5), t0 = log(0.2))))
+  for (type in c("diagonal-gamma", "standard")) {
+    pr <- prior(des, type = type, theta_mu_var = matrix(2.25, 1, 1))
+    expect_equal(dim(pr$theta_mu_var), c(1L, 1L))
+    expect_equal(pr$theta_mu_var[1, 1], 2.25)
+  }
+})
