@@ -40,10 +40,13 @@ cg_file <- file.path("/sys/fs/cgroup", sub("^0::", "", readLines("/proc/self/cgr
 cg_cpu <- function() { x <- tryCatch(readLines(cg_file), error = function(e) character(0))
   u <- grep("^usage_usec", x, value = TRUE); if (length(u)) as.numeric(sub("usage_usec ", "", u)) / 1e6 else NA_real_ }
 set.seed(seed)
-c0 <- cg_cpu(); t0 <- proc.time()[["elapsed"]]
+c0 <- cg_cpu(); t0 <- proc.time()[["elapsed"]]; pt0 <- proc.time()
 emc <- suppressWarnings(suppressMessages(fit(emc, stage = "sample", iter = iter, cores_per_chain = 3,
                                              cores_for_chains = 3, verbose = FALSE)))
 wall <- proc.time()[["elapsed"]] - t0; cpu <- cg_cpu() - c0
+# This process and its reaped descendants only (the cgroup may hold other work).
+pt <- proc.time() - pt0
+cpu_tree <- sum(pt[c("user.self", "sys.self", "user.child", "sys.child")], na.rm = TRUE)
 emc <- ns$restore_duplicates(emc)
 n_new <- vapply(emc, function(ch) sum(ch$samples$stage == "sample" & seq_along(ch$samples$stage) <= ch$samples$idx), 1L) - vapply(w0, length, 1L)
 n_new <- min(n_new)
@@ -67,14 +70,15 @@ lag <- vapply(1:10, acf_k, 0)
 plans <- lapply(emc, function(ch) ch$ensemble_plan_history)
 plan_tab <- do.call(rbind, lapply(seq_along(plans), function(j) do.call(rbind, lapply(plans[[j]], function(r)
   data.frame(chain = j, n = r$n, M = r$M, R = r$R, G = r$G, J_tot = r$J_tot, C = r$C, c_member = r$c_member, T_min = if (is.null(r$T_min)) NA else r$T_min, G_min = if (is.null(r$G_min)) NA else r$G_min, worst = if (is.null(r$worst)) NA else r$worst, eff = r$eff, moved = r$moved, pool = r$pool, rounds = r$rounds)))))
-res <- list(fixture = basename(fx), arm = arm, seed = seed, iter = iter, n_new = n_new, wall = wall, cpu = cpu,
+res <- list(fixture = basename(fx), arm = arm, seed = seed, iter = iter, n_new = n_new, wall = wall, cpu = cpu, cpu_tree = cpu_tree,
             ess = ess, worst = names(ess)[worst], ess_min = min(ess), ess_min_per_cpu = min(ess) / cpu,
-            ess_min_per_wall = min(ess) / wall, lag = lag, plans = plan_tab,
+            ess_min_per_wall = min(ess) / wall, ess_min_per_cpu_tree = min(ess) / cpu_tree, lag = lag, plans = plan_tab,
             ess_alpha_min = min(ess_alpha), ess_alpha_med = median(ess_alpha),
             diag = ns$ensemble_diagnostics(emc), lib = find.package("EMC2"))
 saveRDS(res, out)
 cat(sprintf("%s %s seed %d: %d draws/chain, wall %.0f s, cpu %.0f s | worst %s ESS %.0f (per cpu-s %.3f, per wall-s %.2f) | lag1-5 of worst: %s\n",
   res$fixture, arm, seed, n_new, wall, cpu, res$worst, min(ess), min(ess) / cpu, min(ess) / wall, paste(sprintf("%.2f", lag[1:5]), collapse = " ")))
+cat(sprintf("  process-tree cpu %.0f s (worst ESS per tree cpu-s %.3f)\n", cpu_tree, min(ess) / cpu_tree))
 cat(sprintf("  min ESS mu %.0f, lsd %.0f; median %.0f | alpha min %.0f median %.0f\n", min(ess[1:p]), min(ess[-(1:p)]), median(ess),
             min(ess_alpha), median(ess_alpha)))
 if (!is.null(plan_tab)) print(plan_tab, digits = 3, row.names = FALSE)
