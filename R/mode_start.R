@@ -698,7 +698,8 @@
   }, logical(1))
   jobs <- jobs[present, , drop = FALSE]
   if (!nrow(jobs)) return(emc)
-  results <- .emc_with_preserved_rng(auto_mclapply(seq_len(nrow(jobs)), function(k) {
+  cost <- .emc_subject_cost(emc[[1L]]$data)
+  results <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_len(nrow(jobs)), function(k) {
     chain <- emc[[jobs$chain[k]]]
     s <- jobs$subject[k]
     fit <- chain$lik_laplace[[s]]
@@ -714,7 +715,7 @@
       list(check = .emc_laplace_check(check),
            seed = get(".Random.seed", envir = globalenv()))
     }))
-  }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
+  }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE)))
   for (k in seq_len(nrow(jobs))) {
     result <- results[[k]]
     check <- if (is.list(result)) result$check else NULL
@@ -737,9 +738,10 @@
   emc <- .emc_prepare_chain_rng(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
+  cost <- .emc_subject_cost(emc[[1L]]$data)
   # Each refresh checks the Laplace fit under the current group state.
   # Probe draws advance the subject stream before subsequent transitions.
-  results <- .emc_with_preserved_rng(auto_mclapply(
+  results <- .emc_with_preserved_rng(.emc_rebuild_lapply(
     seq_len(nrow(jobs)), function(k) {
       .emc_quiet_fork({
         sampler <- emc[[jobs$chain[k]]]
@@ -762,7 +764,7 @@
         }, error = function(e) NULL)
         list(result = r, seed = get(".Random.seed", envir = globalenv()))
       })
-    }, mc.cores = min(nrow(jobs), n_cores), mc.set.seed = FALSE))
+    }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE)))
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
     result <- if (is.list(job_result)) job_result$result else NULL

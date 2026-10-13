@@ -153,15 +153,21 @@
   .emc_profile_state$announced <- c(seen, key)
   msg <- tryCatch(conditionMessage(cond), error = function(e) "")
   if (!length(msg) || !nzchar(msg[[1L]])) msg <- "(no message)"
+  # A pilot step is tuning, not a transition: no chain state was repeated.
+  effect <- if (identical(source, "pilot")) {
+    paste0("The HMC tuning pilot scored it as a rejected step, so this ",
+           "subject's step size and HMC rate were set from a failed likelihood. ")
+  } else {
+    paste0("The previous state was repeated, so this chain did not advance ",
+           "at that point and the fit will not say so on its own. ")
+  }
   # `immediate. = TRUE`: this may be running in a forked worker, where a
   # deferred warning goes with the process.
   warning(sprintf(
     paste0("EMC2: a %s update failed for an %s reason, not a numerical one. ",
-           "The previous state was repeated, so this chain did not advance ",
-           "at that point and the fit will not say so on its own. ",
-           "First message: %s\n",
+           "%sFirst message: %s\n",
            "  options(emc2.failure_policy = \"strict\") to stop instead."),
-    source, cls, msg[[1L]]),
+    source, cls, effect, msg[[1L]]),
     call. = FALSE, immediate. = TRUE)
   invisible(TRUE)
 }

@@ -984,8 +984,11 @@ make_nice_summary <- function(object, stat = "max", stat_only = FALSE, stat_name
 
 
 get_summary_stat <- function(emc, selection = "mu", fun, stat = NULL,
-                             stat_only = FALSE, stat_name = NULL, digits = 3, ...){
+                             stat_only = FALSE, stat_name = NULL, digits = 3,
+                             n_cores = 1L, ...){
   dots <- list(...)
+  diagnostic <- identical(fun, r_hat) || identical(fun, n_eff)
+  if (!diagnostic && !missing(n_cores)) dots$n_cores <- n_cores
   if(is.null(emc[[1]]$n_subjects) || length(dots$subject) == 1 || emc[[1]]$n_subjects == 1) dots$by_subject <- TRUE
   # Unmapped mu and alpha are on the unbounded sampling scale, so the R-hat
   # range transform must not apply to them.
@@ -994,7 +997,20 @@ get_summary_stat <- function(emc, selection = "mu", fun, stat = NULL,
                         isFALSE(dots$map %||% FALSE) && !isTRUE(dots$add_recalculated))
   MCMC_samples <- do.call(get_pars, c(list(emc = emc, selection = selection), fix_dots(dots, get_pars)))
   out <- vector("list", length = length(MCMC_samples))
-  for(i in 1:length(MCMC_samples)){
+  # Keep each diagnostic's existing MCMC grouping, including multivariate
+  # R-hat. Only the deterministic diagnostics use independent fork jobs.
+  parallel <- diagnostic && .Platform$OS.type == "unix" &&
+    isTRUE(n_cores > 1L) && length(MCMC_samples) >= 8L
+  if (parallel) {
+    work <- sum(vapply(MCMC_samples, function(x)
+      sum(vapply(x, length, numeric(1))), numeric(1)))
+    parallel <- work >= 1e6
+  }
+  if (parallel) {
+    out <- .emc_rebuild_lapply(seq_along(MCMC_samples), function(i)
+      do.call(fun, c(list(MCMC_samples[[i]]), fix_dots(dots, fun))), n_cores)
+    i <- length(MCMC_samples)
+  } else for(i in 1:length(MCMC_samples)){
     if(length(fun) > 1){
       outputs <- list()
       for(j in 1:length(fun)){

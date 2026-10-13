@@ -1538,6 +1538,7 @@
         s <- jobs$subject[k]
         r <- res[[k]]
         if (!is.list(r) || is.null(r$seed)) next
+        .emc_reject_add(r$rejects, "pilot")
         emc[[j]]$rng$subjects[[s]] <- r$seed
         hst[[j]] <- .emc_hmc_apply_calibration(hst[[j]], s, r)
       }

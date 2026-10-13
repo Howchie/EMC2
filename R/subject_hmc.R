@@ -583,10 +583,22 @@
   prior <- .emc_burn_subject_prior(sampler, s)
   data <- sampler$data[[s]]
   pn <- sampler$par_names
+  # Failures are tallied and returned for the master to count: this runs in a
+  # forked worker, whose counters and warnings end with it.
+  failed <- list(counts = stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                                          .EMC_REJECT_CLASSES), msgs = list())
   ll_fn <- function(X) {
     colnames(X) <- pn
     tryCatch(as.numeric(calc_ll_manager(X, dadm = data, model = sampler$model,
-                                        r_cores = 1L)), error = function(e) NULL)
+                                        r_cores = 1L)), error = function(e) {
+      cls <- .emc_classify_failure(e)
+      if (identical(.emc_failure_action(cls), "abort"))
+        .emc_failure_abort(cls, "pilot", e)
+      failed$counts[[cls]] <<- failed$counts[[cls]] + 1L
+      if (is.null(failed$msgs[[cls]]))
+        failed$msgs[[cls]] <<- tryCatch(conditionMessage(e), error = function(e2) "")
+      NULL
+    })
   }
   fr <- .emc_hmc_frame(sj$prec, prior$mu, prior$var)
   a <- as.numeric(sampler$samples$alpha[, s, sampler$samples$idx])
@@ -617,7 +629,7 @@
   spent <- proc.time() - started
   list(eps = if (is.null(fr)) NA_real_ else eps, evidence = ev, rows = rows,
        cpu = unname(spent[["user.self"]] + spent[["sys.self"]]),
-       seed = get(".Random.seed", envir = globalenv()))
+       seed = get(".Random.seed", envir = globalenv()), rejects = failed)
 }
 
 .emc_hmc_apply_calibration <- function(st, s, r) {

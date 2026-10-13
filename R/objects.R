@@ -253,9 +253,19 @@ make_3dim_mcmc <- function(x, split){
 
 # Function to split array a into list along any dimension n
 split_along_dim <- function(a, n){
-  setNames(lapply(split(a, arrayInd(seq_along(a), dim(a))[, n]),
-                  array, dim = dim(a)[-n], dimnames(a)[-n]),
-           dimnames(a)[[n]])
+  dims <- dim(a)
+  if (!length(a))
+    return(setNames(lapply(split(a, arrayInd(seq_along(a), dims)[, n]),
+                          array, dim = dims[-n], dimnames(a)[-n]), dimnames(a)[[n]]))
+  # Slice along the selected axis without building a rank-wide index matrix
+  # for every element of the sample history.
+  indices <- lapply(dims, seq_len)
+  out <- lapply(seq_len(dims[n]), function(i) {
+    indices[[n]] <- i
+    slice <- do.call(`[`, c(list(a), indices, list(drop = FALSE)))
+    array(slice, dim = dims[-n], dimnames = dimnames(a)[-n])
+  })
+  setNames(out, dimnames(a)[[n]])
 }
 
 filter_sub_and_par <- function(obj, sub, sub_names, par){

@@ -261,13 +261,22 @@
 # (alpha, pooled) jointly and keeps the cross block, from which
 # .emc_collapsed_condition() gives the quadratic in alpha at the current
 # pooled value: the one the move's likelihoods are evaluated at.
-.emc_collapsed_fits <- function(emc, idx) {
+.emc_collapsed_fits <- function(emc, idx, n_cores = 1L) {
   ch <- emc[[1L]]
   laplace <- .emc_shear_fits(ch)
   p <- ch$n_pars
   pooled <- if (!is.null(ch$pooled) && is.matrix(ch$samples$pooled))
     do.call(rbind, lapply(emc, function(c) t(c$samples$pooled[, idx, drop = FALSE])))
-  lapply(seq_len(ch$n_subjects), function(s) {
+  # Wide quadratic regressions justify forking; small regressions stay in
+  # the caller to avoid paying process overhead for a few matrix operations.
+  d <- p + if (is.null(pooled)) 0L else ncol(pooled)
+  coefficients <- 1L + d + d * (d + 1L) / 2L
+  draws <- length(idx) * length(emc)
+  enough <- draws >= 2L * coefficients
+  work <- draws * coefficients^2 * ch$n_subjects
+  cores <- if (d >= 8L && enough && ch$n_subjects >= 8L && work >= 1e8)
+    min(n_cores, ch$n_subjects %/% 2L) else 1L
+  .emc_rebuild_lapply(seq_len(ch$n_subjects), function(s) {
     A <- do.call(rbind, lapply(emc, function(c) t(matrix(c$samples$alpha[, s, idx], p))))
     y <- unlist(lapply(emc, function(c) c$samples$subj_ll[s, idx]))
     fit <- tryCatch(.emc_collapsed_fit_subject(cbind(A, pooled), y), error = function(e) NULL)
@@ -276,7 +285,7 @@
     a <- seq_len(p)
     list(prec = fit$prec[a, a, drop = FALSE], lin = fit$lin[a],
          cross = fit$prec[a, -a, drop = FALSE])
-  })
+  }, n_cores = cores)
 }
 
 # The fits as quadratics in alpha at pooled coefficients `value`: the joint
@@ -303,11 +312,11 @@
 # Every chain's plan from the proposal window create_chain_proposals() uses:
 # the mass from every chain's window draws, then each chain's step size on
 # phat from its current state.
-.emc_collapsed_set_plans <- function(emc, samples_idx, stage) {
+.emc_collapsed_set_plans <- function(emc, samples_idx, stage, n_cores = 1L) {
   if (!.emc_collapsed_active(emc[[1L]])) return(emc)
   idx <- .emc_chain_proposal_window(emc, samples_idx, stage)
   if (length(idx) < 2L) return(emc)
-  fits <- .emc_collapsed_fits(emc, idx)
+  fits <- .emc_collapsed_fits(emc, idx, n_cores)
   for (j in seq_along(emc)) emc[[j]]$collapsed$fits <- fits
   ctx <- .emc_collapsed_context(emc[[1L]])
   chart <- ctx$chart
