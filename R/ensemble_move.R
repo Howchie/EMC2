@@ -40,9 +40,7 @@
 # and in sampling on the increasingly-rare schedule of add_proposals() (after
 # 100, 200, 400, ... production transitions).
 
-# The sampler's between-block plan (R/ensemble_plan.R) sets the pool size
-# and rounds once it exists; the options are the starting values.
-.emc_ensemble_options <- function(sampler = NULL) {
+.emc_ensemble_options <- function() {
   int_opt <- function(name, default) {
     x <- suppressWarnings(as.integer(getOption(name, default)))
     if (length(x) != 1L || is.na(x) || x < 1L) default else x
@@ -53,18 +51,12 @@
   # dependence between subject parameters and factor scores.
   latent <- getOption("emc2.ensemble_latent_weight", "conditional")
   if (!identical(latent, "marginal")) latent <- "conditional"
-  cfg <- list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
-              pool = max(2L, int_opt("emc2.ensemble_pool", 32L)),
-              rounds = int_opt("emc2.ensemble_rounds", 10L),
-              cadence = int_opt("emc2.ensemble_cadence", 1L),
-              latent_weight = latent,
-              tail_weight = 0.25, tail_df = 4, tail_excess = 3)
-  plan <- sampler$ensemble_plan
-  if (!is.null(plan)) {
-    cfg$pool <- max(2L, as.integer(plan$pool))
-    cfg$rounds <- max(1L, as.integer(plan$rounds))
-  }
-  cfg
+  list(enabled = isTRUE(getOption("emc2.ensemble", TRUE)),
+       pool = max(2L, int_opt("emc2.ensemble_pool", 32L)),
+       rounds = int_opt("emc2.ensemble_rounds", 10L),
+       cadence = int_opt("emc2.ensemble_cadence", 1L),
+       latent_weight = latent,
+       tail_weight = 0.25, tail_df = 4, tail_excess = 3)
 }
 
 # Supported hierarchies: those whose group Gibbs step and subject prior are
@@ -246,11 +238,12 @@
 # step and their likelihoods computed in the same worker round trip as the
 # particles (run_stage passes them through .emc_wpool_iter()). Returns NULL
 # when the update does not run this iteration. The draws, their proposal
-# densities and the proposal factors (one Cholesky factor, mean and log
-# determinant per subject) come from one C++ call (src/ensemble_move.cpp).
+# densities and the proposal factors come from one C++ call
+# (src/ensemble_move.cpp); q keeps the per-subject proposal in the form
+# .emc_ensemble_log_q() reads.
 .emc_ensemble_draw_pools <- function(sampler, stage, chains_mu, chains_var,
                                      iteration = 0L) {
-  cfg <- .emc_ensemble_options(sampler)
+  cfg <- .emc_ensemble_options()
   if (!cfg$enabled || stage == "preburn" || !.emc_ensemble_supported(sampler) ||
       iteration %% cfg$cadence != 0L)
     return(NULL)
@@ -263,7 +256,11 @@
   d <- emc_ensemble_draw_pools_cpp(lapply(chains_mu, as.numeric),
                                    lapply(chains_var, as.matrix), cfg$pool - 1L,
                                    cfg$tail_weight, cfg$tail_df, cfg$tail_excess, pn)
-  list(rows = d$rows, lq = d$lq, ll = NULL, L = d$L, mu = d$mu, logdet = d$logdet, c = d$c)
+  p <- nrow(d$mu)
+  q <- lapply(seq_len(n), function(s)
+    list(mu = d$mu[, s], L = d$L[, , s], logdet = d$logdet[s], p = p, c = d$c))
+  list(q = q, rows = d$rows, lq = d$lq, ll = NULL, L = d$L, mu = d$mu,
+       logdet = d$logdet, c = d$c)
 }
 
 # Log-likelihoods of a matrix of candidate states for one subject. A failure
@@ -352,8 +349,7 @@
     pars <- list(tmu = tmu, tvar = diag(1 / res$tvinv, p), tvinv = diag(res$tvinv, p),
                  alpha = NULL)
   }
-  list(selected = res$selected, pars = pars, wess = res$wess, eff = res$eff,
-       traj_mu = res$traj_mu, traj_lsd = res$traj_lsd)
+  list(selected = res$selected, pars = pars, wess = res$wess)
 }
 
 # The same rounds in R, through gibbs_step() and the subject prior of every
@@ -369,37 +365,29 @@
   tmp <- sampler
   store <- .emc_ensemble_store(sampler$samples)
   selected <- k0
-  wess <- eff <- numeric(n)
-  traj_mu <- traj_lsd <- matrix(NA_real_, n_pars, cfg$rounds)
+  wess <- numeric(n)
   for (r in seq_len(cfg$rounds)) {
     alpha_k <- t(pool_stack[offset + selected, , drop = FALSE])
     store <- fill_samples(samples = store, group_level = pars, proposals = NULL,
                           j = 1L, n_pars = n_pars, type = sampler$type)
     tmp$samples <- store
     pars <- gibbs_step(tmp, alpha_k, sampler$type)
-    traj_mu[, r] <- as.numeric(pars$tmu)
-    traj_lsd[, r] <- 0.5 * log(diag(as.matrix(pars$tvar)))
     lw_all <- matrix(base_w + .emc_ensemble_log_g(pool_stack, subj_of_row, pars, sampler,
                                                   n, cfg$latent_weight), nrow = M)
     selected <- .emc_ensemble_select_all(lw_all)
     if (r == cfg$rounds) {
       w <- exp(sweep(lw_all, 2, apply(lw_all, 2, max)))
       wess <- colSums(w)^2 / colSums(w^2)
-      lw_sel <- lw_all[cbind(selected, seq_len(n))]
-      eff <- (colSums(exp(sweep(lw_all, 2, lw_sel))) - 1) / (M - 1)
     }
   }
-  list(selected = selected, pars = pars, wess = wess, eff = eff,
-       traj_mu = traj_mu, traj_lsd = traj_lsd)
+  list(selected = selected, pars = pars, wess = wess)
 }
 
 .emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
                                wpool_part, pools) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
   if (is.null(pools)) return(keep)
-  move_started <- proc.time()[["elapsed"]]
-  cfg <- .emc_ensemble_options(sampler)
-  pars_in <- pars
+  cfg <- .emc_ensemble_options()
   n <- sampler$n_subjects
   n_pars <- sampler$n_pars
   M <- cfg$pool
@@ -423,9 +411,7 @@
   # Gibbs on pi~(h, k | A): h | k with the package's group step, then k | h.
   rounds <- if (.emc_ensemble_rounds_in_cpp(sampler)) .emc_ensemble_rounds_cpp else
     .emc_ensemble_rounds_r
-  rounds_started <- proc.time()[["elapsed"]]
   res <- rounds(sampler, pars, pool_stack, st$base_w, k0, M, cfg)
-  rounds_wall <- proc.time()[["elapsed"]] - rounds_started
   selected <- res$selected
   pars <- res$pars
   wess <- res$wess
@@ -446,18 +432,14 @@
   st$subj_moved <- st$subj_moved + moved
   st$subj_wess <- st$subj_wess + wess / M
   sampler$ensemble_stats <- st
-  res$moved <- moved
-  sampler <- .emc_ensemble_block_record(sampler, pars_in, res, M, cfg$rounds, rounds_wall,
-                                        proc.time()[["elapsed"]] - move_started)
   sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
   list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
 }
 
 #' Ensemble-move diagnostics
 #'
-#' Mean share of subjects whose state changed per ensemble sweep, the mean
-#' normalised weight ESS of the pools under the final group state, and the
-#' pool size and rounds the between-block plan (R/ensemble_plan.R) last set.
+#' Mean share of subjects whose state changed per ensemble sweep, and the mean
+#' normalised weight ESS of the pools under the final group state.
 #' @param emc An emc object.
 #' @return A data frame with one row per chain.
 #' @noRd
@@ -467,10 +449,7 @@ ensemble_diagnostics <- function(emc) {
     st <- emc[[i]]$ensemble_stats
     if (is.null(st) || !st$sweeps) return(data.frame(chain = i, sweeps = 0L,
                                                      moved = NA_real_, weight_ess = NA_real_))
-    plan <- emc[[i]]$ensemble_plan
     data.frame(chain = i, sweeps = st$sweeps, moved = st$moved / st$sweeps,
-               weight_ess = st$wess / st$sweeps,
-               pool = if (is.null(plan)) NA_integer_ else plan$pool,
-               rounds = if (is.null(plan)) NA_integer_ else plan$rounds)
+               weight_ess = st$wess / st$sweeps)
   }))
 }

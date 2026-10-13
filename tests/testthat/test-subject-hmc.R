@@ -239,8 +239,6 @@ test_that("serial, static and queued HMC rounds give the same chain", {
   # prices shear and collapsed moves from measured CPU time, so comparing full
   # adaptive fits can select different move plans even with identical seeds.
   withr::local_options(emc2.group_move = "none", emc2.collapsed_move = FALSE)
-  # The ensemble's between-block plan prices pool members by wall time too.
-  local_mocked_bindings(.emc_ensemble_plan_update = function(sampler) sampler, .package = "EMC2")
   static <- hmc_small_fit("static")
   h <- static[[1]]$subject_hmc
   expect_true(h$supported)

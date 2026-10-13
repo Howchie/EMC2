@@ -853,7 +853,7 @@ run_stage <- function(pmwgs,
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
   for (i in 1:iter) {
-    iteration_started <- proc.time()[["elapsed"]]
+    iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     if (verboseProgress) {
       accRate <- mean(accept_rate(pmwgs))
       update_progress_bar(pb, i, extra = accRate)
@@ -1057,12 +1057,6 @@ run_stage <- function(pmwgs,
     pm_settings <- assembled$pm_settings
     proposals <- assembled$proposals
     }
-    if (!is.null(ens_pools))
-      pmwgs <- .emc_ensemble_record_rows(pmwgs, ens_pools, proc.time()[["elapsed"]] - part_started,
-                                         vapply(pm_settings, function(x)
-                                           if (is.null(x$n_particles)) NA_real_ else as.numeric(x$n_particles),
-                                           numeric(1)),
-                                         if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip)
     if (alloc_on) {
       pmwgs <- .emc_alloc_record_particle(
         pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
@@ -1240,7 +1234,6 @@ run_stage <- function(pmwgs,
     gibbs_delta <- .emc_reject_delta(gibbs_rejects, "gibbs")
     gibbs_rejects <- .emc_reject_counts("gibbs")
     stage_rejects$gibbs <- stage_rejects$gibbs + gibbs_delta
-    pmwgs <- .emc_ensemble_record_iter(pmwgs, proc.time()[["elapsed"]] - iteration_started)
     if (sampler_profile) {
       iteration_total <- proc.time()[["elapsed"]] - iteration_started
       pp <- if (is.null(pool_profile)) list() else pool_profile
