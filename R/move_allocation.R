@@ -1241,14 +1241,16 @@
 # A priced subject unit's candidate counts: multipliers, the step's factors
 # on the subject's and the deviations' coordinates, and its cost, the
 # measured count first so that ties keep it. p_level is the step's factor at
-# the given count, the floor no plan may leave the subject slower than.
+# the given count, the floor no plan may leave the subject slower than; the
+# given count is always a candidate, so the floor stays attainable however far
+# earlier plans moved the count from it.
 .emc_alloc_count_candidates <- function(u, counts, s, data_rows) {
   curve <- counts$curve[s, ]
   m0 <- counts$m_meas[s]
   if (is.null(u$p) || !all(is.finite(curve)) || !is.finite(m0)) return(u)
   base <- counts$base[[s]]
   lo <- max(pmin(25, base) / base)
-  m <- unique(pmin(.EMC_COUNT_MAX, pmax(lo, m0 * .EMC_COUNT_STEPS)))
+  m <- unique(pmin(.EMC_COUNT_MAX, pmax(lo, c(m0 * .EMC_COUNT_STEPS, 1))))
   rows0 <- .emc_alloc_count_rows(base, m0)
   scale <- function(fac, k) if (is.null(fac)) NULL else pmin(1, pmax(0, 1 - k * (1 - fac)))
   kap <- vapply(m, function(x) .emc_alloc_kappa(curve, x / m0), numeric(1))

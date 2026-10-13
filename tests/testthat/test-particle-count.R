@@ -97,7 +97,7 @@ test_that("candidate counts carry the scaled factors, their cost and the floor",
   st <- count_state(10 * sqrt(frac), m_meas = 0.5, base = 200, row_cpu = 1e-5)
   v <- EMC2:::.emc_alloc_count_candidates(u, st, 1L, data_rows = 50)
   expect_equal(v$cands$m[1L], 0.5)
-  expect_equal(sort(v$cands$m), sort(0.5 * c(1, sqrt(0.5), 0.5, sqrt(2))))
+  expect_equal(sort(v$cands$m), sort(c(0.5 * c(1, sqrt(0.5), 0.5, sqrt(2)), 1)))
   for (k in seq_along(v$cands$m)) {
     kap <- sqrt(v$cands$m[k] / 0.5)
     expect_equal(v$cands$p[[k]], 1 - kap * (1 - u$p))
@@ -117,6 +117,21 @@ test_that("candidate counts carry the scaled factors, their cost and the floor",
   # Without a measured curve there are no candidates.
   st <- count_state(rep(NA_real_, 3))
   expect_null(EMC2:::.emc_alloc_count_candidates(u, st, 1L, 50)$cands)
+})
+
+test_that("a subject cut far below its given count can still meet its floor", {
+  frac <- EMC2:::.EMC_COUNT_FRACTIONS
+  u <- list(kind = "subject", rho = c(0.9, 0.8), p = c(0.7, 0.8), c_p = 0.1,
+            p_dev = c(0.8, 0.9))
+  st <- count_state(10 * sqrt(frac), m_meas = 0.25, base = 400)
+  v <- EMC2:::.emc_alloc_count_candidates(u, st, 1L, data_rows = 50)
+  expect_true(any(abs(v$cands$m - 1) < 1e-12))
+  # Without HMC only the given count's step reaches the floor, and it does.
+  floor <- max(EMC2:::.emc_alloc_subject_floor(v))
+  rs <- sort(c(floor, 0.95, 0.99))
+  need <- EMC2:::.emc_alloc_units_need(list(v), TRUE, rs, 4)[[1L]]
+  expect_true(all(is.finite(need$cost)))
+  expect_equal(need$m[1L], 1)
 })
 
 test_that("each subject takes its cheapest count at every target", {
