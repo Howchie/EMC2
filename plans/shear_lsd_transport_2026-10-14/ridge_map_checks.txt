@@ -1,0 +1,6 @@
+subject 1: Jacobian error 4.76e-10, inverse error 2.22e-16, identity error 2.22e-16
+subject 2: Jacobian error 7.3e-11, inverse error 4.44e-16, identity error 2.22e-16
+subject 21: Jacobian error 4.2e-10, inverse error 5.55e-17, identity error 2.78e-17
+subject 39: Jacobian error 1.64e-10, inverse error 4.44e-16, identity error 1.11e-16
+subject 58: Jacobian error 1.39e-10, inverse error 2.22e-16, identity error 6.94e-18
+subject 75: Jacobian error 1.21e-10, inverse error 4.44e-16, identity error 5.55e-17

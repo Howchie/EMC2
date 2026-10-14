@@ -1,0 +1,8 @@
+[bench_lock] waiting 2026-10-14T04:39:03Z pid 1324062: env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 Rscript -e suppressPackageStartupMessages(library(EMC2)); ns<-asNamespace("EMC2"); c<-ns$restore_custom_kernel_pointers(ns$restore_duplicates(readRDS("/data/work/EMC2_workstreams/fixtures/lbaE_replay_rebuild_s1.rds")),quiet=TRUE)[[1]]; out<-NULL; for (B in c(1,2,8,16)) { elapsed<-numeric(5); for (ii in seq_along(elapsed)) { s<-c(1,21,39,58,75)[ii]; A<-matrix(rep(c$samples$alpha[,s,c$samples$idx],B),B,byrow=TRUE); ns$.emc_burn_ll_batch(A,c$data[[s]],c$model,c$par_names); tt<-system.time(for (rep in 1:100) ns$.emc_burn_ll_batch(A,c$data[[s]],c$model,c$par_names)); elapsed[ii]<-tt[[3]]/100 }; out<-rbind(out,data.frame(rows=B,ms=1000*mean(elapsed),min_ms=1000*min(elapsed),max_ms=1000*max(elapsed))) }; print(out); write.csv(out,"plans/shear_lsd_transport_2026-10-14/likelihood_cost.csv",row.names=FALSE)
+[bench_lock] acquired 2026-10-14T04:39:03Z pid 1324062
+  rows    ms min_ms max_ms
+1    1 0.230   0.22   0.27
+2    2 0.298   0.27   0.38
+3    8 0.638   0.55   0.98
+4   16 1.098   0.92   1.76
+[bench_lock] released 2026-10-14T04:39:08Z pid 1324062 status 0

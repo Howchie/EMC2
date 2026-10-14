@@ -1,0 +1,260 @@
+[bench_lock] waiting 2026-10-14T04:37:24Z pid 1323110: env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 BRIDGE_ALLOCATION=work Rscript plans/shear_lsd_transport_2026-10-14/dragging.R /data/work/EMC2_workstreams/fixtures/lbaE_replay_rebuild_s1.rds plans/shear_lsd_transport_2026-10-14/dragging_allocated.rds 1001,1000,980,950 1,2,4,8 12 3
+[bench_lock] acquired 2026-10-14T04:37:24Z pid 1323110
+frozen work allocation: pilot draws 600 700 800 900 
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001   -1 1   12 0.00731864      -4.917331            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.078               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001   -1 2   12 0.01545757      -4.439549    0.7776061     0.7104167    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.352             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001   -1 4   12 0.01890214      -4.479986      1.06826     0.7677083    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.773             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001   -1 8   12 0.02741079      -4.150238     1.213199     0.7610119    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.536             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001 -0.5 1   12  0.2782209       -1.27934            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.074               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001 -0.5 2   12  0.3458969      -1.152371    0.4462742     0.6864583    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.371             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001 -0.5 4   12  0.2817952      -1.428678    0.6142666     0.7680556    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.769             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001 -0.5 8   12  0.2859679      -1.414471    0.6282351     0.7511905    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.551             6800           13600
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001  0.5 1   12 0.001192623        -6.7316            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.082               80             160
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001  0.5 2   12 0.005672483      -5.511367    0.9145877          0.65    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.403             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001  0.5 4   12 0.02923503      -3.714318    0.6784803     0.7336806    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.821             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001  0.5 8   12 0.08323482      -2.977768     1.223048     0.7232143    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.562             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001    1 1   12 6.838982e-14      -30.31355            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.086               80             160
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001    1 2   12 1.91914e-11      -25.30619      1.29813     0.6333333    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.372             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001    1 4   12 2.495148e-08      -19.41748     2.378005     0.7263889    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.793             2960            5920
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1001    1 8   12 2.075006e-06       -15.9999     3.298499     0.7166667    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.592             6800           13600
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000   -1 1   12 0.005229657       -5.25341            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.084               80             160
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000   -1 2   12 0.005375891      -5.238224    0.1622193     0.8552083    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20    0.37             1040            2080
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000   -1 4   12 0.007776352      -4.980906    0.5342103     0.8430556    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.808             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000   -1 8   12 0.01778825      -4.262727    0.7610871     0.8306548    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.568             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000 -0.5 1   12   0.118934      -2.129186            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.081               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000 -0.5 2   12  0.1128727      -2.185879   0.09686692     0.8479167    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20     0.4             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000 -0.5 4   12  0.1287215      -2.086399    0.2892208     0.8354167    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45    0.81             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000 -0.5 8   12  0.1740374      -1.818326    0.4060432     0.8261905    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.529             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000  0.5 1   12  0.7952039     -0.2291568            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.106               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000  0.5 2   12  0.9433918    0.009420963    0.1665655        0.8375    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.391             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000  0.5 4   12  0.9316293      0.1118348     0.339443     0.8239583    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45    0.77             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000  0.5 8   12  0.8941901       0.224337    0.5566356     0.8130952    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.571             6800           13600
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000    1 1   12 0.004037676      -5.512086            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0    0.08               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000    1 2   12 0.01089573      -4.595244    0.4045696     0.8322917    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.394             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000    1 4   12 0.02799658      -3.860485    0.8142213     0.8173611    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.778             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1 1000    1 8   12  0.1081273      -2.936754     1.258591     0.7998512    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.581             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980   -1 1   12 0.04684001      -3.061018            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.083               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980   -1 2   12 0.07473855      -2.652743     0.369289     0.7604167    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.404             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980   -1 4   12  0.1433523      -2.075738    0.5268715     0.7784722    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.788             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980   -1 8   12  0.3610595      -1.256518    0.8286328     0.7596726    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.551             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980 -0.5 1   12  0.2933137      -1.226513            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.082               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980 -0.5 2   12  0.3825205     -0.9728362    0.1623989       0.75625    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.378             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980 -0.5 4   12  0.5333641     -0.6744747    0.3117177     0.7677083    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.819             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980 -0.5 8   12  0.6873903     -0.3196271    0.4957216      0.753869    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.619             6800           13600
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980  0.5 1   12    0.23198      -1.461104            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.092               80             160
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980  0.5 2   12  0.1998963      -1.632918    0.2262313     0.7364583    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.434             1040            2080
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980  0.5 4   12  0.1984962      -1.666984    0.3522512      0.753125    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.826             2960            5920
+  draw jump K reps acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980  0.5 8   12  0.2667461      -1.540373    0.7551807     0.7363095    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.569             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980    1 1   12 2.547162e-05      -10.57795            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.085               80             160
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980    1 2   12 4.102356e-05      -10.17783    0.3964131     0.7302083    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.397             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980    1 4   12 0.0001615695      -9.179082     1.136298     0.7409722    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.812             2960            5920
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  980    1 8   12 0.001901705      -7.263148     1.483509     0.7224702    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.552             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950   -1 1   12 2.055303e-13      -29.21318            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.082               80             160
+  draw jump K reps  acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950   -1 2   12 9.20296e-13      -28.65474     1.244428     0.5885417    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20    0.41             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950   -1 4   12 1.157623e-11      -26.77631     1.872852      0.584375    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.824             2960            5920
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950   -1 8   12 1.569861e-10       -24.5143     2.730073     0.5855655    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.595             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950 -0.5 1   12 6.865683e-06      -11.88897            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0    0.08               80             160
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950 -0.5 2   12 1.927429e-05      -11.70495     1.058578     0.5677083    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.411             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950 -0.5 4   12 3.121658e-05      -11.22419     1.177847     0.5729167    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45    0.83             2960            5920
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950 -0.5 8   12 0.0006841186      -9.379299      2.41113     0.5745536    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.608             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950  0.5 1   12 1.475472e-07      -15.72912            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.087               80             160
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950  0.5 2   12 1.834065e-06      -14.54974     1.838562      0.546875    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.392             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950  0.5 4   12 5.916096e-06      -13.45971     1.904371     0.5447917    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.873             2960            5920
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950  0.5 8   12 0.0007958024      -9.807655     4.193552     0.5418155    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.708             6800           13600
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950    1 1   12 6.986969e-49      -110.8826            0            NA     1
+  active_subjects elapsed likelihood_calls likelihood_rows
+1               0   0.084               80             160
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950    1 2   12 8.589628e-34      -91.55492     11.90391     0.5583333    27
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              20   0.423             1040            2080
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950    1 4   12 7.941316e-27       -72.0834     11.72182     0.5430556    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              45   0.875             2960            5920
+  draw jump K reps   acceptance mean_log_ratio sd_log_ratio bridge_accept max_K
+1  950    1 8   12 1.767974e-16      -51.89984     12.43226     0.5385417    64
+  active_subjects elapsed likelihood_calls likelihood_rows
+1              68   1.611             6800           13600
+[bench_lock] released 2026-10-14T04:38:15Z pid 1323110 status 0

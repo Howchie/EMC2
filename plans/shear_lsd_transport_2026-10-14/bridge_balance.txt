@@ -1,0 +1,4 @@
+K=(1, 1): detailed-balance error 1.39e-17; row-sum error 0
+K=(2, 2): detailed-balance error 1.73e-17; row-sum error 1.11e-16
+K=(4, 4): detailed-balance error 2.78e-17; row-sum error 2.22e-16
+K=(1, 4): detailed-balance error 6.94e-18; row-sum error 2.22e-16

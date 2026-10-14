@@ -1,0 +1,45 @@
+[bench_lock] waiting 2026-10-14T04:34:17Z pid 1321458: env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 RIDGE_FIT=work Rscript plans/shear_lsd_transport_2026-10-14/ridge_first.R /data/work/EMC2_workstreams/fixtures/lbaE_replay_rebuild_s1.rds plans/shear_lsd_transport_2026-10-14/ridge_work_replay.rds 1 1001,1000,980,950
+[bench_lock] acquired 2026-10-14T04:36:34Z pid 1321458
+fit elapsed 0.469 selection
+
+             A              B       B_Espeed      B_lRright             t0 
+             6             14              4             16              7 
+threshold-1:-1  threshold-1:1  threshold1:-1   threshold1:1              v 
+             6              5              4              7             11 
+  chain draw method   spread         am1       amh         aph          ap1
+1     1 1001  ridge 2298.899 0.003706957 0.1423545 0.007409418 5.861242e-13
+  elapsed  cpu      inverse
+1    0.46 0.46 8.881784e-16
+  chain draw   method  spread        am1       amh         aph          ap1
+1     1 1001 gaussian 1123.81 0.01092314 0.2497619 0.008315666 2.825884e-11
+  elapsed   cpu      inverse
+1   0.344 0.344 8.881784e-16
+  chain draw method   spread        am1       amh       aph          ap1
+1     1 1000  ridge 41.02217 0.03113062 0.2639018 0.2884506 0.0005140389
+  elapsed   cpu      inverse
+1   0.383 0.383 8.881784e-16
+  chain draw   method   spread        am1       amh       aph         ap1
+1     1 1000 gaussian 26.03281 0.06391038 0.3693206 0.3142527 0.001286563
+  elapsed  cpu      inverse
+1   0.329 0.33 8.881784e-16
+  chain draw method   spread        am1       amh aph          ap1 elapsed
+1     1  980  ridge 74.53338 0.01963978 0.1466777   1 0.0009848793   0.391
+    cpu      inverse
+1 0.391 8.881784e-16
+  chain draw   method   spread       am1       amh       aph          ap1
+1     1  980 gaussian 81.70675 0.1129894 0.4389633 0.2137501 3.805555e-05
+  elapsed   cpu      inverse
+1   0.338 0.337 8.881784e-16
+  chain draw method   spread          am1          amh          aph
+1     1  950  ridge 467195.7 6.651768e-14 2.374717e-06 2.990121e-13
+           ap1 elapsed  cpu      inverse
+1 7.094709e-95    0.42 0.42 8.881784e-16
+  chain draw   method   spread          am1          amh          aph
+1     1  950 gaussian 380613.2 1.513477e-13 2.860826e-06 1.087238e-10
+           ap1 elapsed   cpu      inverse
+1 2.379949e-84   0.348 0.348 8.881784e-16
+    method    spread        am1       amh       aph          ap1
+1    fixed  21823.64 0.01484708 0.1726189 0.2570942 0.0010157868
+2 gaussian  95461.20 0.04695573 0.2645122 0.1340796 0.0003311546
+3    ridge 117402.55 0.01361934 0.1382341 0.3239650 0.0003747295
+[bench_lock] released 2026-10-14T04:36:40Z pid 1321458 status 0

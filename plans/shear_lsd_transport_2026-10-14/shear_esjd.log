@@ -1,0 +1,10 @@
+[bench_lock] waiting 2026-10-14T04:40:05Z pid 1324459: env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 Rscript plans/shear_lsd_transport_2026-10-14/shear_esjd.R /data/work/EMC2_workstreams/fixtures/lbaE_replay_rebuild_s1.rds plans/shear_lsd_transport_2026-10-14/shear_esjd.rds
+[bench_lock] acquired 2026-10-14T04:40:05Z pid 1324459
+  scale           E        cpu    build_el      ll_el
+1  0.05 0.003499831 0.06298958 0.005229167 0.05755208
+2  0.10 0.013606536 0.05457292 0.004770833 0.04958333
+3  0.20 0.033488864 0.05531250 0.004812500 0.05021875
+4  0.40 0.067077168 0.05519792 0.004812500 0.05011458
+5  0.80 0.101824368 0.06113542 0.004958333 0.05598958
+6  1.60 0.086741491 0.05677083 0.004916667 0.05164583
+[bench_lock] released 2026-10-14T04:40:19Z pid 1324459 status 0
