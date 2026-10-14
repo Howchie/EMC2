@@ -10,8 +10,10 @@
 # The same law is a Poisson counter with threshold K, run on the clock
 # phi = q / (1 - q), whose trial input rate is Gamma distributed with mean
 # v = beta p lambda and SD sv = v/sqrt(beta).  The fitted coordinates are
-# (K, v, sv, h, t0, delta, clock); beta, p and lambda are derived in the
+# (K, v, sv, h, t0, plo, clock); beta, p and lambda are derived in the
 # kernel (src/model_FRQ.h), and sv = 0 is the exact no-variability limit.
+# plo is the probability that an accumulator commits at the low threshold
+# K_lo = 1 instead of K on a trial.
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
@@ -49,7 +51,7 @@ dFRQ <- function(rt, pars) {
   if (any(ok)) {
     out[ok] <- dfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
-                    delta = .frq_opt(pars, ok, "delta", 0),
+                    plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1))
   }
   out
@@ -66,7 +68,7 @@ pFRQ <- function(rt, pars) {
   if (any(ok)) {
     out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
-                    delta = .frq_opt(pars, ok, "delta", 0),
+                    plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1))
   }
   out
@@ -84,7 +86,7 @@ sFRQ <- function(rt, pars) {
   if (any(ok)) {
     out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
-                    delta = .frq_opt(pars, ok, "delta", 0),
+                    plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
                     lower_tail = FALSE)
   }
@@ -125,8 +127,9 @@ sFRQ <- function(rt, pars) {
 # V < 1 - h is the omission, and otherwise 1 - G(T) = (W - (1 - p)) / p.
 # At sv = 0 the latent is the threshold epoch
 # Y ~ Gamma(K): T = Y / v when h = 1, and T = G^{-1}(Y / E) when Y <= E.
-# With delta > 0 the latent is drawn on the CDF scale and pulled back through
-# H.  An all-Inf trial column is the package's omission convention.
+# With plo > 0 each row first draws its threshold, K_lo = 1 with probability
+# plo and K otherwise, and the same construction runs at that threshold with
+# the shared p.  An all-Inf trial column is the package's omission convention.
 rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   .frq_check_cols(pars)
   ok <- .frq_check_race(lR, pars, ok, "FRQ")
@@ -150,24 +153,26 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 # FRQ decision times (t0 excluded) for parameter rows p; +Inf is an omission
 # or an invalid row.
 .frq_draw_dt <- function(p) {
-  dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
+  pl <- if ("plo" %in% colnames(p)) p[, "plo"] else rep(0, nrow(p))
   cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
-  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], dl, cu)
+  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], pl, cu)
   valid <- !is.na(g[, "p"])
   pois <- valid & !is.finite(g[, "beta"])
   beta_r <- valid & !pois
-  vary <- is.finite(dl) & dl > 0
+  # Threshold per row: K_lo = 1 in the low state.  The draw is made only where
+  # plo > 0, so the base model consumes the same uniforms as before.
+  kk <- p[, "K"]
+  mix <- valid & is.finite(pl) & pl > 0
+  if (any(mix)) kk[mix][runif(sum(mix)) < pl[mix]] <- 1
   hit <- rep(Inf, nrow(p))
   if (any(beta_r)) {
     i <- which(beta_r)
     V <- runif(length(i))
-    live <- !(p[i, "h"] < 1 & V < 1 - p[i, "h"])
-    zz <- V
-    iv <- vary[i]
-    if (any(iv)) zz[iv] <- frq_h_inv_r(V[iv], dl[i][iv])
-    # W and 1 - p are held as logs: both underflow for beta < 1.
-    lw <- .frq_log_qbeta(zz, g[i, "beta"], p[i, "K"])
+    # W = 1 - U ~ Beta(beta, k) and 1 - p are held as logs: both underflow
+    # for beta < 1.  W <= 1 - p is the omission.
+    lw <- .frq_log_qbeta(V, g[i, "beta"], kk[i])
     log_om_p <- g[i, "log1mp"]
+    live <- p[i, "h"] == 1 | lw > log_om_p
     floor <- log(.Machine$double.xmin)
     log_sr <- rep(floor, length(i))
     above <- lw > log_om_p
@@ -180,10 +185,7 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   }
   if (any(pois)) {
     i <- which(pois)
-    Y <- rgamma(length(i), p[i, "K"])
-    iv <- i[vary[i]]
-    if (length(iv))
-      Y[vary[i]] <- qgamma(frq_h_inv_r(runif(length(iv)), dl[iv]), p[iv, "K"])
+    Y <- rgamma(length(i), kk[i])
     full <- p[i, "h"] == 1
     hit[i[full]] <- Y[full] / p[i[full], "v"]
     j <- which(!full)
@@ -255,10 +257,10 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' | *sv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = (*v*/*sv*)^2 | Between-trial SD of the input rate |
 #' | *h* | probit | \[1e-6, 1\] | qnorm(1) | *p* = qbeta(*h*, *K*, *beta*) | Probability that the accumulator ever responds |
 #' | *t0* | log | \[0.05, Inf\] or 0 | log(0) | | Non-decision time |
-#' | *delta* | log | \[1e-4, 6\] or 0 | log(0) | | Half-width of the log-odds threshold shift |
+#' | *plo* | probit | \[1e-6, 1\] or 0 | qnorm(0) | | Probability of the low-threshold state |
 #' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
 #'
-#' The values `K = 1`, `sv = 0`, `h = 1`, `t0 = 0`, `delta = 0` and
+#' The values `K = 1`, `sv = 0`, `h = 1`, `t0 = 0`, `plo = 0` and
 #' `clock = 0` are exact bound exceptions and can be set as constants.
 #' `K` is real-valued.
 #'
@@ -272,16 +274,18 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `cv = 0` is the same exact limit as `sv = 0`. At equal values of *sv* and
 #' *cv* *v* the two parameterizations give the same likelihood.
 #'
-#' With `delta > 0` the model is `F(u) = H(I_q(u)(K, beta))`, the closed-form
-#' marginal over a shift `eps ~ Uniform(-delta, delta)` of the log-odds of the
-#' quorum percentile, and `p` is derived from `H^{-1}(h)`. `eps` is drawn
-#' independently for each accumulator on each trial, including when `delta`
-#' is shared across accumulators.
+#' With `plo > 0` each accumulator independently commits at the low threshold
+#' `K_lo = 1` with probability `plo` on each trial:
+#' `F(u) = (1 - plo) * I_q(u)(K, beta) + plo * I_q(u)(1, beta)`, with
+#' `I_q(1, beta) = 1 - (1 - q)^beta`. Both thresholds share `beta`, `p` and the
+#' clock. `p` is solved from
+#' `h = (1 - plo) * I_p(K, beta) + plo * I_p(1, beta)` by a bracketed root
+#' search when `h < 1`.
 #'
 #' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
 #' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
-#' at `h = 1`), `cv` = `sv / v` (`sv` = `cv * v` under
-#' `parameterization = "cv"`) and `sQ` = `delta / sqrt(3)`.
+#' at `h = 1`) and `cv` = `sv / v` (`sv` = `cv * v` under
+#' `parameterization = "cv"`).
 #'
 #' Optional nuisance parameters are `pContaminant`, an omission probability
 #' outside the accumulators, and `pGuess`, a uniform-outlier probability.
@@ -322,11 +326,12 @@ FRQ <- function(parameterization = c("sv", "cv")) {
                # sv = 0 (log(0)) is the exact no-rate-variability counter.
                "rv" = log(0),
                "h" = qnorm(1), "t0" = log(0),
-               "delta" = log(0),
+               # No low-threshold state.
+               "plo" = qnorm(0),
                # A constant-rate evidence clock.
                "clock" = log(1))
   transform <- c(K = "exp", v = "exp", rv = "exp", h = "pnorm", t0 = "exp",
-                 delta = "exp", clock = "exp")
+                 plo = "pnorm", clock = "exp")
   transform_lower <- c(K = 1)
   # sv (or cv) has no upper bound: sv > v (beta < 1) is a valid, very variable
   # rate, and the kernel solves 1 - p from its own quantile.  Its lower guard
@@ -334,13 +339,12 @@ FRQ <- function(parameterization = c("sv", "cv")) {
   # constant.
   # The free h upper bound stops short of one so that a sampler can keep a
   # finite defective mass; h = 1 is reachable through the exception.
-  # delta is capped at 6: cosh(delta/2)^2 is already 101 there, and H^{-1}
-  # shrinks 1 - h by delta/sinh(delta), so a bigger cap pushes p's complement
-  # under double precision at h = 1 - 1e-9.
+  # plo's lower guard keeps a sampled value off the exact plo = 0 base model,
+  # which is reachable as a constant.
   minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
-                  h = c(1e-6, 1), t0 = c(0.05, Inf), delta = c(1e-4, 6),
+                  h = c(1e-6, 1), t0 = c(0.05, Inf), plo = c(1e-6, 1),
                   clock = c(1e-4, Inf))
-  exception <- c(t0 = 0, delta = 0, clock = 0, h = 1, K = 1, rv = 0)
+  exception <- c(t0 = 0, plo = 0, clock = 0, h = 1, K = 1, rv = 0)
   names(p_types)[names(p_types) == "rv"] <- rv
   names(transform)[names(transform) == "rv"] <- rv
   colnames(minmax)[colnames(minmax) == "rv"] <- rv
@@ -363,10 +367,10 @@ FRQ <- function(parameterization = c("sv", "cv")) {
     Ttransform = function(pars, dadm) {
       # Reporting only: Ttransform does not run on the compiled likelihood
       # path (see src/utils.h); the kernel derives the same quantities itself.
-      dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
+      pl <- if ("plo" %in% colnames(pars)) pars[, "plo"] else rep(0, nrow(pars))
       cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
       sv <- .frq_sv(pars)
-      g <- frq_rate(pars[, "K"], pars[, "v"], sv, pars[, "h"], dl, cu)
+      g <- frq_rate(pars[, "K"], pars[, "v"], sv, pars[, "h"], pl, cu)
       # Built as a bare matrix first: cbind()ing named scalars onto a one-row
       # `pars` makes R invent row names from the argument names, which would
       # then travel with the parameter matrix.
@@ -375,7 +379,7 @@ FRQ <- function(parameterization = c("sv", "cv")) {
         cbind(cv = as.numeric(sv / pars[, "v"]))
       add <- cbind(beta = as.numeric(g[, "beta"]), p = as.numeric(g[, "p"]),
                    lambda = as.numeric(g[, "lambda"]), Etot = as.numeric(g[, "Etot"]),
-                   other, sQ = as.numeric(dl) / sqrt(3))
+                   other)
       rownames(add) <- NULL
       cbind(pars, add)
     },

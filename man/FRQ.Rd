@@ -39,12 +39,12 @@ The derivations are in \code{Math/CounterAndQuorumModels.tex}.\tabular{llllll}{
    \emph{sv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = (\emph{v}/\emph{sv})^2 \tab Between-trial SD of the input rate \cr
    \emph{h} \tab probit \tab [1e-6, 1] \tab qnorm(1) \tab \emph{p} = qbeta(\emph{h}, \emph{K}, \emph{beta}) \tab Probability that the accumulator ever responds \cr
    \emph{t0} \tab log \tab [0.05, Inf] or 0 \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{delta} \tab log \tab [1e-4, 6] or 0 \tab log(0) \tab  \tab Half-width of the log-odds threshold shift \cr
+   \emph{plo} \tab probit \tab [1e-6, 1] or 0 \tab qnorm(0) \tab  \tab Probability of the low-threshold state \cr
    \emph{clock} \tab log \tab [1e-4, Inf] or 0 \tab log(1) \tab  \tab Shape of the registration law \cr
 }
 
 
-The values \code{K = 1}, \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{delta = 0} and
+The values \code{K = 1}, \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{plo = 0} and
 \code{clock = 0} are exact bound exceptions and can be set as constants.
 \code{K} is real-valued.
 
@@ -58,16 +58,18 @@ the input rate, in place of \emph{sv}:\tabular{llllll}{
 \code{cv = 0} is the same exact limit as \code{sv = 0}. At equal values of \emph{sv} and
 \emph{cv} \emph{v} the two parameterizations give the same likelihood.
 
-With \code{delta > 0} the model is \code{F(u) = H(I_q(u)(K, beta))}, the closed-form
-marginal over a shift \code{eps ~ Uniform(-delta, delta)} of the log-odds of the
-quorum percentile, and \code{p} is derived from \code{H^{-1}(h)}. \code{eps} is drawn
-independently for each accumulator on each trial, including when \code{delta}
-is shared across accumulators.
+With \code{plo > 0} each accumulator independently commits at the low threshold
+\code{K_lo = 1} with probability \code{plo} on each trial:
+\code{F(u) = (1 - plo) * I_q(u)(K, beta) + plo * I_q(u)(1, beta)}, with
+\code{I_q(1, beta) = 1 - (1 - q)^beta}. Both thresholds share \code{beta}, \code{p} and the
+clock. \code{p} is solved from
+\code{h = (1 - plo) * I_p(K, beta) + plo * I_p(1, beta)} by a bracketed root
+search when \code{h < 1}.
 
 \code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
 (expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}
-at \code{h = 1}), \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
-\code{parameterization = "cv"}) and \code{sQ} = \code{delta / sqrt(3)}.
+at \code{h = 1}) and \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
+\code{parameterization = "cv"}).
 
 Optional nuisance parameters are \code{pContaminant}, an omission probability
 outside the accumulators, and \code{pGuess}, a uniform-outlier probability.

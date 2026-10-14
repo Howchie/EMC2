@@ -24,89 +24,67 @@ skip_model_validation()
 # Independent references
 # ---------------------------------------------------------------------------
 
-ref_pl <- function(a, b, h, lambda, delta = 0, clock = 0) {
-  zh <- if (delta > 0) EMC2:::frq_h_inv_r(h, delta) else h
-  p <- qbeta(zh, a, b)
+# With plo > 0 the threshold is K_lo = 1 with probability plo, so every law is
+# the (1 - plo, plo) mixture of the K and K = 1 members on the same p, and p
+# solves the mixed completion probability.
+ref_pl <- function(a, b, h, lambda, plo = 0, clock = 0) {
+  p <- if (plo > 0 && h < 1) {
+    uniroot(function(x) (1 - plo) * pbeta(x, a, b) + plo * pbeta(x, 1, b) - h,
+            c(0, 1), tol = 1e-15)$root
+  } else {
+    qbeta(h, a, b)
+  }
   c(p = p, lambda = lambda)
 }
 
-ref_H <- function(z, d) {
-  if (d == 0) return(z)
-  lz <- log(z) - log1p(-z)
-  integrate(function(e) 1 / (1 + exp(-(lz + e))), -d, d,
-            rel.tol = 1e-12)$value / (2 * d)
-}
-
-ref_pH <- function(x, a, b, h, lambda, d = 0, clock = 0) {
-  pl <- ref_pl(a, b, h, lambda, d, clock)
-  p <- pl[["p"]]
+ref_q <- function(x, p, lambda, clock) {
   c2 <- clock^2
-  q <- if (c2 == 0) {
-    p * (-expm1(-lambda * x))
-  } else {
-    p * (1 - (1 + c2 * lambda * x)^(-1 / c2))
-  }
-  z <- pbeta(q, a, b)
-  if (d > 0) vapply(z, ref_H, numeric(1), d = d) else z
+  sr <- if (c2 == 0) exp(-lambda * x) else (1 + c2 * lambda * x)^(-1 / c2)
+  g <- if (c2 == 0) lambda * sr else lambda * (1 + c2 * lambda * x)^(-1 / c2 - 1)
+  list(q = p * (1 - sr), omq = (1 - p) + p * sr, g = g)
 }
 
-ref_d <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
-  pl <- ref_pl(a, b, h, lambda, delta, clock)
-  p <- pl[["p"]]
-  c2 <- clock^2
-  if (c2 == 0) {
-    q <- p * (-expm1(-lambda * x))
-    omq <- (1 - p) + p * exp(-lambda * x)
-    dens <- p * lambda * exp(-lambda * x) *
-      q^(a - 1) * omq^(b - 1) / beta(a, b)
-  } else {
-    sr <- (1 + c2 * lambda * x)^(-1 / c2)
-    g <- lambda * (1 + c2 * lambda * x)^(-1 / c2 - 1)
-    q <- p * (1 - sr)
-    omq <- (1 - p) + p * sr
-    dens <- p * g * q^(a - 1) * omq^(b - 1) / beta(a, b)
-  }
-  if (delta > 0) {
-    z <- pbeta(q, a, b)
-    c2_d <- 4 * sinh(delta / 2)^2
-    sinhc <- if (delta < 0.1) 1 + delta^2 / 6 + delta^4 / 120 else sinh(delta) / delta
-    Hprime <- sinhc / (1 + 2 * z * (1 - z) * (cosh(delta) - 1))
-    dens <- dens * Hprime
-  }
-  dens
+ref_p <- function(x, a, b, h, lambda, plo = 0, clock = 0) {
+  p <- ref_pl(a, b, h, lambda, plo, clock)[["p"]]
+  z <- ref_q(x, p, lambda, clock)
+  (1 - plo) * pbeta(z$q, a, b) + plo * pbeta(z$q, 1, b)
 }
 
-ref_p <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
-  ref_pH(x, a, b, h, lambda, d = delta, clock = clock)
+ref_d <- function(x, a, b, h, lambda, plo = 0, clock = 0) {
+  p <- ref_pl(a, b, h, lambda, plo, clock)[["p"]]
+  z <- ref_q(x, p, lambda, clock)
+  main <- p * z$g * z$q^(a - 1) * z$omq^(b - 1) / beta(a, b)
+  low <- p * z$g * z$omq^(b - 1) * b
+  (1 - plo) * main + plo * low
 }
 
-ref_s <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
-  1 - ref_p(x, a, b, h, lambda, delta = delta, clock = clock)
+ref_s <- function(x, a, b, h, lambda, plo = 0, clock = 0) {
+  1 - ref_p(x, a, b, h, lambda, plo = plo, clock = clock)
 }
 
-to_chart <- function(a, b, h, lambda, delta = 0) {
-  p <- ref_pl(a, b, h, lambda, delta)[["p"]]
+to_chart <- function(a, b, h, lambda, plo = 0) {
+  p <- ref_pl(a, b, h, lambda, plo)[["p"]]
   c(K = a, v = b * p * lambda, sv = p * lambda * sqrt(b))
 }
 
-cpp_d <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
-  ch <- to_chart(a, b, h, lambda, delta)
-  EMC2:::dfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+cpp_d <- function(x, a, b, h, lambda, plo = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, plo)
+  EMC2:::dfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, plo = plo,
               log_out = log_out, clock = clock)
 }
-cpp_p <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
-  ch <- to_chart(a, b, h, lambda, delta)
-  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+cpp_p <- function(x, a, b, h, lambda, plo = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, plo)
+  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, plo = plo,
               log_out = log_out, clock = clock)
 }
-cpp_s <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
-  ch <- to_chart(a, b, h, lambda, delta)
-  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+cpp_s <- function(x, a, b, h, lambda, plo = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, plo)
+  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, plo = plo,
               lower_tail = FALSE, log_out = log_out, clock = clock)
 }
-cpp_rate <- function(a, b, h, lambda, delta = 0, clock = 0) {
-  ch <- to_chart(a, b, h, lambda, delta)
-  EMC2:::frq_rate(ch[["K"]], ch[["v"]], ch[["sv"]], h, delta, clock)
+cpp_rate <- function(a, b, h, lambda, plo = 0, clock = 0) {
+  ch <- to_chart(a, b, h, lambda, plo)
+  EMC2:::frq_rate(ch[["K"]], ch[["v"]], ch[["sv"]], h, plo, clock)
 }
 
 frq_grid <- data.frame(
@@ -351,23 +329,23 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(m$type, "RACE")
   expect_equal(m$c_name, "FRQ")
   expect_equal(names(m$p_types),
-               c("K", "v", "sv", "h", "t0", "delta", "clock",
+               c("K", "v", "sv", "h", "t0", "plo", "clock",
                  "pContaminant", "pGuess"))
   expect_equal(m$p_types_canonical, c("K", "v", "sv", "h", "t0"))
   expect_equal(unname(m$transform$func[c("K", "v", "sv", "h", "t0",
-                                         "delta", "clock")]),
-               c("exp", "exp", "exp", "pnorm", "exp", "exp", "exp"))
+                                         "plo", "clock")]),
+               c("exp", "exp", "exp", "pnorm", "exp", "pnorm", "exp"))
   expect_equal(unname(m$transform$lower[["K"]]), 1)
   expect_equal(exp(m$p_types[["sv"]]), 0)
-  expect_equal(exp(m$p_types[["delta"]]), 0)
+  expect_equal(pnorm(m$p_types[["plo"]]), 0)
   expect_equal(exp(m$p_types[["clock"]]), 1)
   expect_equal(pnorm(m$p_types[["h"]]), 1, tolerance = 1e-12)
   expect_equal(unname(m$bound$minmax[, "K"]), c(1, Inf))
   expect_equal(unname(m$bound$minmax[, "v"]), c(1e-4, Inf))
   expect_equal(unname(m$bound$minmax[, "sv"]), c(1e-4, Inf))
-  expect_equal(unname(m$bound$minmax[, "delta"]), c(1e-4, 6))
+  expect_equal(unname(m$bound$minmax[, "plo"]), c(1e-6, 1))
   expect_equal(unname(m$bound$minmax[, "clock"]), c(1e-4, Inf))
-  expect_equal(unname(m$bound$exception[c("sv", "delta", "clock", "h", "K")]),
+  expect_equal(unname(m$bound$exception[c("sv", "plo", "clock", "h", "K")]),
                c(0, 0, 0, 1, 1))
   expect_identical(names(formals(FRQ)), "parameterization")
 })
@@ -389,7 +367,7 @@ test_that("the counter coordinates are representable on the whole bounded box", 
 })
 
 test_that("dfun/pfun apply t0 and call the same kernel", {
-  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, delta = 0,
+  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, plo = 0,
                 clock = 0.5)
   pars <- pars[rep(1, 5), ]
   rt <- c(0.05, 0.15, 0.3, 0.8, Inf)
@@ -407,17 +385,17 @@ test_that("dfun/pfun apply t0 and call the same kernel", {
 })
 
 test_that("Ttransform reports the generative parameters", {
-  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, delta = 0.3,
+  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, plo = 0.3,
                 clock = 1)
   out <- FRQ()$Ttransform(pars, NULL)
   b <- 1 / 0.6^2
-  p <- qbeta(EMC2:::frq_h_inv_r(0.9, 0.3), 2, b)
+  p <- ref_pl(2, b, 0.9, 1, plo = 0.3)[["p"]]
   expect_equal(unname(out[1, "beta"]), b, tolerance = 1e-12)
   expect_equal(unname(out[1, "p"]), p, tolerance = 1e-12)
   expect_equal(unname(out[1, "lambda"]), 3.1 / (b * p), tolerance = 1e-10)
   expect_equal(unname(out[1, "Etot"]), b * p / (1 - p), tolerance = 1e-10)
   expect_equal(unname(out[1, "cv"]), 0.6)
-  expect_equal(unname(out[1, "sQ"]), 0.3 / sqrt(3))
+  expect_false("sQ" %in% colnames(out))
   expect_equal(out[, colnames(pars), drop = FALSE], pars)
   expect_null(rownames(out))
 })
@@ -468,7 +446,7 @@ frq_fixture <- function(n = 60, seed = 20260816, extensions = FALSE) {
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
   formula <- list(K ~ 1, v ~ lM, sv ~ 1, h ~ lM, t0 ~ 1)
   if (extensions)
-    formula[c("delta", "clock")] <- list(delta ~ 1, clock ~ 1)
+    formula[c("plo", "clock")] <- list(plo ~ 1, clock ~ 1)
   des <- design(data = dat, model = FRQ, matchfun = matchfun,
                 formula = formula,
                 contrasts = list(h = list(lM = ADmat), v = list(lM = ADmat)))
@@ -478,7 +456,7 @@ frq_fixture <- function(n = 60, seed = 20260816, extensions = FALSE) {
   p["v"] <- log(3); p["v_lMd"] <- 0.6
   p["t0"] <- log(0.15)
   if (extensions) {
-    p["delta"] <- log(1.2)
+    p["plo"] <- qnorm(0.15)
     p["clock"] <- log(0.5)
   }
   emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
@@ -727,10 +705,10 @@ test_that("the likelihood is maximised at the generating parameters", {
 })
 
 # ---------------------------------------------------------------------------
-# 9. Threshold variability (delta) and unit-rate frailty (clock)
+# 9. The low-threshold state (plo) and unit-rate frailty (clock)
 # ---------------------------------------------------------------------------
 
-test_that("delta defaults to zero and is exactly the untransformed model", {
+test_that("plo defaults to zero and is exactly the base model", {
   x <- c(0.05, 0.2, 0.6, 2, Inf)
   expect_identical(EMC2:::pfrq(x, 2, 3, 0.6, 0.9, 0),
                    EMC2:::pfrq(x, 2, 3, 0.6, 0.9))
@@ -782,27 +760,23 @@ test_that("unit-rate frailty nests the exponential member exactly", {
                ref_p(x[1:4], 2, 3, 0.9, 1.4), tolerance = 1e-12)
 })
 
-test_that("threshold variability and unit frailty compose", {
+test_that("the low state and unit frailty compose", {
   a <- 2.5; b <- 1.4; h <- 0.85; lambda <- 1.4
-  d <- 1.25; cv <- 0.55
+  pl <- 0.35; cv <- 0.55
   x <- c(0.05, 0.2, 0.6, 1.5, 5)
-  pl <- cpp_rate(a, b, h, lambda, d, cv)
-  p <- unname(pl[1, "p"])
-  c2 <- cv^2
-  q <- p * (1 - (1 + c2 * lambda * x)^(-1 / c2))
-  z <- pbeta(q, a, b)
-  want <- vapply(z, ref_H, numeric(1), d = d)
-  expect_equal(cpp_p(x, a, b, h, lambda, d, clock = cv), want,
-               tolerance = 1e-10)
-  expect_equal(cpp_p(Inf, a, b, h, lambda, d, clock = cv), h,
+  expect_equal(cpp_p(x, a, b, h, lambda, pl, clock = cv),
+               ref_p(x, a, b, h, lambda, pl, clock = cv), tolerance = 1e-10)
+  expect_equal(cpp_d(x, a, b, h, lambda, pl, clock = cv),
+               ref_d(x, a, b, h, lambda, pl, clock = cv), tolerance = 1e-10)
+  expect_equal(cpp_p(Inf, a, b, h, lambda, pl, clock = cv), h,
                tolerance = 1e-10)
   expect_equal(integrate(function(t)
-    cpp_d(t, a, b, h, lambda, d, clock = cv), 0, Inf,
+    cpp_d(t, a, b, h, lambda, pl, clock = cv), 0, Inf,
     rel.tol = 1e-9)$value, h, tolerance = 1e-8)
 })
 
 test_that("the proper h = 1 boundary remains proper with unit frailty", {
-  pars <- cbind(K = 2, v = 4.2, sv = 2.436, h = 1, t0 = 0, delta = 0,
+  pars <- cbind(K = 2, v = 4.2, sv = 2.436, h = 1, t0 = 0, plo = 0,
                 clock = 0.7)
   pl <- EMC2:::frq_rate(2, 4.2, 2.436, 1, 0, 0.7)
   expect_equal(unname(pl[1, "p"]), 1)
@@ -820,81 +794,129 @@ test_that("the proper h = 1 boundary remains proper with unit frailty", {
   expect_equal(unname(out[1, "lambda"]), 4.2 / (1 / 0.58^2), tolerance = 1e-12)
 })
 
-test_that("the delta > 0 CDF matches the marginalised criterion state", {
+test_that("the plo > 0 laws match the mixture over thresholds", {
   x <- c(0.02, 0.1, 0.35, 0.9, 4)
-  for (d in c(0.25, 1, 3, 6)) {
-    for (i in c(1, 2, 5)) {
+  for (pl in c(0.05, 0.3, 0.8, 1)) {
+    for (i in c(2, 3, 5, 6)) {
       g <- frq_grid[i, ]
-      expect_equal(cpp_p(x, g$a, g$b, g$h, g$lambda, d),
-                   ref_pH(x, g$a, g$b, g$h, g$lambda, d),
-                   tolerance = 1e-9,
-                   info = paste("delta", d, "row", i))
+      lab <- paste("plo", pl, "row", i)
+      expect_equal(cpp_p(x, g$a, g$b, g$h, g$lambda, pl),
+                   ref_p(x, g$a, g$b, g$h, g$lambda, pl),
+                   tolerance = 1e-9, info = lab)
+      expect_equal(cpp_d(x, g$a, g$b, g$h, g$lambda, pl),
+                   ref_d(x, g$a, g$b, g$h, g$lambda, pl),
+                   tolerance = 1e-9, info = lab)
     }
   }
 })
 
-test_that("delta preserves the defective contract and the meaning of h and lambda", {
-  for (d in c(0.25, 1, 3, 6)) for (i in seq_len(nrow(frq_grid))) {
+test_that("plo preserves the defective contract and the meaning of h and lambda", {
+  for (pl in c(0.05, 0.3, 0.8, 1)) for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
-    lab <- paste("delta", d, "row", i)
-    expect_equal(cpp_p(Inf, g$a, g$b, g$h, g$lambda, d), g$h,
+    lab <- paste("plo", pl, "row", i)
+    expect_equal(cpp_p(Inf, g$a, g$b, g$h, g$lambda, pl), g$h,
                  tolerance = 1e-10, info = lab)
-    expect_equal(cpp_s(Inf, g$a, g$b, g$h, g$lambda, d),
+    expect_equal(cpp_s(Inf, g$a, g$b, g$h, g$lambda, pl),
                  1 - g$h, tolerance = 1e-10, info = lab)
-    expect_equal(integrate(function(t) cpp_d(t, g$a, g$b, g$h, g$lambda, d),
+    expect_equal(unname(cpp_rate(g$a, g$b, g$h, g$lambda, pl)[1, "lambda"]),
+                 g$lambda, tolerance = 1e-9, info = lab)
+    expect_equal(integrate(function(t) cpp_d(t, g$a, g$b, g$h, g$lambda, pl),
                            0, Inf, rel.tol = 1e-10,
                            subdivisions = 2000L)$value,
                  g$h, tolerance = 1e-8, info = lab)
   }
 })
 
-test_that("the density is the derivative of the CDF under delta", {
+test_that("the solved p reproduces h, including beta < 1", {
+  # 1 - h = (1 - plo) I_{1-p}(beta, K) + plo (1 - p)^beta, evaluated from the
+  # kernel's log(1 - p), which keeps its digits where p rounds to one.
+  cases <- rbind(c(K = 3, v = 5, sv = 50, h = 1 - 1e-9, plo = 0.1),
+                 c(K = 3, v = 5, sv = 50, h = 1e-5, plo = 0.1),
+                 c(K = 8, v = 5, sv = 0.05, h = 0.5, plo = 0.5),
+                 c(K = 2, v = 5, sv = 300, h = 0.999999, plo = 0.01),
+                 c(K = 6, v = 5, sv = 2, h = 0.3, plo = 0.95))
+  for (i in seq_len(nrow(cases))) {
+    cs <- cases[i, ]
+    g <- EMC2:::frq_rate(cs[["K"]], cs[["v"]], cs[["sv"]], cs[["h"]], cs[["plo"]])
+    b <- unname(g[1, "beta"]); l <- unname(g[1, "log1mp"])
+    # Below double range I_x(b, K) is its leading term x^b / (b B(b, K)).
+    main <- if (l > -700) pbeta(exp(l), b, cs[["K"]]) else
+      exp(b * l - log(b) - lbeta(b, cs[["K"]]))
+    one_m_h <- (1 - cs[["plo"]]) * main + cs[["plo"]] * exp(b * l)
+    expect_equal(one_m_h, 1 - cs[["h"]], tolerance = 1e-10,
+                 info = paste("case", i))
+  }
+  # sv = 0: E solves the mixed incomplete gamma.
+  E <- unname(EMC2:::frq_rate(4, 5, 0, 0.7, 0.25)[1, "Etot"])
+  expect_equal(0.75 * pgamma(E, 4) + 0.25 * pgamma(E, 1), 0.7, tolerance = 1e-13)
+  expect_equal(EMC2:::pfrq(c(0.1, 0.5, 2), 4, 5, 0, 0.7, 0.25, clock = 0),
+               0.75 * pgamma(E * -expm1(-5 / E * c(0.1, 0.5, 2)), 4) +
+                 0.25 * pgamma(E * -expm1(-5 / E * c(0.1, 0.5, 2)), 1),
+               tolerance = 1e-12)
+})
+
+test_that("the density is the derivative of the CDF under plo", {
   eps <- 1e-5
-  for (d in c(0.5, 2, 5)) {
+  for (pl in c(0.1, 0.5, 0.9)) {
     x <- c(0.1, 0.3, 0.7, 1.5)
-    fd <- (cpp_p(x + eps, 2.5, 1.4, 0.85, 1.4, d) -
-           cpp_p(x - eps, 2.5, 1.4, 0.85, 1.4, d)) / (2 * eps)
-    expect_equal(cpp_d(x, 2.5, 1.4, 0.85, 1.4, d), fd,
-                 tolerance = 1e-6, info = paste("delta", d))
+    fd <- (cpp_p(x + eps, 2.5, 1.4, 0.85, 1.4, pl) -
+           cpp_p(x - eps, 2.5, 1.4, 0.85, 1.4, pl)) / (2 * eps)
+    expect_equal(cpp_d(x, 2.5, 1.4, 0.85, 1.4, pl), fd,
+                 tolerance = 1e-6, info = paste("plo", pl))
   }
 })
 
-test_that("H is invertible and the family nests the base model as delta -> 0", {
-  y <- c(1e-9, 1e-3, 0.1, 0.5, 0.9, 1 - 1e-9)
-  for (d in c(0.3, 1, 3, 6))
-    expect_equal(vapply(EMC2:::frq_h_inv_r(y, d), ref_H, numeric(1), d = d), y,
-                 tolerance = 1e-12, info = paste("delta", d))
-  x <- c(0.05, 0.3, 1)
+test_that("plo sets the onset density and nests both pure thresholds", {
+  # The low state is a K = 1 counter, so the onset density is plo * v.
+  for (sv in c(0, 2)) for (h in c(1, 0.8))
+    expect_equal(EMC2:::dfrq(1e-10, 3, 5, sv, h, 0.2), 0.2 * 5,
+                 tolerance = 1e-6, info = paste(sv, h))
+  # plo = 1 is the K = 1 model with the same chart.
+  x <- c(0.05, 0.3, 1, 3)
+  for (sv in c(0, 2)) for (h in c(1, 0.8))
+    expect_equal(EMC2:::pfrq(x, 3, 5, sv, h, 1), EMC2:::pfrq(x, 1, 5, sv, h),
+                 tolerance = 1e-12, info = paste(sv, h))
+  # plo = 1 at K = 1 is the base K = 1 model.
+  expect_equal(EMC2:::pfrq(x, 1, 5, 2, 0.8, 0.4), EMC2:::pfrq(x, 1, 5, 2, 0.8),
+               tolerance = 1e-12)
   base <- cpp_p(x, 2, 3, 0.9, 1.4, 0)
   prev <- Inf
-  for (d in c(1e-3, 1e-4, 1e-5)) {
-    dev <- max(abs(cpp_p(x, 2, 3, 0.9, 1.4, d) - base))
+  for (pl in c(1e-3, 1e-5, 1e-7)) {
+    dev <- max(abs(cpp_p(x, 2, 3, 0.9, 1.4, pl) - base))
     expect_lt(dev, prev)
     prev <- dev
   }
-  expect_lt(prev, 1e-10)
+  expect_lt(prev, 1e-6)
 })
 
-test_that("the simulator draws from the delta > 0 likelihood", {
+test_that("the simulator draws from the plo > 0 likelihood", {
   skip_on_cran()
-  set.seed(4)
   n <- 4e4
-  d <- 2
-  pars <- cbind(K = 2, v = 3, sv = 1.5, h = 0.8, t0 = 0.15,
-                delta = d)[rep(1, n), ]
-  sim <- EMC2:::rfrq_cpp(pars, "1", rep(TRUE, n))
-  fin <- is.finite(sim$rt)
-  expect_equal(mean(fin), 0.8, tolerance = 0.01)
   probs <- seq(0.1, 0.9, 0.1)
-  qs <- quantile(sim$rt[fin], probs)
-  expect_equal(unname(EMC2:::pfrq(qs - 0.15, 2, 3, 1.5, 0.8, d) / 0.8),
-               probs, tolerance = 0.02)
-  expect_false(isTRUE(all.equal(
-    unname(EMC2:::pfrq(qs - 0.15, 2, 3, 1.5, 0.8, 0) / 0.8), probs,
-    tolerance = 0.02)))
+  for (sv in c(1.5, 0)) {
+    pars <- cbind(K = 4, v = 6, sv = sv, h = 0.8, t0 = 0.15,
+                  plo = 0.3)[rep(1, n), ]
+    set.seed(4)
+    sim <- EMC2:::rfrq_cpp(pars, "1", rep(TRUE, n))
+    fin <- is.finite(sim$rt)
+    expect_equal(mean(fin), 0.8, tolerance = 0.01)
+    qs <- quantile(sim$rt[fin], probs)
+    expect_equal(unname(EMC2:::pfrq(qs - 0.15, 4, 6, sv, 0.8, 0.3) / 0.8),
+                 probs, tolerance = 0.02)
+    expect_false(isTRUE(all.equal(
+      unname(EMC2:::pfrq(qs - 0.15, 4, 6, sv, 0.8, 0) / 0.8), probs,
+      tolerance = 0.02)))
+    set.seed(5)
+    simr <- EMC2:::rFRQ(factor(rep("1", n)), pars)
+    finr <- is.finite(simr$rt)
+    expect_equal(mean(finr), 0.8, tolerance = 0.01)
+    expect_equal(unname(EMC2:::pfrq(quantile(simr$rt[finr], probs) - 0.15,
+                                    4, 6, sv, 0.8, 0.3) / 0.8),
+                 probs, tolerance = 0.02)
+  }
 })
 
-test_that("FRQ keeps the defect when sv > v and rejects extreme delta", {
+test_that("FRQ keeps the defect when sv > v and rejects plo outside [0, 1]", {
   # beta = 0.05 puts 1 - p far below double-precision spacing near one; the
   # complementary quantile keeps it, and the defect is exact.
   g <- EMC2:::frq_rate(2, 1.3, 1.3 / sqrt(0.05), 0.99)
@@ -908,8 +930,9 @@ test_that("FRQ keeps the defect when sv > v and rejects extreme delta", {
                pbeta(omp + (1 - omp) / (1 + lam * x), 0.05, 2), tolerance = 1e-10)
   expect_equal(EMC2:::pfrq(x, 2, 1.3, sv, 0.99, lower_tail = FALSE, clock = 0),
                pbeta(omp + (1 - omp) * exp(-lam * x), 0.05, 2), tolerance = 1e-10)
-  expect_true(is.na(EMC2:::frq_rate(2, 1.3, 0.5, 0.9, 1000)[1, "p"]))
-  expect_equal(EMC2:::pfrq(0.4, 2, 1.3, 0.5, 0.9, 1000), 0)
+  expect_true(is.na(EMC2:::frq_rate(2, 1.3, 0.5, 0.9, 1.5)[1, "p"]))
+  expect_true(is.na(EMC2:::frq_rate(2, 1.3, 0.5, 0.9, -0.1)[1, "p"]))
+  expect_equal(EMC2:::pfrq(0.4, 2, 1.3, 0.5, 0.9, 1.5), 0)
 })
 
 test_that("the FRQ R simulator keeps malformed rows as omissions", {
@@ -936,7 +959,7 @@ test_that("sv far above v stays exact where 1 - q underflows", {
   # range by u = 0.5.
   u <- c(0.1, 0.5, 1.5, 4)
   for (sv in c(3, 30, 150)) {
-    P <- cbind(K = 1, v = 3, sv = sv, h = 1, t0 = 0, delta = 0,
+    P <- cbind(K = 1, v = 3, sv = sv, h = 1, t0 = 0, plo = 0,
                clock = 0)[rep(1, length(u)), ]
     expect_equal(EMC2:::pFRQ(u, P), pexp(u, 3), tolerance = 1e-12)
     expect_equal(EMC2:::sFRQ(u, P), pexp(u, 3, lower.tail = FALSE),
@@ -947,7 +970,7 @@ test_that("sv far above v stays exact where 1 - q underflows", {
   withr::local_options(emc2.cpp_rfun = TRUE)
   set.seed(5)
   n <- 20000
-  P <- cbind(K = 1, v = 3, sv = 150, h = 1, t0 = 0, delta = 0,
+  P <- cbind(K = 1, v = 3, sv = 150, h = 1, t0 = 0, plo = 0,
              clock = 0)[rep(1, n), ]
   sim <- EMC2:::.rfun_FRQ(factor(rep("a", n)), P)
   expect_gt(ks.test(sim$rt, "pexp", 3)$p.value, 1e-3)
@@ -955,14 +978,14 @@ test_that("sv far above v stays exact where 1 - q underflows", {
 
 test_that("a per-row K matches a fresh derive in every state", {
   # Rows mix the proper sv = 0 state (where only alpha and lgamma(K) change
-  # with K) with sv > 0, h < 1 and delta > 0 rows and an invalid K.
+  # with K) with sv > 0, h < 1 and plo > 0 rows and an invalid K.
   set.seed(9)
   n <- 60
   P <- cbind(K = 1 + rexp(n, 0.5), v = 4, sv = 0, h = 1, t0 = 0.1,
-             delta = 0, clock = 1)
+             plo = 0, clock = 1)
   P[c(7, 8, 30), "sv"] <- 1.5
   P[c(12, 31), "h"] <- 0.8
-  P[c(20, 21), "delta"] <- 0.7
+  P[c(20, 21), "plo"] <- 0.3
   P[c(25, 40), "K"] <- 0.5 * 1e-8
   rt <- 0.1 + rexp(n, 2)
   one <- function(f) vapply(seq_len(n), function(i)

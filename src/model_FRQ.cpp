@@ -38,20 +38,20 @@ static inline FrqCache* frq_cache_from_context(void* ctx_) {
 // [[Rcpp::export]]
 NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector sv, NumericVector h,
-                   NumericVector delta = NumericVector::create(0.0),
+                   NumericVector plo = NumericVector::create(0.0),
                    bool log_out = false,
                    NumericVector clock = NumericVector::create(1.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
-  frq_check_len(delta, n, "delta");
+  frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(delta, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i));
     const double lp = frq_log_pdf_dt(t[i], s);
     out[i] = log_out ? lp : ((lp > R_NegInf) ? std::exp(lp) : 0.0);
   }
@@ -65,20 +65,20 @@ NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v,
 // [[Rcpp::export]]
 NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector sv, NumericVector h,
-                   NumericVector delta = NumericVector::create(0.0),
+                   NumericVector plo = NumericVector::create(0.0),
                    bool lower_tail = true, bool log_out = false,
                    NumericVector clock = NumericVector::create(1.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
-  frq_check_len(delta, n, "delta");
+  frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(delta, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i));
     double lp;
     if (lower_tail) {
       lp = frq_log_cdf_dt(t[i], s);
@@ -99,23 +99,23 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
 // [[Rcpp::export]]
 NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
                        NumericVector h,
-                       NumericVector delta = NumericVector::create(0.0),
+                       NumericVector plo = NumericVector::create(0.0),
                        NumericVector clock = NumericVector::create(1.0)) {
   // Length is the longest argument, not K's: a scalar K against a vector v has
   // to give one row per v.
   const int n = static_cast<int>(std::max(std::max(std::max(K.size(), v.size()),
                                                    std::max(sv.size(), h.size())),
-                                          std::max(delta.size(), clock.size())));
+                                          std::max(plo.size(), clock.size())));
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
-  frq_check_len(delta, n, "delta");
+  frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
   NumericMatrix out(n, 5);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(delta, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i));
     out(i, 0) = s.ok ? s.beta : NA_REAL;
     out(i, 1) = s.ok ? s.p : NA_REAL;
     out(i, 2) = s.ok ? ((s.poisson && s.h == 1.0) ? NA_REAL : s.lambda) : NA_REAL;
@@ -127,38 +127,19 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
   return out;
 }
 
-// H^{-1} for the threshold-variability generator. The R simulator pulls
-// uniforms back through the SAME map the likelihood uses, and a second
-// implementation in R could drift from it.
-// Recycles `delta` against `y`.
-// [[Rcpp::export]]
-NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
-  const int n = y.size();
-  frq_check_len(delta, n, "delta");
-  NumericVector out(n);
-  double last = R_NaN;
-  FrqH H;
-  for (int i = 0; i < n; ++i) {
-    const double d = frq_pick(delta, i);
-    if (d != last) { H = frq_h_make(d); last = d; }
-    out[i] = H.ok ? frq_h_inv(y[i], H) : NA_REAL;
-  }
-  return out;
-}
-
 // ============================================================
 // FRQ (Finite Reservoir Quorum) adapters
-// Column layout: K=0, v=1, sv=2, h=3, t0=4, delta=5, clock=6; the cv chart
+// Column layout: K=0, v=1, sv=2, h=3, t0=4, plo=5, clock=6; the cv chart
 // (FRQ_CV) holds the rate CV sv / v in column 2.
-// delta is the threshold-variability half-width (zero by default) and clock the
-// registration clock shape (one by default, a constant-rate counter).
+// plo is the probability of the low-threshold state (zero by default) and
+// clock the registration clock shape (one by default, a constant-rate counter).
 //
 // The upper tail may be defective: an accumulator terminates with probability
 // h = I_p(alpha, beta), and the leftover mass 1 - h sits at t = +Inf.  At
 // h = 1 the survivor reaches zero and the same paths become proper.
 //
 // Every entry point resolves its row through FrqMemo, which splits the state
-// on (K, sv/v, h, delta) -- the beta-quantile half, cached per particle --
+// on (K, sv/v, h, plo) -- the beta-quantile half, cached per particle --
 // and (v, clock), which is recomputed per row for the cost of one log.
 // ============================================================
 
@@ -166,8 +147,8 @@ NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
 // layouts put it at the same position.
 template <bool CV>
 inline const FrqPars& frq_memo_row(FrqMemo& memo, double k, double v,
-                                   double x, double h, double d, double cu) {
-  return CV ? memo.get_cv(k, v, x, h, d, cu) : memo.get(k, v, x, h, d, cu);
+                                   double x, double h, double pl, double cu) {
+  return CV ? memo.get_cv(k, v, x, h, pl, cu) : memo.get(k, v, x, h, pl, cu);
 }
 
 // The scalar entry points are called once per evaluation point, often several
@@ -180,7 +161,7 @@ static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
   memo.shared = frq_cache_from_context(ctx_);
   return frq_memo_row<CV>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
                           par[emc2col::frq::sv], par[emc2col::frq::h],
-                          par[emc2col::frq::delta], par[emc2col::frq::clock]);
+                          par[emc2col::frq::plo], par[emc2col::frq::clock]);
 }
 
 template <bool CV>
@@ -213,7 +194,7 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* sv_ = cols[emc2col::frq::sv];
   const double* h_  = cols[emc2col::frq::h];
   const double* t0_ = cols[emc2col::frq::t0];
-  const double* de_ = cols[emc2col::frq::delta];
+  const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int i = 0; i < n_rows; ++i) {
@@ -228,7 +209,7 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
       continue;
     }
     const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        de_[i], cu_[i]);
+                                        pl_[i], cu_[i]);
     const double log_pdf = frq_log_pdf_dt(tt, s);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -246,7 +227,7 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* sv_ = cols[emc2col::frq::sv];
   const double* h_  = cols[emc2col::frq::h];
   const double* t0_ = cols[emc2col::frq::t0];
-  const double* de_ = cols[emc2col::frq::delta];
+  const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int i = 0; i < n_rows; ++i) {
@@ -259,7 +240,7 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        de_[i], cu_[i]);
+                                        pl_[i], cu_[i]);
     const double log_surv = frq_log_surv_dt(tt, s);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
@@ -277,7 +258,7 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
   const double* sv_ = cols[emc2col::frq::sv];
   const double* h_  = cols[emc2col::frq::h];
   const double* t0_ = cols[emc2col::frq::t0];
-  const double* de_ = cols[emc2col::frq::delta];
+  const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int j = 0; j < n_unique_trials; ++j) {
@@ -293,7 +274,7 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const FrqPars& s = frq_memo_row<CV>(memo, k_[r], v_[r], sv_[r], h_[r],
-                                          de_[r], cu_[r]);
+                                          pl_[r], cu_[r]);
       const double log_surv = !R_FINITE(t)
         ? (s.ok ? frq_log_surv_dt(R_PosInf, s) : R_NaN)
         : frq_log_surv_dt(tt, s);

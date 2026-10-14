@@ -327,32 +327,28 @@ btawl_vcrit_vec <- function(k, tau, b) {
     .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
 
-dfrq <- function(t, K, v, sv, h, delta = as.numeric( c(0.0)), log_out = FALSE, clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_dfrq`, t, K, v, sv, h, delta, log_out, clock)
+dfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), log_out = FALSE, clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_dfrq`, t, K, v, sv, h, plo, log_out, clock)
 }
 
-pfrq <- function(t, K, v, sv, h, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_pfrq`, t, K, v, sv, h, delta, lower_tail, log_out, clock)
+pfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_pfrq`, t, K, v, sv, h, plo, lower_tail, log_out, clock)
 }
 
-frq_rate <- function(K, v, sv, h, delta = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_frq_rate`, K, v, sv, h, delta, clock)
+frq_rate <- function(K, v, sv, h, plo = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_frq_rate`, K, v, sv, h, plo, clock)
 }
 
-frq_h_inv_r <- function(y, delta) {
-    .Call(`_EMC2_frq_h_inv_r`, y, delta)
+dfrqfade <- function(t, K, v, sv, kappa, plo = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_dfrqfade`, t, K, v, sv, kappa, plo, clock)
 }
 
-dfrqfade <- function(t, K, v, sv, kappa, delta = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_dfrqfade`, t, K, v, sv, kappa, delta, clock)
+pfrqfade <- function(t, K, v, sv, kappa, plo = as.numeric( c(0.0)), clock = as.numeric( c(1.0)), lower_tail = TRUE) {
+    .Call(`_EMC2_pfrqfade`, t, K, v, sv, kappa, plo, clock, lower_tail)
 }
 
-pfrqfade <- function(t, K, v, sv, kappa, delta = as.numeric( c(0.0)), clock = as.numeric( c(1.0)), lower_tail = TRUE) {
-    .Call(`_EMC2_pfrqfade`, t, K, v, sv, kappa, delta, clock, lower_tail)
-}
-
-frq_fade_summary <- function(K, v, sv, kappa, delta = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_frq_fade_summary`, K, v, sv, kappa, delta, clock)
+frq_fade_summary <- function(K, v, sv, kappa, plo = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_frq_fade_summary`, K, v, sv, kappa, plo, clock)
 }
 
 pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L, delta = 0.0) {

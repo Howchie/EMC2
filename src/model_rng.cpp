@@ -1272,11 +1272,13 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 }
 
 // One FRQ decision time (t0 excluded) for a valid state; +Inf is an omission.
+// The low state is drawn first, and only when plo > 0, so the base model
+// consumes the same uniforms as before.
 static double frq_draw_decision(const FrqPars& s) {
+  const bool low = s.lo.active && R::unif_rand() < s.lo.plo;
+  const double k = low ? s.lo.K_lo : s.alpha;
   if (s.poisson) {
-    const double y = s.hh.active
-      ? R::qgamma(frq_h_inv(R::unif_rand(), s.hh), s.alpha, 1.0, 1, 0)
-      : R::rgamma(s.alpha, 1.0);
+    const double y = R::rgamma(k, 1.0);
     double d;
     if (s.h == 1.0) {
       d = y / s.v;
@@ -1288,16 +1290,17 @@ static double frq_draw_decision(const FrqPars& s) {
     }
     return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
-  // Drawn on the complement W = 1 - U ~ Beta(beta, K) by inversion: for
+  // Drawn on the complement W = 1 - U ~ Beta(beta, k) by inversion: for
   // beta < 1 much of U's mass lies within rounding of one, where U / p would
-  // collapse.  W < 1 - p, i.e. V < 1 - h, is the omission; otherwise
-  // 1 - q(x) = W gives the unit survivor S(x) = (W - (1 - p)) / p.
+  // collapse.  W < 1 - p is the omission (V < 1 - h for the base model);
+  // otherwise 1 - q(x) = W gives the unit survivor S(x) = (W - (1 - p)) / p.
   const double vv = R::unif_rand();
-  if (s.h < 1.0 && vv < 1.0 - s.h) return R_PosInf;   // quorum unreachable
+  if (!s.lo.active && s.h < 1.0 && vv < 1.0 - s.h) return R_PosInf;
   // W is held as a log: for beta < 1 it underflows with non-negligible
   // probability.
-  const double lw = frq_log_qbeta(frq_h_inv(vv, s.hh), s.beta, s.alpha,
-                                  s.lbeta_val);
+  const double lw = frq_log_qbeta(vv, s.beta, k,
+                                  low ? s.lo.lbeta_lo : s.lbeta_val);
+  if (s.lo.active && s.h < 1.0 && !(lw > s.log_om_p)) return R_PosInf;
   double log_sr = (lw > s.log_om_p)
     ? lw + frq_log1mexp(s.log_om_p - lw) - s.log_p
     : std::log(std::numeric_limits<double>::min());
@@ -1309,7 +1312,7 @@ static double frq_draw_decision(const FrqPars& s) {
   return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
 }
 
-// FRQ simulator.  pars columns: K, v, sv, h, t0, delta, clock.
+// FRQ simulator.  pars columns: K, v, sv, h, t0, plo, clock.
 //
 // Exact, not approximate: the process is distributionally identical to drawing
 // the latent quorum U ~ Beta(K, beta) and inverting the registration CDF at
@@ -1319,12 +1322,12 @@ static double frq_draw_decision(const FrqPars& s) {
 // accumulator NEVER terminates and the trial contributes +Inf -- the package's
 // omission convention.  Matches R's rFRQ (R/model_FRQ.R).
 //
-// With threshold variability (delta > 0) the latent percentile is drawn as
-// U = qbeta(H^{-1}(V), K, beta), V ~ U(0,1), so U <= q(x) <=> V <= F(x).
+// With plo > 0 the threshold is first drawn as K_lo with probability plo, and
+// the same construction runs at that threshold with the shared p.
 //
-// The sv = 0 limit draws the threshold epoch Y ~ Gamma(K) instead (through
-// H^{-1} when delta > 0): with h = 1 the decision time is Y / v; with h < 1 it
-// is G^{-1}(Y / E) when Y <= E and an omission otherwise.
+// The sv = 0 limit draws the threshold epoch Y ~ Gamma(K) instead: with h = 1
+// the decision time is Y / v; with h < 1 it is G^{-1}(Y / E) when Y <= E and an
+// omission otherwise.
 // [[Rcpp::export]]
 Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                     Rcpp::LogicalVector ok) {
@@ -1339,11 +1342,11 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rfrq_cpp: missing parameter column '%s'.", nm);
   const int ik = ci.at("K"), iv = ci.at("v"), isv = ci.at("sv"),
             ih = ci.at("h"), it0 = ci.at("t0");
-  // Absent delta / clock mean the model defaults (no threshold variability, a
-  // constant-rate clock).  Safe to default here, unlike on the likelihood
+  // Absent plo / clock mean the model defaults (no low state, a constant-rate
+  // clock).  Safe to default here, unlike on the likelihood
   // path: this lookup is BY NAME, so a missing column cannot silently resolve
   // to a different parameter.
-  const int idl = ci.count("delta") ? ci.at("delta") : -1;
+  const int ipl = ci.count("plo") ? ci.at("plo") : -1;
   const int icu = ci.count("clock") ? ci.at("clock") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
@@ -1358,7 +1361,7 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       continue;
     }
     const FrqPars& s = memo.get(pars(r, ik), pars(r, iv), pars(r, isv),
-                                pars(r, ih), idl >= 0 ? pars(r, idl) : 0.0,
+                                pars(r, ih), ipl >= 0 ? pars(r, ipl) : 0.0,
                                 icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;                       // invalid row: never finishes
     dt[r] = frq_draw_decision(s);
@@ -1370,7 +1373,7 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQfade simulator.  pars columns: K, v, sv, kappa, t0, delta, clock.
+// FRQfade simulator.  pars columns: K, v, sv, kappa, t0, plo, clock.
 // Draws the h = 1 FRQ decision time x and maps it back through the fading
 // clock: u = -log(1 - kappa x) / kappa, and x >= 1/kappa is an omission.
 // Matches R's rFRQfade (R/model_FRQfade.R).
@@ -1389,8 +1392,8 @@ Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
     if (!ci.count(nm)) Rcpp::stop("rfrqfade_cpp: missing parameter column '%s'.", nm);
   const int ik = ci.at("K"), iv = ci.at("v"), isv = ci.at("sv"),
             ika = ci.at("kappa"), it0 = ci.at("t0");
-  // By-name lookup, so absent delta / clock take the model defaults.
-  const int idl = ci.count("delta") ? ci.at("delta") : -1;
+  // By-name lookup, so absent plo / clock take the model defaults.
+  const int ipl = ci.count("plo") ? ci.at("plo") : -1;
   const int icu = ci.count("clock") ? ci.at("clock") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
@@ -1402,7 +1405,7 @@ Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r] || !R_FINITE(t0col[r])) continue;
     const FrqFadePars& s = memo.get(pars(r, ik), pars(r, iv), pars(r, isv),
-      pars(r, ika), idl >= 0 ? pars(r, idl) : 0.0,
+      pars(r, ika), ipl >= 0 ? pars(r, ipl) : 0.0,
       icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;
     const double d = frqfade_unwarp(frq_draw_decision(*s.base), s);

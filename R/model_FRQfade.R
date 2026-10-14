@@ -15,7 +15,7 @@
 
 .frqfade_call <- function(fun, dt, pars, ok, ...) {
   fun(dt[ok], pars[ok, "K"], pars[ok, "v"], pars[ok, "sv"], pars[ok, "kappa"],
-      delta = .frq_opt(pars, ok, "delta", 0),
+      plo = .frq_opt(pars, ok, "plo", 0),
       clock = .frq_opt(pars, ok, "clock", 1), ...)
 }
 
@@ -87,7 +87,7 @@ rFRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `F(u) = F_1(A(u))`, with `A(u) = (1 - exp(-kappa * u)) / kappa`,
 #'
 #' where `F_1` is the [FRQ()] distribution function at `h = 1` with the same
-#' `K`, `v`, `sv`, `delta` and `clock`, and `A(u) = u` at `kappa = 0`. The
+#' `K`, `v`, `sv`, `plo` and `clock`, and `A(u) = u` at `kappa = 0`. The
 #' density is `f(u) = f_1(A(u)) * exp(-kappa * u)`. An accumulator never
 #' finishes with probability `1 - h`, where `h = F_1(1/kappa)` is derived; a
 #' race omission has probability `prod(1 - h)` over accumulators.
@@ -99,17 +99,17 @@ rFRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' | *sv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = (*v*/*sv*)^2 | Between-trial SD of the input rate |
 #' | *kappa* | log | \[1e-4, Inf\] or 0 | log(0.5) | *h* = *F_1*(1/*kappa*) | Decay rate of the registration opportunity |
 #' | *t0* | log | \[0.05, Inf\] or 0 | log(0) | | Non-decision time |
-#' | *delta* | log | \[1e-4, 6\] or 0 | log(0) | | Half-width of the log-odds threshold shift |
+#' | *plo* | probit | \[1e-6, 1\] or 0 | qnorm(0) | | Probability of the low-threshold state |
 #' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
 #'
-#' The values `K = 1`, `sv = 0`, `kappa = 0`, `t0 = 0`, `delta = 0` and
+#' The values `K = 1`, `sv = 0`, `kappa = 0`, `t0 = 0`, `plo = 0` and
 #' `clock = 0` are exact bound exceptions and can be set as constants. At
 #' `kappa = 0` the model is [FRQ()] with `h = 1`.
 #'
 #' `mapped_pars()` adds the derived columns `h`, `Etot` (expected total
 #' evidence, `beta * G / (1 - G)` with `G` the registration law at `1/kappa`,
-#' or `v / kappa` at `sv = 0`; `Inf` at `kappa = 0`), `beta`, `lambda`,
-#' `cv` = `sv / v` and `sQ` = `delta / sqrt(3)`.
+#' or `v / kappa` at `sv = 0`; `Inf` at `kappa = 0`), `beta`, `lambda` and
+#' `cv` = `sv / v`.
 #'
 #' Optional nuisance parameters are `pContaminant`, an omission probability
 #' outside the accumulators, and `pGuess`, a uniform-outlier probability.
@@ -122,17 +122,17 @@ rFRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' @export
 FRQfade <- function() {
   p_types <- c("K" = log(2), "v" = log(6), "sv" = log(0),
-               "kappa" = log(0.5), "t0" = log(0), "delta" = log(0),
+               "kappa" = log(0.5), "t0" = log(0), "plo" = qnorm(0),
                "clock" = log(1))
   transform <- c(K = "exp", v = "exp", sv = "exp", kappa = "exp",
-                 t0 = "exp", delta = "exp", clock = "exp")
+                 t0 = "exp", plo = "pnorm", clock = "exp")
   transform_lower <- c(K = 1)
   # Bounds as in FRQ(); kappa's lower guard keeps a sampled kappa off the
   # exact kappa = 0 (h = 1) boundary, which is reachable as a constant.
   minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), sv = c(1e-4, Inf),
                   kappa = c(1e-4, Inf), t0 = c(0.05, Inf),
-                  delta = c(1e-4, 6), clock = c(1e-4, Inf))
-  exception <- c(K = 1, sv = 0, kappa = 0, t0 = 0, delta = 0, clock = 0)
+                  plo = c(1e-6, 1), clock = c(1e-4, Inf))
+  exception <- c(K = 1, sv = 0, kappa = 0, t0 = 0, plo = 0, clock = 0)
   nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- nuis$p_types
   transform <- nuis$transform
@@ -148,16 +148,15 @@ FRQfade <- function() {
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       # Reporting only: the compiled likelihood derives h itself.
-      dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
+      pl <- if ("plo" %in% colnames(pars)) pars[, "plo"] else rep(0, nrow(pars))
       cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
       fs <- frq_fade_summary(pars[, "K"], pars[, "v"], pars[, "sv"],
-                             pars[, "kappa"], dl, cu)
-      g <- frq_rate(pars[, "K"], pars[, "v"], pars[, "sv"], 1, dl, cu)
+                             pars[, "kappa"], pl, cu)
+      g <- frq_rate(pars[, "K"], pars[, "v"], pars[, "sv"], 1, pl, cu)
       add <- cbind(h = as.numeric(fs[, "h"]), Etot = as.numeric(fs[, "Etot"]),
                    beta = as.numeric(g[, "beta"]),
                    lambda = as.numeric(g[, "lambda"]),
-                   cv = as.numeric(pars[, "sv"] / pars[, "v"]),
-                   sQ = as.numeric(dl) / sqrt(3))
+                   cv = as.numeric(pars[, "sv"] / pars[, "v"]))
       rownames(add) <- NULL
       cbind(pars, add)
     },

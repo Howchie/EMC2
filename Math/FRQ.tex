@@ -5,10 +5,10 @@ the classic-counter submodels, error signatures and identification results
 are in `CounterAndQuorumModels.tex`. The sampler-facing coordinates are
 
 \[
-  (K,\;v,\;sv,\;h,\;t_0,\;\delta,\;\mathrm{clock}),
+  (K,\;v,\;sv,\;h,\;t_0,\;\pi_{lo},\;\mathrm{clock}),
 \]
 
-with \(\delta\) and `clock` as optional extensions. Every coordinate is a
+with \(\pi_{lo}\) (`plo`) and `clock` as optional extensions. Every coordinate is a
 mechanism. None is a response-time summary.
 
 ## 1. Construction
@@ -65,14 +65,16 @@ The clock satisfies \(\phi'(0)=p\lambda\) and saturates at \(p/(1-p)\) when
 The kernel inverts the chart as
 
 \[
-  \beta=(v/sv)^{2},\qquad p=Q_{\alpha,\beta}\!\left(H_\delta^{-1}(h)\right),
+  \beta=(v/sv)^{2},\qquad p=Q_{\alpha,\beta}(h),
   \qquad \lambda=\frac{v}{\beta p}.
 \]
 
-The beta quantile depends only on \((K,sv/v,h,\delta)\) and is cached on those
+With \(\pi_{lo}>0\), \(p\) is instead the root of the mixed completion
+probability (Section 4). Either way it depends only on \((K,sv/v,h,\pi_{lo})\)
+and is cached on those
 four arguments. A per-trial \(v\) therefore costs a quantile per distinct value
 only when \(sv>0\) and \(h<1\). At \(h=1\), \(p=1\) exactly. Below one, \(1-p\)
-is solved from its own quantile, \(Q_{\beta,K}(H_\delta^{-1}(1-h))\), so the
+is solved from its own quantile, \(Q_{\beta,K}(1-h)\), so the
 defect stays exact when \(\beta<1\) puts \(p\) within rounding of one. The
 tails at \(u=\infty\) return \(h\) and \(1-h\) directly. \(1-p\) and
 \(1-q(u)\) are held as logarithms, since for \(\beta<1\) they underflow while
@@ -82,7 +84,7 @@ tails at \(u=\infty\) return \(h\) and \(1-h\) directly. \(1-p\) and
 \(cv=sv/v=\beta^{-1/2}\) in `sv`'s place, with `sv`'s link, bound, default
 and exception. The charts are the same model (equal likelihood at
 \(sv=cv\,v\)); \(cv=0\) is the \(sv=0\) branch. With
-\((K,cv,h,\delta,\mathrm{clock})\) fixed, \(v\) is a pure time scale,
+\((K,cv,h,\pi_{lo},\mathrm{clock})\) fixed, \(v\) is a pure time scale,
 \(F(u;v)=F(vu;1)\), and the quantile key is free of \(v\). In the `sv`
 chart this holds only along \(sv\propto v\). The mapping layer then reports
 `sv` in place of `cv`.
@@ -94,7 +96,7 @@ the regularised lower incomplete gamma function.
 
 - At \(h=1\): \(F(u)=P_K(vu)\), the homogeneous Poisson counter, and the
   clock drops out.
-- At \(h<1\): let \(E=P_K^{-1}(H_\delta^{-1}(h))\) be the expected total
+- At \(h<1\): let \(E=P_K^{-1}(h)\) be the expected total
   evidence. Then the rate is \(\lambda=v/E\) and \(F(u)=P_K(E\,G(u))\).
 
 **Clock and rate variability.** `clock` and `sv` carry the same contagion
@@ -112,43 +114,34 @@ correlate 0.9-0.98 with their own `v`. The Gamma rate makes the sign of the
 error effect depend on `sv_e / sv_c`: equal CVs give slow errors, equal SDs
 give fast errors at large variability (see `CounterAndQuorumModels.tex`).
 
-## 4. Threshold variability \(\delta\)
+## 4. Low-threshold state \(\pi_{lo}\)
 
-A trialwise shift \(\varepsilon\sim U(-\delta,\delta)\) moves the log-odds of
-the latent quorum percentile. Marginalising it gives the closed form
+On each trial each accumulator independently commits at the low threshold
+\(K_{lo}=1\) with probability \(\pi_{lo}\) (`plo`), and at \(K\) otherwise.
+Both thresholds share \(\beta\), \(p\) and the clock, so
 
 \[
-  H_\delta(z)=\frac{\log(1+e^{x+\delta})-\log(1+e^{x-\delta})}{2\delta},
-  \qquad x=\operatorname{logit} z,
+  F(u)=(1-\pi_{lo})\,I_{q(u)}(K,\beta)+\pi_{lo}\,I_{q(u)}(1,\beta),
+  \qquad I_q(1,\beta)=1-(1-q)^\beta,
 \]
 
-and \(F_\delta=H_\delta(F)\) in both branches. The map has three useful
-properties:
+and likewise for the density, the survivor and the \(sv=0\) branch with
+\(P_1(X)=1-e^{-X}\). In the counter reading the \(\mathrm{Gamma}(K,1)\) level is
+\(E_1+E_r\), and the low state finishes at \(E_1\), the first event.
+\(K_{lo}\) is a kernel constant (`FRQ_K_LO`), not a column.
 
-- symmetry: \(H_\delta(1-z)=1-H_\delta(z)\);
-- an analytic inverse:
-  \(H_\delta^{-1}(y)=\sinh(\delta y)/[\sinh(\delta y)+\sinh(\delta(1-y))]\);
-- an elementary derivative:
-  \(H_\delta'(z)=(\sinh\delta/\delta)/(1+2z(1-z)(\cosh\delta-1))\).
-
-\(\delta\) is a proportional-odds frailty (completion odds times
-\(e^{\varepsilon}\)), not a variation in the number of events required. Its
-effects on the law:
-
-- both tails scale by \(\sinh\delta/\delta\), so at \(K=1\)
-  \(f(0^+)=v\sinh(\delta)/\delta\);
-- neither the onset order \(u^K\) nor the tail exponent changes;
-- the bulk spreads at second order in \(\delta\);
-- it is confounded with \(K\) and \(v\), not with `cv`. The best mimic of a
-  \(\delta\) truth lowers \(K\) and keeps \(cv=0\).
-
-The classic submodels hold at \(\delta=0\).
-
-\(\varepsilon\) is drawn independently for each accumulator on every trial,
-even when \(\delta\) is shared (`delta ~ 1`), as LBA start points are drawn
-per accumulator from a shared `A`. Drawn this way it gives slow errors. A
-single draw shared by the race gives fast errors at large \(\delta\), but needs
-quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
+- The completion probability is
+  \(h=(1-\pi_{lo})I_p(K,\beta)+\pi_{lo}I_p(1,\beta)\). At \(h=1\), \(p=1\).
+  Below one, \(p\) is the root, bracketed by the two pure quantiles and solved
+  by safeguarded Newton in \(\operatorname{logit}p\) (in \(\log E\) at
+  \(sv=0\)).
+- For \(K>1\), \(f(0^+)=\pi_{lo}v\): the leading edge is first order in time,
+  and the density jumps at \(t_0\).
+- With only \(v\) differing between accumulators, the low state gives fast
+  errors; every \(\pi_{lo}=0\) member gives slow ones.
+- At \(K=1\) the components coincide and \(\pi_{lo}\) drops out.
+- \(\pi_{lo}=0\) is the base model and the default. The draw is per
+  accumulator, so the race still factors.
 
 ## 5. Contract
 
@@ -160,7 +153,7 @@ quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
 | `cv`      | log     | [1e-4, Inf)            | 0       | 0         |
 | `h`       | probit  | [1e-6, 1]              | 1       | 1         |
 | `t0`      | log     | [0.05, Inf)            | 0       | 0         |
-| `delta`   | log     | [1e-4, 6]              | 0       | 0         |
+| `plo`     | probit  | [1e-6, 1]              | 0       | 0         |
 | `clock`   | log     | [1e-4, Inf)            | 1       | 0         |
 
 `cv` replaces `sv` under `parameterization = "cv"`.
@@ -170,11 +163,9 @@ psychological floor.
 
 - \(K\ge1\) is required because for \(K<1\) the density is singular at
   \(t_0\).
-- \(\delta\le6\) keeps \(1-p\) above double precision inside the beta
-  quantile.
 
-The mapping layer reports `beta`, `p`, `lambda`, `Etot`, `cv` (\(sv/v\)),
-and `sQ`. `Etot` is \(\beta p/(1-p)\), or \(E\) at \(sv=0\), and is infinite
+The mapping layer reports `beta`, `p`, `lambda`, `Etot` and `cv`
+(\(sv/v\)). `Etot` is \(\beta p/(1-p)\), or \(E\) at \(sv=0\), and is infinite
 at \(h=1\).
 
 Not covered by the kernel:
@@ -182,7 +173,10 @@ Not covered by the kernel:
 - rate variability and self-excitation together;
 - the geometric threshold excess \(\omega\), which rate CV mimics while being
   better identified;
-- rates correlated across accumulators.
+- rates correlated across accumulators;
+- the log-odds threshold frailty \(\delta\), which \(\pi_{lo}\) replaced:
+  it is confounded with \(K\) and gives slow errors (see
+  `CounterAndQuorumModels.tex`).
 
 The removed `PCOUNTERcorr` model is described in
 `PCOUNTER_correlated_rates.md` and can be recovered from git at `75582521`.

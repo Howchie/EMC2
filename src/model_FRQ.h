@@ -48,7 +48,7 @@
 // (1: constant rate, < 1 accelerating, > 1 decelerating) and phi'(0) = p lambda
 // for every clock.
 //
-// PARAMETERISATION.  The fitted coordinates are (K, v, sv, h, t0, delta,
+// PARAMETERISATION.  The fitted coordinates are (K, v, sv, h, t0, plo,
 // clock), read in that counter language:
 //   K   = alpha                 event threshold
 //   v   = beta p lambda         mean initial input rate, E[W] phi'(0)
@@ -64,51 +64,26 @@
 // P_K^{-1}(h) expected events, the clock runs at lambda = v / E, and
 // F(x) = P_K(E G(x)).
 //
-// THRESHOLD VARIABILITY (delta).  The quorum a trial actually demands is not
-// fixed.  Let U be the latent quorum percentile, so that the baseline model is
-// P(U <= u) = I_u(alpha, beta), and shift its LOG-ODDS by a trialwise state
-// eps ~ Uniform(-delta, delta):
+// LOW STATE (plo).  On each trial each accumulator independently commits at
+// the low threshold K_lo with probability plo, and at K otherwise.  Both
+// thresholds run on the same counter (same W, clock and availability), so
 //
-//   P(U <= u | eps) = logit^{-1}[ logit I_u(alpha, beta) + eps ].
+//   F(x) = (1 - plo) I_{q(x)}(K, beta) + plo I_{q(x)}(K_lo, beta),
 //
-// Positive eps makes small effective criteria more likely (a liberal trial),
-// negative eps makes large ones more likely (a conservative trial), so delta is
-// symmetric between-trial variability in caution on an odds scale, with
-// SD(eps) = delta/sqrt(3).  Marginalising eps is a closed-form integral,
-// because the antiderivative of logit^{-1} is the softplus:
+// and likewise for the density, the survivor and the cv = 0 limit with P_K.
+// K_lo is fixed at FRQ_K_LO = 1, where the low component is elementary:
+// I_q(1, beta) = 1 - (1 - q)^beta and P_1(X) = 1 - e^{-X}.  Its density at
+// onset is plo v, so the low state sets the leading edge of the law.  The
+// draw is per accumulator, so the race still factors over accumulators.
 //
-//   H(z) = [log(1 + e^{x+delta}) - log(1 + e^{x-delta})] / (2 delta),  x = logit z
+// The completion probability is a mixture too,
 //
-// and the model becomes F(x) = H(I_{q(x)}(alpha, beta)).  Three properties make
-// this cost almost nothing here:
+//   h = (1 - plo) I_p(K, beta) + plo I_p(K_lo, beta),
 //
-//   * H is a SCALAR POST-MAP on the existing CDF.  It does not touch the
-//     incomplete beta, so the a == 1 / b == 1 fast branches below and the
-//     hoisted lbeta all stay live.
-//   * H is symmetric, H(1 - z) = 1 - H(z), so the survivor needs no new code
-//     path: it is the same H evaluated at logit(1 - z) = -x.  This composes
-//     with the reflection identity already used for I.
-//   * H is analytically invertible,
-//
-//       H^{-1}(y) = sinh(delta y) / [sinh(delta y) + sinh(delta (1 - y))],
-//
-//     so deriving p from h remains stable without a second time-scale anchor.
-//     Solve H(z) = y for e^x directly: (1+e^{x+d})/(1+e^{x-d}) = e^{2dy} gives
-//     e^x = (e^{2dy} - 1)/(e^d - e^{2dy-d}) = sinh(dy)/sinh(d(1-y)).
-//
-// The derivative needed by the density is likewise elementary,
-//
-//   H'(z) = (sinh(delta)/delta) / (1 + 2 z (1-z) (cosh(delta) - 1)),
-//
-// which is > 1 at both endpoints and < 1 at z = 1/2: mass is pulled off middle
-// quorum percentiles toward both extremes.  delta = 0 recovers the base model
-// exactly (H'(z) = 1) and is the default; the delta > 0 density does have to
-// evaluate the incomplete beta, which the base density does not.
-//
-// A caveat that is NOT visible from the formulas: eps is marginalised inside
-// each accumulator's own CDF, so this is per-accumulator criterion noise (like
-// LBA's sv), not a single caution state shared by a trial's whole race.  A
-// shared eps would not factor through f_i prod_j S_j and would need quadrature.
+// so for plo > 0 and h < 1 the availability p (or E at cv = 0) is a
+// one-dimensional monotone root, bracketed by the two pure quantiles and
+// solved by safeguarded Newton (frq_mix_solve).  At h = 1, p = 1 exactly and
+// nothing is solved.  plo = 0 is the base model, bit for bit.
 //
 // NUMERICS.  Everything is evaluated on the log scale.  The one real hazard is
 // 1 - q(x) when q is close to one: forming it by subtraction loses every digit.
@@ -147,11 +122,10 @@ constexpr double FRQ_SHAPE_MIN = 1e-8;
 // Poisson-counter branch takes over.
 constexpr double FRQ_CV_POISSON = 1e-4;
 
-// Beyond this point sinh(delta) and the log-odds inversion lose finite-double
-// guarantees.  The fitted model is much more conservative (delta <= 6), but
-// the exported entry points also accept direct values and must reject rather
-// than manufacture NaNs for extreme inputs.
-constexpr double FRQ_DELTA_MAX = 700.0;
+// Threshold of the low state.  Fixed rather than a fitted column; every
+// evaluator takes it from FrqLow, so freeing it later only changes where the
+// value comes from.
+constexpr double FRQ_K_LO = 1.0;
 
 
 // log(1 - e^y) for y <= 0.
@@ -181,98 +155,54 @@ inline double frq_log_qbeta(double u, double a, double b, double lbeta_ab) {
 }
 
 // ---------------------------------------------------------------------------
-// The threshold-variability generator H_delta and its inverse/derivative.  All
-// three collapse to the identity at delta = 0, which is the default, so an
-// inactive FrqH must cost nothing: every call site branches on `active` rather
-// than evaluating an identity map.
+// The low state.  An inactive FrqLow (plo = 0) must cost nothing: every call
+// site branches on `active` rather than mixing with a zero weight.
 // ---------------------------------------------------------------------------
 
-// log sinh(u) for u > 0, without overflowing at large u.  Below 1/2 the direct
-// evaluation is already exact (sinh is faithful down to the denormals); above
-// it, factor out e^u so the exponential never exceeds one.
-inline double frq_logsinh(double u) {
-  if (!(u > 0.0)) return R_NegInf;
-  if (u < 0.5) return std::log(std::sinh(u));
-  return u + std::log1p(-std::exp(-2.0 * u)) - 0.6931471805599453;
+inline double frq_log1pexp(double x) {
+  return (x > 0.0) ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x));
 }
 
-struct FrqH {
-  bool ok = true;         // false only for a rejected delta
-  bool active = false;    // delta > 0
-  double delta = 0.0;
-  double two_delta = 0.0;
-
-  double two_sinh = 0.0;    // 2 sinh(delta)
-  double exp_mdelta = 1.0;  // e^{-delta}
-  double log_sinhc = 0.0;   // log(sinh(delta)/delta) = log H'(0)
-  double c2 = 0.0;          // 2(cosh(delta) - 1), formed as 4 sinh^2(delta/2)
+struct FrqLow {
+  bool ok = true;           // false only for a rejected plo
+  bool active = false;      // plo > 0
+  double plo = 0.0;
+  double log_plo = R_NegInf;
+  double log_1m_plo = 0.0;
+  double K_lo = FRQ_K_LO;
+  double K_lo_minus_1 = FRQ_K_LO - 1.0;
+  double lbeta_lo = 0.0;    // lbeta(K_lo, beta), beta branch
+  double lgamma_lo = 0.0;   // lgamma(K_lo), cv = 0 branch
 };
-inline FrqH frq_h_make(double delta) {
-  FrqH H;
-  if (ISNAN(delta) || delta < 0.0 || !R_FINITE(delta) ||
-      delta > FRQ_DELTA_MAX) { H.ok = false; return H; }
-  if (delta == 0.0) return H;                 // identity; `active` stays false
-  H.active = true;
-  H.delta = delta;
-  H.two_delta = 2.0 * delta;
-  H.two_sinh = 2.0 * std::sinh(delta);
-  H.exp_mdelta = std::exp(-delta);
-  // 2(cosh d - 1) suffers total cancellation for small d; the half-angle
-  // identity 2(cosh d - 1) = 4 sinh^2(d/2) does not.
-  const double sh = std::sinh(0.5 * delta);
-  H.c2 = 4.0 * sh * sh;
-  // sinh(d)/d - 1 = d^2/6 + d^4/120 + ...  Taking the log of the ratio directly
-  // would round the whole small-delta signal away.
-  H.log_sinhc = (delta < 0.1)
-    ? std::log1p(delta * delta * ((1.0 / 6.0) + delta * delta * (1.0 / 120.0)))
-    : std::log(std::sinh(delta) / delta);
-  return H;
+
+inline FrqLow frq_low_make(double plo, double K_lo = FRQ_K_LO) {
+  FrqLow L;
+  if (ISNAN(plo) || !(plo >= 0.0) || !(plo <= 1.0) ||
+      !(K_lo >= FRQ_SHAPE_MIN) || !R_FINITE(K_lo)) { L.ok = false; return L; }
+  L.K_lo = K_lo;
+  L.K_lo_minus_1 = K_lo - 1.0;
+  if (plo == 0.0) return L;                   // base model; `active` stays false
+  L.active = true;
+  L.plo = plo;
+  L.log_plo = std::log(plo);
+  L.log_1m_plo = std::log1p(-plo);            // -Inf at plo = 1
+  L.lgamma_lo = lgamma_fast(K_lo);
+  return L;
 }
 
-// H_delta(sigma(x)) on the natural scale, for x <= 0 only (so the result is in
-// (0, 1/2]).  The defining difference of softplus terms cancels catastrophically
-// in the lower tail, so it is rearranged as an exact log1p:
-//
-//   (1 + e^{x+d}) / (1 + e^{x-d}) = 1 + 2 sinh(d) / (e^{-x} + e^{-d}),
-//
-// which also removes the overflow, since e^{-x} >= 1 replaces e^{x+d}.
-inline double frq_h_lower_val(double x, const FrqH& H) {
-  if (x < -700.0) return 0.0;                 // e^{-x} would overflow; H is 0
-  const double r = H.two_sinh / (std::exp(-x) + H.exp_mdelta);
-  return std::log1p(r) / H.two_delta;
+// log[(1 - plo) e^main + plo e^low].
+inline double frq_low_mix(double main, double low, const FrqLow& L) {
+  return frq_logaddexp(L.log_1m_plo + main, L.log_plo + low);
 }
 
-// log H_delta(sigma(x)) for any x.  Above zero it uses the exact symmetry
-// H(1 - z) = 1 - H(z) so that only the well-conditioned lower branch is ever
-// evaluated -- the same trick as the incomplete beta's reflection, and the
-// reason the survivor below needs no separate generator.
-inline double frq_h_log(double x, const FrqH& H) {
-  if (x <= 0.0) {
-    // H ~ e^x sinh(d)/d as x -> -Inf, which stays representable long after the
-    // value itself underflows.
-    if (x < -700.0) return x + H.log_sinhc;
-    return std::log(frq_h_lower_val(x, H));
-  }
-  const double lo = frq_h_lower_val(-x, H);   // = 1 - H(sigma(x)), at most 1/2
-  return std::log1p(-lo);
-}
-
-// log H'(z) from log z and log(1 - z).  z(1-z) <= 1/4 always, so the exp is
-// safe, and it underflows to zero in exactly the tails where H' -> sinh(d)/d.
-inline double frq_h_logderiv(double lz, double lomz, const FrqH& H) {
-  return H.log_sinhc - std::log1p(std::exp(lz + lomz) * H.c2);
-}
-
-// H^{-1}(y) = sinh(d y) / [sinh(d y) + sinh(d (1-y))], written as a logistic of
-// the log ratio so that large delta cannot overflow the individual sinh terms
-// and a near-one y keeps its complement.
-inline double frq_h_inv(double y, const FrqH& H) {
-  if (!H.active) return y;
-  if (!(y > 0.0)) return 0.0;
-  if (!(y < 1.0)) return 1.0;
-  const double lr = frq_logsinh(H.delta * (1.0 - y)) - frq_logsinh(H.delta * y);
-  if (lr > 0.0) { const double e = std::exp(-lr); return e / (1.0 + e); }
-  return 1.0 / (1.0 + std::exp(lr));
+// log P(K_lo, X) or log Q(K_lo, X); closed form at K_lo = 1.
+inline double frq_low_gamma_tail(double X, double log_X, const FrqLow& L,
+                                 bool lower) {
+  if (L.K_lo == 1.0) return lower ? frq_log1mexp(-X) : -X;
+  double out;
+  if (lower) gamma_log_pq_fast(L.K_lo, X, log_X, L.lgamma_lo, &out, nullptr);
+  else gamma_log_pq_fast(L.K_lo, X, log_X, L.lgamma_lo, nullptr, &out);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +210,8 @@ inline double frq_h_inv(double y, const FrqH& H) {
 //
 // The evidence-level availability p is the expensive half: it comes from the
 // fitted completion probability h by an incomplete-beta INVERSION, an iterative
-// solve costing roughly fourteen density evaluations.  It is a function of
-// (K, cv, h, delta) ONLY, with cv = sv / v the rate CV; clock does not enter
+// solve costing roughly fourteen density evaluations, plus a root solve when
+// plo > 0.  It is a function of (K, cv, h, plo) ONLY, with cv = sv / v the rate CV; clock does not enter
 // it.  The rate half is one log and a reciprocal.
 //
 // Keeping them on separate keys matters whenever the rate varies faster than
@@ -297,11 +227,12 @@ inline double frq_h_inv(double y, const FrqH& H) {
 // machinery expects from an invalid row.
 // ---------------------------------------------------------------------------
 
-// The (K, cv, h, delta) half -- everything the beta quantile touches, with
+// The (K, cv, h, plo) half -- everything the beta quantile touches, with
 // cv = sv / v.  `poisson` marks the cv -> 0 limit, where beta is infinite and the kernel is
 // the incomplete gamma P_K(E G(x)) (h < 1) or P_K(v x) (h = 1).  E is the
 // expected total number of events available on a trial: beta p / (1 - p) for
-// cv > 0, P_K^{-1}(h) in the limit, and Inf whenever h = 1.
+// cv > 0, the root of the mixed completion probability in the limit, and Inf
+// whenever h = 1.
 struct FrqAvail {
   double alpha = 0.0;
   double beta = 0.0;
@@ -318,7 +249,7 @@ struct FrqAvail {
   double log_p_minus_lbeta = 0.0;
   double alpha_minus_1 = 0.0;
   double beta_minus_1 = 0.0;
-  FrqH hh;
+  FrqLow lo;
   bool ok = false;
 };
 
@@ -346,27 +277,90 @@ struct FrqPars {
   double log_p_minus_lbeta = 0.0;
   double alpha_minus_1 = 0.0;
   double beta_minus_1 = 0.0;
-  FrqH hh;
+  FrqLow lo;
   bool ok = false;
 };
 
+inline double frq_log_ibeta(double x, double omx, double log_x, double log_omx,
+                            double a, double b, double lbeta_val);
+
+// The beta quantile of h as the pair (log p, log(1 - p)).  1 - p comes from
+// the complementary quantile (1 - B ~ Beta(b, a)), since 1 - qbeta(h, a, b)
+// loses every digit once p is near one, which is the normal case for b < 1.
+// p itself is re-solved only when it is the small side.  `closed` takes the
+// elementary inverse at a = 1, which the low state uses; the main threshold
+// keeps the quantile path.
+inline bool frq_beta_quantile_logs(double h, double a, double b, double lb,
+                                   double* log_p, double* log_om_p,
+                                   bool closed = false) {
+  if (closed && a == 1.0) {             // I_p(1, b) = 1 - (1 - p)^b
+    *log_om_p = std::log1p(-h) / b;
+    *log_p = frq_log1mexp(*log_om_p);
+  } else {
+    *log_om_p = frq_log_qbeta(1.0 - h, b, a, lb);
+    if (ISNAN(*log_om_p) || !(*log_om_p < 0.0)) return false;
+    *log_p = (*log_om_p > -M_LN2) ? frq_log_qbeta(h, a, b, lb)
+                                  : frq_log1mexp(*log_om_p);
+  }
+  return !ISNAN(*log_p) && *log_p > R_NegInf && *log_p <= 0.0 &&
+         *log_om_p < 0.0;
+}
+
+// The mixed completion probability m(t) and its slope at a solver coordinate t:
+// log m, log(1 - m) and log dm/dt.  Only the side the residual uses is formed.
+struct FrqMixEval {
+  double lm;
+  double l1m;
+  double lD;
+};
+
+// Root of m(t) = h for an increasing m, bracketed by [t_a, t_b] and started at
+// t_start.  The residual is log m - log h on the lower half and
+// log(1 - h) - log(1 - m) on the upper half, so a completion probability within
+// rounding of either end keeps its digits.  Newton steps that leave the
+// bracket, or fail to shrink the residual, are replaced by bisection.
+template <class Eval>
+inline bool frq_mix_solve(double h, double t_a, double t_b, double t_start,
+                          Eval ev, double* t_out) {
+  const bool lower = (h <= 0.5);
+  const double lh = std::log(h), l1h = std::log1p(-h);
+  double a = std::min(t_a, t_b), b = std::max(t_a, t_b);
+  double t = (t_start > a && t_start < b) ? t_start : 0.5 * (a + b);
+  if (!(b > a)) { *t_out = a; return R_FINITE(a); }
+  for (int it = 0; it < 100; ++it) {
+    const FrqMixEval e = ev(t, lower);
+    const double r = lower ? e.lm - lh : l1h - e.l1m;
+    if (ISNAN(r)) return false;
+    if (std::abs(r) <= 1e-14) break;
+    if (r < 0.0) a = t; else b = t;
+    const double dr = std::exp(e.lD - (lower ? e.lm : e.l1m));
+    double tn = t - r / dr;
+    if (!(tn > a && tn < b)) tn = 0.5 * (a + b);
+    if (std::abs(tn - t) <= 1e-15 * (1.0 + std::abs(t))) { t = tn; break; }
+    t = tn;
+  }
+  *t_out = t;
+  return R_FINITE(t);
+}
+
 inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
-                                  double delta = 0.0) {
+                                  double plo = 0.0) {
   s = FrqAvail();
   if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return;
   if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return;
   if (!(cv >= 0.0) || !R_FINITE(cv)) return;
   if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return;
-  s.hh = frq_h_make(delta);
-  if (!s.hh.ok) return;
+  s.lo = frq_low_make(plo);
+  if (!s.lo.ok) return;
+  const FrqLow& L = s.lo;
   s.alpha = K;
   s.alpha_minus_1 = K - 1.0;
   s.h = h;
 
   if (cv < FRQ_CV_POISSON) {
     // beta -> Inf at fixed (K, v, h).  The availability p -> 0 while the
-    // expected total evidence E = beta p / (1 - p) tends to the gamma quantile
-    // of the (threshold-variability adjusted) completion probability.
+    // expected total evidence E = beta p / (1 - p) tends to the root of
+    // h = (1 - plo) P_K(E) + plo P_{K_lo}(E).
     s.poisson = true;
     s.beta = R_PosInf;
     s.lgamma_K = lgamma_fast(K);
@@ -374,7 +368,37 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
       s.E = R_PosInf; s.log_E = R_PosInf;
       s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
     } else {
-      const double E = R::qgamma(frq_h_inv(h, s.hh), K, 1.0, 1, 0);
+      double E = (L.plo == 1.0) ? R_NaN : R::qgamma(h, K, 1.0, 1, 0);
+      if (L.active) {
+        const double E_lo = (L.K_lo == 1.0) ? -std::log1p(-h)
+                                            : R::qgamma(h, L.K_lo, 1.0, 1, 0);
+        if (L.plo == 1.0) {
+          E = E_lo;
+        } else {
+          if (!(E > 0.0) || !R_FINITE(E) || !(E_lo > 0.0)) return;
+          const double lgK = s.lgamma_K;
+          auto ev = [&](double t, bool lower) {
+            const double X = std::exp(t);
+            FrqMixEval e;
+            double lmain, llow;
+            if (lower) {
+              gamma_log_pq_fast(K, X, t, lgK, &lmain, nullptr);
+              llow = frq_low_gamma_tail(X, t, L, true);
+              e.lm = frq_low_mix(lmain, llow, L);
+            } else {
+              gamma_log_pq_fast(K, X, t, lgK, nullptr, &lmain);
+              llow = frq_low_gamma_tail(X, t, L, false);
+              e.l1m = frq_low_mix(lmain, llow, L);
+            }
+            e.lD = frq_low_mix(K * t - lgK, L.K_lo * t - L.lgamma_lo, L) - X;
+            return e;
+          };
+          const double ta = std::log(E), tb = std::log(E_lo);
+          double t;
+          if (!frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, &t)) return;
+          E = std::exp(t);
+        }
+      }
       if (!(E > 0.0) || !R_FINITE(E)) return;
       s.E = E; s.log_E = std::log(E);
       s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
@@ -385,21 +409,48 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
 
   const double beta = 1.0 / (cv * cv);
   if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return;
-  // h = 1 maps exactly to p = 1 for any shape or threshold-variability map;
-  // skipping qbeta there matters because the proper boundary is the common
-  // case.  Below one, 1 - p comes from the complementary quantile
-  // (1 - B ~ Beta(beta, K)), since 1 - qbeta(z, K, beta) loses every digit once
-  // p is near one, which is the normal case for beta < 1.  H^{-1} is symmetric,
-  // so its complement is H^{-1}(1 - h).  p itself is re-solved only when it is
-  // the small side.  Both sides are held as logs, so a 1 - p that underflows
-  // still enters log(1 - q(x)) exactly.
+  if (L.active) s.lo.lbeta_lo = lbeta_fast(L.K_lo, beta);
+  // h = 1 maps exactly to p = 1 for any shape and plo; skipping the quantile
+  // there matters because the proper boundary is the common case.  Both sides
+  // are held as logs, so a 1 - p that underflows still enters log(1 - q(x))
+  // exactly.
   const double lb = lbeta_fast(K, beta);
   double log_p = 0.0, log_om_p = R_NegInf;
   if (h < 1.0) {
-    log_om_p = frq_log_qbeta(frq_h_inv(1.0 - h, s.hh), beta, K, lb);
-    if (ISNAN(log_om_p) || !(log_om_p < 0.0)) return;
-    log_p = (log_om_p > -M_LN2) ? frq_log_qbeta(frq_h_inv(h, s.hh), K, beta, lb)
-                                : frq_log1mexp(log_om_p);
+    if (L.plo == 1.0) {
+      if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &log_p,
+                                  &log_om_p, true)) return;
+    } else {
+      if (!frq_beta_quantile_logs(h, K, beta, lb, &log_p, &log_om_p)) return;
+      if (L.active) {
+        // Solved in t = logit p, held as the pair (log p, log(1 - p)).
+        double lp_lo, lomp_lo;
+        if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &lp_lo,
+                                    &lomp_lo, true)) return;
+        const double lb_lo = s.lo.lbeta_lo;
+        auto ev = [&](double t, bool lower) {
+          const double lp = -frq_log1pexp(-t), lomp = -frq_log1pexp(t);
+          const double p = std::exp(lp), omp = std::exp(lomp);
+          FrqMixEval e;
+          if (lower) {
+            e.lm = frq_low_mix(frq_log_ibeta(p, omp, lp, lomp, K, beta, lb),
+                               frq_log_ibeta(p, omp, lp, lomp, L.K_lo, beta,
+                                             lb_lo), L);
+          } else {
+            e.l1m = frq_low_mix(frq_log_ibeta(omp, p, lomp, lp, beta, K, lb),
+                                frq_log_ibeta(omp, p, lomp, lp, beta, L.K_lo,
+                                              lb_lo), L);
+          }
+          e.lD = frq_low_mix(K * lp - lb, L.K_lo * lp - lb_lo, L) + beta * lomp;
+          return e;
+        };
+        const double ta = log_p - log_om_p, tb = lp_lo - lomp_lo;
+        double t;
+        if (!frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, &t)) return;
+        log_p = -frq_log1pexp(-t);
+        log_om_p = -frq_log1pexp(t);
+      }
+    }
     if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return;
   }
 
@@ -417,14 +468,14 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
 }
 
 inline FrqAvail frq_derive_avail(double K, double cv, double h,
-                                 double delta = 0.0) {
+                                 double plo = 0.0) {
   FrqAvail s;
-  frq_derive_avail_into(s, K, cv, h, delta);
+  frq_derive_avail_into(s, K, cv, h, plo);
   return s;
 }
 
 // Paste the availability half into the full state.  Runs only when one of
-// (K, cv, h, delta) actually changes.
+// (K, cv, h, plo) actually changes.
 inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.alpha = av.alpha;
   s.beta = av.beta;
@@ -441,7 +492,7 @@ inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.log_p_minus_lbeta = av.log_p_minus_lbeta;
   s.alpha_minus_1 = av.alpha_minus_1;
   s.beta_minus_1 = av.beta_minus_1;
-  s.hh = av.hh;
+  s.lo = av.lo;
 }
 
 // Fill the rate half from the mean initial input rate v.  The registration
@@ -479,9 +530,9 @@ inline double frq_rate_cv(double sv, double v) {
 
 // One-shot derive, for callers that hold no memo.
 inline FrqPars frq_derive(double K, double v, double sv, double h,
-                          double delta = 0.0, double clock = 1.0) {
+                          double plo = 0.0, double clock = 1.0) {
   FrqPars s;
-  const FrqAvail av = frq_derive_avail(K, frq_rate_cv(sv, v), h, delta);
+  const FrqAvail av = frq_derive_avail(K, frq_rate_cv(sv, v), h, plo);
   frq_copy_avail(s, av);
   frq_set_rate(s, av.ok, v, clock);
   return s;
@@ -533,13 +584,13 @@ struct FrqCache {
   // std::unordered_map is node-based, so a reference handed out here survives
   // later insertions; only clear() invalidates it, and that runs between
   // particles, outside any evaluator call.
-  const FrqAvail& get(double K, double cv, double h, double delta) {
+  const FrqAvail& get(double K, double cv, double h, double plo) {
     const FrqCacheKey key{{frq_cache_bits(K), frq_cache_bits(cv),
-                           frq_cache_bits(h), frq_cache_bits(delta)}};
+                           frq_cache_bits(h), frq_cache_bits(plo)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive_avail(K, cv, h, delta));
+      key, frq_derive_avail(K, cv, h, plo));
     return inserted.first->second;
   }
 };
@@ -670,26 +721,8 @@ inline double frq_log_ibeta(double x, double omx, double log_x, double log_omx,
 // kernels can pass a negative x without branching.
 // ---------------------------------------------------------------------------
 
-// log I_{q}(alpha, beta) and log I_{1-q}(beta, alpha) -- i.e. log z and
-// log(1 - z) for the untransformed CDF at x.  The threshold-variability paths
-// need BOTH (their logit is the difference, their product the H' argument), so
-// the pair is formed once and shared rather than recomputed per evaluator.
-struct FrqLogBeta {
-  double lz;
-  double lomz;
-};
-
-inline FrqLogBeta frq_log_beta_pair(const FrqState& z, const FrqPars& s) {
-  FrqLogBeta o;
-  o.lz   = frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq, s.alpha, s.beta,
-                         s.lbeta_val);
-  o.lomz = frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q, s.beta, s.alpha,
-                         s.lbeta_val);
-  return o;
-}
-
 // The cv = 0 limit evaluates through its gamma argument X(x): v x when h = 1,
-// E G(x) when h < 1 (so X(Inf) = E and P_K(E) = h before the H map).
+// E G(x) when h < 1 (so X(Inf) = E).
 struct FrqPoissonArg {
   double X;
   double log_dX;
@@ -721,37 +754,31 @@ inline FrqPoissonArg frq_poisson_arg(double x, const FrqPars& s) {
   return a;
 }
 
-inline FrqLogBeta frq_poisson_pair(const FrqPoissonArg& a, double log_X,
-                                   const FrqPars& s) {
-  FrqLogBeta o;
-  gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, &o.lz, &o.lomz);
-  return o;
-}
-
 inline double frq_poisson_log_pdf(double x, const FrqPars& s) {
   const FrqPoissonArg a = frq_poisson_arg(x, s);
   if (!(a.X > 0.0) || !R_FINITE(a.X)) return R_NegInf;
   const double log_X = std::log(a.X);
-  double lp = s.alpha_minus_1 * log_X - a.X - s.lgamma_K + a.log_dX;
-  if (s.hh.active) {
-    const FrqLogBeta b = frq_poisson_pair(a, log_X, s);
-    lp += frq_h_logderiv(b.lz, b.lomz, s.hh);
+  double lp;
+  if (s.lo.active) {
+    const double lmain = s.alpha_minus_1 * log_X - s.lgamma_K;
+    const double llow = (s.lo.K_lo_minus_1 != 0.0)
+      ? s.lo.K_lo_minus_1 * log_X - s.lo.lgamma_lo : -s.lo.lgamma_lo;
+    lp = frq_low_mix(lmain, llow, s.lo) - a.X + a.log_dX;
+  } else {
+    lp = s.alpha_minus_1 * log_X - a.X - s.lgamma_K + a.log_dX;
   }
   return ISNAN(lp) ? R_NegInf : lp;
 }
 
-// Without the threshold map only the requested tail is evaluated.
+// Only the requested tail is evaluated.
 inline double frq_poisson_log_tail(double x, const FrqPars& s, bool lower) {
   const FrqPoissonArg a = frq_poisson_arg(x, s);
   const double log_X = std::log(a.X);
-  if (s.hh.active) {
-    const FrqLogBeta b = frq_poisson_pair(a, log_X, s);
-    return lower ? frq_h_log(b.lz - b.lomz, s.hh)
-                 : frq_h_log(b.lomz - b.lz, s.hh);
-  }
   double out;
   if (lower) gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, &out, nullptr);
   else gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, nullptr, &out);
+  if (s.lo.active)
+    out = frq_low_mix(out, frq_low_gamma_tail(a.X, log_X, s.lo, lower), s.lo);
   return out;
 }
 
@@ -761,16 +788,19 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (!R_FINITE(x)) return R_NegInf;   // no atom at infinity in the density
   if (s.poisson) return frq_poisson_log_pdf(x, s);
   const FrqState z = frq_state(x, s);
-  double lp = s.log_p_minus_lbeta + z.log_g;
-  if (s.alpha_minus_1 != 0.0) lp += s.alpha_minus_1 * z.log_q;
-  if (s.beta_minus_1 != 0.0) lp += s.beta_minus_1 * z.log_omq;
-  // Chain rule through the threshold-variability map.  Unlike the CDF, the base
-  // density does not need the incomplete beta at all, so this is the one place
-  // where delta > 0 costs real work: H' is a function of z = I_q(alpha, beta).
-  if (s.hh.active) {
-    const FrqLogBeta b = frq_log_beta_pair(z, s);
-    lp += frq_h_logderiv(b.lz, b.lomz, s.hh);
+  double lp;
+  if (s.lo.active) {
+    // Both components share p g(x) (1 - q)^{beta - 1}; only q^{k - 1} / B(k, beta)
+    // differs.
+    double lmain = -s.lbeta_val, llow = -s.lo.lbeta_lo;
+    if (s.alpha_minus_1 != 0.0) lmain += s.alpha_minus_1 * z.log_q;
+    if (s.lo.K_lo_minus_1 != 0.0) llow += s.lo.K_lo_minus_1 * z.log_q;
+    lp = s.log_p + z.log_g + frq_low_mix(lmain, llow, s.lo);
+  } else {
+    lp = s.log_p_minus_lbeta + z.log_g;
+    if (s.alpha_minus_1 != 0.0) lp += s.alpha_minus_1 * z.log_q;
   }
+  if (s.beta_minus_1 != 0.0) lp += s.beta_minus_1 * z.log_omq;
   return ISNAN(lp) ? R_NegInf : lp;
 }
 
@@ -783,24 +813,20 @@ inline double frq_log_cdf_dt(double x, const FrqPars& s) {
     return ISNAN(out) ? R_NegInf : out;
   }
   const FrqState z = frq_state(x, s);
-  double out;
-  if (s.hh.active) {
-    const FrqLogBeta b = frq_log_beta_pair(z, s);
-    out = frq_h_log(b.lz - b.lomz, s.hh);          // logit z = log z - log(1-z)
-  } else {
-    out = frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq, s.alpha, s.beta,
-                        s.lbeta_val);
-  }
+  double out = frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq, s.alpha, s.beta,
+                             s.lbeta_val);
+  if (s.lo.active)
+    out = frq_low_mix(out, frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq,
+                                         s.lo.K_lo, s.beta, s.lo.lbeta_lo),
+                      s.lo);
   return ISNAN(out) ? R_NegInf : out;
 }
 
 // log S(x) = log(1 - F(x)), via I_{1-q}(beta, alpha) so that the defective
 // limit log(1 - h) is reached without ever subtracting two near-equal numbers.
-// An unstarted accumulator (x <= 0) has survivor one, i.e. log S = 0.
-//
-// With delta > 0 the same guarantee survives for free: H is symmetric, so
-// 1 - H(z) = H(1 - z) and the survivor is the SAME generator evaluated at
-// logit(1 - z) = -logit z.  No subtraction is introduced anywhere.
+// An unstarted accumulator (x <= 0) has survivor one, i.e. log S = 0.  The low
+// component reflects the same way, I_{1-q}(beta, K_lo) = (1 - q)^beta at
+// K_lo = 1.
 inline double frq_log_surv_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NaN;             // caller distinguishes bad from certain
   if (!(x > 0.0)) return 0.0;
@@ -810,14 +836,12 @@ inline double frq_log_surv_dt(double x, const FrqPars& s) {
     return ISNAN(out) ? R_NaN : out;
   }
   const FrqState z = frq_state(x, s);
-  double out;
-  if (s.hh.active) {
-    const FrqLogBeta b = frq_log_beta_pair(z, s);
-    out = frq_h_log(b.lomz - b.lz, s.hh);
-  } else {
-    out = frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q, s.beta, s.alpha,
-                        s.lbeta_val);
-  }
+  double out = frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q, s.beta, s.alpha,
+                             s.lbeta_val);
+  if (s.lo.active)
+    out = frq_low_mix(out, frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q,
+                                         s.beta, s.lo.K_lo, s.lo.lbeta_lo),
+                      s.lo);
   return ISNAN(out) ? R_NaN : out;
 }
 
@@ -871,15 +895,15 @@ inline double frq_proper_k_term(const FrqAvail& a, double K) {
 
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  // Two availability states, keyed on (K, sv/v, h, delta), so rows that
+  // Two availability states, keyed on (K, sv/v, h, plo), so rows that
   // alternate between two keys (the accumulators of one trial) find theirs
   // without a re-derive.  The memo owns its copies rather than pointing into
   // the shared cache, so its lifetime is independent of when that is cleared.
   struct Slot {
-    double K = R_NaN, cv = R_NaN, h = R_NaN, delta = R_NaN;
+    double K = R_NaN, cv = R_NaN, h = R_NaN, plo = R_NaN;
     FrqAvail avail;
     bool matches(double k, double c, double hh, double d) const {
-      return k == K && c == cv && hh == h && d == delta;
+      return k == K && c == cv && hh == h && d == plo;
     }
   };
   Slot slot[2];
@@ -902,7 +926,7 @@ struct FrqMemo {
     Slot& s0 = slot[cur];
     if (!s0.matches(k, c, hh, d)) {
       Slot& s1 = slot[cur ^ 1];
-      if (c == s0.cv && hh == s0.h && d == s0.delta &&
+      if (c == s0.cv && hh == s0.h && d == s0.plo &&
           frq_proper_k_update(s0.avail, k)) {
         s0.K = k;
         const double lg = frq_proper_k_term(s0.avail, k);
@@ -914,12 +938,12 @@ struct FrqMemo {
         frq_copy_avail(value, s1.avail);
       } else {
         cur ^= 1;
-        if (c == s1.cv && hh == s1.h && d == s1.delta &&
+        if (c == s1.cv && hh == s1.h && d == s1.plo &&
             frq_proper_k_update(s1.avail, k)) {
           s1.K = k;
           frq_set_proper_k(s1.avail, k, frq_proper_k_term(s1.avail, k));
         } else {
-          s1.K = k; s1.cv = c; s1.h = hh; s1.delta = d;
+          s1.K = k; s1.cv = c; s1.h = hh; s1.plo = d;
           // h = 1 needs no beta quantile, so the derive is cheaper than a
           // shared-cache lookup and insert.
           if (shared != nullptr && hh != 1.0) s1.avail = shared->get(k, c, hh, d);

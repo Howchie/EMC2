@@ -19,7 +19,7 @@ Each accumulator's decision time \code{u = rt - t0} has distribution function
 \code{F(u) = F_1(A(u))}, with \code{A(u) = (1 - exp(-kappa * u)) / kappa},
 
 where \code{F_1} is the \code{\link[=FRQ]{FRQ()}} distribution function at \code{h = 1} with the same
-\code{K}, \code{v}, \code{sv}, \code{delta} and \code{clock}, and \code{A(u) = u} at \code{kappa = 0}. The
+\code{K}, \code{v}, \code{sv}, \code{plo} and \code{clock}, and \code{A(u) = u} at \code{kappa = 0}. The
 density is \code{f(u) = f_1(A(u)) * exp(-kappa * u)}. An accumulator never
 finishes with probability \code{1 - h}, where \code{h = F_1(1/kappa)} is derived; a
 race omission has probability \code{prod(1 - h)} over accumulators.\tabular{llllll}{
@@ -29,19 +29,19 @@ race omission has probability \code{prod(1 - h)} over accumulators.\tabular{llll
    \emph{sv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = (\emph{v}/\emph{sv})^2 \tab Between-trial SD of the input rate \cr
    \emph{kappa} \tab log \tab [1e-4, Inf] or 0 \tab log(0.5) \tab \emph{h} = \emph{F_1}(1/\emph{kappa}) \tab Decay rate of the registration opportunity \cr
    \emph{t0} \tab log \tab [0.05, Inf] or 0 \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{delta} \tab log \tab [1e-4, 6] or 0 \tab log(0) \tab  \tab Half-width of the log-odds threshold shift \cr
+   \emph{plo} \tab probit \tab [1e-6, 1] or 0 \tab qnorm(0) \tab  \tab Probability of the low-threshold state \cr
    \emph{clock} \tab log \tab [1e-4, Inf] or 0 \tab log(1) \tab  \tab Shape of the registration law \cr
 }
 
 
-The values \code{K = 1}, \code{sv = 0}, \code{kappa = 0}, \code{t0 = 0}, \code{delta = 0} and
+The values \code{K = 1}, \code{sv = 0}, \code{kappa = 0}, \code{t0 = 0}, \code{plo = 0} and
 \code{clock = 0} are exact bound exceptions and can be set as constants. At
 \code{kappa = 0} the model is \code{\link[=FRQ]{FRQ()}} with \code{h = 1}.
 
 \code{mapped_pars()} adds the derived columns \code{h}, \code{Etot} (expected total
 evidence, \code{beta * G / (1 - G)} with \code{G} the registration law at \code{1/kappa},
-or \code{v / kappa} at \code{sv = 0}; \code{Inf} at \code{kappa = 0}), \code{beta}, \code{lambda},
-\code{cv} = \code{sv / v} and \code{sQ} = \code{delta / sqrt(3)}.
+or \code{v / kappa} at \code{sv = 0}; \code{Inf} at \code{kappa = 0}), \code{beta}, \code{lambda} and
+\code{cv} = \code{sv / v}.
 
 Optional nuisance parameters are \code{pContaminant}, an omission probability
 outside the accumulators, and \code{pGuess}, a uniform-outlier probability.

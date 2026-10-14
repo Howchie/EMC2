@@ -453,14 +453,15 @@ namespace bawdpsplit {
 // R/model_FRQ.R — FRQ (finite reservoir quorum) in counter coordinates: K is
 // the event threshold (Beta shape alpha), v the mean initial input rate, sv
 // the between-trial SD of that rate (beta = (v/sv)^2), h the completion
-// probability; p and lambda are derived in the kernel.  delta is threshold
-// variability and clock the registration clock shape.  Both are REQUIRED:
+// probability; p and lambda are derived in the kernel.  plo is the
+// probability of the low-threshold state and clock the registration clock
+// shape.  Both are REQUIRED:
 // an optional trailing column is resolved positionally, so a design lacking
 // one would silently read whatever parameter landed in its slot.
 namespace frq {
-  enum : int { K = 0, v, sv, h, t0, delta, clock, N_REQ };
+  enum : int { K = 0, v, sv, h, t0, plo, clock, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"K", "v", "sv", "h", "t0", "delta", "clock"};
+    static const char* n[] = {"K", "v", "sv", "h", "t0", "plo", "clock"};
     return {n, N_REQ, "FRQ"};
   }
 }
@@ -468,23 +469,23 @@ namespace frq {
 // R/model_FRQ.R — FRQ(parameterization = "cv"): the same layout with the rate
 // CV sv / v in sv's position, so the adapters index it through frq::.
 namespace frq_cv {
-  enum : int { K = 0, v, cv, h, t0, delta, clock, N_REQ };
+  enum : int { K = 0, v, cv, h, t0, plo, clock, N_REQ };
   static_assert(int(cv) == int(frq::sv) && int(N_REQ) == int(frq::N_REQ),
                 "frq_cv must share frq's positions");
   inline ColSpec spec() {
-    static const char* n[] = {"K", "v", "cv", "h", "t0", "delta", "clock"};
+    static const char* n[] = {"K", "v", "cv", "h", "t0", "plo", "clock"};
     return {n, N_REQ, "FRQ_CV"};
   }
 }
 
 // R/model_FRQfade.R — FRQfade: the FRQ counter at h = 1 on the fading time
-// (1 - exp(-kappa u)) / kappa; h is derived.  delta and clock are REQUIRED
+// (1 - exp(-kappa u)) / kappa; h is derived.  plo and clock are REQUIRED
 // columns for the same positional reason as FRQ's.
 namespace frq_fade {
-  enum : int { K = 0, v, sv, kappa, t0, delta, clock, N_REQ };
+  enum : int { K = 0, v, sv, kappa, t0, plo, clock, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"K", "v", "sv", "kappa", "t0",
-                              "delta", "clock"};
+                              "plo", "clock"};
     return {n, N_REQ, "FRQ_FADE"};
   }
 }

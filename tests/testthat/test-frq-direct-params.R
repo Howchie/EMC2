@@ -2,7 +2,7 @@ test_that("FRQ exposes the counter coordinates", {
   m <- EMC2::FRQ()
   expect_equal(m$p_types_canonical, c("K", "v", "sv", "h", "t0"))
   expect_equal(names(m$p_types)[seq_len(7)],
-               c("K", "v", "sv", "h", "t0", "delta", "clock"))
+               c("K", "v", "sv", "h", "t0", "plo", "clock"))
   expect_equal(unname(m$bound$exception[["h"]]), 1)
 })
 
@@ -29,11 +29,11 @@ test_that("h = 1 is an exact non-defective FRQ boundary", {
   expect_equal(unname(mapped[, "p"]), 1, tolerance = 1e-12)
 })
 
-test_that("the proper FRQ boundary stays exact with threshold variability", {
+test_that("the proper FRQ boundary stays exact with a low-threshold state", {
   mapped <- EMC2:::frq_rate(K = c(2, 5), v = 1.3, sv = c(0.754, 0.91), h = 1,
-                            delta = c(0.5, 2))
+                            plo = c(0.2, 0.6))
   expect_equal(unname(mapped[, "p"]), c(1, 1), tolerance = 0)
   near <- EMC2:::frq_rate(K = c(2, 5), v = 1.3, sv = c(0.754, 0.91),
-                          h = 1 - 1e-9, delta = c(0.5, 2))
+                          h = 1 - 1e-9, plo = c(0.2, 0.6))
   expect_true(all(near[, "p"] < 1))
 })

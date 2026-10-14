@@ -11,7 +11,7 @@
 //   A(u) = (1 - e^{-kappa u}) / kappa          (A(u) = u at kappa = 0),
 //
 // i.e. its input intensity is multiplied by e^{-kappa u}.  With F_1, f_1 and
-// S_1 the FRQ functions at h = 1 for the same (K, v, sv, delta, clock),
+// S_1 the FRQ functions at h = 1 for the same (K, v, sv, plo, clock),
 //
 //   F(u) = F_1(A(u)),   f(u) = f_1(A(u)) e^{-kappa u},   S(u) = S_1(A(u)).
 //
@@ -42,8 +42,8 @@ struct FrqFadeMemo {
   explicit FrqFadeMemo(FrqCache* shared_cache = nullptr) : base(shared_cache) {}
 
   const FrqFadePars& get(double K, double v, double sv, double kappa,
-                         double delta = 0.0, double clock = 1.0) {
-    value.base = &base.get(K, v, sv, 1.0, delta, clock);
+                         double plo = 0.0, double clock = 1.0) {
+    value.base = &base.get(K, v, sv, 1.0, plo, clock);
     value.ok = false;
     if (!value.base->ok) return value;
     if (ISNAN(kappa) || !(kappa >= 0.0) || !R_FINITE(kappa)) return value;
