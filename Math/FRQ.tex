@@ -74,7 +74,9 @@ four arguments. A per-trial \(v\) therefore costs a quantile per distinct value
 only when \(sv>0\) and \(h<1\). At \(h=1\), \(p=1\) exactly. Below one, \(1-p\)
 is solved from its own quantile, \(Q_{\beta,K}(H_\delta^{-1}(1-h))\), so the
 defect stays exact when \(\beta<1\) puts \(p\) within rounding of one. The
-tails at \(u=\infty\) return \(h\) and \(1-h\) directly.
+tails at \(u=\infty\) return \(h\) and \(1-h\) directly. \(1-p\) and
+\(1-q(u)\) are held as logarithms, since for \(\beta<1\) they underflow while
+\((1-q)^\beta\) is still of order one.
 
 **The \(sv=0\) branch** is exact, not a limit approximation. The kernel also
 takes it whenever \(cv<10^{-4}\), where the beta branch is within about

@@ -1470,53 +1470,53 @@ BEGIN_RCPP
 END_RCPP
 }
 // dfrqfade
-Rcpp::NumericVector dfrqfade(Rcpp::NumericVector t, Rcpp::NumericVector alpha, Rcpp::NumericVector beta, Rcpp::NumericVector lambda, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector cv_u);
-RcppExport SEXP _EMC2_dfrqfade(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP lambdaSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP cv_uSEXP) {
+Rcpp::NumericVector dfrqfade(Rcpp::NumericVector t, Rcpp::NumericVector K, Rcpp::NumericVector v, Rcpp::NumericVector sv, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector clock);
+RcppExport SEXP _EMC2_dfrqfade(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type beta(betaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type kappa(kappaSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type delta(deltaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type cv_u(cv_uSEXP);
-    rcpp_result_gen = Rcpp::wrap(dfrqfade(t, alpha, beta, lambda, kappa, delta, cv_u));
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(dfrqfade(t, K, v, sv, kappa, delta, clock));
     return rcpp_result_gen;
 END_RCPP
 }
 // pfrqfade
-Rcpp::NumericVector pfrqfade(Rcpp::NumericVector t, Rcpp::NumericVector alpha, Rcpp::NumericVector beta, Rcpp::NumericVector lambda, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector cv_u, bool lower_tail);
-RcppExport SEXP _EMC2_pfrqfade(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP lambdaSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP cv_uSEXP, SEXP lower_tailSEXP) {
+Rcpp::NumericVector pfrqfade(Rcpp::NumericVector t, Rcpp::NumericVector K, Rcpp::NumericVector v, Rcpp::NumericVector sv, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector clock, bool lower_tail);
+RcppExport SEXP _EMC2_pfrqfade(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP clockSEXP, SEXP lower_tailSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type beta(betaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type kappa(kappaSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type delta(deltaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type cv_u(cv_uSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type clock(clockSEXP);
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
-    rcpp_result_gen = Rcpp::wrap(pfrqfade(t, alpha, beta, lambda, kappa, delta, cv_u, lower_tail));
+    rcpp_result_gen = Rcpp::wrap(pfrqfade(t, K, v, sv, kappa, delta, clock, lower_tail));
     return rcpp_result_gen;
 END_RCPP
 }
 // frq_fade_summary
-Rcpp::NumericMatrix frq_fade_summary(Rcpp::NumericVector alpha, Rcpp::NumericVector beta, Rcpp::NumericVector lambda, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector cv_u);
-RcppExport SEXP _EMC2_frq_fade_summary(SEXP alphaSEXP, SEXP betaSEXP, SEXP lambdaSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP cv_uSEXP) {
+Rcpp::NumericMatrix frq_fade_summary(Rcpp::NumericVector K, Rcpp::NumericVector v, Rcpp::NumericVector sv, Rcpp::NumericVector kappa, Rcpp::NumericVector delta, Rcpp::NumericVector clock);
+RcppExport SEXP _EMC2_frq_fade_summary(SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kappaSEXP, SEXP deltaSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type beta(betaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type kappa(kappaSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type delta(deltaSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type cv_u(cv_uSEXP);
-    rcpp_result_gen = Rcpp::wrap(frq_fade_summary(alpha, beta, lambda, kappa, delta, cv_u));
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_fade_summary(K, v, sv, kappa, delta, clock));
     return rcpp_result_gen;
 END_RCPP
 }

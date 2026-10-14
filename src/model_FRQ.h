@@ -132,6 +132,7 @@
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
+#include "inc_gamma.h"
 
 using namespace Rcpp;
 
@@ -151,12 +152,31 @@ constexpr double FRQ_CV_POISSON = 1e-4;
 // than manufacture NaNs for extreme inputs.
 constexpr double FRQ_DELTA_MAX = 700.0;
 
-// xlogy(a, y) = a log y, with the a == 0 branch returning 0 rather than the
-// NaN of 0 * (-Inf).  alpha == 1 or beta == 1 hits this on every call.
-inline double frq_xlogy(double a, double y) {
-  if (a == 0.0) return 0.0;
-  if (y <= 0.0) return (a > 0.0) ? R_NegInf : R_PosInf;
-  return a * std::log(y);
+
+// log(1 - e^y) for y <= 0.
+inline double frq_log1mexp(double y) {
+  return (y > -M_LN2) ? std::log(-std::expm1(y)) : std::log1p(-std::exp(y));
+}
+
+inline double frq_logaddexp(double a, double b) {
+  if (a == R_NegInf) return b;
+  if (b == R_NegInf) return a;
+  const double m = std::max(a, b);
+  return m + std::log1p(std::exp(-std::abs(a - b)));
+}
+
+// log Q_{a,b}(u), the log beta quantile.  For a < 1 the quantile underflows
+// long before u does, so the small-x side uses the leading term of
+// I_x(a, b) = x^a / (a B(a, b)) (1 + a(1-b) x/(a+1) + ...), exact to double
+// precision once that series correction is below rounding.
+inline double frq_log_qbeta(double u, double a, double b, double lbeta_ab) {
+  if (!(u > 0.0)) return R_NegInf;
+  if (!(u < 1.0)) return 0.0;
+  const double ly0 = (std::log(u) + std::log(a) + lbeta_ab) / a;
+  if (ly0 < std::log(1e-17 * a * (a + 1.0) / (std::abs(1.0 - b) + 1.0)))
+    return ly0;
+  const double x = R::qbeta(u, a, b, 1, 0);
+  return (x > 0.0) ? std::log(x) : ly0;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +311,7 @@ struct FrqAvail {
   double p = 0.0;
   double log_p = 0.0;
   double om_p = 0.0;
+  double log_om_p = R_NegInf;
   double h = 0.0;
   double lbeta_val = 0.0;
   double log_p_minus_lbeta = 0.0;
@@ -312,6 +333,7 @@ struct FrqPars {
   double p = 0.0;
   double log_p = 0.0;
   double om_p = 0.0;
+  double log_om_p = R_NegInf;
   double h = 0.0;
   double lambda = 0.0;
   double log_lambda = 0.0;
@@ -349,12 +371,12 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
     s.lgamma_K = R::lgammafn(K);
     if (h == 1.0) {
       s.E = R_PosInf; s.log_E = R_PosInf;
-      s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0;
+      s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
     } else {
       const double E = R::qgamma(frq_h_inv(h, s.hh), K, 1.0, 1, 0);
       if (!(E > 0.0) || !R_FINITE(E)) return s;
       s.E = E; s.log_E = std::log(E);
-      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0;
+      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
     }
     s.ok = true;
     return s;
@@ -368,25 +390,26 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
   // (1 - B ~ Beta(beta, K)), since 1 - qbeta(z, K, beta) loses every digit once
   // p is near one, which is the normal case for beta < 1.  H^{-1} is symmetric,
   // so its complement is H^{-1}(1 - h).  p itself is re-solved only when it is
-  // the small side.  An om_p that underflows to zero is still a valid state:
-  // it only enters 1 - q(x) next to p S(x), and the tails at x = Inf return
-  // h and 1 - h directly.
-  double p = 1.0, om_p = 0.0;
+  // the small side.  Both sides are held as logs, so a 1 - p that underflows
+  // still enters log(1 - q(x)) exactly.
+  const double lb = R::lbeta(K, beta);
+  double log_p = 0.0, log_om_p = R_NegInf;
   if (h < 1.0) {
-    om_p = R::qbeta(frq_h_inv(1.0 - h, s.hh), beta, K, 1, 0);
-    if (!(om_p >= 0.0) || !(om_p < 1.0)) return s;
-    p = (om_p > 0.5) ? R::qbeta(frq_h_inv(h, s.hh), K, beta, 1, 0)
-                     : 1.0 - om_p;
-    if (!(p > 0.0) || !(p <= 1.0)) return s;
+    log_om_p = frq_log_qbeta(frq_h_inv(1.0 - h, s.hh), beta, K, lb);
+    if (ISNAN(log_om_p) || !(log_om_p < 0.0)) return s;
+    log_p = (log_om_p > -M_LN2) ? frq_log_qbeta(frq_h_inv(h, s.hh), K, beta, lb)
+                                : frq_log1mexp(log_om_p);
+    if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return s;
   }
 
   s.beta = beta;
-  s.p = p;
-  s.log_p = std::log(p);
-  s.om_p = om_p;
-  s.E = (h == 1.0) ? R_PosInf : beta * p / om_p;
-  s.log_E = std::log(s.E);
-  s.lbeta_val = R::lbeta(K, beta);
+  s.p = std::exp(log_p);
+  s.log_p = log_p;
+  s.om_p = std::exp(log_om_p);
+  s.log_om_p = log_om_p;
+  s.log_E = (h == 1.0) ? R_PosInf : std::log(beta) + log_p - log_om_p;
+  s.E = std::exp(s.log_E);
+  s.lbeta_val = lb;
   s.log_p_minus_lbeta = s.log_p - s.lbeta_val;
   s.beta_minus_1 = beta - 1.0;
   s.ok = true;
@@ -405,6 +428,7 @@ inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.p = av.p;
   s.log_p = av.log_p;
   s.om_p = av.om_p;
+  s.log_om_p = av.log_om_p;
   s.h = av.h;
   s.lbeta_val = av.lbeta_val;
   s.log_p_minus_lbeta = av.log_p_minus_lbeta;
@@ -520,6 +544,8 @@ struct FrqCache {
 struct FrqState {
   double q;
   double omq;
+  double log_q;
+  double log_omq;
   double log_g;
 };
 
@@ -529,12 +555,12 @@ inline double frq_registration_inv(double ratio, const FrqPars& s) {
   return std::expm1(-s.cv2 * std::log1p(-ratio)) / s.cv2_lambda;
 }
 
-// The same inverse given the unit survivor sr = 1 - G(x), for draws whose
+// The same inverse given the log unit survivor log(1 - G(x)), for draws whose
 // G(x) is too close to one to be held directly.
-inline double frq_registration_inv_surv(double sr, const FrqPars& s) {
+inline double frq_registration_inv_logsurv(double log_sr, const FrqPars& s) {
   if (s.cv2 == 0.0)
-    return -std::log(sr) / s.lambda;
-  return std::expm1(-s.cv2 * std::log(sr)) / s.cv2_lambda;
+    return -log_sr / s.lambda;
+  return std::expm1(-s.cv2 * log_sr) / s.cv2_lambda;
 }
 
 inline FrqState frq_state(double x, const FrqPars& s) {
@@ -542,24 +568,28 @@ inline FrqState frq_state(double x, const FrqPars& s) {
   if (!R_FINITE(x)) {           // x == +Inf: fully saturated reservoir
     z.q = s.p;
     z.omq = s.om_p;
+    z.log_q = s.log_p;
+    z.log_omq = s.log_om_p;
     z.log_g = R_NegInf;
     return z;
   }
+  double log_sr;
   if (s.cv2 == 0.0) {
-    const double e = std::exp(-s.lambda * x);
-    z.q = s.p * (-std::expm1(-s.lambda * x));
-    z.omq = s.om_p + s.p * e;
-    z.log_g = s.log_lambda - s.lambda * x;
+    log_sr = -s.lambda * x;
+    z.log_g = s.log_lambda + log_sr;
   } else {
     const double lx = std::log1p(s.cv2_lambda * x);
-    const double log_sr = -lx * s.inv_cv2;
-    const double sr = std::exp(log_sr);
-    z.q = s.p * (-std::expm1(log_sr));
-    z.omq = s.om_p + s.p * sr;
+    log_sr = -lx * s.inv_cv2;
     // Split the exponent to avoid multiplying a potentially huge 1/cv^2 by a
     // small log1p term; lx/cv^2 has a finite exponential-limit value.
     z.log_g = s.log_lambda - lx * s.inv_cv2 - lx;
   }
+  // 1 - q = (1 - p) + p S(x) is kept in logs: for beta < 1 it underflows
+  // while (1 - q)^beta is still of order one.
+  z.log_q = s.log_p + frq_log1mexp(log_sr);
+  z.log_omq = frq_logaddexp(s.log_om_p, s.log_p + log_sr);
+  z.q = std::exp(z.log_q);
+  z.omq = std::exp(z.log_omq);
   return z;
 }
 
@@ -570,7 +600,8 @@ inline FrqState frq_state(double x, const FrqPars& s) {
 // I_x(a, b) = 1 - I_{1-x}(b, a) elsewhere. Special-cases a == 1 and b == 1
 // algebraically to eliminate all loops.
 // ---------------------------------------------------------------------------
-inline double frq_ibeta_cf_log(double x, double a, double b, double omx, double lbeta_val) {
+inline double frq_ibeta_cf_log(double x, double a, double b, double log_x,
+                               double log_omx, double lbeta_val) {
   const double FPMIN = 1e-300;
   const double EPS = 1e-15;
   const int MAXIT = 200;
@@ -613,32 +644,28 @@ inline double frq_ibeta_cf_log(double x, double a, double b, double omx, double 
     if (std::abs(delta - 1.0) < EPS) break;
   }
 
-  const double log_pref = a * std::log(x) + b * std::log(omx) - std::log(a) - lbeta_val;
+  const double log_pref = a * log_x + b * log_omx - std::log(a) - lbeta_val;
   return log_pref - std::log(f);
 }
 
-inline double frq_log_ibeta(double x, double omx, double a, double b, double lbeta_val) {
-  if (x <= 0.0) return R_NegInf;
-  if (x >= 1.0 || omx <= 0.0) return 0.0;
+// The prefactor takes log x and log(1 - x) directly: either side may underflow
+// while the other rounds to one.
+inline double frq_log_ibeta(double x, double omx, double log_x, double log_omx,
+                            double a, double b, double lbeta_val) {
+  if (log_x == R_NegInf) return R_NegInf;
+  if (log_omx == R_NegInf) return 0.0;
 
   // Exact algebraic special cases
-  if (b == 1.0) {
-    return a * std::log(x);
-  }
-  if (a == 1.0) {
-    // I_x(1, b) = 1 - (1-x)^b = 1 - omx^b = -expm1(b * log(omx))
-    const double z = -std::expm1(b * std::log(omx));
-    return (z > 0.0) ? std::log(z) : R_NegInf;
-  }
+  if (b == 1.0) return a * log_x;
+  if (a == 1.0) return frq_log1mexp(b * log_omx);   // I_x(1, b) = 1 - omx^b
 
   const double thresh = (a + 1.0) / (a + b + 2.0);
   if (x < thresh) {
-    return frq_ibeta_cf_log(x, a, b, omx, lbeta_val);
+    return frq_ibeta_cf_log(x, a, b, log_x, log_omx, lbeta_val);
   } else {
     // Symmetry: I_x(a, b) = 1 - I_{omx}(b, a)
-    const double log_w = frq_ibeta_cf_log(omx, b, a, x, lbeta_val);
-    const double w = std::exp(log_w);
-    return (w < 1.0) ? std::log1p(-w) : R_NegInf;
+    const double log_w = frq_ibeta_cf_log(omx, b, a, log_omx, log_x, lbeta_val);
+    return (log_w < 0.0) ? frq_log1mexp(log_w) : R_NegInf;
   }
 }
 
@@ -659,8 +686,10 @@ struct FrqLogBeta {
 
 inline FrqLogBeta frq_log_beta_pair(const FrqState& z, const FrqPars& s) {
   FrqLogBeta o;
-  o.lz   = frq_log_ibeta(z.q, z.omq, s.alpha, s.beta, s.lbeta_val);
-  o.lomz = frq_log_ibeta(z.omq, z.q, s.beta, s.alpha, s.lbeta_val);
+  o.lz   = frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq, s.alpha, s.beta,
+                         s.lbeta_val);
+  o.lomz = frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q, s.beta, s.alpha,
+                         s.lbeta_val);
   return o;
 }
 
@@ -697,29 +726,38 @@ inline FrqPoissonArg frq_poisson_arg(double x, const FrqPars& s) {
   return a;
 }
 
-inline FrqLogBeta frq_poisson_pair(const FrqPoissonArg& a, const FrqPars& s) {
+inline FrqLogBeta frq_poisson_pair(const FrqPoissonArg& a, double log_X,
+                                   const FrqPars& s) {
   FrqLogBeta o;
-  o.lz   = R::pgamma(a.X, s.alpha, 1.0, 1, 1);
-  o.lomz = R::pgamma(a.X, s.alpha, 1.0, 0, 1);
+  gamma_log_pq_fast(s.alpha, a.X, log_X, &o.lz, &o.lomz);
   return o;
 }
 
 inline double frq_poisson_log_pdf(double x, const FrqPars& s) {
   const FrqPoissonArg a = frq_poisson_arg(x, s);
-  double lp = R::dgamma(a.X, s.alpha, 1.0, 1) + a.log_dX;
+  if (!(a.X > 0.0) || !R_FINITE(a.X)) return R_NegInf;
+  const double log_X = std::log(a.X);
+  double lp = s.alpha_minus_1 * log_X - a.X - s.lgamma_K + a.log_dX;
   if (s.hh.active) {
-    const FrqLogBeta b = frq_poisson_pair(a, s);
+    const FrqLogBeta b = frq_poisson_pair(a, log_X, s);
     lp += frq_h_logderiv(b.lz, b.lomz, s.hh);
   }
   return ISNAN(lp) ? R_NegInf : lp;
 }
 
+// Without the threshold map only the requested tail is evaluated.
 inline double frq_poisson_log_tail(double x, const FrqPars& s, bool lower) {
-  const FrqLogBeta b = frq_poisson_pair(frq_poisson_arg(x, s), s);
-  if (s.hh.active)
+  const FrqPoissonArg a = frq_poisson_arg(x, s);
+  const double log_X = std::log(a.X);
+  if (s.hh.active) {
+    const FrqLogBeta b = frq_poisson_pair(a, log_X, s);
     return lower ? frq_h_log(b.lz - b.lomz, s.hh)
                  : frq_h_log(b.lomz - b.lz, s.hh);
-  return lower ? b.lz : b.lomz;
+  }
+  double out;
+  if (lower) gamma_log_pq_fast(s.alpha, a.X, log_X, &out, nullptr);
+  else gamma_log_pq_fast(s.alpha, a.X, log_X, nullptr, &out);
+  return out;
 }
 
 inline double frq_log_pdf_dt(double x, const FrqPars& s) {
@@ -729,8 +767,8 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (s.poisson) return frq_poisson_log_pdf(x, s);
   const FrqState z = frq_state(x, s);
   double lp = s.log_p_minus_lbeta + z.log_g;
-  lp += frq_xlogy(s.alpha_minus_1, z.q);
-  lp += frq_xlogy(s.beta_minus_1, z.omq);
+  if (s.alpha_minus_1 != 0.0) lp += s.alpha_minus_1 * z.log_q;
+  if (s.beta_minus_1 != 0.0) lp += s.beta_minus_1 * z.log_omq;
   // Chain rule through the threshold-variability map.  Unlike the CDF, the base
   // density does not need the incomplete beta at all, so this is the one place
   // where delta > 0 costs real work: H' is a function of z = I_q(alpha, beta).
@@ -755,7 +793,8 @@ inline double frq_log_cdf_dt(double x, const FrqPars& s) {
     const FrqLogBeta b = frq_log_beta_pair(z, s);
     out = frq_h_log(b.lz - b.lomz, s.hh);          // logit z = log z - log(1-z)
   } else {
-    out = frq_log_ibeta(z.q, z.omq, s.alpha, s.beta, s.lbeta_val);
+    out = frq_log_ibeta(z.q, z.omq, z.log_q, z.log_omq, s.alpha, s.beta,
+                        s.lbeta_val);
   }
   return ISNAN(out) ? R_NegInf : out;
 }
@@ -781,7 +820,8 @@ inline double frq_log_surv_dt(double x, const FrqPars& s) {
     const FrqLogBeta b = frq_log_beta_pair(z, s);
     out = frq_h_log(b.lomz - b.lz, s.hh);
   } else {
-    out = frq_log_ibeta(z.omq, z.q, s.beta, s.alpha, s.lbeta_val);
+    out = frq_log_ibeta(z.omq, z.q, z.log_omq, z.log_q, s.beta, s.alpha,
+                        s.lbeta_val);
   }
   return ISNAN(out) ? R_NaN : out;
 }

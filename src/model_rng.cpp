@@ -1271,6 +1271,44 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// One FRQ decision time (t0 excluded) for a valid state; +Inf is an omission.
+static double frq_draw_decision(const FrqPars& s) {
+  if (s.poisson) {
+    const double y = s.hh.active
+      ? R::qgamma(frq_h_inv(R::unif_rand(), s.hh), s.alpha, 1.0, 1, 0)
+      : R::rgamma(s.alpha, 1.0);
+    double d;
+    if (s.h == 1.0) {
+      d = y / s.v;
+    } else {
+      if (!(y <= s.E)) return R_PosInf;        // evidence exhausted: omission
+      double ratio = y / s.E;
+      if (ratio >= 1.0) ratio = std::nextafter(1.0, 0.0);
+      d = frq_registration_inv(ratio, s);
+    }
+    return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+  }
+  // Drawn on the complement W = 1 - U ~ Beta(beta, K) by inversion: for
+  // beta < 1 much of U's mass lies within rounding of one, where U / p would
+  // collapse.  W < 1 - p, i.e. V < 1 - h, is the omission; otherwise
+  // 1 - q(x) = W gives the unit survivor S(x) = (W - (1 - p)) / p.
+  const double vv = R::unif_rand();
+  if (s.h < 1.0 && vv < 1.0 - s.h) return R_PosInf;   // quorum unreachable
+  // W is held as a log: for beta < 1 it underflows with non-negligible
+  // probability.
+  const double lw = frq_log_qbeta(frq_h_inv(vv, s.hh), s.beta, s.alpha,
+                                  s.lbeta_val);
+  double log_sr = (lw > s.log_om_p)
+    ? lw + frq_log1mexp(s.log_om_p - lw) - s.log_p
+    : std::log(std::numeric_limits<double>::min());
+  // Rounding at either end: keep the draw finite and non-negative.
+  if (ISNAN(log_sr) || log_sr == R_NegInf)
+    log_sr = std::log(std::numeric_limits<double>::min());
+  if (log_sr > 0.0) log_sr = 0.0;
+  const double d = frq_registration_inv_logsurv(log_sr, s);
+  return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+}
+
 // FRQ simulator.  pars columns: K, v, sv, h, t0, delta, clock.
 //
 // Exact, not approximate: the process is distributionally identical to drawing
@@ -1323,35 +1361,7 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                                 pars(r, ih), idl >= 0 ? pars(r, idl) : 0.0,
                                 icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;                       // invalid row: never finishes
-    if (s.poisson) {
-      const double y = s.hh.active
-        ? R::qgamma(frq_h_inv(R::unif_rand(), s.hh), s.alpha, 1.0, 1, 0)
-        : R::rgamma(s.alpha, 1.0);
-      double d;
-      if (s.h == 1.0) {
-        d = y / s.v;
-      } else {
-        if (!(y <= s.E)) continue;             // evidence exhausted: omission
-        double ratio = y / s.E;
-        if (ratio >= 1.0) ratio = std::nextafter(1.0, 0.0);
-        d = frq_registration_inv(ratio, s);
-      }
-      dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
-      continue;
-    }
-    // Drawn on the complement W = 1 - U ~ Beta(beta, K) by inversion: for
-    // beta < 1 much of U's mass lies within rounding of one, where U / p would
-    // collapse.  W < 1 - p, i.e. V < 1 - h, is the omission; otherwise
-    // 1 - q(x) = W gives the unit survivor S(x) = (W - (1 - p)) / p.
-    const double vv = R::unif_rand();
-    if (s.h < 1.0 && vv < 1.0 - s.h) continue;   // quorum unreachable
-    const double w = R::qbeta(frq_h_inv(vv, s.hh), s.beta, s.alpha, 1, 0);
-    double sr = (w - s.om_p) / s.p;
-    // Rounding at either end: keep the draw finite and non-negative.
-    if (!(sr > 0.0)) sr = std::numeric_limits<double>::min();
-    if (sr > 1.0) sr = 1.0;
-    const double d = frq_registration_inv_surv(sr, s);
-    dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+    dt[r] = frq_draw_decision(s);
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
@@ -1360,10 +1370,10 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQfade simulator. It draws the latent quorum percentile, inverts the
-// threshold map when delta is active, then maps that percentile onto the
-// finite integrated-opportunity clock. Crossing the clock horizon is an
-// intrinsic omission.
+// FRQfade simulator.  pars columns: K, v, sv, kappa, t0, delta, clock.
+// Draws the h = 1 FRQ decision time x and maps it back through the fading
+// clock: u = -log(1 - kappa x) / kappa, and x >= 1/kappa is an omission.
+// Matches R's rFRQfade (R/model_FRQfade.R).
 // [[Rcpp::export]]
 Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
                         Rcpp::CharacterVector lR_levels,
@@ -1375,15 +1385,13 @@ Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
   if (ok.size() != n_rows) Rcpp::stop("rfrqfade_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  for (const char* nm : {"alpha", "beta", "lambda", "kappa", "t0"})
+  for (const char* nm : {"K", "v", "sv", "kappa", "t0"})
     if (!ci.count(nm)) Rcpp::stop("rfrqfade_cpp: missing parameter column '%s'.", nm);
-  const int ia = ci.at("alpha"), ib = ci.at("beta"), il = ci.at("lambda"),
-            ik = ci.at("kappa"), it0 = ci.at("t0");
-  // delta and cv_u default to zero here, as in rfrq_cpp and the R reference
-  // simulator: this lookup is by name, so an absent column cannot resolve to a
-  // different parameter (the positional likelihood contract still requires it).
-  const int id = ci.count("delta") ? ci.at("delta") : -1;
-  const int icv = ci.count("cv_u") ? ci.at("cv_u") : -1;
+  const int ik = ci.at("K"), iv = ci.at("v"), isv = ci.at("sv"),
+            ika = ci.at("kappa"), it0 = ci.at("t0");
+  // By-name lookup, so absent delta / clock take the model defaults.
+  const int idl = ci.count("delta") ? ci.at("delta") : -1;
+  const int icu = ci.count("clock") ? ci.at("clock") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1393,19 +1401,12 @@ Rcpp::List rfrqfade_cpp(Rcpp::NumericMatrix pars,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r] || !R_FINITE(t0col[r])) continue;
-    const FrqFadePars& s = memo.get(pars(r, ia), pars(r, ib), pars(r, il),
-      pars(r, ik), id >= 0 ? pars(r, id) : 0.0,
-      icv >= 0 ? pars(r, icv) : 0.0);
+    const FrqFadePars& s = memo.get(pars(r, ik), pars(r, iv), pars(r, isv),
+      pars(r, ika), idl >= 0 ? pars(r, idl) : 0.0,
+      icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;
-    const double rank = s.hh.active
-      ? frq_h_inv(R::unif_rand(), s.hh)
-      : R::rbeta(s.alpha, s.beta);
-    const double u_rank = s.hh.active
-      ? R::qbeta(rank, s.alpha, s.beta, 1, 0)
-      : rank;
-    const double decision = frqfade_decision_time(u_rank, s);
-    dt[r] = R_FINITE(decision) && decision >= 0.0
-      ? decision : R_PosInf;
+    const double d = frqfade_unwarp(frq_draw_decision(*s.base), s);
+    dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

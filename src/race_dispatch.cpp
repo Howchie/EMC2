@@ -228,7 +228,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.t0_index   = emc2col::frq_fade::t0;
     out.ctx.defective_upper_tail = true;
     out.ctx.supports_batched_defective_truncation = true;
-    out.ctx.frq_fade_cache = std::make_shared<FrqFadeCache>();
+    out.ctx.frq_cache = std::make_shared<FrqCache>();
   } else if (type_std.find("FRQ") != std::string::npos) {
     // FRQ_FADE shares the prefix and is dispatched above.
     out.pdf1_ptr       = &dfrq_scalar;

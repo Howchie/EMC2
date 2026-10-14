@@ -1,11 +1,22 @@
-# FRQ with a fading evidence-registration opportunity.
+# ============================================================================
+# FRQfade: the FRQ counter (at h = 1) on the fading time
+#   A(u) = (1 - exp(-kappa u)) / kappa,
+# so F(u) = F_1(A(u)) and the completion probability h = F_1(1/kappa) is
+# derived.  Kernel: src/model_FRQfade.h over src/model_FRQ.h.
+# ============================================================================
 
 .frqfade_check_cols <- function(pars) {
-  need <- c("alpha", "beta", "lambda", "kappa", "t0")
+  need <- c("K", "v", "sv", "kappa", "t0")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("FRQfade requires parameter columns ", paste(missing, collapse = ", "))
   invisible(NULL)
+}
+
+.frqfade_call <- function(fun, dt, pars, ok, ...) {
+  fun(dt[ok], pars[ok, "K"], pars[ok, "v"], pars[ok, "sv"], pars[ok, "kappa"],
+      delta = .frq_opt(pars, ok, "delta", 0),
+      clock = .frq_opt(pars, ok, "clock", 1), ...)
 }
 
 dFRQfade <- function(rt, pars) {
@@ -14,27 +25,18 @@ dFRQfade <- function(rt, pars) {
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
-  if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- dfrqfade(dt[ok], pars[ok, "alpha"], pars[ok, "beta"],
-      pars[ok, "lambda"], pars[ok, "kappa"], delta, cv_u)
-  }
+  if (any(ok)) out[ok] <- .frqfade_call(dfrqfade, dt, pars, ok)
   out
 }
 
 pFRQfade <- function(rt, pars) {
   .frqfade_check_cols(pars)
   dt <- rt - pars[, "t0"]
+  # rt = Inf is kept: the CDF there is the derived h.
   ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
-  if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- pfrqfade(dt[ok], pars[ok, "alpha"], pars[ok, "beta"],
-      pars[ok, "lambda"], pars[ok, "kappa"], delta, cv_u)
-  }
+  if (any(ok)) out[ok] <- .frqfade_call(pfrqfade, dt, pars, ok)
   out
 }
 
@@ -44,175 +46,93 @@ sFRQfade <- function(rt, pars) {
   out <- rep(1, length(dt))
   ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
-  if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- pfrqfade(dt[ok], pars[ok, "alpha"], pars[ok, "beta"],
-      pars[ok, "lambda"], pars[ok, "kappa"], delta, cv_u,
-      lower_tail = FALSE)
-  }
+  if (any(ok)) out[ok] <- .frqfade_call(pfrqfade, dt, pars, ok,
+                                        lower_tail = FALSE)
   out
 }
 
-# Reference generator. The compiled simulator is the default route.
+# Pure-R reference simulator; .rfun_FRQfade uses the C++ kernel unless
+# options(emc2.cpp_rfun = FALSE).  Draws the h = 1 FRQ decision time x and
+# maps it back through the fading clock, u = -log(1 - kappa x) / kappa;
+# x >= 1/kappa is an omission.
 rFRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   .frqfade_check_cols(pars)
-  nr <- length(levels(lR))
-  if (nr < 1L || nrow(pars) %% nr != 0L)
-    stop("FRQfade: pars rows must be a multiple of accumulators")
-  if (length(ok) != nrow(pars))
-    stop("FRQfade: ok must have one value per parameter row")
-  ok <- as.logical(ok)
-  ok[is.na(ok)] <- FALSE
-  n_trials <- nrow(pars) / nr
-  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
-  t0 <- pars[, "t0"]
-  alpha <- pars[, "alpha"]
-  beta <- pars[, "beta"]
-  lambda <- pars[, "lambda"]
+  ok <- .frq_check_race(lR, pars, ok, "FRQfade")
   kappa <- pars[, "kappa"]
-  delta <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
-  cv_u <- if ("cv_u" %in% colnames(pars)) pars[, "cv_u"] else rep(0, nrow(pars))
-  valid <- ok & is.finite(t0) & is.finite(alpha) & alpha >= 1 &
-    is.finite(beta) & beta >= 1 & is.finite(lambda) & lambda > 0 &
-    is.finite(kappa) & kappa >= 0 & is.finite(delta) & delta >= 0 & delta <= 700 &
-    is.finite(cv_u) & cv_u >= 0 & is.finite(cv_u^2)
-  valid[is.na(valid)] <- FALSE
-  idx <- which(valid)
+  dt <- rep(Inf, nrow(pars))
+  idx <- which(ok & is.finite(pars[, "t0"]) & is.finite(kappa) & kappa >= 0)
   if (length(idx)) {
-    p <- pars[idx, , drop = FALSE]
-    d <- delta[idx]
-    c_u <- cv_u[idx]
-    rank <- stats::rbeta(nrow(p), p[, "alpha"], p[, "beta"])
-    varied <- d > 0
-    if (any(varied)) {
-      rank[varied] <- stats::qbeta(
-        frq_h_inv_r(stats::runif(sum(varied)), d[varied]),
-        p[varied, "alpha"], p[varied, "beta"])
-    }
-    c2 <- c_u^2
-    y <- -log1p(-rank)
-    A <- y / p[, "lambda"]
-    frail <- c2 > 0
-    if (any(frail)) {
-      z <- c2[frail] * y[frail]
-      A_frail <- y[frail] / p[frail, "lambda"]
-      overflow <- z > log(.Machine$double.xmax)
-      A_frail[overflow] <- Inf
-      nz <- !overflow & z > 0
-      A_frail[nz] <- A_frail[nz] * expm1(z[nz]) / z[nz]
-      A[frail] <- A_frail
-    }
-    kappa <- p[, "kappa"]
-    # Unlimited opportunity is proper: an exact rank of one (a zero-probability
-    # RNG endpoint) must not become an omission, matching the compiled path.
-    edge <- kappa == 0 & rank >= 1
-    if (any(edge)) {
-      r1 <- 1 - .Machine$double.eps / 2
-      A[edge] <- -log1p(-r1) / p[edge, "lambda"]
-      e_frail <- edge & c2 > 0
-      if (any(e_frail)) {
-        z1 <- c2[e_frail] * -log1p(-r1)
-        A[e_frail] <- A[e_frail] * expm1(z1) / z1
-      }
-    }
-    hit <- A
-    fading <- kappa > 0
-    if (any(fading)) {
-      kA <- kappa[fading] * A[fading]
-      live <- is.finite(kA) & kA < 1
-      z <- rep(Inf, length(kA))
-      z[live] <- -log1p(-kA[live]) / kappa[fading][live]
-      hit[fading] <- z
-    }
-    hit[!is.finite(hit) | hit < 0] <- Inf
-    dt[idx] <- hit
+    base <- cbind(pars[idx, , drop = FALSE], h = 1)
+    x <- .frq_draw_dt(base)
+    k <- kappa[idx]
+    u <- x
+    fade <- k > 0
+    u[fade] <- Inf
+    live <- fade & k * x < 1
+    u[live] <- -log1p(-k[live] * x[live]) / k[live]
+    dt[idx] <- u
   }
-  t0_safe <- t0
-  t0_safe[!is.finite(t0_safe)] <- 0
-  dt <- dt + matrix(t0_safe, nrow = nr)
-  bad_col <- colSums(!is.infinite(dt)) == 0L
-  R <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(R, seq_len(ncol(dt)))
-  rt <- dt[pick]
-  R <- factor(levels(lR)[R], levels = levels(lR))
-  R[bad_col] <- NA
-  rt[bad_col] <- Inf
-  ok_col <- colSums(matrix(ok, nrow = nr)) > 0L
-  out <- data.frame(R = rep(NA_character_, n_trials), rt = rep(NA_real_, n_trials))
-  out$R[ok_col] <- levels(lR)[R][ok_col]
-  out$R <- factor(out$R, levels = levels(lR))
-  out$rt[ok_col] <- rt[ok_col]
-  .apply_timed_guess_winner(out, levels(lR))
+  .frq_race(lR, dt, pars[, "t0"], ok)
 }
 
-#' Finite reservoir quorum with a fading registration opportunity
+#' The FRQ Process with a Fading Registration Opportunity (FRQfade)
 #'
-#' `FRQfade()` is a sibling of [FRQ()] in which response omissions arise from
-#' the same registration process that determines finite response times.
+#' Model file to estimate [FRQ()] with a fading registration opportunity in
+#' EMC2.
 #'
 #' @details
-#' Each accumulator has a quorum percentile with Beta shapes `alpha` and
-#' `beta`. Evidence registers at mean rate `lambda`, while its total future
-#' opportunity fades exponentially at rate `kappa`. For decision time
-#' `u = rt - t0`, the integrated opportunity clock is
-#' `A_kappa(u) = (1 - exp(-kappa * u)) / kappa`, with the limit `u` at
-#' `kappa = 0`. Thus positive `kappa` limits total integrated opportunity to
-#' `1/kappa`; it does not impose a finite cutoff in physical time. A quorum
-#' above the available evidence percentile produces an omission.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' Each accumulator's decision time `u = rt - t0` has distribution function
+#'
+#' `F(u) = F_1(A(u))`, with `A(u) = (1 - exp(-kappa * u)) / kappa`,
+#'
+#' where `F_1` is the [FRQ()] distribution function at `h = 1` with the same
+#' `K`, `v`, `sv`, `delta` and `clock`, and `A(u) = u` at `kappa = 0`. The
+#' density is `f(u) = f_1(A(u)) * exp(-kappa * u)`. An accumulator never
+#' finishes with probability `1 - h`, where `h = F_1(1/kappa)` is derived; a
+#' race omission has probability `prod(1 - h)` over accumulators.
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *alpha* | 1 + exp | \[1, Inf\] | log(0) | | Quorum shape |
-#' | *beta* | 1 + exp | \[1, Inf\] | log(0) | | Spare-capacity shape |
-#' | *lambda* | log | \[0, Inf\] | log(log(2) / 0.5) | | Mean latent registration rate at time zero |
-#' | *kappa* | log | \[0, Inf\] | log(0.5) | | Exponential decay rate of registration opportunity; exact zero is supported |
-#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
-#' | *delta* | log | \[0, Inf\] | log(0) | | Half-width of uniform log-odds threshold variability |
-#' | *cv_u* | log | \[0, Inf\] | log(0) | | CV of independent Gamma-distributed unit rates |
+#' | *K* | 1 + exp | \[1, Inf\] | log(2) (K = 3) | | Event threshold |
+#' | *v* | log | \[1e-4, Inf\] | log(6) | | Mean initial input rate |
+#' | *sv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = (*v*/*sv*)^2 | Between-trial SD of the input rate |
+#' | *kappa* | log | \[1e-4, Inf\] or 0 | log(0.5) | *h* = *F_1*(1/*kappa*) | Decay rate of the registration opportunity |
+#' | *t0* | log | \[0.05, Inf\] or 0 | log(0) | | Non-decision time |
+#' | *delta* | log | \[1e-4, 6\] or 0 | log(0) | | Half-width of the log-odds threshold shift |
+#' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
 #'
-#' The fitted coordinates are `alpha`, `beta`, `lambda`, `kappa`, `t0`,
-#' `delta`, and `cv_u`; `h` is derived and is not fitted. At `kappa = 0`,
-#' opportunity is unlimited and `h = 1`, including with threshold variation
-#' or unit-rate frailty. At positive `kappa`, `h` is the transformed Beta CDF
-#' evaluated at the limiting evidence percentile `q_inf`. Both `delta` and
-#' `cv_u` can change `h` under finite opportunity. `mapped_pars()` reports
-#' `h`, `q_inf`, reservoir summaries `N = alpha + beta - 1` and
-#' `d = alpha/N`, threshold SD `sQ = delta/sqrt(3)`, and unit-rate Gamma shape
-#' `a_u = 1/cv_u^2` (`Inf` when `cv_u = 0`).
+#' The values `K = 1`, `sv = 0`, `kappa = 0`, `t0 = 0`, `delta = 0` and
+#' `clock = 0` are exact bound exceptions and can be set as constants. At
+#' `kappa = 0` the model is [FRQ()] with `h = 1`.
 #'
-#' With `cv_u = 0`, the model is the proper FRQ curve run on the internal clock
-#' `A_kappa(u)`, which stops at `1/kappa`. A response occurs when the
-#' corresponding unlimited-opportunity FRQ time is below this horizon, and
-#' its physical decision time is `-log1p(-kappa * A)/kappa`. For fixed shapes,
-#' `lambda/kappa` controls completion probability and `kappa` sets the time
-#' scale, coupling omission probability to the conditional RT distribution.
-#' This coupling remains when `alpha = beta = 1`.
+#' `mapped_pars()` adds the derived columns `h`, `Etot` (expected total
+#' evidence, `beta * G / (1 - G)` with `G` the registration law at `1/kappa`,
+#' or `v / kappa` at `sv = 0`; `Inf` at `kappa = 0`), `beta`, `lambda`,
+#' `cv` = `sv / v` and `sQ` = `delta / sqrt(3)`.
 #'
-#' Optional nuisance parameters are `pContaminant`, for omissions outside the
-#' evidence process, and `pGuess`, for uniform response-time outliers. The
-#' `delta` and `cv_u` model extensions are included in every positional kernel
-#' contract and default to zero.
+#' Optional nuisance parameters are `pContaminant`, an omission probability
+#' outside the accumulators, and `pGuess`, a uniform-outlier probability.
 #'
 #' @return A model list defining the FRQfade race model.
 #' @examples
 #' design_FRQfade <- design(data = forstmann, model = FRQfade,
 #'   matchfun = function(d) d$S == d$lR,
-#'   formula = list(alpha ~ 1, beta ~ 1, lambda ~ lM + E,
-#'                  kappa ~ lM, t0 ~ 1))
+#'   formula = list(K ~ 1, v ~ lM + E, sv ~ lM, kappa ~ 1, t0 ~ 1))
 #' @export
 FRQfade <- function() {
-  p_types <- c("alpha" = log(0), "beta" = log(0),
-    "lambda" = log(log(2) / 0.5), "kappa" = log(0.5),
-    "t0" = log(0), "delta" = log(0), "cv_u" = log(0))
-  transform <- c(alpha = "exp", beta = "exp", lambda = "exp",
-    kappa = "exp", t0 = "exp", delta = "exp", cv_u = "exp")
-  transform_lower <- c(alpha = 1, beta = 1)
-  minmax <- cbind(alpha = c(1, Inf), beta = c(1, Inf),
-    lambda = c(1e-4, Inf), kappa = c(1e-4, Inf), t0 = c(0.05, Inf),
-    delta = c(1e-4, 6), cv_u = c(1e-4, Inf))
-  exception <- c(alpha = 1, beta = 1, kappa = 0, t0 = 0,
-                 delta = 0, cv_u = 0)
+  p_types <- c("K" = log(2), "v" = log(6), "sv" = log(0),
+               "kappa" = log(0.5), "t0" = log(0), "delta" = log(0),
+               "clock" = log(1))
+  transform <- c(K = "exp", v = "exp", sv = "exp", kappa = "exp",
+                 t0 = "exp", delta = "exp", clock = "exp")
+  transform_lower <- c(K = 1)
+  # Bounds as in FRQ(); kappa's lower guard keeps a sampled kappa off the
+  # exact kappa = 0 (h = 1) boundary, which is reachable as a constant.
+  minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), sv = c(1e-4, Inf),
+                  kappa = c(1e-4, Inf), t0 = c(0.05, Inf),
+                  delta = c(1e-4, 6), clock = c(1e-4, Inf))
+  exception <- c(K = 1, sv = 0, kappa = 0, t0 = 0, delta = 0, clock = 0)
   nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- nuis$p_types
   transform <- nuis$transform
@@ -223,20 +143,21 @@ FRQfade <- function() {
     type = "RACE",
     c_name = "FRQ_FADE",
     p_types = p_types,
-    p_types_canonical = c("alpha", "beta", "lambda", "kappa", "t0"),
+    p_types_canonical = c("K", "v", "sv", "kappa", "t0"),
     transform = list(func = transform, lower = transform_lower),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      delta <- if ("delta" %in% colnames(pars)) pars[, "delta"] else 0
-      cv_u <- if ("cv_u" %in% colnames(pars)) pars[, "cv_u"] else 0
-      summary <- frq_fade_summary(pars[, "alpha"], pars[, "beta"],
-        pars[, "lambda"], pars[, "kappa"], delta, cv_u)
-      N <- pars[, "alpha"] + pars[, "beta"] - 1
-      add <- cbind(q_inf = as.numeric(summary[, "q_inf"]),
-        h = as.numeric(summary[, "h"]), N = as.numeric(N),
-        d = as.numeric(pars[, "alpha"] / N),
-        sQ = as.numeric(delta) / sqrt(3),
-        a_u = ifelse(cv_u == 0, Inf, 1 / cv_u^2))
+      # Reporting only: the compiled likelihood derives h itself.
+      dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
+      cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
+      fs <- frq_fade_summary(pars[, "K"], pars[, "v"], pars[, "sv"],
+                             pars[, "kappa"], dl, cu)
+      g <- frq_rate(pars[, "K"], pars[, "v"], pars[, "sv"], 1, dl, cu)
+      add <- cbind(h = as.numeric(fs[, "h"]), Etot = as.numeric(fs[, "Etot"]),
+                   beta = as.numeric(g[, "beta"]),
+                   lambda = as.numeric(g[, "lambda"]),
+                   cv = as.numeric(pars[, "sv"] / pars[, "v"]),
+                   sQ = as.numeric(dl) / sqrt(3))
       rownames(add) <- NULL
       cbind(pars, add)
     },

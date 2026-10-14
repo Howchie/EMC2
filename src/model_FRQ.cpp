@@ -94,8 +94,8 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
 
 // Map the fitted coordinates to the generative ones: the Beta shape
 // beta = (v/sv)^2, the availability p, the registration rate lambda and the
-// expected total evidence E (Inf when h = 1).  Used by Ttransform and the R
-// reference simulator.
+// expected total evidence E (Inf when h = 1), and log(1 - p).  Used by
+// Ttransform and the R reference simulator.
 // [[Rcpp::export]]
 NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
                        NumericVector h,
@@ -110,7 +110,7 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(delta, n, "delta");
   frq_check_len(clock, n, "clock");
-  NumericMatrix out(n, 4);
+  NumericMatrix out(n, 5);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
@@ -120,8 +120,10 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
     out(i, 1) = s.ok ? s.p : NA_REAL;
     out(i, 2) = s.ok ? ((s.poisson && s.h == 1.0) ? NA_REAL : s.lambda) : NA_REAL;
     out(i, 3) = s.ok ? s.E : NA_REAL;
+    out(i, 4) = s.ok ? s.log_om_p : NA_REAL;
   }
-  colnames(out) = CharacterVector::create("beta", "p", "lambda", "Etot");
+  colnames(out) = CharacterVector::create("beta", "p", "lambda", "Etot",
+                                          "log1mp");
   return out;
 }
 
@@ -159,16 +161,24 @@ NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
 // and (v, clock), which is recomputed per row for the cost of one log.
 // ============================================================
 
+// The scalar entry points are called once per evaluation point, often several
+// times on one row (bin edges and midpoint), so they share a per-thread memo.
+// Its keys are the parameter values themselves, so a hit is valid across
+// particles; only a miss consults the per-particle cache.
+static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
+  static thread_local FrqMemo memo;
+  memo.shared = frq_cache_from_context(ctx_);
+  return memo.get(par[emc2col::frq::K], par[emc2col::frq::v],
+                  par[emc2col::frq::sv], par[emc2col::frq::h],
+                  par[emc2col::frq::delta], par[emc2col::frq::clock]);
+}
+
 double dfrq_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
       !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
-  FrqMemo memo(frq_cache_from_context(ctx_));
-  const FrqPars& s = memo.get(par[emc2col::frq::K], par[emc2col::frq::v],
-                              par[emc2col::frq::sv], par[emc2col::frq::h],
-                              par[emc2col::frq::delta], par[emc2col::frq::clock]);
-  return frq_pdf_natural_dt(tt, s);
+  return frq_pdf_natural_dt(tt, frq_scalar_row(par, ctx_));
 }
 double pfrq_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
@@ -177,11 +187,7 @@ double pfrq_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   // tt == Inf deliberately reaches the kernel: the CDF there is h, not one
   // when h < 1, and is one at the proper h = 1 boundary.
-  FrqMemo memo(frq_cache_from_context(ctx_));
-  const FrqPars& s = memo.get(par[emc2col::frq::K], par[emc2col::frq::v],
-                              par[emc2col::frq::sv], par[emc2col::frq::h],
-                              par[emc2col::frq::delta], par[emc2col::frq::clock]);
-  return frq_cdf_natural_dt(tt, s);
+  return frq_cdf_natural_dt(tt, frq_scalar_row(par, ctx_));
 }
 
 void dfrq_raw(const double* rt, const double* const* cols, int n_rows,

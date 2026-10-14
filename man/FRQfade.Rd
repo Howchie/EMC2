@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_FRQfade.R
 \name{FRQfade}
 \alias{FRQfade}
-\title{Finite reservoir quorum with a fading registration opportunity}
+\title{The FRQ Process with a Fading Registration Opportunity (FRQfade)}
 \usage{
 FRQfade()
 }
@@ -10,55 +10,44 @@ FRQfade()
 A model list defining the FRQfade race model.
 }
 \description{
-\code{FRQfade()} is a sibling of \code{\link[=FRQ]{FRQ()}} in which response omissions arise from
-the same registration process that determines finite response times.
+Model file to estimate \code{\link[=FRQ]{FRQ()}} with a fading registration opportunity in
+EMC2.
 }
 \details{
-Each accumulator has a quorum percentile with Beta shapes \code{alpha} and
-\code{beta}. Evidence registers at mean rate \code{lambda}, while its total future
-opportunity fades exponentially at rate \code{kappa}. For decision time
-\code{u = rt - t0}, the integrated opportunity clock is
-\code{A_kappa(u) = (1 - exp(-kappa * u)) / kappa}, with the limit \code{u} at
-\code{kappa = 0}. Thus positive \code{kappa} limits total integrated opportunity to
-\code{1/kappa}; it does not impose a finite cutoff in physical time. A quorum
-above the available evidence percentile produces an omission.\tabular{llllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{alpha} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Quorum shape \cr
-   \emph{beta} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Spare-capacity shape \cr
-   \emph{lambda} \tab log \tab [0, Inf] \tab log(log(2) / 0.5) \tab  \tab Mean latent registration rate at time zero \cr
-   \emph{kappa} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Exponential decay rate of registration opportunity; exact zero is supported \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{delta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Half-width of uniform log-odds threshold variability \cr
-   \emph{cv_u} \tab log \tab [0, Inf] \tab log(0) \tab  \tab CV of independent Gamma-distributed unit rates \cr
+Each accumulator's decision time \code{u = rt - t0} has distribution function
+
+\code{F(u) = F_1(A(u))}, with \code{A(u) = (1 - exp(-kappa * u)) / kappa},
+
+where \code{F_1} is the \code{\link[=FRQ]{FRQ()}} distribution function at \code{h = 1} with the same
+\code{K}, \code{v}, \code{sv}, \code{delta} and \code{clock}, and \code{A(u) = u} at \code{kappa = 0}. The
+density is \code{f(u) = f_1(A(u)) * exp(-kappa * u)}. An accumulator never
+finishes with probability \code{1 - h}, where \code{h = F_1(1/kappa)} is derived; a
+race omission has probability \code{prod(1 - h)} over accumulators.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{K} \tab 1 + exp \tab [1, Inf] \tab log(2) (K = 3) \tab  \tab Event threshold \cr
+   \emph{v} \tab log \tab [1e-4, Inf] \tab log(6) \tab  \tab Mean initial input rate \cr
+   \emph{sv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = (\emph{v}/\emph{sv})^2 \tab Between-trial SD of the input rate \cr
+   \emph{kappa} \tab log \tab [1e-4, Inf] or 0 \tab log(0.5) \tab \emph{h} = \emph{F_1}(1/\emph{kappa}) \tab Decay rate of the registration opportunity \cr
+   \emph{t0} \tab log \tab [0.05, Inf] or 0 \tab log(0) \tab  \tab Non-decision time \cr
+   \emph{delta} \tab log \tab [1e-4, 6] or 0 \tab log(0) \tab  \tab Half-width of the log-odds threshold shift \cr
+   \emph{clock} \tab log \tab [1e-4, Inf] or 0 \tab log(1) \tab  \tab Shape of the registration law \cr
 }
 
 
-The fitted coordinates are \code{alpha}, \code{beta}, \code{lambda}, \code{kappa}, \code{t0},
-\code{delta}, and \code{cv_u}; \code{h} is derived and is not fitted. At \code{kappa = 0},
-opportunity is unlimited and \code{h = 1}, including with threshold variation
-or unit-rate frailty. At positive \code{kappa}, \code{h} is the transformed Beta CDF
-evaluated at the limiting evidence percentile \code{q_inf}. Both \code{delta} and
-\code{cv_u} can change \code{h} under finite opportunity. \code{mapped_pars()} reports
-\code{h}, \code{q_inf}, reservoir summaries \code{N = alpha + beta - 1} and
-\code{d = alpha/N}, threshold SD \code{sQ = delta/sqrt(3)}, and unit-rate Gamma shape
-\code{a_u = 1/cv_u^2} (\code{Inf} when \code{cv_u = 0}).
+The values \code{K = 1}, \code{sv = 0}, \code{kappa = 0}, \code{t0 = 0}, \code{delta = 0} and
+\code{clock = 0} are exact bound exceptions and can be set as constants. At
+\code{kappa = 0} the model is \code{\link[=FRQ]{FRQ()}} with \code{h = 1}.
 
-With \code{cv_u = 0}, the model is the proper FRQ curve run on the internal clock
-\code{A_kappa(u)}, which stops at \code{1/kappa}. A response occurs when the
-corresponding unlimited-opportunity FRQ time is below this horizon, and
-its physical decision time is \code{-log1p(-kappa * A)/kappa}. For fixed shapes,
-\code{lambda/kappa} controls completion probability and \code{kappa} sets the time
-scale, coupling omission probability to the conditional RT distribution.
-This coupling remains when \code{alpha = beta = 1}.
+\code{mapped_pars()} adds the derived columns \code{h}, \code{Etot} (expected total
+evidence, \code{beta * G / (1 - G)} with \code{G} the registration law at \code{1/kappa},
+or \code{v / kappa} at \code{sv = 0}; \code{Inf} at \code{kappa = 0}), \code{beta}, \code{lambda},
+\code{cv} = \code{sv / v} and \code{sQ} = \code{delta / sqrt(3)}.
 
-Optional nuisance parameters are \code{pContaminant}, for omissions outside the
-evidence process, and \code{pGuess}, for uniform response-time outliers. The
-\code{delta} and \code{cv_u} model extensions are included in every positional kernel
-contract and default to zero.
+Optional nuisance parameters are \code{pContaminant}, an omission probability
+outside the accumulators, and \code{pGuess}, a uniform-outlier probability.
 }
 \examples{
 design_FRQfade <- design(data = forstmann, model = FRQfade,
   matchfun = function(d) d$S == d$lR,
-  formula = list(alpha ~ 1, beta ~ 1, lambda ~ lM + E,
-                 kappa ~ lM, t0 ~ 1))
+  formula = list(K ~ 1, v ~ lM + E, sv ~ lM, kappa ~ 1, t0 ~ 1))
 }

@@ -78,12 +78,28 @@ sFRQ <- function(rt, pars) {
 }
 
 # Inverse registration clock: G^{-1} for the unit CDF G with rate lambda and
-# shape clock, given the unit survivor sr = 1 - G.
-.frq_clock_inv <- function(sr, lambda, clock) {
+# shape clock, given the log unit survivor log(1 - G).
+.frq_clock_inv <- function(log_sr, lambda, clock) {
   c2 <- clock * clock
-  out <- -log(sr) / lambda
+  out <- -log_sr / lambda
   pw <- c2 > 0
-  out[pw] <- expm1(-c2[pw] * log(sr[pw])) / (c2[pw] * lambda[pw])
+  out[pw] <- expm1(-c2[pw] * log_sr[pw]) / (c2[pw] * lambda[pw])
+  out
+}
+
+.frq_log1mexp <- function(y) ifelse(y > -log(2), log(-expm1(y)), log1p(-exp(y)))
+
+# log Q_{a,b}(u); as frq_log_qbeta in src/model_FRQ.h, the small-x side uses
+# the leading term of I_x(a, b), since Q underflows long before u does.
+.frq_log_qbeta <- function(u, a, b) {
+  ly0 <- (log(u) + log(a) + lbeta(a, b)) / a
+  small <- ly0 < log(1e-17 * a * (a + 1) / (abs(1 - b) + 1))
+  out <- ly0
+  big <- !small
+  if (any(big)) {
+    x <- qbeta(u[big], a[big], b[big])
+    out[big] <- ifelse(x > 0, log(x), ly0[big])
+  }
   out
 }
 
@@ -99,62 +115,84 @@ sFRQ <- function(rt, pars) {
 # H.  An all-Inf trial column is the package's omission convention.
 rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   .frq_check_cols(pars)
+  ok <- .frq_check_race(lR, pars, ok, "FRQ")
+  dt <- rep(Inf, nrow(pars))
+  idx <- which(ok & is.finite(pars[, "t0"]))
+  if (length(idx)) dt[idx] <- .frq_draw_dt(pars[idx, , drop = FALSE])
+  .frq_race(lR, dt, pars[, "t0"], ok)
+}
+
+.frq_check_race <- function(lR, pars, ok, model) {
   nr <- length(levels(lR))
   if (nr < 1L || nrow(pars) %% nr != 0L)
-    stop("FRQ: pars rows must be a multiple of accumulators")
+    stop(model, ": pars rows must be a multiple of accumulators")
   if (length(ok) != nrow(pars))
-    stop("FRQ: ok must have one value per parameter row")
+    stop(model, ": ok must have one value per parameter row")
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
-  n_trials <- nrow(pars) / nr
-  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
-  t0 <- pars[, "t0"]
-  idx <- which(ok & is.finite(t0))
-  if (length(idx)) {
-    p <- pars[idx, , drop = FALSE]
-    dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
-    cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
-    g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], dl, cu)
-    valid <- !is.na(g[, "p"])
-    pois <- valid & !is.finite(g[, "beta"])
-    beta_r <- valid & !pois
-    vary <- is.finite(dl) & dl > 0
-    hit <- rep(Inf, nrow(p))
-    if (any(beta_r)) {
-      i <- which(beta_r)
-      V <- runif(length(i))
-      live <- !(p[i, "h"] < 1 & V < 1 - p[i, "h"])
-      zz <- V
-      iv <- vary[i]
-      if (any(iv)) zz[iv] <- frq_h_inv_r(V[iv], dl[i][iv])
-      W <- qbeta(zz, g[i, "beta"], p[i, "K"])
-      om_p <- ifelse(p[i, "h"] == 1, 0,
-                     g[i, "beta"] * g[i, "p"] / g[i, "Etot"])
-      sr <- pmin(pmax((W - om_p) / g[i, "p"], .Machine$double.xmin), 1)
-      hit[i[live]] <- .frq_clock_inv(sr[live], g[i, "lambda"][live], cu[i][live])
-    }
-    if (any(pois)) {
-      i <- which(pois)
-      Y <- rgamma(length(i), p[i, "K"])
-      iv <- i[vary[i]]
-      if (length(iv))
-        Y[vary[i]] <- qgamma(frq_h_inv_r(runif(length(iv)), dl[iv]), p[iv, "K"])
-      full <- p[i, "h"] == 1
-      hit[i[full]] <- Y[full] / p[i[full], "v"]
-      j <- which(!full)
-      live <- Y[j] <= g[i[j], "Etot"]
-      hit[i[j][live]] <- .frq_clock_inv(1 - Y[j][live] / g[i[j], "Etot"][live],
-                                        g[i[j], "lambda"][live],
-                                        cu[i[j]][live])
-    }
-    hit[!is.finite(hit) | hit < 0] <- Inf
-    dt[idx] <- hit
+  ok
+}
+
+# FRQ decision times (t0 excluded) for parameter rows p; +Inf is an omission
+# or an invalid row.
+.frq_draw_dt <- function(p) {
+  dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
+  cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
+  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], dl, cu)
+  valid <- !is.na(g[, "p"])
+  pois <- valid & !is.finite(g[, "beta"])
+  beta_r <- valid & !pois
+  vary <- is.finite(dl) & dl > 0
+  hit <- rep(Inf, nrow(p))
+  if (any(beta_r)) {
+    i <- which(beta_r)
+    V <- runif(length(i))
+    live <- !(p[i, "h"] < 1 & V < 1 - p[i, "h"])
+    zz <- V
+    iv <- vary[i]
+    if (any(iv)) zz[iv] <- frq_h_inv_r(V[iv], dl[i][iv])
+    # W and 1 - p are held as logs: both underflow for beta < 1.
+    lw <- .frq_log_qbeta(zz, g[i, "beta"], p[i, "K"])
+    log_om_p <- g[i, "log1mp"]
+    floor <- log(.Machine$double.xmin)
+    log_sr <- rep(floor, length(i))
+    above <- lw > log_om_p
+    log_sr[above] <- lw[above] + .frq_log1mexp(log_om_p[above] - lw[above]) -
+      log(g[i, "p"][above])
+    log_sr[!is.finite(log_sr)] <- floor
+    log_sr <- pmin(log_sr, 0)
+    hit[i[live]] <- .frq_clock_inv(log_sr[live], g[i, "lambda"][live],
+                                   cu[i][live])
   }
+  if (any(pois)) {
+    i <- which(pois)
+    Y <- rgamma(length(i), p[i, "K"])
+    iv <- i[vary[i]]
+    if (length(iv))
+      Y[vary[i]] <- qgamma(frq_h_inv_r(runif(length(iv)), dl[iv]), p[iv, "K"])
+    full <- p[i, "h"] == 1
+    hit[i[full]] <- Y[full] / p[i[full], "v"]
+    j <- which(!full)
+    live <- Y[j] <= g[i[j], "Etot"]
+    hit[i[j][live]] <- .frq_clock_inv(log1p(-Y[j][live] / g[i[j], "Etot"][live]),
+                                      g[i[j], "lambda"][live],
+                                      cu[i[j]][live])
+  }
+  hit[!is.finite(hit) | hit < 0] <- Inf
+  hit
+}
+
+# Resolve a race from per-row decision times dt (accumulators fastest within
+# each trial column); an all-Inf trial column is the package's omission
+# convention.
+.frq_race <- function(lR, dt, t0, ok) {
+  nr <- length(levels(lR))
+  n_trials <- length(dt) / nr
   # Invalid/non-finite t0 rows stay at +Inf rather than poisoning the race
   # column with NA when the additive shift is applied.
   t0_safe <- t0
   t0_safe[!is.finite(t0_safe)] <- 0
-  dt <- dt + matrix(t0_safe, nrow = nr)
+  dt <- matrix(dt + t0_safe, nrow = nr)
 
   bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- max.col(-t(dt), ties.method = "first")

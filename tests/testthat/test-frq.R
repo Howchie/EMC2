@@ -241,8 +241,9 @@ test_that("frq_rate is the exact inverse of the counter coordinates", {
     expect_equal(pbeta(unname(got[1, "p"]), g$a, g$b), g$h, tolerance = 1e-10)
   }
   v <- EMC2:::frq_rate(c(1, 2, 3), 4, 0.5, 0.9)
-  expect_equal(dim(v), c(3L, 4L))
-  expect_equal(colnames(v), c("beta", "p", "lambda", "Etot"))
+  expect_equal(dim(v), c(3L, 5L))
+  expect_equal(colnames(v), c("beta", "p", "lambda", "Etot", "log1mp"))
+  expect_equal(unname(v[, "log1mp"]), log1p(-unname(v[, "p"])), tolerance = 1e-12)
   expect_equal(v[2, ], EMC2:::frq_rate(2, 4, 0.5, 0.9)[1, ])
 })
 
@@ -927,4 +928,27 @@ test_that("the FRQ R simulator permits a valid accumulator to win", {
   sim <- EMC2:::rFRQ(lR, pars)
   expect_equal(sim$R, factor("b", levels = levels(lR)))
   expect_true(is.finite(sim$rt))
+})
+
+test_that("sv far above v stays exact where 1 - q underflows", {
+  # K = 1 on the exponential clock at h = 1 is exactly Exp(v) for every sv:
+  # the first of the units to register.  sv / v = 50 puts 1 - q below double
+  # range by u = 0.5.
+  u <- c(0.1, 0.5, 1.5, 4)
+  for (sv in c(3, 30, 150)) {
+    P <- cbind(K = 1, v = 3, sv = sv, h = 1, t0 = 0, delta = 0,
+               clock = 0)[rep(1, length(u)), ]
+    expect_equal(EMC2:::pFRQ(u, P), pexp(u, 3), tolerance = 1e-12)
+    expect_equal(EMC2:::sFRQ(u, P), pexp(u, 3, lower.tail = FALSE),
+                 tolerance = 1e-12)
+    expect_equal(EMC2:::dFRQ(u, P), dexp(u, 3), tolerance = 1e-10)
+  }
+  # The simulator holds W = 1 - U as a log for the same reason.
+  withr::local_options(emc2.cpp_rfun = TRUE)
+  set.seed(5)
+  n <- 20000
+  P <- cbind(K = 1, v = 3, sv = 150, h = 1, t0 = 0, delta = 0,
+             clock = 0)[rep(1, n), ]
+  sim <- EMC2:::.rfun_FRQ(factor(rep("a", n)), P)
+  expect_gt(ks.test(sim$rt, "pexp", 3)$p.value, 1e-3)
 })

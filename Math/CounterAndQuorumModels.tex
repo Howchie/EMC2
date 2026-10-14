@@ -347,10 +347,29 @@ $\delta$ & $\log$ & $[10^{-4}, 6]$, or exactly 0 & 0 & log-odds threshold variab
 
 \begin{itemize}
   \item The exact boundary values $t_0 = 0$, $\delta = 0$, $\cvu = 0$, $h = 1$, $K = 1$ and $sv = 0$ are bound exceptions, so they can be fixed without being a limiting approximation.
-  \item $sv$ has no upper bound: $sv > v$ ($\beta < 1$) is a valid, very variable rate. Then $p$ lies within rounding of one, so the kernel solves $1 - p$ from its own quantile, $1 - p = Q_{\beta,K}\big(H_\delta^{-1}(1-h)\big)$, and returns $F(\infty) = h$ and $S(\infty) = 1-h$ directly. Even a $1-p$ that underflows to zero leaves the likelihood exact. The simulators draw the complement $1-U \sim \BetaDist(\beta, K)$ by inversion for the same reason. The lower guard $10^{-4}$ keeps a sampled $sv$ off the exact $sv = 0$ branch, which is reachable by fixing $sv$ as a constant. The upper bound on $\delta$ guards the quantile, since $H_\delta^{-1}$ shrinks $1-h$ by $\delta/\sinh\delta$.
+  \item $sv$ has no upper bound: $sv > v$ ($\beta < 1$) is a valid, very variable rate. Then $p$ lies within rounding of one, so the kernel solves $1 - p$ from its own quantile, $1 - p = Q_{\beta,K}\big(H_\delta^{-1}(1-h)\big)$, and returns $F(\infty) = h$ and $S(\infty) = 1-h$ directly. For $\beta < 1$ the complements $1-p$ and $1-q(u) = (1-p) + pS_G(u)$ underflow while $(1-q)^\beta$ is still of order one, so both are held as logarithms, and the incomplete beta takes $\log q$ and $\log(1-q)$ directly. Where the beta quantile underflows, its log is the leading term of $I_x(a,b) = x^a/(aB(a,b))\,(1 + O(x))$. The simulators draw the complement $1-U \sim \BetaDist(\beta, K)$ by inversion on the same log scale. The lower guard $10^{-4}$ keeps a sampled $sv$ off the exact $sv = 0$ branch, which is reachable by fixing $sv$ as a constant. The upper bound on $\delta$ guards the quantile, since $H_\delta^{-1}$ shrinks $1-h$ by $\delta/\sinh\delta$.
   \item The mapping layer reports derived quantities: $\beta$, $p$, $\lambda$, the expected total evidence $\beta p/(1-p)$, or $E$ at $sv=0$ (column \texttt{Etot}, infinite at $h=1$), the rate CV $\mathit{cv} = sv/v$, and the threshold-shift SD \texttt{sQ} $= \delta/\sqrt{3}$. They are not fitted coordinates.
-  \item The likelihood uses Rmath's \texttt{qbeta}, \texttt{pgamma} and \texttt{qgamma}, and a continued-fraction incomplete beta of its own in the general branch. It is evaluated on the log scale throughout.
+  \item The likelihood uses Rmath's \texttt{qbeta} and \texttt{qgamma}, a continued-fraction incomplete beta of its own in the general branch, and the package's series and continued-fraction incomplete gamma (\texttt{src/inc\_gamma.h}) in the $sv = 0$ branch, which evaluates only the tail it needs. It is evaluated on the log scale throughout.
 \end{itemize}
+
+%======================================================================
+\section{FRQfade: A Fading Registration Opportunity}\label{sec:fade}
+%======================================================================
+\texttt{FRQfade()} runs the proper ($h = 1$) \textsc{FRQ} accumulator on the warped time
+\begin{equation}
+  A(u) = \frac{1 - \e^{-\kappa u}}{\kappa}, \qquad A(u) = u \text{ at } \kappa = 0,
+\end{equation}
+so that its input intensity is multiplied by $\e^{-\kappa u}$. With $F_1$, $f_1$ and $S_1$ the \textsc{FRQ} functions at $h = 1$ for the same $(K, v, sv, \delta, \cvu)$,
+\begin{equation}
+  F(u) = F_1\big(A(u)\big), \qquad f(u) = f_1\big(A(u)\big)\,\e^{-\kappa u}, \qquad S(u) = S_1\big(A(u)\big).
+\end{equation}
+Operational time is capped at $1/\kappa$, so the completion probability is derived rather than fitted:
+\begin{equation}
+  h = F_1(1/\kappa).
+\end{equation}
+The expected total evidence a trial can deliver is $\mathbb{E}[W]\,\phi(1/\kappa)$: $v/\kappa$ at $sv = 0$, $\beta q/(1-q)$ at the cap otherwise, and infinite at $\kappa = 0$. The mapping layer reports it as \texttt{Etot}, with $h$, $\beta$, $\lambda$, $\mathit{cv}$ and \texttt{sQ}. The simulator draws the $h = 1$ decision time $x$ and returns $u = -\log(1 - \kappa x)/\kappa$, with $x \ge 1/\kappa$ an omission.
+
+The sampled parameters are those of Table~\ref{tab:contract} with $h$ replaced by $\kappa$ (log link, $[10^{-4}, \infty)$ or exactly 0, default 0.5). At $\kappa = 0$ the model is \textsc{FRQ} with $h = 1$. Every \textsc{FRQ} submodel of Table~\ref{tab:submodels} therefore has a fading counterpart on the clock $A(u)$. In particular, $sv = 0$ gives $F(u) = P_K\big(vA(u)\big)$, and $sv = 0$, $K = 1$ gives the exponential with a fading rate.
 
 %======================================================================
 \begin{thebibliography}{9}
