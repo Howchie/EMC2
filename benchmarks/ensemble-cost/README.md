@@ -1,7 +1,7 @@
 # Ensemble cost harness (WS5)
 
-Paths point at the WS5 private libraries (`EMC_LIB`/`R_LIBS`) and fixtures under
-`/data/work/EMC2_ws5_libs` and `/data/work/EMC2_workstreams/fixtures`; edit before reuse.
+Libraries are passed as arguments (`EMC_LIB`/`R_LIBS`); checkpoints are read from
+`/data/work/EMC2_workstreams/fixtures`.
 
 - `prof_ens2.R`: per-function wall time of the ensemble move, pool draws and Gibbs step over a sample-stage run.
 - `prof_pair.sh`: `prof_ens2.R` for a base and a head library, alternating, pinned with taskset.
