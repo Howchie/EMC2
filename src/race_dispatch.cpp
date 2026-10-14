@@ -9,7 +9,6 @@
 #include "fpe_models.h"
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
-#include "model_PCOUNTER.h"
 #include "time_clock.h"
 #include <cmath>
 #include <memory>
@@ -656,18 +655,6 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     // LNRcorr uses the same generic Gaussian-copula race evaluator as the
     // RDMSWTN finishing-time copula; only the marginal callbacks differ.
     out.ctx.rdmswtn_correlated = (type_std.find("_CORR") != std::string::npos);
-  } else if (type_std.find("PCOUNTER") != std::string::npos) {
-    out.pdf1_ptr = &dpcounter_scalar;
-    out.cdf1_ptr = &ppcounter_scalar;
-    out.model_dfun_raw = &dpcounter_raw;
-    out.model_pfun_raw = &ppcounter_raw;
-    out.logS_at_t_ptr = &pcounter_logS_at_t;
-    out.ctx.pcounter_correlated = (type_std.find("PCOUNTERcorr") != std::string::npos);
-    out.col_spec     = out.ctx.pcounter_correlated ? emc2col::pcounter_corr::spec()
-                                                    : emc2col::pcounter::spec();
-    // PCOUNTER's t0 is an ordinary additive shift, so truncation/censoring
-    // integration can skip its zero-density dead zone just like FRQ/LNR.
-    out.ctx.t0_index = emc2col::pcounter::t0;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -676,19 +663,6 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.gng = true;
   }
   return out;
-}
-
-void configure_pcounter_corr_context(RaceModelAdapter& adapter,
-                                     const Rcpp::CharacterVector& keep_names,
-                                     const std::string& caller) {
-  if (!adapter.ctx.pcounter_correlated) return;
-  for (int j = 0; j < keep_names.size(); ++j) {
-    if (Rcpp::as<std::string>(keep_names[j]) == "rho") {
-      adapter.ctx.pcounter_rho_index = j;
-      return;
-    }
-  }
-  Rcpp::stop("%s: PCOUNTERcorr requires a parameter column named 'rho'.", caller.c_str());
 }
 
 void configure_corr_drift_context(RaceModelAdapter& adapter,

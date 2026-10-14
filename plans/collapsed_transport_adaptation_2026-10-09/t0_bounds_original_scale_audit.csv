@@ -1,5 +1,0 @@
-"arm","proposals","proposals_any_lower_violation","proposals_any_rt_violation","mean_subjects_below_005","mean_subjects_t0_ge_rt","mean_acceptance_on_violation","mean_acceptance_without_violation","mean_acceptance"
-"unit_global_t0_rows_fixed",64,61,0,5.09375,0,0,2.60323314550018e-10,1.22026553695321e-11
-"unit_global_t0_group_frozen",64,60,0,5.03125,0,0,6.79345428203073e-13,4.24590892626921e-14
-"old_global_t0_rows_fixed",64,16,0,0.34375,0,0,0.224377211198358,0.168282908398769
-"selected_directional",64,6,0,0.125,0,0,0.480576655431952,0.435522593985207

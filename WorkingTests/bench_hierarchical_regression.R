@@ -29,7 +29,7 @@
 #                   Groups: smoke, size, stress, cores, particles, chains.
 #                   `stress` is the P = 250 mapper probe and is slow by
 #                   construction -- see the registry note.
-#   EMC_MODEL       RDM (default), LBA, BAwL, DDM or PCOUNTER
+#   EMC_MODEL       RDM (default), LBA, BAwL or DDM
 #   EMC_LIB         library to load EMC2 from
 #   EMC_ITER_SCALE  multiplies every stage's iteration count (1)
 #   EMC_STEP        run_emc block size (100, capped at the shortest stage)
@@ -42,10 +42,10 @@
 #   EMC_TRIALS      override trials/subject for a short proof-of-concept run
 #   EMC_PARTICLE_FACTOR  override particle_factor for a short proof-of-concept
 #
-# How the shapes are chosen.  `cond` (or PCOUNTER's `condition`) is a synthetic
+# How the shapes are chosen.  `cond` is a synthetic
 # factor whose level count sets the parameter vector's width, so P is exact
 # rather than whatever a chosen interaction happened to produce: P =
-# levels(cond) + 6 for RDM, LBA and DDM, + 7 for BAwL, and + 5 for PCOUNTER.
+# levels(cond) + 6 for RDM, LBA and DDM, and + 7 for BAwL.
 # A case asking for less than a model's floor is raised to it and renamed.
 # Trial counts are uneven across subjects, and they scale with the level count
 # so that every subject observes every condition.  P and dataset size are
@@ -154,16 +154,6 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
     DDM  = list(fun = DDM,  offset = 6L, race = FALSE,
                 formula = list(v ~ S + cond, a ~ E, t0 ~ 1, Z ~ 1),
                 constants = c(s = log(1))),
-    PCOUNTER = list(fun = PCOUNTER, offset = 5L, race = TRUE,
-                    # PCOUNTER is included here as the proof-of-concept
-                    # comparator, not as a permanently special sampler route.
-                    # Its six kernel parameters share one condition design on
-                    # nu; the omission/guess terms remain fixed for a stable
-                    # matched sampling workload.
-                    formula = list(nu ~ condition, sv ~ 1, gamma ~ 1,
-                                   k ~ 1, omega ~ 1, t0 ~ 1),
-                    constants = c(pContaminant = qnorm(0),
-                                  pGuess = qnorm(0))),
     stop("no benchmark specification for model ", model))
 }
 
@@ -282,7 +272,6 @@ STEP <- min(.env_int("EMC_STEP", 100L), min(ITERS))
     # would alias `cond` with the E and S cycle the source rows already carry,
     # and the design would collapse.
     d$cond <- factor(sample(rep_len(levs, n_i[s])), levels = levs)
-    d$condition <- d$cond
     d
   }))
   dat$subjects <- factor(dat$subjects, levels = sprintf("s%03d", seq_len(cs$subjects)))

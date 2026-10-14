@@ -327,16 +327,16 @@ btawl_vcrit_vec <- function(k, tau, b) {
     .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
 
-dfrq <- function(t, alpha, beta, h, lambda, delta = as.numeric( c(0.0)), log_out = FALSE, cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_dfrq`, t, alpha, beta, h, lambda, delta, log_out, cv_u)
+dfrq <- function(t, K, v, sv, h, delta = as.numeric( c(0.0)), log_out = FALSE, clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_dfrq`, t, K, v, sv, h, delta, log_out, clock)
 }
 
-pfrq <- function(t, alpha, beta, h, lambda, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_pfrq`, t, alpha, beta, h, lambda, delta, lower_tail, log_out, cv_u)
+pfrq <- function(t, K, v, sv, h, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_pfrq`, t, K, v, sv, h, delta, lower_tail, log_out, clock)
 }
 
-frq_rate <- function(alpha, beta, h, lambda, delta = as.numeric( c(0.0)), cv_u = as.numeric( c(0.0))) {
-    .Call(`_EMC2_frq_rate`, alpha, beta, h, lambda, delta, cv_u)
+frq_rate <- function(K, v, sv, h, delta = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {
+    .Call(`_EMC2_frq_rate`, K, v, sv, h, delta, clock)
 }
 
 frq_h_inv_r <- function(y, delta) {
@@ -385,14 +385,6 @@ dlba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
 
 plba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift, log_out)
-}
-
-dpcounter <- function(t, nu, sv, gamma, k, omega, t0, log_out = FALSE) {
-    .Call(`_EMC2_dpcounter`, t, nu, sv, gamma, k, omega, t0, log_out)
-}
-
-ppcounter <- function(t, nu, sv, gamma, k, omega, t0, lower_tail = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_ppcounter`, t, nu, sv, gamma, k, omega, t0, lower_tail, log_out)
 }
 
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
@@ -783,7 +775,8 @@ gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }
 
-#' Ask the kernel to signal this process when its parent dies
+#' Ask the kernel to signal this process when its parent dies, and let
+#' SIGTERM terminate it
 #'
 #' @return 1 if armed and the parent is still there, -1 if armed but the
 #'   parent had already gone (the caller should exit rather than wait for a

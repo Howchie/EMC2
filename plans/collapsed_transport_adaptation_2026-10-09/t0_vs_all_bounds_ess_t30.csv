@@ -1,3 +1,0 @@
-"case","arm","chains","draws_per_chain","seconds","group_mu_median_bulk_ess","group_mu_median_ess_per_second","t0_group_median_bulk_ess","t0_group_median_ess_per_second","group_mu_median_rhat","group_mu_max_rhat","subject_median_bulk_ess","subject_median_ess_per_second","collapsed_expected_acceptance","collapsed_moved_rate"
-"T30","all_hard_bounds",3,200,113.419,9.66758886184394,0.0852378248956871,9.66758886184394,0.0852378248956871,1.22670946025261,2.56759468134388,30.0497502368641,0.264944588092507,0.175165840636103,0.171666666666667
-"T30","t0_only",3,200,130.485,160.333260476798,1.2287485954462,25.8503517075564,0.198109757501294,1.02552613606397,1.09898503656654,179.391715773007,1.37480718682612,0.394594736917509,0.405

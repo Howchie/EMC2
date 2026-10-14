@@ -7,7 +7,7 @@
 // GENERATIVE STORY.  One accumulator draws on N potential evidence units and
 // responds once K distinct units have registered.  Each unit is available
 // independently with probability p, and an available unit registers at a delay
-// with mean rate lambda; cv_u = 0 is exponential registration and cv_u > 0
+// with mean rate lambda; clock = 0 is exponential registration and clock > 0
 // integrates an independent Gamma-distributed unit rate.  An unavailable unit
 // never registers at all.  The
 // decision time is the K-th order statistic of the effective arrival times,
@@ -26,7 +26,7 @@
 //   h    = F(Inf) = I_p(alpha, beta)          eventual completion probability
 //
 // For exponential registration G(x) = 1 - e^{-lambda x}, so its density is
-// g(x) = G'(x) = lambda e^{-lambda x}.  With unit-rate CV c = cv_u > 0, the
+// g(x) = G'(x) = lambda e^{-lambda x}.  With unit-rate CV c = clock > 0, the
 // integrated registration CDF and density are
 //   G_c(x) = 1 - (1 + c^2 lambda x)^(-1/c^2)
 //   g_c(x) = lambda (1 + c^2 lambda x)^(-1/c^2 - 1).
@@ -35,19 +35,34 @@
 // just alpha, beta > 0 rather than positive integers; every formula above is
 // already valid there, because nothing above uses integrality -- only that
 // I_q(alpha, beta) and the Beta density exist, which they do for any
-// alpha, beta > 0. The fitted model bounds both shapes below at 1
-// (R/model_FRQ.R) to preserve the finite-reservoir interpretation and a
-// bounded leading edge, and reaches that bound through an offset link,
-// alpha = 1 + exp(x), so the sampler coordinate x stays unbounded.
+// alpha, beta > 0. The fitted model keeps K = alpha >= 1 (R/model_FRQ.R),
+// reached through an offset link K = 1 + exp(x): below one the density is
+// singular at t0 and the likelihood is unbounded as t0 -> min(rt).  beta needs
+// no such guard: 1 - p is solved from its own quantile, so beta < 1 (a rate
+// SD above the mean rate) keeps every digit of the defect.
 //
-// PARAMETERISATION.  The fitted coordinates are (alpha, beta, h, lambda, t0,
-// delta, cv_u). `h` is the accumulator-level eventual completion probability,
-// retained because it is directly observed and better identified than the
-// evidence-level availability p when alpha and beta are estimated. The kernel
-// derives p = I^{-1}_h(alpha, beta), while lambda remains the mean
-// registration-rate parameter. The endpoint h = 1 gives p = 1 and is a proper,
-// non-defective FRQ member. Response-time summaries are derived reports, not
-// fitted coordinates.
+// COUNTER READING.  With phi(x) = q(x) / (1 - q(x)), the CDF is P(G_K <= W phi(x)) for independent
+// G_K ~ Gamma(alpha) and W ~ Gamma(beta): a Poisson counter run on the
+// operational clock phi, whose trial intensity W is Gamma distributed, and
+// whose threshold is K = alpha events.  clock fixes the shape of the clock
+// (1: constant rate, < 1 accelerating, > 1 decelerating) and phi'(0) = p lambda
+// for every clock.
+//
+// PARAMETERISATION.  The fitted coordinates are (K, v, sv, h, t0, delta,
+// clock), read in that counter language:
+//   K   = alpha                 event threshold
+//   v   = beta p lambda         mean initial input rate, E[W] phi'(0)
+//   sv  = v / sqrt(beta)        between-trial SD of the counter's input rate
+//   h   = F(Inf)                eventual completion probability
+// The kernel derives beta = (v/sv)^2, p = I^{-1}_h(alpha, beta) and
+// lambda = v / (beta p).  h = 1 gives p = 1 and a proper accumulator.
+//
+// sv = 0 is the exact beta -> Inf limit at fixed (K, v, h), a counter with no
+// between-trial rate variability.  With h = 1 it is F(x) = P_K(v x), the
+// regularised lower incomplete gamma (the classic Poisson counter; the clock
+// drops out).  With h < 1 the total evidence on a trial is finite: E =
+// P_K^{-1}(h) expected events, the clock runs at lambda = v / E, and
+// F(x) = P_K(E G(x)).
 //
 // THRESHOLD VARIABILITY (delta).  The quorum a trial actually demands is not
 // fixed.  Let U be the latent quorum percentile, so that the baseline model is
@@ -124,6 +139,11 @@ using namespace Rcpp;
 // alpha, beta >= 1 (R/model_FRQ.R bounds), so this floor is only a guard for
 // the exported dfrq/pfrq/frq_rate entry points, which take shapes directly.
 constexpr double FRQ_SHAPE_MIN = 1e-8;
+// Below this rate CV (beta > 1e8) the beta branch differs from its
+// beta -> Inf limit by O(cv^2), about 5e-9 in the CDF, while the incomplete
+// beta and its quantile start losing digits to the huge shape; the exact
+// Poisson-counter branch takes over.
+constexpr double FRQ_CV_POISSON = 1e-4;
 
 // Beyond this point sinh(delta) and the log-odds inversion lose finite-double
 // guarantees.  The fitted model is much more conservative (delta <= 6), but
@@ -240,13 +260,13 @@ inline double frq_h_inv(double y, const FrqH& H) {
 // The evidence-level availability p is the expensive half: it comes from the
 // fitted completion probability h by an incomplete-beta INVERSION, an iterative
 // solve costing roughly fourteen density evaluations.  It is a function of
-// (alpha, beta, h, delta) ONLY -- neither lambda nor cv_u enters it.  The rate
-// half is one log and a reciprocal.
+// (K, cv, h, delta) ONLY, with cv = sv / v the rate CV; clock does not enter
+// it.  The rate half is one log and a reciprocal.
 //
 // Keeping them on separate keys matters whenever the rate varies faster than
-// the shapes, which is the normal case once a trend or a covariate touches
-// lambda: a per-trial rate against constant shapes then costs one log per row
-// instead of one beta quantile per row.  FrqAvail is what the shared cache
+// the shapes.  Because cv = sv / v, a per-trial v moves the key only when
+// sv > 0 and h < 1: at h = 1 there is no quantile, and at sv = 0 the key is
+// cv = 0 whatever v is.  FrqAvail is what the shared cache
 // stores; FrqPars is what the evaluators read, assembled by pasting a cached
 // FrqAvail together with the row's rate.
 //
@@ -256,10 +276,18 @@ inline double frq_h_inv(double y, const FrqH& H) {
 // machinery expects from an invalid row.
 // ---------------------------------------------------------------------------
 
-// The (alpha, beta, h, delta) half -- everything the beta quantile touches.
+// The (K, cv, h, delta) half -- everything the beta quantile touches, with
+// cv = sv / v.  `poisson` marks the cv -> 0 limit, where beta is infinite and the kernel is
+// the incomplete gamma P_K(E G(x)) (h < 1) or P_K(v x) (h = 1).  E is the
+// expected total number of events available on a trial: beta p / (1 - p) for
+// cv > 0, P_K^{-1}(h) in the limit, and Inf whenever h = 1.
 struct FrqAvail {
   double alpha = 0.0;
   double beta = 0.0;
+  bool poisson = false;
+  double E = 0.0;
+  double log_E = 0.0;
+  double lgamma_K = 0.0;
   double p = 0.0;
   double log_p = 0.0;
   double om_p = 0.0;
@@ -275,13 +303,19 @@ struct FrqAvail {
 struct FrqPars {
   double alpha = 0.0;
   double beta = 0.0;
+  bool poisson = false;
+  double E = 0.0;
+  double log_E = 0.0;
+  double lgamma_K = 0.0;
+  double v = 0.0;
+  double log_v = 0.0;
   double p = 0.0;
   double log_p = 0.0;
   double om_p = 0.0;
   double h = 0.0;
   double lambda = 0.0;
   double log_lambda = 0.0;
-  double cv_u = 0.0;
+  double clock = 0.0;
   double cv2 = 0.0;
   double cv2_lambda = 0.0;
   double inv_cv2 = 0.0;
@@ -293,51 +327,81 @@ struct FrqPars {
   bool ok = false;
 };
 
-inline FrqAvail frq_derive_avail(double alpha, double beta, double h,
+inline FrqAvail frq_derive_avail(double K, double cv, double h,
                                  double delta = 0.0) {
   FrqAvail s;
-  if (ISNAN(alpha) || ISNAN(beta) || ISNAN(h)) return s;
-  if (!(alpha >= FRQ_SHAPE_MIN) || !R_FINITE(alpha)) return s;
-  if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
+  if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return s;
+  if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return s;
+  if (!(cv >= 0.0) || !R_FINITE(cv)) return s;
   if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return s;
   s.hh = frq_h_make(delta);
   if (!s.hh.ok) return s;
+  s.alpha = K;
+  s.alpha_minus_1 = K - 1.0;
+  s.h = h;
 
-  // h is the identified accumulator-level completion probability. Pull it
-  // back through the threshold-variability map before inverting the Beta CDF
-  // to obtain the evidence-level availability p used by the generative
-  // kernel. h = 1 maps exactly to p = 1.
-  // The proper boundary is exact: h = 1 means every accumulator eventually
-  // completes, so the evidence-level availability is p = 1 regardless of the
-  // Beta shape or threshold-variability map.  Avoid qbeta() here; this branch
-  // is common for non-defective FRQ fits and qbeta(1, ...) is needlessly costly
-  // when alpha/beta vary over rows.  Values just below one still take the
-  // inversion path so the defective tail remains numerically unchanged.
-  const double p = (h == 1.0)
-    ? 1.0
-    : R::qbeta(frq_h_inv(h, s.hh), alpha, beta, 1, 0);
-  if (!(p > 0.0) || !(p <= 1.0) || !R_FINITE(p) ||
-      (h < 1.0 && !(p < 1.0))) return s;
+  if (cv < FRQ_CV_POISSON) {
+    // beta -> Inf at fixed (K, v, h).  The availability p -> 0 while the
+    // expected total evidence E = beta p / (1 - p) tends to the gamma quantile
+    // of the (threshold-variability adjusted) completion probability.
+    s.poisson = true;
+    s.beta = R_PosInf;
+    s.lgamma_K = R::lgammafn(K);
+    if (h == 1.0) {
+      s.E = R_PosInf; s.log_E = R_PosInf;
+      s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0;
+    } else {
+      const double E = R::qgamma(frq_h_inv(h, s.hh), K, 1.0, 1, 0);
+      if (!(E > 0.0) || !R_FINITE(E)) return s;
+      s.E = E; s.log_E = std::log(E);
+      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0;
+    }
+    s.ok = true;
+    return s;
+  }
 
-  s.alpha = alpha;
+  const double beta = 1.0 / (cv * cv);
+  if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
+  // h = 1 maps exactly to p = 1 for any shape or threshold-variability map;
+  // skipping qbeta there matters because the proper boundary is the common
+  // case.  Below one, 1 - p comes from the complementary quantile
+  // (1 - B ~ Beta(beta, K)), since 1 - qbeta(z, K, beta) loses every digit once
+  // p is near one, which is the normal case for beta < 1.  H^{-1} is symmetric,
+  // so its complement is H^{-1}(1 - h).  p itself is re-solved only when it is
+  // the small side.  An om_p that underflows to zero is still a valid state:
+  // it only enters 1 - q(x) next to p S(x), and the tails at x = Inf return
+  // h and 1 - h directly.
+  double p = 1.0, om_p = 0.0;
+  if (h < 1.0) {
+    om_p = R::qbeta(frq_h_inv(1.0 - h, s.hh), beta, K, 1, 0);
+    if (!(om_p >= 0.0) || !(om_p < 1.0)) return s;
+    p = (om_p > 0.5) ? R::qbeta(frq_h_inv(h, s.hh), K, beta, 1, 0)
+                     : 1.0 - om_p;
+    if (!(p > 0.0) || !(p <= 1.0)) return s;
+  }
+
   s.beta = beta;
   s.p = p;
   s.log_p = std::log(p);
-  s.om_p = 1.0 - p;
-  s.h = h;
-  s.lbeta_val = R::lbeta(alpha, beta);
+  s.om_p = om_p;
+  s.E = (h == 1.0) ? R_PosInf : beta * p / om_p;
+  s.log_E = std::log(s.E);
+  s.lbeta_val = R::lbeta(K, beta);
   s.log_p_minus_lbeta = s.log_p - s.lbeta_val;
-  s.alpha_minus_1 = alpha - 1.0;
   s.beta_minus_1 = beta - 1.0;
   s.ok = true;
   return s;
 }
 
 // Paste the availability half into the full state.  Runs only when one of
-// (alpha, beta, h, delta) actually changes.
+// (K, cv, h, delta) actually changes.
 inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.alpha = av.alpha;
   s.beta = av.beta;
+  s.poisson = av.poisson;
+  s.E = av.E;
+  s.log_E = av.log_E;
+  s.lgamma_K = av.lgamma_K;
   s.p = av.p;
   s.log_p = av.log_p;
   s.om_p = av.om_p;
@@ -349,34 +413,46 @@ inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.hh = av.hh;
 }
 
-// Fill the rate half.  This is the part that is allowed to run per row.  On
-// rejection only `ok` is meaningful; every evaluator bails on `!ok` before
-// reading anything else, so the stale rate fields are never observed.
-inline void frq_set_rate(FrqPars& s, bool avail_ok, double lambda,
-                         double cv_u) {
+// Fill the rate half from the mean initial input rate v.  The registration
+// rate follows from the availability half: lambda = v / (beta p), or v / E in
+// the cv = 0 limit with h < 1.  With cv = 0 and h = 1 the clock drops out of
+// the likelihood and lambda is unused.  On rejection only `ok` is meaningful.
+inline void frq_set_rate(FrqPars& s, bool avail_ok, double v, double clock) {
   s.ok = false;
   if (!avail_ok) return;
-  if (ISNAN(lambda) || ISNAN(cv_u)) return;
-  if (!(lambda > 0.0) || !R_FINITE(lambda)) return;
-  if (!(cv_u >= 0.0) || !R_FINITE(cv_u)) return;
-  const double cv2 = cv_u * cv_u;
+  if (ISNAN(v) || ISNAN(clock)) return;
+  if (!(v > 0.0) || !R_FINITE(v)) return;
+  if (!(clock >= 0.0) || !R_FINITE(clock)) return;
+  const double cv2 = clock * clock;
   if (!R_FINITE(cv2)) return;
+  const bool clock_free = s.poisson && s.h == 1.0;
+  const double lambda = clock_free ? 0.0
+    : (s.poisson ? v / s.E : v / (s.beta * s.p));
+  if (!clock_free && (!(lambda > 0.0) || !R_FINITE(lambda))) return;
+  s.v = v;
+  s.log_v = std::log(v);
   s.lambda = lambda;
-  s.log_lambda = std::log(lambda);
-  s.cv_u = cv_u;
+  s.log_lambda = clock_free ? R_NegInf : std::log(lambda);
+  s.clock = clock;
   s.cv2 = cv2;
   s.cv2_lambda = cv2 * lambda;
   s.inv_cv2 = (cv2 > 0.0) ? (1.0 / cv2) : 0.0;
   s.ok = true;
 }
 
+// The fitted rate variability is the SD sv of the trial input rate; the
+// beta-quantile half works in its CV, sv / v, which is 1/sqrt(beta).
+inline double frq_rate_cv(double sv, double v) {
+  return (sv == 0.0) ? 0.0 : sv / v;
+}
+
 // One-shot derive, for callers that hold no memo.
-inline FrqPars frq_derive(double alpha, double beta, double h, double lambda,
-                          double delta = 0.0, double cv_u = 0.0) {
+inline FrqPars frq_derive(double K, double v, double sv, double h,
+                          double delta = 0.0, double clock = 1.0) {
   FrqPars s;
-  const FrqAvail av = frq_derive_avail(alpha, beta, h, delta);
+  const FrqAvail av = frq_derive_avail(K, frq_rate_cv(sv, v), h, delta);
   frq_copy_avail(s, av);
-  frq_set_rate(s, av.ok, lambda, cv_u);
+  frq_set_rate(s, av.ok, v, clock);
   return s;
 }
 
@@ -426,21 +502,21 @@ struct FrqCache {
   // std::unordered_map is node-based, so a reference handed out here survives
   // later insertions; only clear() invalidates it, and that runs between
   // particles, outside any evaluator call.
-  const FrqAvail& get(double alpha, double beta, double h, double delta) {
-    const FrqCacheKey key{{frq_cache_bits(alpha), frq_cache_bits(beta),
+  const FrqAvail& get(double K, double cv, double h, double delta) {
+    const FrqCacheKey key{{frq_cache_bits(K), frq_cache_bits(cv),
                            frq_cache_bits(h), frq_cache_bits(delta)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive_avail(alpha, beta, h, delta));
+      key, frq_derive_avail(K, cv, h, delta));
     return inserted.first->second;
   }
 };
 
 // q(x) = p G_c(x) together with its cancellation-free complement
 // 1 - q(x) = (1 - p) + p S_c(x).  x == Inf gives the saturated pair
-// (p, 1 - p), which is exactly what makes F(Inf) = h fall out of the ordinary
-// CDF code path rather than needing a special case.
+// (p, 1 - p); the CDF and survivor return h and 1 - h there directly, because
+// 1 - p can underflow when beta is small.
 struct FrqState {
   double q;
   double omq;
@@ -451,6 +527,14 @@ inline double frq_registration_inv(double ratio, const FrqPars& s) {
   if (s.cv2 == 0.0)
     return -std::log1p(-ratio) / s.lambda;
   return std::expm1(-s.cv2 * std::log1p(-ratio)) / s.cv2_lambda;
+}
+
+// The same inverse given the unit survivor sr = 1 - G(x), for draws whose
+// G(x) is too close to one to be held directly.
+inline double frq_registration_inv_surv(double sr, const FrqPars& s) {
+  if (s.cv2 == 0.0)
+    return -std::log(sr) / s.lambda;
+  return std::expm1(-s.cv2 * std::log(sr)) / s.cv2_lambda;
 }
 
 inline FrqState frq_state(double x, const FrqPars& s) {
@@ -580,10 +664,69 @@ inline FrqLogBeta frq_log_beta_pair(const FrqState& z, const FrqPars& s) {
   return o;
 }
 
+// The cv = 0 limit evaluates through its gamma argument X(x): v x when h = 1,
+// E G(x) when h < 1 (so X(Inf) = E and P_K(E) = h before the H map).
+struct FrqPoissonArg {
+  double X;
+  double log_dX;
+};
+
+inline FrqPoissonArg frq_poisson_arg(double x, const FrqPars& s) {
+  FrqPoissonArg a;
+  if (s.h == 1.0) {
+    a.X = s.v * x;
+    a.log_dX = s.log_v;
+    return a;
+  }
+  if (!R_FINITE(x)) {
+    a.X = s.E;
+    a.log_dX = R_NegInf;
+    return a;
+  }
+  double G, log_g;
+  if (s.cv2 == 0.0) {
+    G = -std::expm1(-s.lambda * x);
+    log_g = s.log_lambda - s.lambda * x;
+  } else {
+    const double lx = std::log1p(s.cv2_lambda * x);
+    G = -std::expm1(-lx * s.inv_cv2);
+    log_g = s.log_lambda - lx * s.inv_cv2 - lx;
+  }
+  a.X = s.E * G;
+  a.log_dX = s.log_E + log_g;
+  return a;
+}
+
+inline FrqLogBeta frq_poisson_pair(const FrqPoissonArg& a, const FrqPars& s) {
+  FrqLogBeta o;
+  o.lz   = R::pgamma(a.X, s.alpha, 1.0, 1, 1);
+  o.lomz = R::pgamma(a.X, s.alpha, 1.0, 0, 1);
+  return o;
+}
+
+inline double frq_poisson_log_pdf(double x, const FrqPars& s) {
+  const FrqPoissonArg a = frq_poisson_arg(x, s);
+  double lp = R::dgamma(a.X, s.alpha, 1.0, 1) + a.log_dX;
+  if (s.hh.active) {
+    const FrqLogBeta b = frq_poisson_pair(a, s);
+    lp += frq_h_logderiv(b.lz, b.lomz, s.hh);
+  }
+  return ISNAN(lp) ? R_NegInf : lp;
+}
+
+inline double frq_poisson_log_tail(double x, const FrqPars& s, bool lower) {
+  const FrqLogBeta b = frq_poisson_pair(frq_poisson_arg(x, s), s);
+  if (s.hh.active)
+    return lower ? frq_h_log(b.lz - b.lomz, s.hh)
+                 : frq_h_log(b.lomz - b.lz, s.hh);
+  return lower ? b.lz : b.lomz;
+}
+
 inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NegInf;
   if (!(x > 0.0)) return R_NegInf;
   if (!R_FINITE(x)) return R_NegInf;   // no atom at infinity in the density
+  if (s.poisson) return frq_poisson_log_pdf(x, s);
   const FrqState z = frq_state(x, s);
   double lp = s.log_p_minus_lbeta + z.log_g;
   lp += frq_xlogy(s.alpha_minus_1, z.q);
@@ -601,6 +744,11 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
 inline double frq_log_cdf_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NegInf;
   if (!(x > 0.0)) return R_NegInf;
+  if (!R_FINITE(x)) return std::log(s.h);   // F(Inf) = h by construction
+  if (s.poisson) {
+    const double out = frq_poisson_log_tail(x, s, true);
+    return ISNAN(out) ? R_NegInf : out;
+  }
   const FrqState z = frq_state(x, s);
   double out;
   if (s.hh.active) {
@@ -622,6 +770,11 @@ inline double frq_log_cdf_dt(double x, const FrqPars& s) {
 inline double frq_log_surv_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NaN;             // caller distinguishes bad from certain
   if (!(x > 0.0)) return 0.0;
+  if (!R_FINITE(x)) return std::log1p(-s.h);
+  if (s.poisson) {
+    const double out = frq_poisson_log_tail(x, s, false);
+    return ISNAN(out) ? R_NaN : out;
+  }
   const FrqState z = frq_state(x, s);
   double out;
   if (s.hh.active) {
@@ -652,14 +805,14 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
 }
 
 // Front-end memo for every call site.  It keeps the two halves on separate
-// keys, so a row that moves only the rate -- a trend or a covariate on lambda,
+// keys, so a row that moves only the rate -- a trend or a covariate on v,
 // against constant shapes -- redoes one log rather than one beta quantile.
 // The likelihood adapters hand it the per-particle FrqCache; the exported
 // entry points run without one and memoise locally.
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  double alpha = R_NaN, beta = R_NaN, h = R_NaN, delta = R_NaN;
-  double lambda = R_NaN, cv_u = R_NaN;
+  double K = R_NaN, cv = R_NaN, h = R_NaN, delta = R_NaN;
+  double v = R_NaN, clock = R_NaN;
   // The memo owns its copy rather than holding a pointer into the shared
   // cache: the copy runs only when the shape key changes -- the same branch
   // that would otherwise pay a hash lookup or a beta quantile -- and it keeps
@@ -669,22 +822,21 @@ struct FrqMemo {
 
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
-  const FrqPars& get(double a, double b, double hh, double l,
-                     double d = 0.0, double c = 0.0) {
+  const FrqPars& get(double k, double vv, double sv, double hh,
+                     double d = 0.0, double cu = 1.0) {
     // NaN never compares equal, so a NaN parameter always re-derives, and the
-    // NaN-initialised keys make the first call always miss -- the same
-    // behaviour the single-key memo had.
-    const bool same_avail =
-      a == alpha && b == beta && hh == h && d == delta;
-    if (same_avail && l == lambda && c == cv_u) return value;
+    // NaN-initialised keys make the first call always miss.
+    const double c = frq_rate_cv(sv, vv);
+    const bool same_avail = k == K && c == cv && hh == h && d == delta;
+    if (same_avail && vv == v && cu == clock) return value;
     if (!same_avail) {
-      alpha = a; beta = b; h = hh; delta = d;
-      avail = (shared != nullptr) ? shared->get(a, b, hh, d)
-                                  : frq_derive_avail(a, b, hh, d);
+      K = k; cv = c; h = hh; delta = d;
+      avail = (shared != nullptr) ? shared->get(k, c, hh, d)
+                                  : frq_derive_avail(k, c, hh, d);
       frq_copy_avail(value, avail);
     }
-    lambda = l; cv_u = c;
-    frq_set_rate(value, avail.ok, l, c);
+    v = vv; clock = cu;
+    frq_set_rate(value, avail.ok, vv, cu);
     return value;
   }
 };

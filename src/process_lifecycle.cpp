@@ -23,6 +23,11 @@
 // never armed will never arrive.  The check that closes that window is
 // `getppid()`, which R does not expose, so both halves happen here rather than
 // leaving the caller to do the interesting one.
+//
+// SIGTERM goes back to its default action for the same reason. A child forked
+// from an RStudio session inherits rsession's SIGTERM handler, which only
+// flags a shutdown for rsession's own event loop; the child never runs that
+// loop, so `mclapply`'s cleanup and `tools::pskill()` would leave it running.
 
 #include <Rcpp.h>
 
@@ -35,7 +40,8 @@
 #include <csignal>
 #endif
 
-//' Ask the kernel to signal this process when its parent dies
+//' Ask the kernel to signal this process when its parent dies, and let
+//' SIGTERM terminate it
 //'
 //' @return 1 if armed and the parent is still there, -1 if armed but the
 //'   parent had already gone (the caller should exit rather than wait for a
@@ -45,6 +51,7 @@
 // [[Rcpp::export]]
 int emc_arm_parent_death() {
 #ifdef __linux__
+  std::signal(SIGTERM, SIG_DFL);
   if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0) return 0;
   // Reparenting is the observable consequence of the parent's death, whatever
   // adopts the orphan -- init, or a subreaper.

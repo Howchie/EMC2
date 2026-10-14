@@ -245,11 +245,6 @@ struct ContextForRaceModels {
     bool rdmswtn_correlated = false;
     int rdmswtn_rho_index = -1;
 
-    // Fixed-K PCOUNTER with a shared gamma input-rate component.  This is a
-    // separate joint-race kernel (not a product of marginal PCOUNTER kernels).
-    bool pcounter_correlated = false;
-    int pcounter_rho_index = -1;
-
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;

@@ -12,15 +12,19 @@ skip_model_validation()
 #   2. An independent R transcription of the closed-form density and CDF.
 #   3. The defective-distribution contract: F(Inf) = h, S(Inf) = 1 - h,
 #      integrate(f) = h.
-#   4. That the parameterisation means what it claims: h is the completion
-#      probability, lambda is the direct registration rate, and
-#      (alpha, beta, h, lambda) inverts to the generating p.
+#   4. That the counter coordinates mean what they claim: h is the completion
+#      probability, v the mean initial input rate, sv = v/sqrt(beta) the
+#      between-trial rate SD, and (K, v, sv, h) inverts to the generating
+#      (beta, p, lambda); sv = 0 is the exact Poisson-counter limit.
+#
+# The references below are written in the generative coordinates
+# (alpha, beta, h, lambda); to_chart() maps them to the fitted ones.
 
 # ---------------------------------------------------------------------------
 # Independent references
 # ---------------------------------------------------------------------------
 
-ref_pl <- function(a, b, h, lambda, delta = 0, cv_u = 0) {
+ref_pl <- function(a, b, h, lambda, delta = 0, clock = 0) {
   zh <- if (delta > 0) EMC2:::frq_h_inv_r(h, delta) else h
   p <- qbeta(zh, a, b)
   c(p = p, lambda = lambda)
@@ -33,10 +37,10 @@ ref_H <- function(z, d) {
             rel.tol = 1e-12)$value / (2 * d)
 }
 
-ref_pH <- function(x, a, b, h, lambda, d = 0, cv_u = 0) {
-  pl <- ref_pl(a, b, h, lambda, d, cv_u)
+ref_pH <- function(x, a, b, h, lambda, d = 0, clock = 0) {
+  pl <- ref_pl(a, b, h, lambda, d, clock)
   p <- pl[["p"]]
-  c2 <- cv_u^2
+  c2 <- clock^2
   q <- if (c2 == 0) {
     p * (-expm1(-lambda * x))
   } else {
@@ -46,10 +50,10 @@ ref_pH <- function(x, a, b, h, lambda, d = 0, cv_u = 0) {
   if (d > 0) vapply(z, ref_H, numeric(1), d = d) else z
 }
 
-ref_d <- function(x, a, b, h, lambda, delta = 0, cv_u = 0) {
-  pl <- ref_pl(a, b, h, lambda, delta, cv_u)
+ref_d <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
+  pl <- ref_pl(a, b, h, lambda, delta, clock)
   p <- pl[["p"]]
-  c2 <- cv_u^2
+  c2 <- clock^2
   if (c2 == 0) {
     q <- p * (-expm1(-lambda * x))
     omq <- (1 - p) + p * exp(-lambda * x)
@@ -72,20 +76,38 @@ ref_d <- function(x, a, b, h, lambda, delta = 0, cv_u = 0) {
   dens
 }
 
-ref_p <- function(x, a, b, h, lambda, delta = 0, cv_u = 0) {
-  ref_pH(x, a, b, h, lambda, d = delta, cv_u = cv_u)
+ref_p <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
+  ref_pH(x, a, b, h, lambda, d = delta, clock = clock)
 }
 
-ref_s <- function(x, a, b, h, lambda, delta = 0, cv_u = 0) {
-  1 - ref_p(x, a, b, h, lambda, delta = delta, cv_u = cv_u)
+ref_s <- function(x, a, b, h, lambda, delta = 0, clock = 0) {
+  1 - ref_p(x, a, b, h, lambda, delta = delta, clock = clock)
 }
 
-cpp_d <- function(x, a, b, h, lambda, delta = 0, cv_u = 0)
-  EMC2:::dfrq(x, a, b, h, lambda, delta = delta, cv_u = cv_u)
-cpp_p <- function(x, a, b, h, lambda, delta = 0, cv_u = 0)
-  EMC2:::pfrq(x, a, b, h, lambda, delta = delta, cv_u = cv_u)
-cpp_s <- function(x, a, b, h, lambda, delta = 0, cv_u = 0)
-  EMC2:::pfrq(x, a, b, h, lambda, delta = delta, lower_tail = FALSE, cv_u = cv_u)
+to_chart <- function(a, b, h, lambda, delta = 0) {
+  p <- ref_pl(a, b, h, lambda, delta)[["p"]]
+  c(K = a, v = b * p * lambda, sv = p * lambda * sqrt(b))
+}
+
+cpp_d <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, delta)
+  EMC2:::dfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+              log_out = log_out, clock = clock)
+}
+cpp_p <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, delta)
+  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+              log_out = log_out, clock = clock)
+}
+cpp_s <- function(x, a, b, h, lambda, delta = 0, clock = 0, log_out = FALSE) {
+  ch <- to_chart(a, b, h, lambda, delta)
+  EMC2:::pfrq(x, ch[["K"]], ch[["v"]], ch[["sv"]], h, delta = delta,
+              lower_tail = FALSE, log_out = log_out, clock = clock)
+}
+cpp_rate <- function(a, b, h, lambda, delta = 0, clock = 0) {
+  ch <- to_chart(a, b, h, lambda, delta)
+  EMC2:::frq_rate(ch[["K"]], ch[["v"]], ch[["sv"]], h, delta, clock)
+}
 
 frq_grid <- data.frame(
   a      = c(1,    1,    2,    1.7,  3,     8,    2.5,  1),
@@ -115,7 +137,7 @@ test_that("the closed form is the K-th order statistic of a finite reservoir", {
   expect_equal(cpp_p(Inf, a, b, h, lam), h, tolerance = 1e-12)
 
   # ... and the kernel must recover exactly the (p, lambda) that generated it.
-  got <- EMC2:::frq_rate(a, b, h, lam)
+  got <- EMC2:::frq_rate(K, b * p * lam, p * lam * sqrt(b), h, clock = 0)
   expect_equal(unname(got[1, "p"]), p, tolerance = 1e-9)
   expect_equal(unname(got[1, "lambda"]), lam, tolerance = 1e-9)
 })
@@ -144,12 +166,11 @@ test_that("pdf, cdf and survivor match an independent R reference", {
 test_that("the log output equals the log of the natural output", {
   for (i in c(1, 4, 5)) {
     g <- frq_grid[i, ]
-    expect_equal(EMC2:::dfrq(frq_x, g$a, g$b, g$h, g$lambda, log_out = TRUE),
+    expect_equal(cpp_d(frq_x, g$a, g$b, g$h, g$lambda, log_out = TRUE),
                  log(cpp_d(frq_x, g$a, g$b, g$h, g$lambda)), tolerance = 1e-12)
-    expect_equal(EMC2:::pfrq(frq_x, g$a, g$b, g$h, g$lambda, log_out = TRUE),
+    expect_equal(cpp_p(frq_x, g$a, g$b, g$h, g$lambda, log_out = TRUE),
                  log(cpp_p(frq_x, g$a, g$b, g$h, g$lambda)), tolerance = 1e-12)
-    expect_equal(EMC2:::pfrq(frq_x, g$a, g$b, g$h, g$lambda, lower_tail = FALSE,
-                             log_out = TRUE),
+    expect_equal(cpp_s(frq_x, g$a, g$b, g$h, g$lambda, log_out = TRUE),
                  log(cpp_s(frq_x, g$a, g$b, g$h, g$lambda)), tolerance = 1e-12)
   }
 })
@@ -191,30 +212,90 @@ test_that("the CDF is monotone and the density non-negative and finite", {
 })
 
 # ---------------------------------------------------------------------------
-# 4. The (alpha, beta, h, lambda) parameterisation
+# 4. The (K, v, sv, h) counter coordinates
 # ---------------------------------------------------------------------------
 
-test_that("h is the completion probability and lambda is the registration rate", {
+test_that("h is the completion probability and v the initial input rate", {
   for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
     expect_equal(cpp_p(Inf, g$a, g$b, g$h, g$lambda), g$h, tolerance = 1e-12)
     expect_equal(cpp_s(Inf, g$a, g$b, g$h, g$lambda), 1 - g$h, tolerance = 1e-9)
   }
+  # At K = 1 the density at the onset is the expected initial event rate, for
+  # any rate variability, completion probability or clock shape.
+  for (cv in c(0, 0.3, 1)) for (h in c(1, 0.6)) for (cu in c(0, 1, 2))
+    expect_equal(EMC2:::dfrq(1e-10, 1, 7.5, cv * 7.5, h, clock = cu), 7.5,
+                 tolerance = 1e-8, info = paste(cv, h, cu))
 })
 
-test_that("frq_rate is the exact inverse of h = I_p(alpha, beta)", {
+test_that("frq_rate is the exact inverse of the counter coordinates", {
   for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
-    got <- EMC2:::frq_rate(g$a, g$b, g$h, g$lambda)
+    got <- cpp_rate(g$a, g$b, g$h, g$lambda)
     want <- ref_pl(g$a, g$b, g$h, g$lambda)
+    expect_equal(unname(got[1, "beta"]), g$b, tolerance = 1e-12)
     expect_equal(unname(got[1, "p"]), want[["p"]], tolerance = 1e-12)
-    expect_equal(unname(got[1, "lambda"]), want[["lambda"]], tolerance = 1e-10)
+    expect_equal(unname(got[1, "lambda"]), g$lambda, tolerance = 1e-10)
+    expect_equal(unname(got[1, "Etot"]), g$b * want[["p"]] / (1 - want[["p"]]),
+                 tolerance = 1e-10)
     expect_equal(pbeta(unname(got[1, "p"]), g$a, g$b), g$h, tolerance = 1e-10)
   }
-  v <- EMC2:::frq_rate(c(1, 2, 3), 2, 0.9, 0.4)
-  expect_equal(dim(v), c(3L, 2L))
-  expect_equal(colnames(v), c("p", "lambda"))
-  expect_equal(v[2, ], EMC2:::frq_rate(2, 2, 0.9, 0.4)[1, ])
+  v <- EMC2:::frq_rate(c(1, 2, 3), 4, 0.5, 0.9)
+  expect_equal(dim(v), c(3L, 4L))
+  expect_equal(colnames(v), c("beta", "p", "lambda", "Etot"))
+  expect_equal(v[2, ], EMC2:::frq_rate(2, 4, 0.5, 0.9)[1, ])
+})
+
+test_that("sv = 0 is the exact Poisson-counter limit", {
+  x <- c(0.01, 0.1, 0.3, 1, 3)
+  K <- 2.7; v <- 6
+  for (cu in c(0, 1, 2)) {
+    # Proper: a Gamma(K, v) decision time, and the clock drops out.
+    expect_equal(EMC2:::pfrq(x, K, v, 0, 1, clock = cu), pgamma(v * x, K),
+                 tolerance = 1e-14)
+    expect_equal(EMC2:::dfrq(x, K, v, 0, 1, clock = cu), dgamma(x, K, v),
+                 tolerance = 1e-12)
+    # Defective: finite expected evidence E = P_K^{-1}(h) on the clock v / E.
+    E <- qgamma(0.8, K); lam <- v / E
+    G <- if (cu == 0) -expm1(-lam * x) else 1 - (1 + cu^2 * lam * x)^(-1 / cu^2)
+    expect_equal(EMC2:::pfrq(x, K, v, 0, 0.8, clock = cu), pgamma(E * G, K),
+                 tolerance = 1e-14)
+    expect_equal(EMC2:::pfrq(Inf, K, v, 0, 0.8, clock = cu), 0.8, tolerance = 1e-14)
+    expect_equal(EMC2:::pfrq(Inf, K, v, 0, 0.8, clock = cu, lower_tail = FALSE),
+                 0.2, tolerance = 1e-14)
+    expect_equal(integrate(function(t) EMC2:::dfrq(t, K, v, 0, 0.8, clock = cu),
+                           0, Inf, rel.tol = 1e-10)$value, 0.8, tolerance = 1e-8)
+    # The sv > 0 family converges to it.
+    prev <- Inf
+    for (cv in c(0.1, 0.01, 0.001)) {
+      dev <- max(abs(EMC2:::pfrq(x, K, v, cv * v, 0.8, clock = cu) -
+                     EMC2:::pfrq(x, K, v, 0, 0.8, clock = cu)))
+      expect_lt(dev, prev); prev <- dev
+    }
+    expect_lt(prev, 1e-5)
+  }
+  # Below a rate CV of 1e-4 the kernel takes the limit branch itself, and the
+  # step there is the O(cv^2) gap, not a loss of accuracy.
+  for (h in c(1, 0.8)) {
+    expect_identical(EMC2:::pfrq(x, K, v, 0.99e-4 * v, h),
+                     EMC2:::pfrq(x, K, v, 0, h))
+    expect_lt(max(abs(EMC2:::pfrq(x, K, v, 1.01e-4 * v, h) -
+                      EMC2:::pfrq(x, K, v, 0, h))), 1e-8)
+  }
+  r <- EMC2:::frq_rate(K, v, 0, c(1, 0.8))
+  expect_equal(unname(r[, "beta"]), c(Inf, Inf))
+  expect_equal(unname(r[, "Etot"]), c(Inf, qgamma(0.8, K)), tolerance = 1e-12)
+})
+
+test_that("a constant-rate clock is a counter with a Gamma-mixed input rate", {
+  # Lambda ~ Gamma(mean v, SD sv) and Gamma(K) epochs: the decision time is a
+  # scaled beta-prime, F(x) = I_{x / (x + b)}(K, a), a = (v/sv)^2, b = a / v.
+  x <- c(0.02, 0.1, 0.4, 1.5, 6)
+  for (K in c(1, 2.4, 5)) for (cv in c(0.2, 0.6, 1)) {
+    a <- 1 / cv^2; b <- a / 9
+    expect_equal(EMC2:::pfrq(x, K, 9, cv * 9, 1, clock = 1),
+                 pbeta(x / (x + b), K, a), tolerance = 1e-12)
+  }
 })
 
 test_that("K = N removes p from the conditional RT distribution", {
@@ -236,12 +317,13 @@ test_that("alpha controls the order of the leading edge", {
 })
 
 test_that("degenerate parameters are rejected rather than returning garbage", {
-  bad <- list(c(0, 2, 0.9, 1.3), c(2, 0, 0.9, 1.3), c(2, 2, 0, 1.3),
-              c(2, 2, 1.5, 1.3), c(2, 2, 0.9, 0), c(2, 2, 0.9, -1),
-              c(Inf, 2, 0.9, 1.3), c(NA, 2, 0.9, 1.3))
+  # Columns are (K, v, sv, h).
+  bad <- list(c(0, 2, 0.5, 0.9), c(2, 0, 0.5, 0.9), c(2, -1, 0.5, 0.9),
+              c(2, 2, -0.1, 0.9), c(2, 2, 0.5, 0), c(2, 2, 0.5, 1.5),
+              c(Inf, 2, 0.5, 0.9), c(NA, 2, 0.5, 0.9), c(2, 2, Inf, 0.9))
   for (v in bad) {
-    expect_equal(cpp_d(0.4, v[1], v[2], v[3], v[4]), 0)
-    expect_equal(cpp_p(0.4, v[1], v[2], v[3], v[4]), 0)
+    expect_equal(EMC2:::dfrq(0.4, v[1], v[2], v[3], v[4]), 0)
+    expect_equal(EMC2:::pfrq(0.4, v[1], v[2], v[3], v[4]), 0)
     expect_true(is.na(EMC2:::frq_rate(v[1], v[2], v[3], v[4])[1, "p"]))
   }
   expect_equal(cpp_d(c(-1, 0), 2, 3, 0.9, 1.3), c(0, 0))
@@ -254,7 +336,7 @@ test_that("h at its upper bound stays finite and reaches the non-defective limit
   expect_equal(cpp_p(Inf, 2, 3, h, 1.3), h, tolerance = 1e-15)
   expect_equal(cpp_s(Inf, 2, 3, h, 1.3), 1 - h, tolerance = 1e-5)
   expect_true(all(is.finite(cpp_d(frq_x, 2, 3, h, 1.3))))
-  expect_equal(unname(EMC2:::frq_rate(2, 3, 1, 1.3)[1, "p"]), 1)
+  expect_equal(unname(cpp_rate(2, 3, 1, 1.3)[1, "p"]), 1)
   expect_equal(cpp_p(Inf, 2, 3, 1, 1.3), 1, tolerance = 1e-14)
   expect_equal(cpp_s(Inf, 2, 3, 1, 1.3), 0, tolerance = 1e-14)
 })
@@ -268,65 +350,73 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(m$type, "RACE")
   expect_equal(m$c_name, "FRQ")
   expect_equal(names(m$p_types),
-               c("alpha", "beta", "h", "lambda", "t0", "delta",
-                 "cv_u",
+               c("K", "v", "sv", "h", "t0", "delta", "clock",
                  "pContaminant", "pGuess"))
-  expect_equal(m$p_types_canonical,
-               c("alpha", "beta", "h", "lambda", "t0"))
-  expect_equal(unname(m$transform$func[c("alpha", "beta", "h", "lambda", "t0",
-                                         "delta", "cv_u")]),
-               c("exp", "exp", "pnorm", "exp", "exp", "exp", "exp"))
+  expect_equal(m$p_types_canonical, c("K", "v", "sv", "h", "t0"))
+  expect_equal(unname(m$transform$func[c("K", "v", "sv", "h", "t0",
+                                         "delta", "clock")]),
+               c("exp", "exp", "exp", "pnorm", "exp", "exp", "exp"))
+  expect_equal(unname(m$transform$lower[["K"]]), 1)
+  expect_equal(exp(m$p_types[["sv"]]), 0)
   expect_equal(exp(m$p_types[["delta"]]), 0)
-  expect_equal(unname(m$bound$minmax[, "delta"]), c(1e-4, 6))
-  expect_equal(m$bound$exception[["delta"]], 0)
-  expect_equal(unname(m$bound$minmax[, "cv_u"]), c(1e-4, Inf))
-  expect_equal(m$bound$exception[["cv_u"]], 0)
-  expect_equal(m$bound$exception[["h"]], 1)
+  expect_equal(exp(m$p_types[["clock"]]), 1)
   expect_equal(pnorm(m$p_types[["h"]]), 1, tolerance = 1e-12)
-  expect_equal(unname(m$bound$minmax[, "alpha"]), c(1, Inf))
-  expect_equal(unname(m$bound$minmax[, "beta"]), c(1, Inf))
-  expect_equal(unname(m$bound$minmax[, "lambda"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$minmax[, "K"]), c(1, Inf))
+  expect_equal(unname(m$bound$minmax[, "v"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$minmax[, "sv"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$minmax[, "delta"]), c(1e-4, 6))
+  expect_equal(unname(m$bound$minmax[, "clock"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$exception[c("sv", "delta", "clock", "h", "K")]),
+               c(0, 0, 0, 1, 1))
   expect_length(formals(FRQ), 0L)
 })
 
-test_that("the (h, lambda) coordinates are representable on the whole bounded box", {
+test_that("the counter coordinates are representable on the whole bounded box", {
   grid <- data.frame(
-    alpha = c(1, 1.5, 2, 20, 200),
-    beta = c(1.0001, 2, 5, 20, 1),
-    h = c(1e-3, 0.05, 0.5, 0.9, 0.99),
-    lambda = c(0.1, 0.5, 1.0, 2.0, 5.0)
+    K = c(1, 1.5, 2, 20, 200),
+    v = c(0.1, 2, 10, 40, 500),
+    cv = c(5, 1, 0.3, 0.05, 1e-3),
+    h = c(1e-3, 0.05, 0.5, 0.9, 1 - 1e-9)
   )
-  pl <- EMC2:::frq_rate(grid$alpha, grid$beta, grid$h, grid$lambda)
-  expect_false(anyNA(pl[, "p"]))
-  expect_true(all(pl[, "p"] > 0 & pl[, "p"] < 1))
-  expect_true(all(is.finite(pl[, "lambda"]) & pl[, "lambda"] > 0))
-  expect_equal(pbeta(pl[, "p"], grid$alpha, grid$beta), grid$h, tolerance = 1e-8)
-  expect_equal(qbeta(0.99, 0.05, 0.05), 1)
-  expect_equal(qbeta(0.1, 1e-4, 1e-4), 0)
+  g <- EMC2:::frq_rate(grid$K, grid$v, grid$cv * grid$v, grid$h)
+  expect_false(anyNA(g))
+  expect_true(all(g[, "p"] > 0 & g[, "p"] < 1))
+  expect_true(all(is.finite(g[, "lambda"]) & g[, "lambda"] > 0))
+  expect_equal(pbeta(g[, "p"], grid$K, 1 / grid$cv^2), grid$h, tolerance = 1e-8)
+  expect_equal(unname(g[, "beta"] * g[, "p"] * g[, "lambda"]), grid$v,
+               tolerance = 1e-12)
 })
 
 test_that("dfun/pfun apply t0 and call the same kernel", {
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, lambda = 1.35, t0 = 0.15, delta = 0)
+  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, delta = 0,
+                clock = 0.5)
   pars <- pars[rep(1, 5), ]
   rt <- c(0.05, 0.15, 0.3, 0.8, Inf)
+  x <- c(0.15, 0.65)
   expect_equal(EMC2:::dFRQ(rt, pars),
-               c(0, 0, cpp_d(c(0.15, 0.65), 2, 3, 0.9, 1.35), 0))
+               c(0, 0, EMC2:::dfrq(x, 2, 3.1, 1.86, 0.9, clock = 0.5), 0))
   expect_equal(EMC2:::pFRQ(rt, pars),
-               c(0, 0, cpp_p(c(0.15, 0.65), 2, 3, 0.9, 1.35), 0.9))
+               c(0, 0, EMC2:::pfrq(x, 2, 3.1, 1.86, 0.9, clock = 0.5), 0.9))
   expect_equal(EMC2:::sFRQ(rt, pars),
-               c(1, 1, cpp_s(c(0.15, 0.65), 2, 3, 0.9, 1.35), 0.1))
+               c(1, 1, EMC2:::pfrq(x, 2, 3.1, 1.86, 0.9, clock = 0.5,
+                                   lower_tail = FALSE), 0.1))
+  # A design without clock reads the model default, a constant-rate clock.
+  expect_equal(EMC2:::dFRQ(rt, pars[, colnames(pars) != "clock"]),
+               c(0, 0, EMC2:::dfrq(x, 2, 3.1, 1.86, 0.9, clock = 1), 0))
 })
 
 test_that("Ttransform reports the generative parameters", {
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, lambda = 1.35, t0 = 0.15, delta = 0)
+  pars <- cbind(K = 2, v = 3.1, sv = 1.86, h = 0.9, t0 = 0.15, delta = 0.3,
+                clock = 1)
   out <- FRQ()$Ttransform(pars, NULL)
-  want <- ref_pl(2, 3, 0.9, 1.35)
-  expect_equal(unname(out[1, "p"]), want[["p"]], tolerance = 1e-12)
-  expect_equal(unname(out[1, "lambda"]), want[["lambda"]], tolerance = 1e-10)
-  expect_equal(unname(out[1, "N"]), 4)
-  expect_equal(unname(out[1, "d"]), 0.5)
-  expect_equal(unname(out[1, "sQ"]), 0)
-  expect_equal(unname(out[1, "a_u"]), Inf)
+  b <- 1 / 0.6^2
+  p <- qbeta(EMC2:::frq_h_inv_r(0.9, 0.3), 2, b)
+  expect_equal(unname(out[1, "beta"]), b, tolerance = 1e-12)
+  expect_equal(unname(out[1, "p"]), p, tolerance = 1e-12)
+  expect_equal(unname(out[1, "lambda"]), 3.1 / (b * p), tolerance = 1e-10)
+  expect_equal(unname(out[1, "Etot"]), b * p / (1 - p), tolerance = 1e-10)
+  expect_equal(unname(out[1, "cv"]), 0.6)
+  expect_equal(unname(out[1, "sQ"]), 0.3 / sqrt(3))
   expect_equal(out[, colnames(pars), drop = FALSE], pars)
   expect_null(rownames(out))
 })
@@ -375,20 +465,20 @@ frq_fixture <- function(n = 60, seed = 20260816, extensions = FALSE) {
   dat$subjects <- droplevels(dat$subjects)
   dat <- dat[seq_len(n), ]
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
-  formula <- list(alpha ~ 1, beta ~ 1, h ~ lM, lambda ~ lM, t0 ~ 1)
+  formula <- list(K ~ 1, v ~ lM, sv ~ 1, h ~ lM, t0 ~ 1)
   if (extensions)
-    formula[c("delta", "cv_u")] <- list(delta ~ 1, cv_u ~ 1)
+    formula[c("delta", "clock")] <- list(delta ~ 1, clock ~ 1)
   des <- design(data = dat, model = FRQ, matchfun = matchfun,
                 formula = formula,
-                contrasts = list(h = list(lM = ADmat), lambda = list(lM = ADmat)))
+                contrasts = list(h = list(lM = ADmat), v = list(lM = ADmat)))
   p <- sampled_pars(des)
-  p["alpha"] <- log(2.2); p["beta"] <- log(3.1)
+  p["K"] <- log(1.2); p["sv"] <- log(1.65)
   p["h"] <- qnorm(0.93); p["h_lMd"] <- 0.9
-  p["lambda"] <- log(1.5); p["lambda_lMd"] <- 0.6
+  p["v"] <- log(3); p["v_lMd"] <- 0.6
   p["t0"] <- log(0.15)
   if (extensions) {
     p["delta"] <- log(1.2)
-    p["cv_u"] <- log(0.5)
+    p["clock"] <- log(0.5)
   }
   emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
                                    compress = FALSE, rt_resolution = NULL))
@@ -503,14 +593,17 @@ test_that("truncation, censoring and pContaminant stay well posed", {
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
   des_pc <- suppressMessages(design(
     data = fx$dat, model = FRQ, matchfun = matchfun,
-    formula = list(alpha ~ 1, beta ~ 1, h ~ lM, lambda ~ lM, t0 ~ 1,
+    formula = list(K ~ 1, v ~ lM, sv ~ 1, h ~ lM, t0 ~ 1,
                    pContaminant ~ 1),
-    contrasts = list(h = list(lM = ADmat), lambda = list(lM = ADmat))))
+    contrasts = list(h = list(lM = ADmat), v = list(lM = ADmat))))
   p_pc <- c(fx$p, pContaminant = qnorm(0.05))[names(sampled_pars(des_pc))]
   e_pc <- suppressMessages(make_emc(fx$dat, des_pc, type = "single",
                                     n_chains = 1, compress = FALSE,
                                     rt_resolution = NULL))
-  expect_equal(frq_ll(e_pc, p_pc), ll_base + nrow(fx$dat) * log(0.95),
+  # The contaminant's link carries its bound, so read its natural value back.
+  pc <- EMC2:::get_pars_matrix_oo(p_pc, e_pc[[1]]$data[[1]],
+                                  e_pc[[1]]$model())[[1, "pContaminant"]]
+  expect_equal(frq_ll(e_pc, p_pc), ll_base + nrow(fx$dat) * log(1 - pc),
                tolerance = 1e-6)
 })
 
@@ -535,7 +628,8 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
   # standard errors; at n = 1000 they were ~1.9 and failed for many seeds.
   n <- 4000
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, lambda = 1.35, t0 = 0.1)
+  for (cv in c(0.6, 0)) {
+  pars <- cbind(K = 2, v = 3, sv = 3 * cv, h = 0.9, t0 = 0.1)
   pars <- pars[rep(1, length(lR)), ]
   set.seed(4)
   a <- EMC2:::rFRQ(lR, pars)
@@ -543,7 +637,7 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
   b <- withr::with_options(list(emc2.cpp_rfun = TRUE),
                            EMC2:::.rfun_FRQ(lR, pars))
   probe <- c(0.2, 0.35, 0.5, 0.8)
-  th <- 1 - cpp_s(probe - 0.1, 2, 3, 0.9, 1.35)^2
+  th <- 1 - EMC2:::pfrq(probe - 0.1, 2, 3, 3 * cv, 0.9, lower_tail = FALSE)^2
   for (dat in list(a, b)) {
     fin <- is.finite(dat$rt)
     emp <- vapply(probe, function(x) mean(fin & dat$rt <= x), numeric(1))
@@ -551,6 +645,15 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
     expect_lt(abs(mean(!fin) - 0.01), 0.006)
     expect_true(all(is.na(dat$R[!fin])))
     expect_true(all(dat$rt[fin] > 0.1))
+  }
+  }
+  # The proper Poisson counter (sv = 0, h = 1) is a Gamma(K, v) race.
+  pars <- cbind(K = 2.5, v = 6, sv = 0, h = 1, t0 = 0)[rep(1, 2 * n), ]
+  for (sim in list(EMC2:::rFRQ(lR, pars), EMC2:::rfrq_cpp(pars, levels(lR), rep(TRUE, 2 * n)))) {
+    expect_true(all(is.finite(sim$rt)))
+    th <- 1 - pgamma(6 * probe, 2.5, lower.tail = FALSE)^2
+    emp <- vapply(probe, function(x) mean(sim$rt <= x), numeric(1))
+    expect_lt(max(abs(emp - th)), 0.03)
   }
 })
 
@@ -562,7 +665,8 @@ test_that("the simulator reproduces the literal reservoir at integer shapes", {
   h <- pbeta(p, a, b)
   n <- 1e4
   lR <- factor(rep("go", n), levels = "go")
-  pars <- cbind(alpha = a, beta = b, h = h, lambda = lam, t0 = 0)
+  pars <- cbind(K = a, v = b * p * lam, sv = p * lam * sqrt(b), h = h, t0 = 0,
+                clock = 0)
   sim <- EMC2:::.rfun_FRQ(lR, pars[rep(1, n), ])
 
   avail <- matrix(runif(n * N) < p, nrow = n)
@@ -622,23 +726,23 @@ test_that("the likelihood is maximised at the generating parameters", {
 })
 
 # ---------------------------------------------------------------------------
-# 9. Threshold variability (delta) and unit-rate frailty (cv_u)
+# 9. Threshold variability (delta) and unit-rate frailty (clock)
 # ---------------------------------------------------------------------------
 
 test_that("delta defaults to zero and is exactly the untransformed model", {
   x <- c(0.05, 0.2, 0.6, 2, Inf)
-  expect_identical(EMC2:::pfrq(x, 2, 3, 0.9, 1.4, 0),
-                   EMC2:::pfrq(x, 2, 3, 0.9, 1.4))
-  expect_identical(EMC2:::dfrq(x, 2, 3, 0.9, 1.4, 0),
-                   EMC2:::dfrq(x, 2, 3, 0.9, 1.4))
-  expect_identical(EMC2:::frq_rate(2, 3, 0.9, 1.4, 0),
-                   EMC2:::frq_rate(2, 3, 0.9, 1.4))
-  expect_equal(EMC2:::pfrq(x[1:4], 2, 3, 0.9, 1.4, 0), ref_p(x[1:4], 2, 3, 0.9, 1.4))
+  expect_identical(EMC2:::pfrq(x, 2, 3, 0.6, 0.9, 0),
+                   EMC2:::pfrq(x, 2, 3, 0.6, 0.9))
+  expect_identical(EMC2:::dfrq(x, 2, 3, 0.6, 0.9, 0),
+                   EMC2:::dfrq(x, 2, 3, 0.6, 0.9))
+  expect_identical(EMC2:::frq_rate(2, 3, 0.6, 0.9, 0),
+                   EMC2:::frq_rate(2, 3, 0.6, 0.9))
+  expect_equal(cpp_p(x[1:4], 2, 3, 0.9, 1.4, 0), ref_p(x[1:4], 2, 3, 0.9, 1.4))
 })
 
 test_that("unit-rate frailty matches the closed-form registration mixture", {
   a <- 2.5; b <- 1.4; h <- 0.85; lambda <- 1.4; cv <- 0.7
-  pl <- EMC2:::frq_rate(a, b, h, lambda, 0, cv)
+  pl <- cpp_rate(a, b, h, lambda, 0, cv)
   p <- qbeta(h, a, b)
   expect_equal(unname(pl[1, "p"]), p, tolerance = 1e-12)
   expect_equal(unname(pl[1, "lambda"]), lambda, tolerance = 1e-12)
@@ -650,56 +754,60 @@ test_that("unit-rate frailty matches the closed-form registration mixture", {
   q <- p * (1 - sr)
   want_p <- pbeta(q, a, b)
   want_d <- p * g * q^(a - 1) * (1 - q)^(b - 1) / beta(a, b)
-  expect_equal(EMC2:::pfrq(x, a, b, h, lambda, 0, cv_u = cv), want_p,
+  expect_equal(cpp_p(x, a, b, h, lambda, 0, clock = cv), want_p,
                tolerance = 1e-11)
-  expect_equal(EMC2:::dfrq(x, a, b, h, lambda, 0, cv_u = cv), want_d,
+  expect_equal(cpp_d(x, a, b, h, lambda, 0, clock = cv), want_d,
                tolerance = 1e-11)
-  expect_equal(EMC2:::pfrq(Inf, a, b, h, lambda, 0, cv_u = cv), h,
+  expect_equal(cpp_p(Inf, a, b, h, lambda, 0, clock = cv), h,
                tolerance = 1e-11)
-  expect_equal(EMC2:::pfrq(Inf, a, b, h, lambda, 0, cv_u = cv,
-                            lower_tail = FALSE), 1 - h,
+  expect_equal(cpp_s(Inf, a, b, h, lambda, 0, clock = cv), 1 - h,
                tolerance = 1e-11)
   expect_equal(integrate(function(z)
-    EMC2:::dfrq(z, a, b, h, lambda, 0, cv_u = cv), 0, Inf,
+    cpp_d(z, a, b, h, lambda, 0, clock = cv), 0, Inf,
     rel.tol = 1e-9)$value, h, tolerance = 1e-8)
 })
 
 test_that("unit-rate frailty nests the exponential member exactly", {
   x <- c(0.05, 0.2, 0.6, 2, Inf)
-  expect_identical(EMC2:::dfrq(x, 2, 3, 0.9, 1.4, 0),
-                   EMC2:::dfrq(x, 2, 3, 0.9, 1.4, 0, cv_u = 0))
-  expect_identical(EMC2:::pfrq(x, 2, 3, 0.9, 1.4, 0),
-                   EMC2:::pfrq(x, 2, 3, 0.9, 1.4, 0, cv_u = 0))
-  expect_identical(EMC2:::frq_rate(2, 3, 0.9, 1.4, 0),
-                   EMC2:::frq_rate(2, 3, 0.9, 1.4, 0, 0))
+  # The exponential clock is the clock = 0 member of the Lomax family.
+  prev <- Inf
+  for (cu in c(1e-2, 1e-3, 1e-4)) {
+    dev <- max(abs(cpp_p(x, 2, 3, 0.9, 1.4, 0, clock = cu) -
+                   cpp_p(x, 2, 3, 0.9, 1.4, 0, clock = 0)))
+    expect_lt(dev, prev); prev <- dev
+  }
+  expect_lt(prev, 1e-4)
+  expect_equal(cpp_p(x[1:4], 2, 3, 0.9, 1.4, 0, clock = 0),
+               ref_p(x[1:4], 2, 3, 0.9, 1.4), tolerance = 1e-12)
 })
 
 test_that("threshold variability and unit frailty compose", {
   a <- 2.5; b <- 1.4; h <- 0.85; lambda <- 1.4
   d <- 1.25; cv <- 0.55
   x <- c(0.05, 0.2, 0.6, 1.5, 5)
-  pl <- EMC2:::frq_rate(a, b, h, lambda, d, cv)
+  pl <- cpp_rate(a, b, h, lambda, d, cv)
   p <- unname(pl[1, "p"])
   c2 <- cv^2
   q <- p * (1 - (1 + c2 * lambda * x)^(-1 / c2))
   z <- pbeta(q, a, b)
   want <- vapply(z, ref_H, numeric(1), d = d)
-  expect_equal(EMC2:::pfrq(x, a, b, h, lambda, d, cv_u = cv), want,
+  expect_equal(cpp_p(x, a, b, h, lambda, d, clock = cv), want,
                tolerance = 1e-10)
-  expect_equal(EMC2:::pfrq(Inf, a, b, h, lambda, d, cv_u = cv), h,
+  expect_equal(cpp_p(Inf, a, b, h, lambda, d, clock = cv), h,
                tolerance = 1e-10)
   expect_equal(integrate(function(t)
-    EMC2:::dfrq(t, a, b, h, lambda, d, cv_u = cv), 0, Inf,
+    cpp_d(t, a, b, h, lambda, d, clock = cv), 0, Inf,
     rel.tol = 1e-9)$value, h, tolerance = 1e-8)
 })
 
 test_that("the proper h = 1 boundary remains proper with unit frailty", {
-  pars <- cbind(alpha = 2, beta = 3, h = 1, lambda = 1.4, t0 = 0,
-                delta = 0, cv_u = 0.7)
-  pl <- EMC2:::frq_rate(2, 3, 1, 1.4, 0, 0.7)
+  pars <- cbind(K = 2, v = 4.2, sv = 2.436, h = 1, t0 = 0, delta = 0,
+                clock = 0.7)
+  pl <- EMC2:::frq_rate(2, 4.2, 2.436, 1, 0, 0.7)
   expect_equal(unname(pl[1, "p"]), 1)
-  expect_equal(EMC2:::pfrq(Inf, 2, 3, 1, 1.4, 0, cv_u = 0.7), 1)
-  expect_equal(EMC2:::pfrq(Inf, 2, 3, 1, 1.4, 0, cv_u = 0.7,
+  expect_equal(unname(pl[1, "Etot"]), Inf)
+  expect_equal(EMC2:::pfrq(Inf, 2, 4.2, 2.436, 1, 0, clock = 0.7), 1)
+  expect_equal(EMC2:::pfrq(Inf, 2, 4.2, 2.436, 1, 0, clock = 0.7,
                             lower_tail = FALSE), 0)
   set.seed(20260920)
   sim_cpp <- EMC2:::rfrq_cpp(pars[rep(1, 2000), ], "1", rep(TRUE, 2000))
@@ -708,7 +816,7 @@ test_that("the proper h = 1 boundary remains proper with unit frailty", {
                        pars[rep(1, 2000), ])
   expect_true(all(is.finite(sim_r$rt)))
   out <- FRQ()$Ttransform(pars, NULL)
-  expect_equal(unname(out[1, "a_u"]), 1 / 0.7^2, tolerance = 1e-12)
+  expect_equal(unname(out[1, "lambda"]), 4.2 / (1 / 0.58^2), tolerance = 1e-12)
 })
 
 test_that("the delta > 0 CDF matches the marginalised criterion state", {
@@ -716,7 +824,7 @@ test_that("the delta > 0 CDF matches the marginalised criterion state", {
   for (d in c(0.25, 1, 3, 6)) {
     for (i in c(1, 2, 5)) {
       g <- frq_grid[i, ]
-      expect_equal(EMC2:::pfrq(x, g$a, g$b, g$h, g$lambda, d),
+      expect_equal(cpp_p(x, g$a, g$b, g$h, g$lambda, d),
                    ref_pH(x, g$a, g$b, g$h, g$lambda, d),
                    tolerance = 1e-9,
                    info = paste("delta", d, "row", i))
@@ -728,11 +836,11 @@ test_that("delta preserves the defective contract and the meaning of h and lambd
   for (d in c(0.25, 1, 3, 6)) for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
     lab <- paste("delta", d, "row", i)
-    expect_equal(EMC2:::pfrq(Inf, g$a, g$b, g$h, g$lambda, d), g$h,
+    expect_equal(cpp_p(Inf, g$a, g$b, g$h, g$lambda, d), g$h,
                  tolerance = 1e-10, info = lab)
-    expect_equal(EMC2:::pfrq(Inf, g$a, g$b, g$h, g$lambda, d, lower_tail = FALSE),
+    expect_equal(cpp_s(Inf, g$a, g$b, g$h, g$lambda, d),
                  1 - g$h, tolerance = 1e-10, info = lab)
-    expect_equal(integrate(function(t) EMC2:::dfrq(t, g$a, g$b, g$h, g$lambda, d),
+    expect_equal(integrate(function(t) cpp_d(t, g$a, g$b, g$h, g$lambda, d),
                            0, Inf, rel.tol = 1e-10,
                            subdivisions = 2000L)$value,
                  g$h, tolerance = 1e-8, info = lab)
@@ -743,9 +851,9 @@ test_that("the density is the derivative of the CDF under delta", {
   eps <- 1e-5
   for (d in c(0.5, 2, 5)) {
     x <- c(0.1, 0.3, 0.7, 1.5)
-    fd <- (EMC2:::pfrq(x + eps, 2.5, 1.4, 0.85, 1.4, d) -
-           EMC2:::pfrq(x - eps, 2.5, 1.4, 0.85, 1.4, d)) / (2 * eps)
-    expect_equal(EMC2:::dfrq(x, 2.5, 1.4, 0.85, 1.4, d), fd,
+    fd <- (cpp_p(x + eps, 2.5, 1.4, 0.85, 1.4, d) -
+           cpp_p(x - eps, 2.5, 1.4, 0.85, 1.4, d)) / (2 * eps)
+    expect_equal(cpp_d(x, 2.5, 1.4, 0.85, 1.4, d), fd,
                  tolerance = 1e-6, info = paste("delta", d))
   }
 })
@@ -756,10 +864,10 @@ test_that("H is invertible and the family nests the base model as delta -> 0", {
     expect_equal(vapply(EMC2:::frq_h_inv_r(y, d), ref_H, numeric(1), d = d), y,
                  tolerance = 1e-12, info = paste("delta", d))
   x <- c(0.05, 0.3, 1)
-  base <- EMC2:::pfrq(x, 2, 3, 0.9, 1.4, 0)
+  base <- cpp_p(x, 2, 3, 0.9, 1.4, 0)
   prev <- Inf
   for (d in c(1e-3, 1e-4, 1e-5)) {
-    dev <- max(abs(EMC2:::pfrq(x, 2, 3, 0.9, 1.4, d) - base))
+    dev <- max(abs(cpp_p(x, 2, 3, 0.9, 1.4, d) - base))
     expect_lt(dev, prev)
     prev <- dev
   }
@@ -771,29 +879,41 @@ test_that("the simulator draws from the delta > 0 likelihood", {
   set.seed(4)
   n <- 4e4
   d <- 2
-  pars <- cbind(alpha = 2, beta = 3, h = 0.8, lambda = 1.4, t0 = 0.15,
+  pars <- cbind(K = 2, v = 3, sv = 1.5, h = 0.8, t0 = 0.15,
                 delta = d)[rep(1, n), ]
   sim <- EMC2:::rfrq_cpp(pars, "1", rep(TRUE, n))
   fin <- is.finite(sim$rt)
   expect_equal(mean(fin), 0.8, tolerance = 0.01)
   probs <- seq(0.1, 0.9, 0.1)
   qs <- quantile(sim$rt[fin], probs)
-  expect_equal(unname(EMC2:::pfrq(qs - 0.15, 2, 3, 0.8, 1.4, d) / 0.8),
+  expect_equal(unname(EMC2:::pfrq(qs - 0.15, 2, 3, 1.5, 0.8, d) / 0.8),
                probs, tolerance = 0.02)
   expect_false(isTRUE(all.equal(
-    unname(EMC2:::pfrq(qs - 0.15, 2, 3, 0.8, 1.4, 0) / 0.8), probs,
+    unname(EMC2:::pfrq(qs - 0.15, 2, 3, 1.5, 0.8, 0) / 0.8), probs,
     tolerance = 0.02)))
 })
 
-test_that("FRQ rejects numerically saturated defective and extreme delta inputs", {
-  expect_true(is.na(EMC2:::frq_rate(0.05, 0.05, 0.99, 1.3)[1, "p"]))
-  expect_true(is.na(EMC2:::frq_rate(2, 3, 0.9, 1.3, 1000)[1, "p"]))
-  expect_equal(EMC2:::pfrq(0.4, 2, 3, 0.9, 1.3, 1000), 0)
+test_that("FRQ keeps the defect when sv > v and rejects extreme delta", {
+  # beta = 0.05 puts 1 - p far below double-precision spacing near one; the
+  # complementary quantile keeps it, and the defect is exact.
+  g <- EMC2:::frq_rate(2, 1.3, 1.3 / sqrt(0.05), 0.99)
+  expect_false(anyNA(g))
+  expect_equal(unname(g[1, "beta"]), 0.05, tolerance = 1e-12)
+  expect_equal(EMC2:::pfrq(Inf, 2, 1.3, 1.3 / sqrt(0.05), 0.99,
+                           lower_tail = FALSE), 0.01, tolerance = 1e-12)
+  sv <- 1.3 / sqrt(0.05); x <- c(0.1, 1, 10, 1e3)
+  omp <- qbeta(0.01, 0.05, 2); lam <- 1.3 / (0.05 * (1 - omp))
+  expect_equal(EMC2:::pfrq(x, 2, 1.3, sv, 0.99, lower_tail = FALSE),
+               pbeta(omp + (1 - omp) / (1 + lam * x), 0.05, 2), tolerance = 1e-10)
+  expect_equal(EMC2:::pfrq(x, 2, 1.3, sv, 0.99, lower_tail = FALSE, clock = 0),
+               pbeta(omp + (1 - omp) * exp(-lam * x), 0.05, 2), tolerance = 1e-10)
+  expect_true(is.na(EMC2:::frq_rate(2, 1.3, 0.5, 0.9, 1000)[1, "p"]))
+  expect_equal(EMC2:::pfrq(0.4, 2, 1.3, 0.5, 0.9, 1000), 0)
 })
 
 test_that("the FRQ R simulator keeps malformed rows as omissions", {
   lR <- factor(rep(c("a", "b"), 2), levels = c("a", "b"))
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, lambda = 1.3,
+  pars <- cbind(K = 2, v = 3, sv = 1.5, h = 0.9,
                 t0 = c(NA, NA, 0.1, 0.1))
   sim <- EMC2:::rFRQ(lR, pars)
   expect_true(is.infinite(sim$rt[1]) || is.na(sim$R[1]))
@@ -802,8 +922,8 @@ test_that("the FRQ R simulator keeps malformed rows as omissions", {
 
 test_that("the FRQ R simulator permits a valid accumulator to win", {
   lR <- factor(c("a", "b"), levels = c("a", "b"))
-  pars <- cbind(alpha = c(2, 2), beta = c(3, 3), h = c(1, 1),
-                lambda = c(1.3, 1.3), t0 = c(NA, 0.1))
+  pars <- cbind(K = c(2, 2), v = c(3, 3), sv = c(1.5, 1.5), h = c(1, 1),
+                t0 = c(NA, 0.1))
   sim <- EMC2:::rFRQ(lR, pars)
   expect_equal(sim$R, factor("b", levels = levels(lR)))
   expect_true(is.finite(sim$rt))

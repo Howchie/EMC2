@@ -1271,26 +1271,22 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQ simulator.  pars columns: alpha, beta, h, lambda, t0, delta, cv_u.
+// FRQ simulator.  pars columns: K, v, sv, h, t0, delta, clock.
 //
 // Exact, not approximate: the process is distributionally identical to drawing
-// the latent quorum U ~ Beta(alpha, beta) and inverting the registration CDF at
-// U/p.  That follows from F(x) = I_{q(x)}(alpha, beta) with q(x) = p G(x): the
-// decision time is the quantile transform of a Beta(alpha, beta) draw, so
-// U <= q(x) <=> T <= x, i.e. T = G^{-1}(U/p).  U > p means the reservoir
-// saturates below the required quorum, so the accumulator NEVER terminates and
-// the trial contributes +Inf -- the package's omission convention.  For integer
-// alpha = K and beta = N - K + 1 this reproduces explicitly building N cues and
-// waiting for the K-th.  Matches R's rFRQ (R/model_FRQ.R).
+// the latent quorum U ~ Beta(K, beta) and inverting the registration CDF at
+// U/p.  That follows from F(x) = I_{q(x)}(K, beta) with q(x) = p G(x): the
+// decision time is the quantile transform of a Beta draw, so U <= q(x) <=>
+// T <= x, i.e. T = G^{-1}(U/p).  U > p means the quorum is unreachable, so the
+// accumulator NEVER terminates and the trial contributes +Inf -- the package's
+// omission convention.  Matches R's rFRQ (R/model_FRQ.R).
 //
-// With threshold variability (delta > 0) the latent quorum percentile is no
-// longer Beta: F(x) = H(I_{q(x)}(alpha, beta)), so the quantile transform runs
-// through H as well.  Draw V ~ U(0,1) and set U = qbeta(H^{-1}(V), alpha, beta);
-// then U <= q(x) <=> V <= F(x) exactly as before, and the omission test U > p is
-// unchanged because it is equivalent to V > h.  delta == 0 keeps the direct
-// rbeta draw rather than routing through qbeta(runif()), which is the same
-// distribution but a different RNG stream -- seeded FRQ simulations predating
-// delta must keep reproducing.
+// With threshold variability (delta > 0) the latent percentile is drawn as
+// U = qbeta(H^{-1}(V), K, beta), V ~ U(0,1), so U <= q(x) <=> V <= F(x).
+//
+// The sv = 0 limit draws the threshold epoch Y ~ Gamma(K) instead (through
+// H^{-1} when delta > 0): with h = 1 the decision time is Y / v; with h < 1 it
+// is G^{-1}(Y / E) when Y <= E and an omission otherwise.
 // [[Rcpp::export]]
 Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                     Rcpp::LogicalVector ok) {
@@ -1301,17 +1297,16 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rfrq_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  for (const char* nm : {"alpha", "beta", "h", "lambda", "t0"})
+  for (const char* nm : {"K", "v", "sv", "h", "t0"})
     if (!ci.count(nm)) Rcpp::stop("rfrq_cpp: missing parameter column '%s'.", nm);
-  const int ia = ci.at("alpha"), ib = ci.at("beta"), ih = ci.at("h"),
-            il = ci.at("lambda"), it0 = ci.at("t0");
-  // Absent delta means the documented default of no threshold variability.
-  // Safe to default here, unlike on the likelihood path: this lookup is BY NAME,
-  // so a missing column cannot silently resolve to a different parameter.
+  const int ik = ci.at("K"), iv = ci.at("v"), isv = ci.at("sv"),
+            ih = ci.at("h"), it0 = ci.at("t0");
+  // Absent delta / clock mean the model defaults (no threshold variability, a
+  // constant-rate clock).  Safe to default here, unlike on the likelihood
+  // path: this lookup is BY NAME, so a missing column cannot silently resolve
+  // to a different parameter.
   const int idl = ci.count("delta") ? ci.at("delta") : -1;
-  // cv_u is optional only for this named direct/reference simulator path; the
-  // compiled likelihood has it in the required positional FRQ contract.
-  const int icv = ci.count("cv_u") ? ci.at("cv_u") : -1;
+  const int icu = ci.count("clock") ? ci.at("clock") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1324,21 +1319,38 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       dt[r] = R_PosInf;
       continue;
     }
-    const FrqPars& s = memo.get(pars(r, ia), pars(r, ib), pars(r, ih),
-                                pars(r, il), idl >= 0 ? pars(r, idl) : 0.0,
-                                icv >= 0 ? pars(r, icv) : 0.0);
+    const FrqPars& s = memo.get(pars(r, ik), pars(r, iv), pars(r, isv),
+                                pars(r, ih), idl >= 0 ? pars(r, idl) : 0.0,
+                                icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;                       // invalid row: never finishes
-    const double u = s.hh.active
-      ? R::qbeta(frq_h_inv(R::unif_rand(), s.hh), s.alpha, s.beta, 1, 0)
-      : R::rbeta(s.alpha, s.beta);
-    if (!(u <= s.p)) continue;                 // quorum unreachable: omission
-    double ratio = u / s.p;
-    // An exact U = p = 1 is a zero-probability endpoint, but finite RNGs can
-    // return it.  Keep the proper model finite rather than creating an
-    // artificial omission through an infinite inverse.
-    if (s.p == 1.0 && ratio >= 1.0)
-      ratio = std::nextafter(1.0, 0.0);
-    const double d = frq_registration_inv(ratio, s);
+    if (s.poisson) {
+      const double y = s.hh.active
+        ? R::qgamma(frq_h_inv(R::unif_rand(), s.hh), s.alpha, 1.0, 1, 0)
+        : R::rgamma(s.alpha, 1.0);
+      double d;
+      if (s.h == 1.0) {
+        d = y / s.v;
+      } else {
+        if (!(y <= s.E)) continue;             // evidence exhausted: omission
+        double ratio = y / s.E;
+        if (ratio >= 1.0) ratio = std::nextafter(1.0, 0.0);
+        d = frq_registration_inv(ratio, s);
+      }
+      dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+      continue;
+    }
+    // Drawn on the complement W = 1 - U ~ Beta(beta, K) by inversion: for
+    // beta < 1 much of U's mass lies within rounding of one, where U / p would
+    // collapse.  W < 1 - p, i.e. V < 1 - h, is the omission; otherwise
+    // 1 - q(x) = W gives the unit survivor S(x) = (W - (1 - p)) / p.
+    const double vv = R::unif_rand();
+    if (s.h < 1.0 && vv < 1.0 - s.h) continue;   // quorum unreachable
+    const double w = R::qbeta(frq_h_inv(vv, s.hh), s.beta, s.alpha, 1, 0);
+    double sr = (w - s.om_p) / s.p;
+    // Rounding at either end: keep the draw finite and non-negative.
+    if (!(sr > 0.0)) sr = std::numeric_limits<double>::min();
+    if (sr > 1.0) sr = 1.0;
+    const double d = frq_registration_inv_surv(sr, s);
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 

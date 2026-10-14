@@ -1,4 +1,0 @@
-"chain","scale","t0_mean_ratio","t0_hyper_ratio","effective_t0_mean_scale","effective_t0_hyper_scale","length","eps","validation_acceptance","calibration_seconds","pilots","search_mode"
-1,0.0625,2,0.25,0.125,0.015625,3,1.5,0.129837241162654,15.287,280,"full"
-2,0.0625,2,0.5,0.125,0.03125,1.5,1.5,0.22127959415314,13.859,288,"full"
-3,0.0441941738241592,0.5,0.5,0.0220970869120796,0.0220970869120796,3,1.5,0.288288703380512,13.967,288,"full"

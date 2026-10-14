@@ -1,4 +1,0 @@
-baseline initial collapsed rounds: 0,0,0; scales: 1,1,1; rebuild sec: 12.7
-
-
-Execution halted

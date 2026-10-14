@@ -48,95 +48,9 @@ audit_data <- function(n_trials = 400L, cells = NULL, width = 1L,
 
 
 # Per-model formulas and the constants each one needs to be identified, so a
-# test can name a model rather than restating its whole specification.  The
-# PCOUNTER branches are deliberately explicit: a benchmark case says which
-# kernel path it is exercising rather than relying on an accidental zero in a
-# sampled vector.
-.audit_pcounter_branch <- function(branch = NULL) {
-  if (is.null(branch) || !length(branch)) return("default")
-  if (length(branch) != 1L || is.na(branch)) stop("branch must be one string")
-  key <- tolower(trimws(as.character(branch)))
-  key <- gsub("[^a-z0-9]+", "_", key)
-  key <- gsub("^_|_$", "", key)
-  if (!nzchar(key) || key %in% c("default", "baseline")) return("default")
-  if (key %in% c("constant", "constants", "all_constant", "const")) return("constant")
-  if (key %in% c("varying", "nu_varying", "nu_cells", "cells")) return("varying")
-  if (key %in% c("k_varying", "k_cells", "threshold", "threshold_varying")) return("k_varying")
-  if (key %in% c("continuous", "continuous_nu_t0", "continuous_covariate")) return("continuous")
-  if (key %in% c("degenerate", "all_degenerate", "all_zero", "zero")) return("degenerate")
-  if (key %in% c("sv_zero", "sv0", "zero_sv")) return("sv_zero")
-  if (key %in% c("gamma_zero", "gamma0", "zero_gamma")) return("gamma_zero")
-  if (key %in% c("omega_zero", "omega0", "zero_omega")) return("omega_zero")
-  if (key %in% c("k_zero", "k0", "zero_k")) return("k_zero")
-  if (key %in% c("k_1023", "k1023", "large_k", "large_threshold")) return("k_1023")
-  # A combined spelling is useful at the command line and keeps the matrix
-  # labels readable without making callers know an internal enum.
-  if (grepl("mixed", key) ||
-      (grepl("trunc", key) && grepl("omit", key))) return("mixed")
-  if (grepl("trunc", key)) return("truncation")
-  if (grepl("omis|omit", key)) return("omission")
-  stop("unknown PCOUNTER audit branch: ", branch)
-}
-
-.audit_model_spec <- function(model, cells = NULL, width = 1L, branch = NULL) {
+# test can name a model rather than restating its whole specification.
+.audit_model_spec <- function(model, cells = NULL, width = 1L) {
   vform <- if (!is.null(cells)) v ~ x else if (width > 1L) v ~ 0 + condition else v ~ lM
-  if (identical(model, "PCOUNTER")) {
-    b <- .audit_pcounter_branch(branch)
-    shape_rhs <- if (!is.null(cells)) ~ x else if (width > 1L) ~ 0 + condition else ~ lM
-    constant_rhs <- ~ 1
-    f <- function(lhs, rhs) {
-      rhs_txt <- paste(deparse(rhs[[length(rhs)]]), collapse = " ")
-      stats::as.formula(paste(lhs, "~", rhs_txt))
-    }
-    forms <- list(
-      nu = f("nu", constant_rhs), sv = f("sv", constant_rhs),
-      gamma = f("gamma", constant_rhs), k = f("k", constant_rhs),
-      omega = f("omega", constant_rhs), t0 = f("t0", constant_rhs))
-    # Keep the normal fixture on the fixed-rate member.  Explicit branches
-    # below then make every departure from it visible in a case label.
-    forms$nu <- f("nu", shape_rhs)
-    constants <- c(sv = log(0), gamma = log(0), omega = log(0),
-                   pContaminant = qnorm(0), pGuess = qnorm(0))
-    centre <- c(nu = log(10), sv = log(2), gamma = log(0.5),
-                k = log(2), omega = log(1), t0 = log(0.1))
-    if (b == "constant") {
-      forms <- stats::setNames(lapply(names(forms), f, rhs = constant_rhs),
-                               names(forms))
-      constants <- c(pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "varying") {
-      forms$nu <- f("nu", shape_rhs)
-    } else if (b == "k_varying") {
-      forms$nu <- f("nu", shape_rhs)
-      forms$k <- f("k", shape_rhs)
-    } else if (b == "continuous") {
-      forms$nu <- f("nu", shape_rhs)
-      forms$t0 <- f("t0", shape_rhs)
-    } else if (b == "degenerate") {
-      forms$nu <- f("nu", constant_rhs)
-      constants <- c(sv = log(0), gamma = log(0), omega = log(0), k = log(0),
-                     pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "sv_zero") {
-      constants <- c(sv = log(0), pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "gamma_zero") {
-      constants <- c(gamma = log(0), pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "omega_zero") {
-      constants <- c(omega = log(0), pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "k_zero") {
-      constants <- c(k = log(0), pContaminant = qnorm(0), pGuess = qnorm(0))
-    } else if (b == "k_1023") {
-      constants <- c(k = log(1023), pContaminant = qnorm(0), pGuess = qnorm(0))
-      centre[["k"]] <- log(1023)
-    } else if (b %in% c("mixed", "omission")) {
-      # Omission rows need an explicit finite omission mass; otherwise their
-      # correct likelihood is zero and the benchmark would only measure the
-      # invalid floor.
-      constants <- c(pContaminant = qnorm(0.10), pGuess = qnorm(0))
-    } else if (b == "truncation") {
-      constants <- c(pContaminant = qnorm(0), pGuess = qnorm(0))
-    }
-    return(list(formula = unname(forms), constants = constants,
-                centre = centre, branch = b))
-  }
   switch(model,
     DDM = list(
       formula = list(if (!is.null(cells) || width > 1L) vform else v ~ S,
@@ -159,41 +73,6 @@ audit_data <- function(n_trials = 400L, cells = NULL, width = 1L,
 }
 
 
-# Apply the data-side part of an explicit PCOUNTER branch.  The ordinary
-# fixture is untouched; these deterministic edits are only for short benchmark
-# cases that need omission, censoring or truncation rows.
-.audit_pcounter_branch_data <- function(data, branch) {
-  if (!branch %in% c("mixed", "truncation", "omission")) return(data)
-  out <- data
-  n <- nrow(out)
-  if (branch %in% c("mixed", "omission") && n) {
-    omit <- if (n >= 10L) seq.int(10L, n, by = 10L) else integer(0L)
-    if (length(omit)) {
-      out$rt[omit] <- Inf
-      out$R[omit] <- NA
-    }
-  }
-  if (branch %in% c("mixed", "truncation")) {
-    # Keep missing rows while applying the finite observation window.  The
-    # lower edge is below the fixture's fastest response; the upper edge
-    # removes only a small, deterministic tail.
-    lo <- 0.20
-    hi <- 1.10
-    keep <- !is.finite(out$rt) | (out$rt >= lo & out$rt <= hi)
-    if (any(keep)) out <- out[keep, , drop = FALSE]
-    out$LT <- rep(lo, nrow(out))
-    out$UT <- rep(hi, nrow(out))
-  }
-  if (identical(branch, "mixed")) {
-    out$UC <- rep(0.75, nrow(out))
-    upper <- is.finite(out$rt) & out$rt > out$UC
-    out$rt[upper] <- Inf
-    out$R[upper] <- NA
-  }
-  rownames(out) <- NULL
-  out
-}
-
 # A complete likelihood fixture: compressed data, the model closure, and a
 # particle cloud centred somewhere the likelihood is actually finite.  At
 # sampled_pars()' zeros t0 is 1 s, which floors every row and leaves the
@@ -204,12 +83,9 @@ audit_fixture <- function(model = "RDM", n_trials = 400L, n_particles = 5L,
                           cells = NULL, width = 1L, formula = NULL,
                           constants = NULL, data = NULL, seed = 91026L,
                           spread = 0.04, rt_resolution = NULL, ...,
-                          branch = NULL, plain = FALSE) {
-  spec <- .audit_model_spec(model, cells, width, branch = branch)
-  branch_name <- if (identical(model, "PCOUNTER")) spec$branch else "default"
+                          plain = FALSE) {
+  spec <- .audit_model_spec(model, cells, width)
   dat <- if (is.null(data)) audit_data(n_trials, cells, width, seed = seed) else data
-  if (identical(model, "PCOUNTER"))
-    dat <- .audit_pcounter_branch_data(dat, branch_name)
   model_fun <- get(model, envir = asNamespace("EMC2"))
   if (plain) model_fun <- plain_link(model_fun)
   des <- suppressMessages(design(
@@ -235,7 +111,7 @@ audit_fixture <- function(model = "RDM", n_trials = 400L, n_particles = 5L,
   prop <- sweep(prop, 2L, as.numeric(centre), "+")
   dadm <- emc[[1L]]$data[[1L]]
   cst <- attr(dadm, "constants")
-  list(model_name = model, branch = branch_name, dadm = dadm,
+  list(model_name = model, dadm = dadm,
        model = des$model, des = des, data = dat, emc = emc, prop = prop,
        centre = centre, p_types = names(des$model()$p_types),
        constants = if (is.null(cst)) NA else cst)

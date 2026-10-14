@@ -1544,6 +1544,14 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
     on.exit(parallel::stopCluster(cluster), add = TRUE)
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
   } else{
+    # A forked child must die with its caller: an interrupted mclapply
+    # SIGTERMs it, and its own workers follow through their death signal.
+    fun <- FUN
+    FUN <- function(...) {
+      if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
+        stop("the calling process exited before this child started")
+      fun(...)
+    }
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
                                    mc.preschedule = mc.preschedule,
                                    mc.set.seed = mc.set.seed, ...)

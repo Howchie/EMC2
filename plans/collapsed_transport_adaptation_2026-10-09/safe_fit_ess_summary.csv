@@ -1,3 +1,0 @@
-"arm","sample_seconds","rebuild_seconds","total_seconds","collapsed_rounds","chain2_acceptance","group_mean_ess_sec","t0_group_mean_ess_sec","other_group_mean_ess_sec","participant_52091_ess_sec","key_ess_median","key_max_rhat","key_rhat_over_1_05"
-"no_collapsed",415.801,45.601,461.402,"0,0,0",NA,0.0645181087498508,0.0461389664314187,0.0660453119474759,0.0710871643019575,21.6213420337122,1.21603995169095,10
-"safe_fit_split_t0",399.101,45.601,444.702,"0,4,0",0.171258716832155,0.0664075012254669,0.0481041858066525,0.0687201941832849,0.0733963114307985,20.3711235201087,1.19492087208157,10

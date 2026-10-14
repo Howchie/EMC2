@@ -72,25 +72,6 @@ namespace lnr {
   }
 }
 
-// R/model_LNR.R — PCOUNTER (gamma-mixed, self-exciting Poisson counter race).
-// The leading columns are the natural-scale parameters documented by
-// PCOUNTER() in R/model_LNR.R.
-namespace pcounter {
-  enum : int { nu = 0, sv, gamma, k, omega, t0, N_REQ };
-  inline ColSpec spec() {
-    static const char* n[] = {"nu", "sv", "gamma", "k", "omega", "t0"};
-    return {n, N_REQ, "PCOUNTER"};
-  }
-}
-
-namespace pcounter_corr {
-  enum : int { nu = 0, c, gamma, k, omega, t0, rho, N_REQ };
-  inline ColSpec spec() {
-    static const char* n[] = {"nu", "c", "gamma", "k", "omega", "t0", "rho"};
-    return {n, N_REQ, "PCOUNTERcorr"};
-  }
-}
-
 // R/model_LNR.R — REXG
 namespace rexg {
   enum : int { mu = 0, sigma, tau, t0, N_REQ };
@@ -469,22 +450,17 @@ namespace bawdpsplit {
   }
 }
 
-// R/model_FRQ.R — FRQ (finite reservoir quorum).  alpha/beta are the Beta
-// shapes of the latent quorum U ~ Beta(alpha, beta), i.e. the quorum size K
-// and the residual redundancy N - K + 1.  The latter is called `beta` rather
-// than `R` because `R` is a reserved data column name in EMC2
-// (R/design.R:251).  h is the accumulator-level completion probability and
-// lambda the mean registration rate; p is derived internally.
-// delta is between-trial threshold variability (half-width of the uniform
-// log-odds shift of the quorum percentile) and cv_u is independent unit-rate
-// CV.  Both are REQUIRED rather than optional even though they default to zero:
-// an optional trailing column is resolved positionally, so a design lacking one
-// would silently read whatever parameter happened to land in its slot instead
-// of erroring.
+// R/model_FRQ.R — FRQ (finite reservoir quorum) in counter coordinates: K is
+// the event threshold (Beta shape alpha), v the mean initial input rate, cv
+// the between-trial SD of that rate (beta = (v/sv)^2), h the completion
+// probability; p and lambda are derived in the kernel.  delta is threshold
+// variability and clock the registration clock shape.  Both are REQUIRED:
+// an optional trailing column is resolved positionally, so a design lacking
+// one would silently read whatever parameter landed in its slot.
 namespace frq {
-  enum : int { alpha = 0, beta, h, lambda, t0, delta, cv_u, N_REQ };
+  enum : int { K = 0, v, sv, h, t0, delta, clock, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"alpha", "beta", "h", "lambda", "t0", "delta", "cv_u"};
+    static const char* n[] = {"K", "v", "sv", "h", "t0", "delta", "clock"};
     return {n, N_REQ, "FRQ"};
   }
 }

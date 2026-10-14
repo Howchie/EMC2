@@ -13,109 +13,60 @@ A model list defining the FRQ race model.
 Model file to estimate the Finite Reservoir Quorum (FRQ) process in EMC2.
 }
 \details{
-Model files are almost exclusively used in \code{design()}.
+Each accumulator's decision time \code{u = rt - t0} has distribution function
 
-Each accumulator draws on a finite pool of \code{N} potential evidence units and
-responds once a quorum of \code{K} of them has registered. A unit is usable on a
-given trial with probability \code{p}, and a usable unit registers after a delay
-with mean rate \code{lambda}. At \code{cv_u = 0} the delay is exponential; at positive
-\code{cv_u} its latent unit rate is Gamma-distributed. If fewer than \code{K} of
-the \code{N} units happen to be usable, the quorum is never reached and the
-accumulator never responds, so the model produces omissions without needing
-a contaminant parameter.
+\code{F(u) = I_q(u)(K, beta)}, with \code{q(u) = p * G(u)},
 
-Default values are used for all parameters that are not explicitly listed in
-the \code{formula} argument of \code{design()}. They can also be accessed with
-\code{FRQ()$p_types}.\tabular{llllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{alpha} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Quorum size (\code{K}): how many evidence units are needed to respond \cr
-   \emph{beta} \tab 1 + exp \tab [1, Inf] \tab log(0) \tab  \tab Spare capacity (\code{N - K + 1}): how many units beyond the quorum the pool holds \cr
-   \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
-   \emph{lambda} \tab log \tab [0, Inf] \tab log(log(2) / 0.5) \tab  \tab Registration rate of an available evidence unit \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{delta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Half-width of continuous threshold variability \cr
-   \emph{cv_u} \tab log \tab [0, Inf] \tab log(0) \tab  \tab CV of an individual unit's latent registration rate \cr
+where \code{I} is the regularized incomplete beta function and \code{G} the unit
+registration law
+\code{G(u) = 1 - (1 + clock^2 * lambda * u)^(-1/clock^2)}, or
+\code{1 - exp(-lambda * u)} at \code{clock = 0}. The kernel derives
+\code{beta = (v/sv)^2}, \code{p} from \code{h} by a beta quantile, and
+\code{lambda = v / (beta * p)}. At \code{sv = 0} it uses the exact limit
+\code{F(u) = P_K(v * u)} when \code{h = 1} and \code{F(u) = P_K(E * G(u))} otherwise, where
+\code{P_K} is the regularized lower incomplete gamma function,
+\code{E = P_K^{-1}(h)} and \code{lambda = v / E}. The kernel also uses this limit
+whenever \code{sv / v < 1e-4}. An accumulator never finishes with probability
+\code{1 - h}; a race omission has probability \code{prod(1 - h)} over accumulators.
+The derivations are in \code{Math/CounterAndQuorumModels.tex}.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{K} \tab 1 + exp \tab [1, Inf] \tab log(2) (K = 3) \tab \emph{alpha} = \emph{K} \tab Event threshold \cr
+   \emph{v} \tab log \tab [1e-4, Inf] \tab log(6) \tab \emph{lambda} = \emph{v}/(\emph{beta} \emph{p}) \tab Mean initial input rate \cr
+   \emph{sv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = (\emph{v}/\emph{sv})^2 \tab Between-trial SD of the input rate \cr
+   \emph{h} \tab probit \tab [1e-6, 1] \tab qnorm(1) \tab \emph{p} = qbeta(\emph{h}, \emph{K}, \emph{beta}) \tab Probability that the accumulator ever responds \cr
+   \emph{t0} \tab log \tab [0.05, Inf] or 0 \tab log(0) \tab  \tab Non-decision time \cr
+   \emph{delta} \tab log \tab [1e-4, 6] or 0 \tab log(0) \tab  \tab Half-width of the log-odds threshold shift \cr
+   \emph{clock} \tab log \tab [1e-4, Inf] or 0 \tab log(1) \tab  \tab Shape of the registration law \cr
 }
 
 
-The fitted parameters define the generative model in sampler-friendly
-coordinates.
-\code{alpha} and \code{beta} are the quorum size \code{K} and the spare
-capacity \code{N - K + 1}, treated as continuous and bounded below at 1, so
-\code{alpha = beta = 1} is a single-unit pool. \code{h} is the
-accumulator-level probability of eventual response and \code{lambda} is the
-registration rate of an available unit. The kernel derives the evidence-level
-availability \code{p} from \code{h}, \code{alpha}, and \code{beta};
-\code{mapped_pars()} reports that \code{p} alongside the pool size \code{N} =
-\code{alpha} + \code{beta} - 1, the quorum fraction \code{d} =
-\code{alpha}/\code{N}, and the unit-rate Gamma shape \code{a_u = 1/cv_u^2}
-(\code{Inf} at zero).
+The values \code{K = 1}, \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{delta = 0} and
+\code{clock = 0} are exact bound exceptions and can be set as constants.
+\code{K} is real-valued.
 
-\code{h} and \code{lambda} are the two exposed evidence dimensions: \code{h}
-controls whether enough evidence is ultimately available, while \code{lambda}
-controls the speed of registration conditional on availability. This makes
-direct rate versus quorum/threshold tests possible while retaining the more
-identified accumulator-level response coordinate.
+With \code{delta > 0} the model is \code{F(u) = H(I_q(u)(K, beta))}, the closed-form
+marginal over a shift \code{eps ~ Uniform(-delta, delta)} of the log-odds of the
+quorum percentile, and \code{p} is derived from \code{H^{-1}(h)}. \code{eps} is drawn
+independently for each accumulator on each trial, including when \code{delta}
+is shared across accumulators.
 
-\code{delta} adds between-trial variability in how much evidence the accumulator
-demands before responding, playing the role that start-point or threshold
-variability plays in the ballistic models. On a trial where \code{delta} is
-larger, the requirement is more often unusually lenient \emph{or} unusually
-strict, and less often typical; the average requirement is unchanged, so
-\code{h} and \code{lambda} keep their meanings exactly. At the default of zero there is
-no such variability and the model reduces to the description above.
-\code{mapped_pars()} reports \code{sQ} = \code{delta}/sqrt(3), the standard deviation of
-the trial-to-trial shift on a log-odds scale. Note that \code{delta} is a
-property of a single accumulator rather than a state shared by the whole
-race, and that it is only weakly identified: values below about 2 are
-difficult to distinguish from a small change in \code{alpha} and \code{beta}, so it
-is worth fitting only with a lot of data or a strong prior.
+\code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
+(expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}
+at \code{h = 1}), \code{cv} = \code{sv / v} and \code{sQ} = \code{delta / sqrt(3)}.
 
-\code{cv_u} is independent unit-level rate heterogeneity, not a shared trialwise
-drift state. It is best held fixed or shared across racers initially. The
-proper/non-defective boundary is obtained by fixing \code{h = 1}, which maps
-to \code{p = 1} exactly. This boundary is exact and leaves \code{lambda} as
-the rate parameter rather than changing coordinates.
-
-\code{alpha} and \code{beta} control the shape of the distribution: \code{alpha} how
-sharply the density rises at the leading edge, \code{beta} how heavy the late
-tail is. Both are more weakly informed than \code{h} and \code{lambda}, so the
-recommended default is \code{alpha ~ 1} and \code{beta ~ 1}, shared across
-accumulators along with \code{t0}.
-
-A race produces an omission only when every accumulator in it fails, with
-probability \code{prod(1 - h)} over accumulators, so an appreciable failure rate
-per accumulator is compatible with very few observed omissions: two
-accumulators at \code{h = 0.98} give a race-level omission rate of 0.0004.
-Optional fitting parameters are \code{pContaminant}, the omission probability,
-and \code{pGuess}, the uniform-outlier probability. The optional
-threshold-variability \code{delta} and unit-rate \code{cv_u} parameters are log/exp
-transformed with default \code{log(0)}.
-
-Because the FRQ is a race model, it has one accumulator per response
-option. EMC2 automatically constructs a factor representing the
-accumulators \code{lR} (i.e., the latent response) with level names taken from
-the \code{R} column in the data. For race models, the \code{design()} argument
-\code{matchfun} can be provided, a function that takes the \code{lR} factor (defined
-in the augmented data (d) in the following function) and returns a logical
-defining the correct response. In the example below, the match is simply
-such that the \code{S} factor equals the latent response factor:
-\code{matchfun=function(d)d$S==d$lR}. Then \code{matchfun} is used to automatically
-create a latent match (\code{lM}) factor with levels \code{FALSE} (i.e., the stimulus
-does not match the accumulator) and \code{TRUE} (i.e., the stimulus does match
-the accumulator). This is added internally and can also be used in model
-formula, typically for parameters related to the rate of accumulation.
+Optional nuisance parameters are \code{pContaminant}, an omission probability
+outside the accumulators, and \code{pGuess}, a uniform-outlier probability.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 matchfun <- function(d) d$S == d$lR
-# The shapes are held constant; the design acts on the two evidence
-# dimensions, lambda (registration rate) and h (eventual response).
+# The design acts on the input rate and its SD; the threshold is shared
+# across accumulators.
 design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
-                     formula = list(alpha ~ 1, beta ~ 1, h ~ lM,
-                                    lambda ~ lM + E, t0 ~ 1),
-                     contrasts = list(h = list(lM = ADmat),
-                                      lambda = list(lM = ADmat)))
+                     formula = list(K ~ 1, v ~ lM + E, sv ~ lM, h ~ 1,
+                                    t0 ~ 1),
+                     contrasts = list(v = list(lM = ADmat)),
+                     constants = c(h = qnorm(1))) # non-defective race
 # For all parameters that are not defined in the formula, default values are
 # assumed (see Table above).
 }

@@ -1405,55 +1405,55 @@ BEGIN_RCPP
 END_RCPP
 }
 // dfrq
-NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector lambda, NumericVector delta, bool log_out, NumericVector cv_u);
-RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP lambdaSEXP, SEXP deltaSEXP, SEXP log_outSEXP, SEXP cv_uSEXP) {
+NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector delta, bool log_out, NumericVector clock);
+RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP deltaSEXP, SEXP log_outSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type cv_u(cv_uSEXP);
-    rcpp_result_gen = Rcpp::wrap(dfrq(t, alpha, beta, h, lambda, delta, log_out, cv_u));
+    Rcpp::traits::input_parameter< NumericVector >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(dfrq(t, K, v, sv, h, delta, log_out, clock));
     return rcpp_result_gen;
 END_RCPP
 }
 // pfrq
-NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector lambda, NumericVector delta, bool lower_tail, bool log_out, NumericVector cv_u);
-RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP lambdaSEXP, SEXP deltaSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP, SEXP cv_uSEXP) {
+NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector delta, bool lower_tail, bool log_out, NumericVector clock);
+RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP deltaSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type cv_u(cv_uSEXP);
-    rcpp_result_gen = Rcpp::wrap(pfrq(t, alpha, beta, h, lambda, delta, lower_tail, log_out, cv_u));
+    Rcpp::traits::input_parameter< NumericVector >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(pfrq(t, K, v, sv, h, delta, lower_tail, log_out, clock));
     return rcpp_result_gen;
 END_RCPP
 }
 // frq_rate
-NumericMatrix frq_rate(NumericVector alpha, NumericVector beta, NumericVector h, NumericVector lambda, NumericVector delta, NumericVector cv_u);
-RcppExport SEXP _EMC2_frq_rate(SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP lambdaSEXP, SEXP deltaSEXP, SEXP cv_uSEXP) {
+NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector delta, NumericVector clock);
+RcppExport SEXP _EMC2_frq_rate(SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP deltaSEXP, SEXP clockSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type cv_u(cv_uSEXP);
-    rcpp_result_gen = Rcpp::wrap(frq_rate(alpha, beta, h, lambda, delta, cv_u));
+    Rcpp::traits::input_parameter< NumericVector >::type clock(clockSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_rate(K, v, sv, h, delta, clock));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1681,43 +1681,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     rcpp_result_gen = Rcpp::wrap(plba(t, A, b, v, sv, posdrift, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dpcounter
-NumericVector dpcounter(NumericVector t, NumericVector nu, NumericVector sv, NumericVector gamma, NumericVector k, NumericVector omega, NumericVector t0, bool log_out);
-RcppExport SEXP _EMC2_dpcounter(SEXP tSEXP, SEXP nuSEXP, SEXP svSEXP, SEXP gammaSEXP, SEXP kSEXP, SEXP omegaSEXP, SEXP t0SEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type nu(nuSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type gamma(gammaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type omega(omegaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dpcounter(t, nu, sv, gamma, k, omega, t0, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// ppcounter
-NumericVector ppcounter(NumericVector t, NumericVector nu, NumericVector sv, NumericVector gamma, NumericVector k, NumericVector omega, NumericVector t0, bool lower_tail, bool log_out);
-RcppExport SEXP _EMC2_ppcounter(SEXP tSEXP, SEXP nuSEXP, SEXP svSEXP, SEXP gammaSEXP, SEXP kSEXP, SEXP omegaSEXP, SEXP t0SEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type nu(nuSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type gamma(gammaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type omega(omegaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(ppcounter(t, nu, sv, gamma, k, omega, t0, lower_tail, log_out));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3843,8 +3806,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pleakyba", (DL_FUNC) &_EMC2_pleakyba, 9},
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 7},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 7},
-    {"_EMC2_dpcounter", (DL_FUNC) &_EMC2_dpcounter, 8},
-    {"_EMC2_ppcounter", (DL_FUNC) &_EMC2_ppcounter, 9},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 13},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 13},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},

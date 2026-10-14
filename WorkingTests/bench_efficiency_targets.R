@@ -2,10 +2,10 @@
 #
 # Examples:
 #   Rscript WorkingTests/bench_efficiency_targets.R
-#   MODEL=PCOUNTER TRIALS=600 CELLS=4 PARTICLES=25 REPS=9 \
+#   MODEL=RDM TRIALS=600 CELLS=4 PARTICLES=25 REPS=9 \
 #     Rscript WorkingTests/bench_efficiency_targets.R
-#   MODEL=PCOUNTER TRIALS=600 CELLS=255,256,257,512 PARTICLES=5 \
-#     BRANCH=varying PROFILE=1 Rscript WorkingTests/bench_efficiency_targets.R
+#   MODEL=RDM TRIALS=600 CELLS=255,256,257,512 PARTICLES=5 \
+#     PROFILE=1 Rscript WorkingTests/bench_efficiency_targets.R
 #
 # This intentionally does not call fit(), run_emc(), or a worker pool.  The
 # optional profiling pass is a separate explanatory run and must not be used as
@@ -40,18 +40,15 @@ read_bool <- function(name, default = FALSE) {
   raw %in% c("1", "true", "t", "yes", "y", "on")
 }
 
-model_tokens <- trimws(strsplit(Sys.getenv("MODEL", "PCOUNTER"), ",", fixed = TRUE)[[1L]])
-model_names <- c(BAWL = "BAwL", PCOUNTER = "PCOUNTER", RDM = "RDM", DDM = "DDM",
+model_tokens <- trimws(strsplit(Sys.getenv("MODEL", "RDM"), ",", fixed = TRUE)[[1L]])
+model_names <- c(BAWL = "BAwL", RDM = "RDM", DDM = "DDM",
                  LBA = "LBA")
 models <- unname(model_names[toupper(model_tokens)])
 models <- models[!is.na(models) & nzchar(models)]
-if (!length(models)) models <- "PCOUNTER"
+if (!length(models)) models <- "RDM"
 trials <- read_ints("TRIALS", "200")
 particles <- read_ints("PARTICLES", "5")
 cells <- read_cells()
-branches <- trimws(strsplit(Sys.getenv("BRANCH", "varying"), ",", fixed = TRUE)[[1L]])
-branches <- branches[nzchar(branches)]
-if (!length(branches)) branches <- "varying"
 reps <- max(7L, read_ints("REPS", "7")[[1L]])
 profile <- read_bool("PROFILE", FALSE)
 
@@ -59,10 +56,10 @@ fmt <- function(x) {
   if (length(x) != 1L || is.na(x)) "NA" else format(x, digits = 17, scientific = TRUE, trim = TRUE)
 }
 
-run_case <- function(model, nt, nc, np, branch) {
+run_case <- function(model, nt, nc, np) {
   cell_label <- if (is.null(nc)) "null" else as.character(nc)
-  label <- sprintf("model=%s trials=%d cells=%s particles=%d branch=%s",
-                   model, nt, cell_label, np, branch)
+  label <- sprintf("model=%s trials=%d cells=%s particles=%d",
+                   model, nt, cell_label, np)
   # A one-cell workload is the intercept-only design, not a rank-deficient
   # covariate with one observed level.
   fixture_cells <- if (!is.null(nc) && identical(as.integer(nc), 1L)) NULL else nc
@@ -70,7 +67,6 @@ run_case <- function(model, nt, nc, np, branch) {
   fx <- suppressMessages(audit_fixture(
     model = model, n_trials = nt, n_particles = np,
     cells = fixture_cells,
-    branch = if (identical(model, "PCOUNTER")) branch else NULL,
     seed = 91026L, rt_resolution = NULL))
   cat(sprintf("  fixture dadm_rows=%d proposal_rows=%d proposal_cols=%d\n",
               nrow(fx$dadm), nrow(fx$prop), ncol(fx$prop)))
@@ -107,4 +103,4 @@ run_case <- function(model, nt, nc, np, branch) {
 }
 
 for (model in models) for (nt in trials) for (nc in cells) for (np in particles)
-  for (branch in branches) run_case(model, nt, nc, np, branch)
+  run_case(model, nt, nc, np)

@@ -225,19 +225,6 @@ test_that("correlated bin likelihoods approach their independent limit", {
   }
 })
 
-test_that("shared-gamma counter bins agree with the integrated R density", {
-  des <- bin_design(PCOUNTERcorr,
-    list(nu ~ 1, c ~ 1, gamma ~ 1, k ~ 1, omega ~ 1, t0 ~ 1, rho ~ 1))
-  p <- c(nu = log(12), c = log(0.3), gamma = -Inf, k = log(2),
-         omega = -Inf, t0 = log(0.1), rho = qnorm(0.4))
-  pars <- matrix(rep(c(12, 0.3, 0, 2, 0, 0.1, 0.4), 2), nrow = 2, byrow = TRUE,
-    dimnames = list(NULL, c("nu", "c", "gamma", "k", "omega", "t0", "rho")))
-  expected <- log(integrate(function(t) dPCOUNTERcorr(t, pars, 1),
-                             0.1, 0.15, rel.tol = 1e-9)$value / 0.05)
-  expect_equal(bin_ll(p, bin_dadm(bin_trial(0.14), des, 0.05), des),
-               expected, tolerance = 1e-6)
-})
-
 test_that("drift and copula races retain their boundary-bin probability", {
   cases <- list(
     list(model = BAwLcorr,

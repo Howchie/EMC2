@@ -14,7 +14,6 @@
 #include "composite_functions.h"
 #include "trend.h"
 #include "utils.h"
-#include "model_PCOUNTER.h"
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
 #include "wald_functions.h"
@@ -1111,7 +1110,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
-    configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo");
     configure_filter_defective(adapter, data, is_logicalrules);
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
@@ -1200,7 +1198,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above
-      !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated && !adapter.ctx.pcounter_correlated &&
+      !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -1577,10 +1575,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, nullptr,
             corr_materialize);
-      } else if (adapter.ctx.pcounter_correlated) {
-        pars = pt.materialize_reusable();
-        lls[i] = c_log_likelihood_pcounter_corr(pars, data, n_trials, winner,
-            expand, min_ll, is_ok, n_lR, adapter.ctx.pcounter_rho_index);
       } else {
         pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_race(pars, data,
@@ -1750,7 +1744,6 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
-    configure_pcounter_corr_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_filter_defective(adapter, data, is_logicalrules);
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
@@ -1873,10 +1866,6 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, &row_vec,
             corr_materialize);
-      } else if (adapter.ctx.pcounter_correlated) {
-        pars = pt.materialize_reusable();
-        c_log_likelihood_pcounter_corr(pars, data, n_trials, winner, expand,
-            min_ll, is_ok, n_lR, adapter.ctx.pcounter_rho_index, &row_vec);
       } else {
         pars = pt.materialize_reusable();
         c_log_likelihood_race(pars, data,

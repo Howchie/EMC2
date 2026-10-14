@@ -59,7 +59,7 @@ test_that("bound overrides move the link and explicit transforms win", {
 
 test_that("explicit model sides are kept (FRQ shapes, RLF alpha)", {
   tf <- EMC2:::fill_transform(NULL, FRQ, bound = EMC2:::fill_bound(NULL, FRQ))
-  expect_equal(unname(tf$lower[c("alpha", "beta", "t0")]), c(1, 1, 0.05))
+  expect_equal(unname(tf$lower[c("K", "t0")]), c(1, 0.05))
   tf <- EMC2:::fill_transform(NULL, RLF, bound = EMC2:::fill_bound(NULL, RLF))
   expect_equal(unname(c(tf$lower["alpha"], tf$upper["alpha"])), c(1, 2))
 })

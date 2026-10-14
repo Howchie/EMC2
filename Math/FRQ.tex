@@ -1,215 +1,159 @@
 # Finite Reservoir Quorum (FRQ): fitted coordinates and likelihood
 
-This note is the live mathematical specification of the FRQ model. The
-sampler-facing coordinates are
+This note is the short live specification of the FRQ model. Derivations,
+the classic-counter submodels, error signatures and identification results
+are in `CounterAndQuorumModels.tex`. The sampler-facing coordinates are
 
 \[
-  (\alpha,\;\beta,\;h,\;\lambda,\;t_0,\;\delta,\;cv_u),
+  (K,\;v,\;sv,\;h,\;t_0,\;\delta,\;\mathrm{clock}),
 \]
 
-with optional `delta` and `cv_u` extensions. Response-time summaries are
-derived quantities; they are not fitted coordinates.
+with \(\delta\) and `clock` as optional extensions. Every coordinate is a
+mechanism. None is a response-time summary.
 
-## 1. Finite-reservoir construction
+## 1. Construction
 
-Consider a reservoir of \(N\) potential evidence units. A unit is available
-with probability \(p\), and an available unit registers after a latency with
-CDF \(G(u)\). The accumulator responds when a quorum is reached. With the
-continuous-shape extension
+A reservoir of \(N\) units has each unit available with probability \(p\).
+An available unit registers after a delay with CDF \(G\), and the accumulator
+responds when \(K\) units have registered. With \(\alpha=K\),
+\(\beta=N-K+1\) (both real and positive), and \(q(u)=pG(u)\),
 
 \[
-  \alpha=K>0, \qquad \beta=N-K+1>0,
+  F(u)=I_{q(u)}(\alpha,\beta),\qquad
+  f(u)=p\,g(u)\,\frac{q^{\alpha-1}(1-q)^{\beta-1}}{B(\alpha,\beta)},\qquad
+  S(u)=I_{1-q(u)}(\beta,\alpha).
 \]
 
-the probability that one unit has registered by decision time \(u>0\) is
+The registration law has rate \(\lambda\) and shape \(c\) (parameter `clock`):
 
 \[
-  q(u)=pG(u).
+  G(u)=1-\left(1+c^2\lambda u\right)^{-1/c^2},
 \]
 
-The quorum CDF, density, and survivor are
+which becomes \(G(u)=1-e^{-\lambda u}\) at \(c=0\). In every case
+\(g(0)=\lambda\). The observed time is \(T=t_0+U\). The eventual completion
+probability is \(h=F(\infty)=I_p(\alpha,\beta)\), and \(U=\infty\) with
+probability \(1-h\).
+
+## 2. Counter reading
+
+With \(\phi(u)=q/(1-q)\),
 
 \[
-  F(u)=I_{q(u)}(\alpha,\beta),
-  \qquad
-  f(u)=g_{\alpha,\beta}(q(u))q'(u),
-  \qquad
-  S(u)=I_{1-q(u)}(\beta,\alpha),
+  F(u)=P\{\mathrm{Gamma}(\alpha,1)\le W\phi(u)\},\qquad
+  W\sim\mathrm{Gamma}(\beta,1).
 \]
 
-where \(I_x\) is the regularized incomplete beta function and
+Each accumulator is therefore a Poisson counter with threshold \(K\), a trial
+intensity \(W\) with CV \(1/\sqrt\beta\), and an operational clock \(\phi\).
+The clock satisfies \(\phi'(0)=p\lambda\) and saturates at \(p/(1-p)\) when
+\(p<1\), which is the evidence ceiling. At \(p=1\) the clock accelerates for
+\(c<1\), is exactly linear at \(c=1\), and decelerates for \(c>1\).
+
+## 3. Fitted chart
 
 \[
-  g_{\alpha,\beta}(q)=
-  \frac{q^{\alpha-1}(1-q)^{\beta-1}}{B(\alpha,\beta)}.
+  K=\alpha,\qquad v=\beta p\lambda,\qquad sv=v\,\beta^{-1/2},\qquad h=F(\infty).
 \]
 
-For the base model, \(G(u)=1-\exp(-\lambda u)\). Thus \(\lambda\) is the
-direct mean registration rate of an available unit, not a rate inferred from a
-time quantile. With unit-level rate variation `cv_u`, the registration CDF is
+- \(K\) is the event threshold.
+- \(v\) is the mean initial input rate in events per second.
+- \(sv\) is the between-trial SD of the input rate. Its CV, \(cv=sv/v\), is
+  derived. \(sv>v\) is allowed.
+- \(h\) is the probability that the accumulator ever responds.
+
+The kernel inverts the chart as
 
 \[
-  G_{cv_u}(u)=
-  1-\left(1+cv_u^2\lambda u\right)^{-1/cv_u^2},
+  \beta=(v/sv)^{2},\qquad p=Q_{\alpha,\beta}\!\left(H_\delta^{-1}(h)\right),
+  \qquad \lambda=\frac{v}{\beta p}.
 \]
 
-with the exponential expression recovered at \(cv_u=0\). Its derivative is
+The beta quantile depends only on \((K,sv/v,h,\delta)\) and is cached on those
+four arguments. A per-trial \(v\) therefore costs a quantile per distinct value
+only when \(sv>0\) and \(h<1\). At \(h=1\), \(p=1\) exactly. Below one, \(1-p\)
+is solved from its own quantile, \(Q_{\beta,K}(H_\delta^{-1}(1-h))\), so the
+defect stays exact when \(\beta<1\) puts \(p\) within rounding of one. The
+tails at \(u=\infty\) return \(h\) and \(1-h\) directly.
+
+**The \(sv=0\) branch** is exact, not a limit approximation. The kernel also
+takes it whenever \(cv<10^{-4}\), where the beta branch is within about
+\(5\times10^{-9}\) of the limit. Let \(P_K\) be
+the regularised lower incomplete gamma function.
+
+- At \(h=1\): \(F(u)=P_K(vu)\), the homogeneous Poisson counter, and the
+  clock drops out.
+- At \(h<1\): let \(E=P_K^{-1}(H_\delta^{-1}(h))\) be the expected total
+  evidence. Then the rate is \(\lambda=v/E\) and \(F(u)=P_K(E\,G(u))\).
+
+**Clock and rate variability.** `clock` and `sv` carry the same contagion
+signature, and with both free their posterior correlation is 1. The
+constructor therefore fixes `clock = 1`, the constant-rate counter in which
+\(sv\) is exactly gamma-mixed rate variability. `clock = 0` is the
+accelerating variant, which is exactly the linear self-exciting counter with
+\(\gamma=\lambda\) and \(\nu=v\).
+
+**Rate SD per accumulator.** Designs use `sv ~ lM`. Because `K` counts
+events, `v` and `sv` are absolute and no `sv` needs fixing; at h = 1 both are
+identified (per-trial SD of log sv about 6-15 for the correct accumulator), but
+correlate 0.9-0.98 with their own `v`. The Gamma rate makes the sign of the
+error effect depend on `sv_e / sv_c`: equal CVs give slow errors, equal SDs
+give fast errors at large variability (see `CounterAndQuorumModels.tex`).
+
+## 4. Threshold variability \(\delta\)
+
+A trialwise shift \(\varepsilon\sim U(-\delta,\delta)\) moves the log-odds of
+the latent quorum percentile. Marginalising it gives the closed form
 
 \[
-  g_{cv_u}(u)=\lambda\left(1+cv_u^2\lambda u\right)^{-1/cv_u^2-1}.
+  H_\delta(z)=\frac{\log(1+e^{x+\delta})-\log(1+e^{x-\delta})}{2\delta},
+  \qquad x=\operatorname{logit} z,
 \]
 
-The observed response time is \(T=t_0+U\), where \(t_0\) is non-decision
-time. An FRQ accumulator may have \(U=+\infty\), so races retain a genuine
-omission probability.
+and \(F_\delta=H_\delta(F)\) in both branches. The map has three useful
+properties:
 
-## 2. The fitted FRQ contract
+- symmetry: \(H_\delta(1-z)=1-H_\delta(z)\);
+- an analytic inverse:
+  \(H_\delta^{-1}(y)=\sinh(\delta y)/[\sinh(\delta y)+\sinh(\delta(1-y))]\);
+- an elementary derivative:
+  \(H_\delta'(z)=(\sinh\delta/\delta)/(1+2z(1-z)(\cosh\delta-1))\).
 
-The accumulator-level completion probability is
+\(\varepsilon\) is drawn independently for each accumulator on every trial,
+even when \(\delta\) is shared (`delta ~ 1`), as LBA start points are drawn
+per accumulator from a shared `A`. A single draw shared by the race would
+need quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
 
-\[
-  h=F(\infty)=I_p(\alpha,\beta).
-\]
+## 5. Contract
 
-This is the exposed availability coordinate because it is the quantity directly
-identified by the finite or infinite outcome of an accumulator. The evidence-
-level availability \(p\) is derived internally from \(h\), \(\alpha\), and
-\(\beta\). Let \(Q_{\alpha,\beta}\) denote the beta quantile function. For
-the base model (`delta = 0`),
+| Parameter | Link    | Bound                  | Default | Exception |
+|-----------|---------|------------------------|---------|-----------|
+| `K`       | 1 + exp | [1, Inf)               | 3       | 1         |
+| `v`       | log     | [1e-4, Inf)            | 6       |           |
+| `sv`      | log     | [1e-4, Inf)            | 0       | 0         |
+| `h`       | probit  | [1e-6, 1]              | 1       | 1         |
+| `t0`      | log     | [0.05, Inf)            | 0       | 0         |
+| `delta`   | log     | [1e-4, 6]              | 0       | 0         |
+| `clock`   | log     | [1e-4, Inf)            | 1       | 0         |
 
-\[
-  p=Q_{\alpha,\beta}(h).
-\]
+The bounds are numerical guards, with one exception: the `t0` floor is a
+psychological floor.
 
-For the threshold-variability extension below,
+- \(K\ge1\) is required because for \(K<1\) the density is singular at
+  \(t_0\).
+- \(\delta\le6\) keeps \(1-p\) above double precision inside the beta
+  quantile.
 
-\[
-  p=Q_{\alpha,\beta}\!\left(H_\delta^{-1}(h)\right).
-\]
+The mapping layer reports `beta`, `p`, `lambda`, `Etot`, `cv` (\(sv/v\)),
+and `sQ`. `Etot` is \(\beta p/(1-p)\), or \(E\) at \(sv=0\), and is infinite
+at \(h=1\).
 
-The mapping is one closed-form inverse of \(H_\delta\) when needed, followed
-by one beta quantile. No time quantile is inverted anywhere. The beta quantile
-itself is an iterative solve, so the kernel caches it on
-\((\alpha,\beta,h,\delta)\) -- the only arguments it depends on -- and a rate
-that varies per trial therefore costs no extra inversions.
+Not covered by the kernel:
 
-The endpoint is exact:
+- rate variability and self-excitation together;
+- the geometric threshold excess \(\omega\), which rate CV mimics while being
+  better identified;
+- rates correlated across accumulators.
 
-\[
-  h=1 \Longrightarrow p=1, \qquad F(\infty)=1.
-\]
-
-For \(h<1\), the defective mass is \(P(U=\infty)=1-h\). Consequently a
-race of independent accumulators has omission probability \(\prod_i(1-h_i)\)
-before any contaminant or guessing mechanism is added.
-
-The default sampler geometry uses log coordinates for \(\lambda\),
-\(t_0\), \(\delta\), and \(cv_u\), a probit coordinate for \(h\), and an
-offset log coordinate \(\alpha=1+e^{x}\), \(\beta=1+e^{y}\) for the shapes,
-so that the constraint \(\alpha,\beta\ge 1\) costs the sampler no boundary.
-The exact `h = 1` proper model is a bound exception, not a limiting
-approximation. This keeps the exposed design variables aligned
-with the model: \(h\) controls eventual availability, while \(\lambda\)
-controls registration speed conditional on availability.
-
-## 3. Continuous threshold variability
-
-To represent trial-to-trial variation in effective caution, let
-
-\[
-  \varepsilon\sim\operatorname{Uniform}(-\delta,\delta)
-\]
-
-shift the log-odds of the baseline quorum percentile. For \(z\in(0,1)\),
-
-\[
-  H_\delta(z)=\frac{1}{2\delta}
-  \int_{-\delta}^{\delta}
-  \operatorname{logit}^{-1}\!\bigl(\operatorname{logit}(z)+\varepsilon\bigr)\,d\varepsilon,
-\]
-
-and \(H_0(z)=z\). Writing \(x=\operatorname{logit}(z)\), the integral is
-
-\[
-  H_\delta(z)=
-  \frac{\log(1+e^{x+\delta})-\log(1+e^{x-\delta})}{2\delta}.
-\]
-
-The marginal FRQ law is therefore
-
-\[
-  F_\delta(u)=H_\delta\!\left(I_{q(u)}(\alpha,\beta)\right),
-\]
-
-\[
-  f_\delta(u)=H_\delta'\!\left(I_{q(u)}(\alpha,\beta)\right)
-  g_{\alpha,\beta}(q(u))q'(u).
-\]
-
-The useful identities are
-
-\[
-  H_\delta(1-z)=1-H_\delta(z),
-\]
-
-\[
-  H_\delta^{-1}(y)=
-  \frac{\sinh(\delta y)}
-  {\sinh(\delta y)+\sinh(\delta(1-y))},
-\]
-
-and
-
-\[
-  H_\delta'(z)=
-  \frac{\sinh(\delta)/\delta}
-  {1+2z(1-z)(\cosh(\delta)-1)}.
-\]
-
-Hence the fitted completion coordinate still maps directly to evidence
-availability:
-
-\[
-  z_h=H_\delta^{-1}(h),
-  \qquad p=Q_{\alpha,\beta}(z_h).
-\]
-
-The proper boundary remains \(h=1\), \(z_h=1\), and \(p=1\). The parameter
-\(\delta\) changes the dispersion of effective quorum percentiles while
-leaving the meaning of \(h\) and \(\lambda\) intact. The log-odds shift has
-standard deviation \(\delta/\sqrt{3}\).
-
-## 4. Unit-rate frailty
-
-With `cv_u > 0`, each available unit has a gamma-distributed latent rate with
-mean \(\lambda\) and coefficient of variation `cv_u`. Integrating the unit
-rate gives the Lomax-type registration law in Section 1. The parameter
-`cv_u` is unit-level heterogeneity; it is distinct from \(\delta\), which is a
-trial-level effective-quorum shift. Both extensions remain closed form.
-
-## 5. Relation to PCOUNTER
-
-On the non-defective boundary \(h=1\) (equivalently \(p=1\)), set
-
-\[
-  \alpha=K, \qquad \lambda=\gamma, \qquad
-  \beta=\frac{\nu}{\gamma}.
-\]
-
-Then
-
-\[
-  F_{\mathrm{FRQ}}(u)=I_{1-e^{-\gamma u}}
-  \left(K,\frac{\nu}{\gamma}\right),
-\]
-
-which is the first-passage law of the PCOUNTER pure-birth process with base
-rate \(\nu\), self-excitation \(\gamma\), and threshold \(K\). Integer
-\(\beta\) gives the literal finite-pool interpretation; non-integer shapes are
-the continuous extension used by FRQ.
-
-The shared design interpretation is direct: \(h\) is the availability or
-completion dimension, \(\lambda\) is the registration/drift-rate dimension,
-and \(\alpha,\beta\) determine the quorum shape. Derived \(p\), reservoir
-size \(N=\alpha+\beta-1\), quorum fraction \(\alpha/N\), and other summaries
-belong in mapped output rather than in the model's fitted design contract.
+The removed `PCOUNTERcorr` model is described in
+`PCOUNTER_correlated_rates.md` and can be recovered from git at `75582521`.

@@ -1,29 +1,29 @@
 # ============================================================================
-# FRQ: finite-reservoir quorum process
+# FRQ: finite-reservoir quorum process, fitted in counter coordinates
 #
-# N units are independently available with probability p and, when available,
-# register after delays whose mean rate is lambda.  With cv_u = 0 the delays are
-# exponential; cv_u > 0 integrates an independent Gamma-distributed unit rate.
-# The accumulator responds at the K-th registration and otherwise has an
-# infinite finishing time.
-#
-# With alpha = K, beta = N - K + 1:
-#   F(x) = I_{q(x)}(alpha, beta),  q(x) = p G_cv(x),
-#   G_0(x) = 1 - exp(-lambda x),
-#   G_cv(x) = 1 - (1 + cv_u^2 lambda x)^(-1/cv_u^2).
-#
-# The fitted coordinates are (alpha, beta, h, lambda, t0, delta, cv_u), where
-# h is the accumulator-level completion probability and lambda is the
-# registration rate. The evidence-level availability p is derived and
-# reported. The R wrappers use the kernels in src/model_FRQ.h.
+# Generatively, N units are independently available with probability p and,
+# when available, register after delays with mean rate lambda; the
+# accumulator responds at the K-th registration.  With alpha = K and
+# beta = N - K + 1,
+#   F(x) = I_{q(x)}(alpha, beta),  q(x) = p G(x),
+#   G(x) = 1 - (1 + clock^2 lambda x)^(-1/clock^2)   (1 - exp(-lambda x) at 0).
+# The same law is a Poisson counter with threshold K, run on the clock
+# phi = q / (1 - q), whose trial input rate is Gamma distributed with mean
+# v = beta p lambda and SD sv = v/sqrt(beta).  The fitted coordinates are
+# (K, v, sv, h, t0, delta, clock); beta, p and lambda are derived in the
+# kernel (src/model_FRQ.h), and sv = 0 is the exact no-variability limit.
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
-  need <- c("alpha", "beta", "h", "lambda", "t0")
+  need <- c("K", "v", "sv", "h", "t0")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("FRQ requires parameter columns ", paste(missing, collapse = ", "))
   invisible(NULL)
+}
+
+.frq_opt <- function(pars, ok, nm, default) {
+  if (nm %in% colnames(pars)) pars[ok, nm] else default
 }
 
 dFRQ <- function(rt, pars) {
@@ -33,11 +33,10 @@ dFRQ <- function(rt, pars) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- dfrq(t = dt[ok], alpha = pars[ok, "alpha"],
-                    beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    lambda = pars[ok, "lambda"], delta = delta, cv_u = cv_u)
+    out[ok] <- dfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
+                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    delta = .frq_opt(pars, ok, "delta", 0),
+                    clock = .frq_opt(pars, ok, "clock", 1))
   }
   out
 }
@@ -46,24 +45,22 @@ pFRQ <- function(rt, pars) {
   .frq_check_cols(pars)
   dt <- rt - pars[, "t0"]
   # rt = Inf is deliberately kept: the CDF there is h (the complement of the
-  # never-finish mass), not one.  The compiled kernel returns the saturated
-  # branch, which is what the defective-tail bookkeeping needs.
+  # never-finish mass), not one.
   ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- pfrq(t = dt[ok], alpha = pars[ok, "alpha"],
-                    beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    lambda = pars[ok, "lambda"], delta = delta, cv_u = cv_u)
+    out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
+                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    delta = .frq_opt(pars, ok, "delta", 0),
+                    clock = .frq_opt(pars, ok, "clock", 1))
   }
   out
 }
 
 # Survivor 1 - F, saturating at the defective mass 1 - h.  Computed through the
-# reflection I_{1-q}(beta, alpha) rather than by subtraction, so it stays
-# accurate in the deep tail where 1 - F is the interesting quantity.
+# reflection I_{1-q}(beta, alpha) (or the upper incomplete gamma at sv = 0)
+# rather than by subtraction, so the deep tail stays accurate.
 sFRQ <- function(rt, pars) {
   .frq_check_cols(pars)
   dt <- rt - pars[, "t0"]
@@ -71,25 +68,35 @@ sFRQ <- function(rt, pars) {
   ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
-    cv_u <- if ("cv_u" %in% colnames(pars)) pars[ok, "cv_u"] else 0
-    out[ok] <- pfrq(t = dt[ok], alpha = pars[ok, "alpha"],
-                    beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    lambda = pars[ok, "lambda"], delta = delta, cv_u = cv_u,
+    out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
+                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    delta = .frq_opt(pars, ok, "delta", 0),
+                    clock = .frq_opt(pars, ok, "clock", 1),
                     lower_tail = FALSE)
   }
   out
 }
 
+# Inverse registration clock: G^{-1} for the unit CDF G with rate lambda and
+# shape clock, given the unit survivor sr = 1 - G.
+.frq_clock_inv <- function(sr, lambda, clock) {
+  c2 <- clock * clock
+  out <- -log(sr) / lambda
+  pw <- c2 > 0
+  out[pw] <- expm1(-c2[pw] * log(sr[pw])) / (c2[pw] * lambda[pw])
+  out
+}
+
 # Pure-R reference simulator; .rfun_FRQ uses the C++ kernel unless
-# options(emc2.cpp_rfun = FALSE).  This is the exact order-statistic
-# representation, not an approximation: drawing the latent quorum
-# U ~ Beta(alpha, beta) and inverting the registration CDF at U/p is
-# distributionally identical to building N cues and waiting for the K-th,
-# because F(x) = I_{q(x)}(alpha, beta) makes U <= q(x) equivalent to T <= x.
-# U > p means the reservoir saturates below the quorum, so the accumulator
-# never terminates; an all-Inf trial column is the package's omission
-# convention (R = NA, rt = Inf), which make_data() already handles.
+# options(emc2.cpp_rfun = FALSE).  Exact: the latent quorum percentile
+# U ~ Beta(K, beta) satisfies U <= q(x) <=> T <= x, so T = G^{-1}(U / p), and
+# U > p is an omission.  It is drawn as its complement W = 1 - U ~ Beta(beta, K)
+# by inversion, because for beta < 1 much of U lies within rounding of one:
+# V < 1 - h is the omission, and otherwise 1 - G(T) = (W - (1 - p)) / p.
+# At sv = 0 the latent is the threshold epoch
+# Y ~ Gamma(K): T = Y / v when h = 1, and T = G^{-1}(Y / E) when Y <= E.
+# With delta > 0 the latent is drawn on the CDF scale and pulled back through
+# H.  An all-Inf trial column is the package's omission convention.
 rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   .frq_check_cols(pars)
   nr <- length(levels(lR))
@@ -106,42 +113,39 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
     dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
-    cu <- if ("cv_u" %in% colnames(p)) p[, "cv_u"] else rep(0, nrow(p))
-    # Derive the evidence-level availability from the fitted completion
-    # probability using the same compiled inversion as the likelihood.
-    pl <- frq_rate(p[, "alpha"], p[, "beta"], p[, "h"],
-                   p[, "lambda"], dl, cu)
-    # With threshold variability the latent quorum percentile is no longer
-    # Beta: draw uniformly on the CDF scale and pull it back through H before
-    # inverting the incomplete beta.
-    U <- rbeta(nrow(p), p[, "alpha"], p[, "beta"])
+    cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
+    g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], dl, cu)
+    valid <- !is.na(g[, "p"])
+    pois <- valid & !is.finite(g[, "beta"])
+    beta_r <- valid & !pois
     vary <- is.finite(dl) & dl > 0
-    if (any(vary)) {
-      z <- frq_h_inv_r(runif(sum(vary)), dl[vary])
-      U[vary] <- qbeta(z, p[vary, "alpha"], p[vary, "beta"])
-    }
     hit <- rep(Inf, nrow(p))
-    live <- is.finite(pl[, "p"]) & is.finite(pl[, "lambda"]) &
-      is.finite(U) & (U <= pl[, "p"])
-    live[is.na(live)] <- FALSE
-    if (any(live)) {
-      ratio <- U[live] / pl[live, "p"]
-      # A proper model has p = 1 (equivalently h = 1). An exact U = 1 is a zero-probability
-      # endpoint, but a finite RNG can return it; keep it finite rather than
-      # creating an artificial omission through an infinite inverse.
-      proper <- p[live, "h"] == 1
-      ratio[proper & ratio >= 1] <- 1 - .Machine$double.eps / 2
-      c2 <- cu[live] * cu[live]
-      z <- numeric(length(ratio))
-      exp_branch <- c2 == 0
-      if (any(exp_branch))
-        z[exp_branch] <- -log1p(-ratio[exp_branch]) /
-          pl[live, "lambda"][exp_branch]
-      if (any(!exp_branch))
-        z[!exp_branch] <- expm1(-c2[!exp_branch] *
-                                  log1p(-ratio[!exp_branch])) /
-          (c2[!exp_branch] * pl[live, "lambda"][!exp_branch])
-      hit[live] <- z
+    if (any(beta_r)) {
+      i <- which(beta_r)
+      V <- runif(length(i))
+      live <- !(p[i, "h"] < 1 & V < 1 - p[i, "h"])
+      zz <- V
+      iv <- vary[i]
+      if (any(iv)) zz[iv] <- frq_h_inv_r(V[iv], dl[i][iv])
+      W <- qbeta(zz, g[i, "beta"], p[i, "K"])
+      om_p <- ifelse(p[i, "h"] == 1, 0,
+                     g[i, "beta"] * g[i, "p"] / g[i, "Etot"])
+      sr <- pmin(pmax((W - om_p) / g[i, "p"], .Machine$double.xmin), 1)
+      hit[i[live]] <- .frq_clock_inv(sr[live], g[i, "lambda"][live], cu[i][live])
+    }
+    if (any(pois)) {
+      i <- which(pois)
+      Y <- rgamma(length(i), p[i, "K"])
+      iv <- i[vary[i]]
+      if (length(iv))
+        Y[vary[i]] <- qgamma(frq_h_inv_r(runif(length(iv)), dl[iv]), p[iv, "K"])
+      full <- p[i, "h"] == 1
+      hit[i[full]] <- Y[full] / p[i[full], "v"]
+      j <- which(!full)
+      live <- Y[j] <= g[i[j], "Etot"]
+      hit[i[j][live]] <- .frq_clock_inv(1 - Y[j][live] / g[i[j], "Etot"][live],
+                                        g[i[j], "lambda"][live],
+                                        cu[i[j]][live])
     }
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
@@ -175,139 +179,94 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'
 #' @details
 #'
-#' Each accumulator draws on a finite pool of `N` potential evidence units and
-#' responds once a quorum of `K` of them has registered. A unit is usable on a
-#' given trial with probability `p`, and a usable unit registers after a delay
-#' with mean rate `lambda`. At `cv_u = 0` the delay is exponential; at positive
-#' `cv_u` its latent unit rate is Gamma-distributed. If fewer than `K` of
-#' the `N` units happen to be usable, the quorum is never reached and the
-#' accumulator never responds, so the model can produce omissions without needing
-#' a contaminant parameter.
+#' Each accumulator's decision time `u = rt - t0` has distribution function
 #'
+#' `F(u) = I_q(u)(K, beta)`, with `q(u) = p * G(u)`,
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' where `I` is the regularized incomplete beta function and `G` the unit
+#' registration law
+#' `G(u) = 1 - (1 + clock^2 * lambda * u)^(-1/clock^2)`, or
+#' `1 - exp(-lambda * u)` at `clock = 0`. The kernel derives
+#' `beta = (v/sv)^2`, `p` from `h` by a beta quantile, and
+#' `lambda = v / (beta * p)`. At `sv = 0` it uses the exact limit
+#' `F(u) = P_K(v * u)` when `h = 1` and `F(u) = P_K(E * G(u))` otherwise, where
+#' `P_K` is the regularized lower incomplete gamma function,
+#' `E = P_K^{-1}(h)` and `lambda = v / E`. The kernel also uses this limit
+#' whenever `sv / v < 1e-4`. An accumulator never finishes with probability
+#' `1 - h`; a race omission has probability `prod(1 - h)` over accumulators.
+#' The derivations are in `Math/CounterAndQuorumModels.tex`.
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *alpha* | 1 + exp | \[1, Inf\] | log(0) | | Quorum size (`K`): how many evidence units are needed to respond |
-#' | *beta* | 1 + exp | \[1, Inf\] | log(0) | | Spare capacity (`N - K + 1`): how many units beyond the quorum the pool holds |
-#' | *h* | probit | \[0, 1\] | qnorm(1) | | Probability that the accumulator ever responds |
-#' | *lambda* | log | \[0, Inf\] | log(log(2) / 0.5) | | Registration rate of an available evidence unit |
-#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
-#' | *delta* | log | \[0, Inf\] | log(0) | | Half-width of continuous threshold variability |
-#' | *cv_u* | log | \[0, Inf\] | log(0) | | CV of an individual unit's latent registration rate |
+#' | *K* | 1 + exp | \[1, Inf\] | log(2) (K = 3) | *alpha* = *K* | Event threshold |
+#' | *v* | log | \[1e-4, Inf\] | log(6) | *lambda* = *v*/(*beta* *p*) | Mean initial input rate |
+#' | *sv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = (*v*/*sv*)^2 | Between-trial SD of the input rate |
+#' | *h* | probit | \[1e-6, 1\] | qnorm(1) | *p* = qbeta(*h*, *K*, *beta*) | Probability that the accumulator ever responds |
+#' | *t0* | log | \[0.05, Inf\] or 0 | log(0) | | Non-decision time |
+#' | *delta* | log | \[1e-4, 6\] or 0 | log(0) | | Half-width of the log-odds threshold shift |
+#' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
 #'
-#' The fitted parameters define the generative model in sampler-friendly
-#' coordinates. `alpha` and `beta` are the quorum size `K` and the spare
-#' capacity `N - K + 1`, treated as continuous
-#' and bounded below at 1, so `alpha = beta = 1` is a single-unit pool. `h` is
-#' the accumulator-level probability of eventual response and `lambda` is the
-#' registration rate of an available unit. The kernel derives the
-#' evidence-level availability `p` from `h`, `alpha`, and `beta`; `mapped_pars()`
-#' reports that `p` alongside the pool size `N` = `alpha` + `beta` - 1, the
-#' quorum fraction `d` = `alpha`/`N`, and the unit-rate Gamma shape
-#' `a_u = 1/cv_u^2` (`Inf` at zero).
+#' The values `K = 1`, `sv = 0`, `h = 1`, `t0 = 0`, `delta = 0` and
+#' `clock = 0` are exact bound exceptions and can be set as constants.
+#' `K` is real-valued.
 #'
-#' `h` and `lambda` are the two exposed evidence dimensions: `h` controls
-#' whether enough evidence is ultimately available, while `lambda` controls
-#' the speed of registration conditional on availability. This makes direct
-#' rate versus quorum/threshold tests possible while retaining the more
-#' identified accumulator-level response coordinate.
+#' With `delta > 0` the model is `F(u) = H(I_q(u)(K, beta))`, the closed-form
+#' marginal over a shift `eps ~ Uniform(-delta, delta)` of the log-odds of the
+#' quorum percentile, and `p` is derived from `H^{-1}(h)`. `eps` is drawn
+#' independently for each accumulator on each trial, including when `delta`
+#' is shared across accumulators.
 #'
-#' `delta` adds between-trial variability in how much evidence the accumulator
-#' demands before responding, playing the role that start-point or threshold
-#' variability plays in the ballistic models. On a trial where `delta` is
-#' larger, the requirement is more often unusually lenient *or* unusually
-#' strict, and less often typical; the average requirement is unchanged, so
-#' `h` and `lambda` keep their meanings exactly. At the default of zero there is
-#' no such variability and the model reduces to the description above.
-#' `mapped_pars()` reports `sQ` = `delta`/sqrt(3), the standard deviation of
-#' the trial-to-trial shift on a log-odds scale. Note that `delta` is a
-#' property of a single accumulator rather than a state shared by the whole
-#' race, and that it is only weakly identified.
+#' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
+#' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
+#' at `h = 1`), `cv` = `sv / v` and `sQ` = `delta / sqrt(3)`.
 #'
-#' `cv_u` is independent unit-level rate heterogeneity, not a shared trialwise
-#' drift state. The proper/non-defective boundary is obtained by fixing `h = 1`, which maps to
-#' `p = 1` exactly. This boundary is exact and leaves `lambda` as the rate
-#' parameter.
-#'
-#' `alpha` and `beta` control the shape of the distribution: `alpha` how
-#' sharply the density rises at the leading edge, `beta` how heavy the late
-#' tail is.
-#'
-#' A race produces an omission only when every accumulator in it fails, with
-#' probability `prod(1 - h)` over accumulators, so an appreciable failure rate
-#' per accumulator is compatible with very few observed omissions: two
-#' accumulators at `h = 0.98` give a race-level omission rate of 0.0004.
-#' Optional fitting parameters are `pContaminant`, the omission probability,
-#' and `pGuess`, the uniform-outlier probability. The optional
-#' threshold-variability `delta` and unit-rate `cv_u` parameters are log/exp
-#' transformed with default `log(0)`.
-#'
+#' Optional nuisance parameters are `pContaminant`, an omission probability
+#' outside the accumulators, and `pGuess`, a uniform-outlier probability.
 #'
 #' @return A model list defining the FRQ race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 #' matchfun <- function(d) d$S == d$lR
-#' # The shapes are held constant; the design acts on the two evidence
-#' # dimensions, lambda (registration rate) and h (eventual response).
+#' # The design acts on the input rate and its SD; the threshold is shared
+#' # across accumulators.
 #' design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
-#'                      formula = list(alpha ~ 1, beta ~ 1, h ~ 1,
-#'                                     lambda ~ lM + E, t0 ~ 1),
-#'                      contrasts = list(h = list(lM = ADmat),
-#'                                       lambda = list(lM = ADmat)),
-#'                      constants = c(h=qnorm(1))) # default non-defective race
+#'                      formula = list(K ~ 1, v ~ lM + E, sv ~ lM, h ~ 1,
+#'                                     t0 ~ 1),
+#'                      contrasts = list(v = list(lM = ADmat)),
+#'                      constants = c(h = qnorm(1))) # non-defective race
 #' # For all parameters that are not defined in the formula, default values are
 #' # assumed (see Table above).
 #' @export
 FRQ <- function() {
-  # Shapes on an OFFSET log scale: the transform below is alpha = 1 + exp(x),
-  # so the sampler coordinate x is unbounded while the natural shape keeps its
-  # alpha >= 1 support.  A plain log scale would put a hard wall at x = 0
-  # exactly where the default sits, halving the acceptance rate of any chain
-  # that wants a near-exponential leading edge.  log(0) = -Inf is therefore the
-  # one-unit reservoir alpha = beta = 1, reached the same way t0 reaches zero.
-  p_types <- c("alpha" = log(0), "beta" = log(0),
-               # A proper completion probability. The default
-               # remains non-defective intentionally.
-               "h" = qnorm(1),
-               # For alpha = beta = 1, lambda = log(2) / 0.5 gives a
-               # one-unit registration timescale of about 0.5 seconds.
-               "lambda" = log(log(2) / 0.5), "t0" = log(0),
-               # Threshold variability OFF by default: the base FRQ is the
-               # delta = 0 member of the family, and log(0) = -Inf reaches it
-               # exactly (the same idiom t0 uses to default to zero).
-               "delta" = log(0), "cv_u" = log(0))
-  transform <- c(alpha = "exp", beta = "exp", h = "pnorm", lambda = "exp",
-                 t0 = "exp", delta = "exp", cv_u = "exp")
-  # `lower` shifts the exp link: natural = lower + exp(free).  Only the shapes
-  # use it, and only to move their boundary off the sampling scale.
-  transform_lower <- c(alpha = 1, beta = 1)
-  # alpha, beta >= 1 is the conservative continuous FRQ relaxation: it is the
-  # region a literal finite reservoir can reach (K >= 1 and N - K + 1 >= 1),
-  # and it keeps the density bounded at the leading edge, where
-  # f(x) ~ x^(alpha - 1).  The unrestricted transformed-Beta family
-  # (shapes down to ~0) is mathematically valid but is NOT offered because
-  # it leaves the finite-reservoir interpretation and leading-edge behavior.
-  # The free h upper bound stops just short of one so that a sampler can keep
-  # a finite defective mass; h = 1 is the explicit non-defective boundary and
-  # is reachable through the bound exception below.
-  # delta is capped at 6 rather than left unbounded. It is a log-odds
-  # half-width, so H'(0)/H'(1/2) = cosh(delta/2)^2 -- already 101 at delta = 6,
-  # i.e. extreme quorum percentiles a hundred times more likely than middling
-  # ones.
-  # Unit-rate CV is positive on the free scale but zero is an exact nested
-  # boundary.  Keeping a small positive lower bound avoids a near-zero
-  # transformed region with essentially no shape information.
-  minmax <- cbind(alpha = c(1, Inf), beta = c(1, Inf),
-                  h = c(1e-6, 1), lambda = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), delta = c(1e-4, 6),
-                  cv_u = c(1e-4, Inf))
-  exception <- c(t0 = 0, delta = 0, cv_u = 0, h = 1, alpha = 1, beta = 1)
+  # K on an OFFSET log scale, K = 1 + exp(x): the sampler coordinate is
+  # unbounded while K keeps its K >= 1 support, below which the density is
+  # singular at t0 and the likelihood unbounded as t0 -> min(rt).
+  p_types <- c("K" = log(2), "v" = log(6),
+               # sv = 0 (log(0)) is the exact no-rate-variability counter.
+               "sv" = log(0),
+               "h" = qnorm(1), "t0" = log(0),
+               "delta" = log(0),
+               # A constant-rate evidence clock.
+               "clock" = log(1))
+  transform <- c(K = "exp", v = "exp", sv = "exp", h = "pnorm", t0 = "exp",
+                 delta = "exp", clock = "exp")
+  transform_lower <- c(K = 1)
+  # sv has no upper bound: sv > v (beta < 1) is a valid, very variable rate,
+  # and the kernel solves 1 - p from its own quantile.  Its lower guard keeps
+  # a sampled sv off the exact sv = 0 branch, which is reachable as a constant.
+  # The free h upper bound stops short of one so that a sampler can keep a
+  # finite defective mass; h = 1 is reachable through the exception.
+  # delta is capped at 6: cosh(delta/2)^2 is already 101 there, and H^{-1}
+  # shrinks 1 - h by delta/sinh(delta), so a bigger cap pushes p's complement
+  # under double precision at h = 1 - 1e-9.
+  minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), sv = c(1e-4, Inf),
+                  h = c(1e-6, 1), t0 = c(0.05, Inf), delta = c(1e-4, 6),
+                  clock = c(1e-4, Inf))
+  exception <- c(t0 = 0, delta = 0, clock = 0, h = 1, K = 1, sv = 0)
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
-  # FRQ already produces omissions intrinsically through 1 - h, so
-  # pContaminant is genuinely redundant here unless a mechanism *outside* the
-  # decision process is wanted; it is offered for consistency, not because the
-  # model needs it.
+  # pContaminant is redundant with 1 - h unless an omission mechanism outside
+  # the decision process is wanted.
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -316,35 +275,22 @@ FRQ <- function() {
     type = "RACE",
     c_name = "FRQ",
     p_types = p_types,
-    p_types_canonical = c("alpha", "beta", "h", "lambda", "t0"),
+    p_types_canonical = c("K", "v", "sv", "h", "t0"),
     transform = list(func = transform, lower = transform_lower),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       # Reporting only: Ttransform does not run on the compiled likelihood
-      # path (see src/utils.h), so this costs nothing during sampling. The
-      # h/lambda are the fitted coordinates; derive p and the structural
-      # summaries here for reporting.
+      # path (see src/utils.h); the kernel derives the same quantities itself.
       dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
-      cu <- if ("cv_u" %in% colnames(pars)) pars[, "cv_u"] else rep(0, nrow(pars))
-      pl <- frq_rate(pars[, "alpha"], pars[, "beta"], pars[, "h"],
-                     pars[, "lambda"], dl, cu)
-      # N = alpha + beta - 1 is the reservoir size of the literal finite-cue
-      # process, and d = alpha/N the fraction of it required to reach quorum:
-      # small d is Poisson-counter-like, appreciable d is where the finite
-      # reservoir actually bites.  Both are only literal at integer shapes.
-      # The alpha, beta >= 1 bounds keep N >= 1 and d in (0, 1].
-      N <- pars[, "alpha"] + pars[, "beta"] - 1
+      cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
+      g <- frq_rate(pars[, "K"], pars[, "v"], pars[, "sv"], pars[, "h"], dl, cu)
       # Built as a bare matrix first: cbind()ing named scalars onto a one-row
       # `pars` makes R invent row names from the argument names, which would
       # then travel with the parameter matrix.
-      # sQ = delta/sqrt(3) is SD(eps) for eps ~ U(-delta, delta), i.e. the
-      # trialwise SD of the log-odds shift in caution -- the scale a reader
-      # actually has intuitions about, unlike the half-width itself.
-      add <- cbind(p = as.numeric(pl[, "p"]),
-                   N = as.numeric(N),
-                   d = as.numeric(pars[, "alpha"] / N),
-                   sQ = as.numeric(dl) / sqrt(3),
-                   a_u = ifelse(cu == 0, Inf, 1 / cu^2))
+      add <- cbind(beta = as.numeric(g[, "beta"]), p = as.numeric(g[, "p"]),
+                   lambda = as.numeric(g[, "lambda"]), Etot = as.numeric(g[, "Etot"]),
+                   cv = as.numeric(pars[, "sv"] / pars[, "v"]),
+                   sQ = as.numeric(dl) / sqrt(3))
       rownames(add) <- NULL
       cbind(pars, add)
     },

@@ -1,3 +1,0 @@
-"arm","rounds","subjects_per_round","exact_subject_rows","same_rng_candidate_repeated","candidate_exact_acceptance_probability","observed_accepted_rounds","mean_exact_eval_wall_seconds","total_exact_eval_wall_seconds","mean_exact_eval_cpu_seconds","total_exact_eval_cpu_seconds","mean_round_wall_seconds","total_round_wall_seconds","step_size"
-"unit",12,93,1116,TRUE,0,0,0.308,3.696,0.307916666666667,3.695,0.316333333333334,3.796,0.4783262269565
-"fixed",12,93,1116,TRUE,0.00077311836295148,0,0.313416666666666,3.761,0.3135,3.762,0.32025,3.843,1.5

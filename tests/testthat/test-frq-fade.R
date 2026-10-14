@@ -40,9 +40,11 @@ test_that("zero fading rate is the proper FRQ boundary", {
   rt <- c(0.05, 0.15, 0.3, 0.8, 2, Inf)
   pars <- fade_pars(length(rt), alpha = 2.4, beta = 1.7,
     lambda = 0.95, kappa = 0, t0 = 0.1, delta = 0.6, cv_u = 0.35)
-  old_pars <- cbind(alpha = pars[, "alpha"], beta = pars[, "beta"], h = 1,
-    lambda = pars[, "lambda"], t0 = pars[, "t0"], delta = pars[, "delta"],
-    cv_u = pars[, "cv_u"])
+  # At h = 1, FRQ's counter coordinates are v = beta lambda, sv = v/sqrt(beta),
+  # and FRQfade's unit-rate CV is FRQ's clock.
+  old_pars <- cbind(K = pars[, "alpha"], v = pars[, "beta"] * pars[, "lambda"],
+    sv = sqrt(pars[, "beta"]) * pars[, "lambda"], h = 1, t0 = pars[, "t0"],
+    delta = pars[, "delta"], clock = pars[, "cv_u"])
 
   expect_equal(dFRQfade(rt, pars), EMC2:::dFRQ(rt, old_pars), tolerance = 1e-12)
   expect_equal(pFRQfade(rt, pars), EMC2:::pFRQ(rt, old_pars), tolerance = 1e-12)

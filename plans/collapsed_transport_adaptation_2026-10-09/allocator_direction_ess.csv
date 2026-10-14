@@ -1,3 +1,0 @@
-"arm","sample_seconds","directional_pilot_seconds","total_seconds_charged","collapsed_rounds","collapsed_acceptance","target_ess","target_ess_per_second","median_group_mu_ess","median_group_mu_ess_per_second","median_group_logsd_ess","median_group_logsd_ess_per_second","median_subject_ess","median_subject_ess_per_second","max_rhat"
-"direction_x2",358.191,22.881,381.072,"0;4;0",0.589624208367195,47.1456847598774,0.123718574862172,56.4026569257371,0.148010499133332,210.866019616221,0.553349549733963,289.107110787496,0.758667944082736,
-"no_collapsed",382.522,0,382.522,"0;0;0",,52.4571046347473,0.137134869719251,52.6312041922735,0.137590005783389,160.794909629824,0.420354671443273,289.663768662189,0.757247344367615,
