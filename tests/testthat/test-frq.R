@@ -952,3 +952,24 @@ test_that("sv far above v stays exact where 1 - q underflows", {
   sim <- EMC2:::.rfun_FRQ(factor(rep("a", n)), P)
   expect_gt(ks.test(sim$rt, "pexp", 3)$p.value, 1e-3)
 })
+
+test_that("a per-row K matches a fresh derive in every state", {
+  # Rows mix the proper sv = 0 state (where only alpha and lgamma(K) change
+  # with K) with sv > 0, h < 1 and delta > 0 rows and an invalid K.
+  set.seed(9)
+  n <- 60
+  P <- cbind(K = 1 + rexp(n, 0.5), v = 4, sv = 0, h = 1, t0 = 0.1,
+             delta = 0, clock = 1)
+  P[c(7, 8, 30), "sv"] <- 1.5
+  P[c(12, 31), "h"] <- 0.8
+  P[c(20, 21), "delta"] <- 0.7
+  P[c(25, 40), "K"] <- 0.5 * 1e-8
+  rt <- 0.1 + rexp(n, 2)
+  one <- function(f) vapply(seq_len(n), function(i)
+    f(rt[i], P[i, , drop = FALSE]), numeric(1))
+  expect_equal(EMC2:::dFRQ(rt, P), one(EMC2:::dFRQ), tolerance = 1e-14)
+  expect_equal(EMC2:::pFRQ(rt, P), one(EMC2:::pFRQ), tolerance = 1e-14)
+  expect_equal(EMC2:::sFRQ(rt, P), one(EMC2:::sFRQ), tolerance = 1e-14)
+  expect_equal(EMC2:::pFRQ(rt[1:3], P[1:3, ]),
+               pgamma(4 * (rt[1:3] - 0.1), P[1:3, "K"]), tolerance = 1e-12)
+})

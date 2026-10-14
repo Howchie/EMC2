@@ -38,6 +38,25 @@ inline double lgammafn_cached(double a) {
   return s.val;
 }
 
+// log Gamma(a) for a >= 0.5, for orders that change per row and so miss any
+// cache: the recurrence shifts to y >= 12, then the Stirling series through
+// 1/y^13.  Within ~1e-14 absolute of R::lgammafn (the cancellation against
+// log(prod) near a = 1), at a third of its cost.
+inline double lgamma_pos(double a) {
+  double y = a, prod = 1.0;
+  while (y < 12.0) { prod *= y; y += 1.0; }
+  const double r = 1.0 / y, r2 = r * r;
+  const double series = r * (1.0 / 12 + r2 * (-1.0 / 360 + r2 * (1.0 / 1260
+    + r2 * (-1.0 / 1680 + r2 * (1.0 / 1188 + r2 * (-691.0 / 360360
+    + r2 * (1.0 / 156)))))));
+  return (y - 0.5) * std::log(y) - y + 0.91893853320467274178 + series -
+    std::log(prod);
+}
+
+inline double lgamma_fast(double a) {
+  return (a >= 0.5 && emc2_isfinite(a)) ? lgamma_pos(a) : R::lgammafn(a);
+}
+
 // P(a,z) and Q(a,z), the regularized lower and upper incomplete gamma.
 // R::pgamma's Didonato-Morris path costs ~190 ns and dominated the Weibull
 // launch the way R::pnorm once dominated the truncated LBA; the classical
@@ -69,8 +88,9 @@ inline bool in_band(double a, double z) {
 // log of the exp(-z) z^a / Gamma(a) factor shared by both expansions.  It is
 // maximised at z = a, where Stirling makes it negative, so exp() cannot
 // overflow.
-inline double log_prefactor(double a, double z, double log_z) {
-  return a * log_z - z - lgammafn_cached(a);
+inline double log_prefactor(double a, double z, double log_z,
+                            double lgamma_a) {
+  return a * log_z - z - lgamma_a;
 }
 
 // P(a,z) = exp(log_prefactor) * lower_series(a,z), for z < a + 1.
@@ -107,7 +127,8 @@ inline double upper_cf(double a, double z) {
 // Regularized lower incomplete gamma on the natural scale.
 inline double gamma_p_fast(double a, double z, double log_z) {
   if (!inc_gamma::in_band(a, z)) return R::pgamma(z, a, 1.0, true, false);
-  const double pref = std::exp(inc_gamma::log_prefactor(a, z, log_z));
+  const double pref =
+    std::exp(inc_gamma::log_prefactor(a, z, log_z, lgammafn_cached(a)));
   if (z < a + 1.0)
     return std::fmin(pref * inc_gamma::lower_series(a, z), 1.0);
   return std::fmax(1.0 - pref * inc_gamma::upper_cf(a, z), 0.0);
@@ -115,15 +136,16 @@ inline double gamma_p_fast(double a, double z, double log_z) {
 
 // log P(a,z) and log Q(a,z); either pointer may be null.  Each tail is taken
 // from the expansion that computes it directly, so the complement is only
-// ever formed on the side that keeps its digits.
+// ever formed on the side that keeps its digits.  lgamma_a is log Gamma(a),
+// passed by callers that already hold it.
 inline void gamma_log_pq_fast(double a, double z, double log_z,
-                              double* log_p, double* log_q) {
+                              double lgamma_a, double* log_p, double* log_q) {
   if (!inc_gamma::in_band(a, z)) {
     if (log_p) *log_p = R::pgamma(z, a, 1.0, true, true);
     if (log_q) *log_q = R::pgamma(z, a, 1.0, false, true);
     return;
   }
-  const double lpref = inc_gamma::log_prefactor(a, z, log_z);
+  const double lpref = inc_gamma::log_prefactor(a, z, log_z, lgamma_a);
   if (z < a + 1.0) {
     const double lp =
       std::fmin(lpref + std::log(inc_gamma::lower_series(a, z)), 0.0);
@@ -135,6 +157,13 @@ inline void gamma_log_pq_fast(double a, double z, double log_z,
     std::fmin(lpref + std::log(inc_gamma::upper_cf(a, z)), 0.0);
   if (log_q) *log_q = lq;
   if (log_p) *log_p = log1m_exp(lq);
+}
+
+inline void gamma_log_pq_fast(double a, double z, double log_z,
+                              double* log_p, double* log_q) {
+  gamma_log_pq_fast(a, z, log_z,
+                    inc_gamma::in_band(a, z) ? lgammafn_cached(a) : 0.0,
+                    log_p, log_q);
 }
 
 #endif  // EMC2_INC_GAMMA_H

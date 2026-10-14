@@ -368,7 +368,7 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
     // of the (threshold-variability adjusted) completion probability.
     s.poisson = true;
     s.beta = R_PosInf;
-    s.lgamma_K = R::lgammafn(K);
+    s.lgamma_K = lgamma_fast(K);
     if (h == 1.0) {
       s.E = R_PosInf; s.log_E = R_PosInf;
       s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
@@ -729,7 +729,7 @@ inline FrqPoissonArg frq_poisson_arg(double x, const FrqPars& s) {
 inline FrqLogBeta frq_poisson_pair(const FrqPoissonArg& a, double log_X,
                                    const FrqPars& s) {
   FrqLogBeta o;
-  gamma_log_pq_fast(s.alpha, a.X, log_X, &o.lz, &o.lomz);
+  gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, &o.lz, &o.lomz);
   return o;
 }
 
@@ -755,8 +755,8 @@ inline double frq_poisson_log_tail(double x, const FrqPars& s, bool lower) {
                  : frq_h_log(b.lomz - b.lz, s.hh);
   }
   double out;
-  if (lower) gamma_log_pq_fast(s.alpha, a.X, log_X, &out, nullptr);
-  else gamma_log_pq_fast(s.alpha, a.X, log_X, nullptr, &out);
+  if (lower) gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, &out, nullptr);
+  else gamma_log_pq_fast(s.alpha, a.X, log_X, s.lgamma_K, nullptr, &out);
   return out;
 }
 
@@ -849,6 +849,19 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
 // against constant shapes -- redoes one log rather than one beta quantile.
 // The likelihood adapters hand it the per-particle FrqCache; the exported
 // entry points run without one and memoise locally.
+// True when `a` is a valid proper (h = 1) Poisson-limit state and K is a valid
+// threshold, i.e. when a new K changes nothing but alpha and lgamma(K).
+inline bool frq_poisson_proper_k(const FrqAvail& a, double K) {
+  return a.ok && a.poisson && a.h == 1.0 && K >= FRQ_SHAPE_MIN && R_FINITE(K);
+}
+
+template <class S>
+inline void frq_set_poisson_proper_k(S& s, double K, double lgamma_K) {
+  s.alpha = K;
+  s.alpha_minus_1 = K - 1.0;
+  s.lgamma_K = lgamma_K;
+}
+
 struct FrqMemo {
   FrqCache* shared = nullptr;
   double K = R_NaN, cv = R_NaN, h = R_NaN, delta = R_NaN;
@@ -870,10 +883,20 @@ struct FrqMemo {
     const bool same_avail = k == K && c == cv && hh == h && d == delta;
     if (same_avail && vv == v && cu == clock) return value;
     if (!same_avail) {
-      K = k; cv = c; h = hh; delta = d;
-      avail = (shared != nullptr) ? shared->get(k, c, hh, d)
-                                  : frq_derive_avail(k, c, hh, d);
-      frq_copy_avail(value, avail);
+      if (c == cv && hh == h && d == delta && frq_poisson_proper_k(avail, k)) {
+        // The proper sv = 0 state depends on K only through alpha and
+        // lgamma(K), so a K that varies per row (a trend) skips the derive.
+        K = k;
+        const double lg = lgamma_fast(k);
+        frq_set_poisson_proper_k(avail, k, lg);
+        frq_set_poisson_proper_k(value, k, lg);
+        if (vv == v && cu == clock) return value;   // rate half is K-free
+      } else {
+        K = k; cv = c; h = hh; delta = d;
+        avail = (shared != nullptr) ? shared->get(k, c, hh, d)
+                                    : frq_derive_avail(k, c, hh, d);
+        frq_copy_avail(value, avail);
+      }
     }
     v = vv; clock = cu;
     frq_set_rate(value, avail.ok, vv, cu);
