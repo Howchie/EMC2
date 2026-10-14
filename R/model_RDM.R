@@ -446,14 +446,14 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
 
   if (global) {
     # Global kill: shared timer fires → no response this trial
-    is_killed <- tk < apply(dt, 2, min)
+    is_killed <- tk < matrixStats::colMins(dt)
     if (any(is_killed)) {
       dt[, is_killed] <- Inf
     }
   }
 
-  bad_col <- colSums(!is.infinite(dt)) == 0L
-  R <- apply(dt, 2, which.min)
+  bad_col <- colSums(!is.infinite(dt)) == 0
+  R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- dt[pick]
   out$R <- levels(lR)[R]
@@ -1920,14 +1920,14 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
 
   if (global) {
     # Global kill: shared timer fires → no response this trial.
-    is_killed <- tk < apply(dt, 2, min)
+    is_killed <- tk < matrixStats::colMins(dt)
     if (any(is_killed)) {
       dt[, is_killed] <- Inf
     }
   }
 
-  bad_col <- colSums(!is.infinite(dt)) == 0L
-  R <- apply(dt, 2, which.min)
+  bad_col <- colSums(!is.infinite(dt)) == 0
+  R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- dt[pick]
   out$R <- levels(lR)[R]
