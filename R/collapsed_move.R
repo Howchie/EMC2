@@ -349,7 +349,8 @@
   # Outside production, do not pool movement across nonempty blocks because
   # the fits, mass and step size change at every rebuild. If the allocator
   # selected too few moves to measure the new block, retain the last measured
-  # block within this stage instead of reverting to an optimistic prior.
+  # block instead of reverting to an optimistic prior; across a stage change
+  # it carries at the evidence decay, so the exploration floor re-measures it.
   # Production blocks run settled kernels on a stationary chain, so their
   # measurements pool over the sample stage.
   blk <- .emc_collapsed_record(if (is.list(old$block)) old$block, p)
@@ -364,9 +365,15 @@
   } else zero
   last <- if (pooled) pool else blk
   if (last$n < 5L) {
-    previous <- if (!pooled && identical(stage, old$stage))
-      .emc_collapsed_record(old$last, p) else zero
-    last <- if (previous$n >= 5L) previous else zero
+    previous <- if (!pooled) .emc_collapsed_record(old$last, p) else zero
+    if (previous$n < 5L) previous <- zero
+    else if (!identical(stage, old$stage)) {
+      d <- .EMC_ALLOC_EVIDENCE_DECAY
+      previous <- list(E = d * previous$E, n = d * previous$n, acc = d * previous$acc,
+                       moved = d * previous$moved, N = d * previous$N,
+                       K = d * previous$K, iters = d * previous$iters)
+    }
+    last <- previous
   }
   st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim, stage = stage,
                   last = last, pool = pool, block = zero)

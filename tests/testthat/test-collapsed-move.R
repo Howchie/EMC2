@@ -519,7 +519,18 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   expect_identical(chain$collapsed$plan$last$n, 6L)
   chain <- rebuild(chain, "burn", block(0L, 0))
   expect_identical(chain$collapsed$plan$last$n, 6L)
-  # A new stage starts with its own proposal geometry and gets a fresh probe.
+  # A new stage carries the last measurement at the evidence decay, so the
+  # exploration floor re-measures the move instead of crediting the prior.
   chain <- rebuild(chain, "adapt", block(0L, 0))
+  expect_equal(chain$collapsed$plan$last$n, d * 6)
+  expect_equal(chain$collapsed$plan$last$E, diag(d * 1, 2 * p))
+  u <- EMC2:::.emc_alloc_units(list(s_rho = matrix(0.5, 1, 1), g_rho = rep(0.99, 2 * p),
+    g_fac = rep(0.5, 2 * p), g_measured = rep(FALSE, 2 * p), C_rest = 1, c_round = 0.05,
+    coll = TRUE, c_fac = rep(1, 2 * p), c_measured = TRUE, c_n = d * 6, c_coll = 0.1, c_rate = 0,
+    W = list(diag(p)), s_var = matrix(1, 1, p), c_hmc = NA_real_), NULL, TRUE, FALSE, B = 100)
+  expect_equal(u$joint$floor, (EMC2:::.EMC_ALLOC_ROUND_EVIDENCE - d * 6) / 100)
+  # Without a usable measurement a new stage starts unmeasured.
+  chain$collapsed$plan$last$n <- 2
+  chain <- rebuild(chain, "burn", block(0L, 0))
   expect_identical(chain$collapsed$plan$last$n, 0L)
 })

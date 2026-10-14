@@ -663,8 +663,13 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
   ch <- chain(list(E = c(50, 0, 0, 0), n = c(50, 5, 0, 0), moved = integer(4)))
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
   g1 <- 1 - 1 / (2 * ms$g_var[1])
-  expect_equal(ms$g_fac[1], (50 * g1 + n0 * ((50 * g1 + 5 * 1) / 55)) / (50 + n0))
-  expect_equal(ms$g_fac[2], (5 * 1 + n0 * ((50 * g1 + 5 * 1) / 55)) / (5 + n0))
+  # Two measured coordinates leave the spread at its floor 2 / n0: log
+  # movements shrink towards their precision-weighted mean, n0 rounds' worth.
+  t2 <- 2 / n0
+  l <- log(c(1 - g1, EMC2:::.EMC_ALLOC_MIN_MOVE)); v <- 2 / c(50, 5)
+  ref <- sum(l / (t2 + v)) / sum(1 / (t2 + v))
+  lk <- (l / v + ref / t2) / (1 / v + 1 / t2)
+  expect_equal(ms$g_fac[1:2], 1 - exp(lk))
   expect_lt(ms$g_fac[2], 1)
   # With evidence the measured zero movement wins: 500 rounds of nothing.
   ch2 <- chain(list(E = c(50, 0, 0, 0), n = c(50, 500, 0, 0), moved = integer(4)))
@@ -681,6 +686,29 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
   # Outside production nothing pools.
   msb <- EMC2:::.emc_alloc_measure(list(mine, other), 1, NULL, diag(p), stage = "burn")
   expect_false(msb$g_measured[3])
+})
+
+test_that("a well-measured slow coordinate keeps its own factor among quick ones", {
+  n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
+  # Four quick mean directions and one slow ridge, all well measured.
+  g_obs <- c(0.6, 0.55, 0.65, 0.6, 0.94)
+  n <- c(50, 50, 50, 50, 60)
+  g <- EMC2:::.emc_alloc_shrink_g(g_obs, n, rep(1L, 5))
+  # The spread between them far exceeds their noise, so the ridge keeps its
+  # factor within its noise, where a fixed n0-round weight credits it with
+  # the quick directions' movement.
+  fixed <- (60 * 0.94 + n0 * sum(n[1:4] * g_obs[1:4]) / 200) / (60 + n0)
+  expect_lt(abs(log(1 - g[5]) - log(0.06)), 2 * sqrt(2 / 60))
+  expect_gt(g[5], fixed + 0.02)
+  # Equal coordinates still pool: noise alone is shrunk away.
+  same <- EMC2:::.emc_alloc_shrink_g(c(0.7, 0.75, 0.72), c(5, 5, 5), rep(1L, 3))
+  expect_lt(diff(range(same)), diff(range(c(0.7, 0.75, 0.72))))
+  # An unmeasured coordinate takes its kind's centre; with nothing measured,
+  # the prior.
+  un <- EMC2:::.emc_alloc_shrink_g(c(0.6, 0.6, 0.6, NA), c(30, 30, 30, 0), rep(1L, 4))
+  expect_equal(un[4], 0.6)
+  expect_equal(EMC2:::.emc_alloc_shrink_g(rep(NA, 2), c(0, 0), 1:2),
+               rep(EMC2:::.EMC_ALLOC_SHEAR_PRIOR_G, 2))
 })
 
 test_that("rounds are priced at their own time, the frames as a fixed cost paid once", {

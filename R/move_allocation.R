@@ -411,6 +411,51 @@
   a
 }
 
+# Shear round factors shrunk towards their kind's (mean directions, log
+# sds). The movement m = 1 - g of n rounds has relative standard error about
+# sqrt(2 / n), so log m carries sampling variance 2 / n; each coordinate's
+# log m is shrunk towards its kind's precision-weighted mean by the spread
+# tau^2 between the kind's coordinates beyond that noise. A kind of very
+# different coordinates (a slow ridge among quick directions) then barely
+# shrinks its well-measured ones; tau^2 is at least 2 / ROUND_EVIDENCE, the
+# weight a reference had before. With fewer than three measured coordinates
+# in a kind, tau^2 comes from all measured coordinates, else its floor. An
+# unmeasured coordinate takes its kind's mean (either kind's, else the prior).
+# Movements below .EMC_ALLOC_MIN_MOVE count as that floor.
+.EMC_ALLOC_MIN_MOVE <- 1e-3
+.emc_alloc_shrink_g <- function(g_obs, n, kind) {
+  out <- rep(.EMC_ALLOC_SHEAR_PRIOR_G, length(n))
+  meas <- n > 0 & is.finite(g_obs)
+  if (!any(meas)) return(out)
+  l <- log(pmin(1, pmax(.EMC_ALLOC_MIN_MOVE, 1 - g_obs)))
+  v <- 2 / pmax(n, 1e-12)
+  t2_min <- 2 / .EMC_ALLOC_ROUND_EVIDENCE
+  spread <- function(sel) {
+    if (sum(sel) < 3L) return(NA_real_)
+    w <- 1 / v[sel]
+    lbar <- sum(w * l[sel]) / sum(w)
+    sum(w * (l[sel] - lbar)^2) / sum(w) - sum(w * v[sel]) / sum(w)
+  }
+  t2_all <- spread(meas)
+  centre <- function(sel, t2) {
+    w <- 1 / (t2 + v[sel])
+    sum(w * l[sel]) / sum(w)
+  }
+  for (kk in unique(kind)) {
+    sel <- meas & kind == kk
+    t2 <- spread(sel)
+    if (!is.finite(t2)) t2 <- t2_all
+    t2 <- max(t2_min, if (is.finite(t2)) t2 else t2_min)
+    ref <- if (any(sel)) centre(sel, t2) else centre(meas, t2)
+    lk <- ifelse(sel, (l / v + ref / t2) / (1 / v + 1 / t2), ref)
+    m <- exp(lk[kind == kk])
+    # At the movement floor a coordinate does not move: exactly one, which
+    # the solver treats as a kernel it cannot use.
+    out[kind == kk] <- ifelse(m <= .EMC_ALLOC_MIN_MOVE * (1 + 1e-9), 1, 1 - m)
+  }
+  out
+}
+
 # Candidate expected collapsed moves per iteration: eighths up to 4, then
 # halves, then the cap itself.
 .emc_alloc_joint_grid <- function(cap) {
@@ -971,24 +1016,16 @@
         last$K <- .emc_alloc_khist_sum(last$K, oK)
       }
     }
-    # A coordinate's factor weighs its own rounds against its kind's pooled
-    # factor (or the prior) by the rounds behind each, so a handful of
-    # rounds shade the reference rather than replace it (see the header).
+    # A coordinate's factor is its own rounds' shrunk towards its kind's by
+    # their noise and the kind's spread (.emc_alloc_shrink_g), so a handful
+    # of rounds shade the reference rather than replace it.
     nk <- last$n
     last_n <- nk
     last_iters <- last$iters
     g_measured <- nk > 0
     g_obs <- ifelse(g_measured,
                     pmin(1, pmax(0, 1 - (last$E / pmax(nk, 1e-12)) / (2 * g_var))), NA_real_)
-    kind <- rep(1:2, each = p)
-    g_ref <- rep(.EMC_ALLOC_SHEAR_PRIOR_G, 2L * p)
-    for (kk in 1:2) {
-      sel <- g_measured & kind == kk
-      if (!any(sel)) sel <- g_measured
-      if (any(sel)) g_ref[kind == kk] <- sum(nk[sel] * g_obs[sel]) / sum(nk[sel])
-    }
-    n0 <- .EMC_ALLOC_ROUND_EVIDENCE
-    g_fac <- ifelse(g_measured, (nk * g_obs + n0 * g_ref) / (nk + n0), g_ref)
+    g_fac <- .emc_alloc_shrink_g(g_obs, nk, rep(1:2, each = p))
     g_sat <- .emc_alloc_saturation(
       g_fac, last$N / pmax(1, rowSums(last$K)) / (2 * g_var), last$K)
   }
