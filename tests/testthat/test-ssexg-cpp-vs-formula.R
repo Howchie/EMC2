@@ -25,7 +25,7 @@ RNGkind("L'Ecuyer-CMRG")
 
 .make_design_verify <- function() {
   design(
-    model    = SSEXG,
+    model    = plain_link(SSEXG),
     factors  = list(subjects = 1, S = c("left", "right")),
     Rlevels  = c("left", "right"),
     matchfun = function(d) as.character(d$S) == as.character(d$lR),

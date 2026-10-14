@@ -8,7 +8,7 @@ ddm_var_frame <- function(rt, R) {
 }
 
 ddm_var_data <- function(rt, R, rt_resolution = NULL, dat = ddm_var_frame(rt, R)) {
-  des <- design(data = dat, model = DDM,
+  des <- design(data = dat, model = plain_link(DDM),
                 formula = list(v ~ 1, a ~ 1, t0 ~ 1, s ~ 1, Z ~ 1, sv ~ 1, SZ ~ 1, st0 ~ 1),
                 constants = c(s = 0), verbose = FALSE)
   emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,

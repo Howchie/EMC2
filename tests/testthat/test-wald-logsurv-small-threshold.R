@@ -23,7 +23,7 @@ small_threshold_design <- function() {
     matchfun = function(d) d$S == d$lR,
     formula  = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 0 + lM, sv ~ 1),
     constants = c(A = log(0), sv = log(0)),
-    model    = RDMSWTN,
+    model    = plain_link(RDMSWTN),
     report_p_vector = FALSE
   )
 }

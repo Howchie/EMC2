@@ -244,7 +244,8 @@ test_that("bound verdicts are per row on both sides of the cutoff", {
   # Bounds are the other consumer of the cell buffers.  Push t0 below its lower
   # bound and the whole particle must be rejected identically on both routes.
   for (cells in c(255L, 257L)) {
-    fx <- audit_fixture("RDM", n_trials = 600L, n_particles = 2L, cells = cells)
+    fx <- audit_fixture("RDM", n_trials = 600L, n_particles = 2L, cells = cells,
+                        plain = TRUE)
     fx$prop[1L, "t0"] <- log(1e-6)
     got <- audit_prologue(fx)
     expect_false(all(got$ok), info = paste("cells =", cells))

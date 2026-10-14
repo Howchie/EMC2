@@ -197,18 +197,21 @@ audit_data <- function(n_trials = 400L, cells = NULL, width = 1L,
 # A complete likelihood fixture: compressed data, the model closure, and a
 # particle cloud centred somewhere the likelihood is actually finite.  At
 # sampled_pars()' zeros t0 is 1 s, which floors every row and leaves the
-# fixture unable to discriminate anything at all.
+# fixture unable to discriminate anything at all.  `plain = TRUE` keeps every
+# link at its default sides (see plain_link), so a proposal can reach values
+# outside the bound.
 audit_fixture <- function(model = "RDM", n_trials = 400L, n_particles = 5L,
                           cells = NULL, width = 1L, formula = NULL,
                           constants = NULL, data = NULL, seed = 91026L,
                           spread = 0.04, rt_resolution = NULL, ...,
-                          branch = NULL) {
+                          branch = NULL, plain = FALSE) {
   spec <- .audit_model_spec(model, cells, width, branch = branch)
   branch_name <- if (identical(model, "PCOUNTER")) spec$branch else "default"
   dat <- if (is.null(data)) audit_data(n_trials, cells, width, seed = seed) else data
   if (identical(model, "PCOUNTER"))
     dat <- .audit_pcounter_branch_data(dat, branch_name)
   model_fun <- get(model, envir = asNamespace("EMC2"))
+  if (plain) model_fun <- plain_link(model_fun)
   des <- suppressMessages(design(
     data = dat, model = model_fun,
     formula = if (is.null(formula)) spec$formula else formula,

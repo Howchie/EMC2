@@ -136,10 +136,18 @@ get_p_types <- function(nams, reverse = FALSE){
   return(out)
 }
 
+# `bound` (a filled bound) links the transform to the declared support: a
+# lower or upper side the model and user leave unspecified moves from the
+# link's default (0 for exp and pnorm, 1 for pnorm) to the bound when the
+# bound is tighter, so the sampled real line maps inside the bound. Explicit
+# sides are kept. Parameters in `plain` (those with a constant) keep the
+# default sides, so constants and exception values keep their natural meaning.
+# A linked side records its default in `lower_inf`/`upper_inf`, the natural
+# value at a sampled -Inf/+Inf, so log(0) and qnorm(0) still give 0.
 fill_transform <- function(transform, model, p_vector,
                            supported=c("identity","exp","pnorm"),
                            has_lower=c("exp","pnorm"),has_upper=c("pnorm"),
-                           is_pre = FALSE){
+                           is_pre = FALSE, bound = NULL, plain = character()){
   if(!is.null(transform)){
     if (!all(transform$func %in% supported)){
       stop("Only ", paste(supported, collapse = ", "), " transforms supported")
@@ -175,18 +183,90 @@ fill_transform <- function(transform, model, p_vector,
   filled_lower[names(transform$lower)] <- transform$lower
   filled_upper[names(transform$upper)] <- transform$upper
 
+  explicit_lower <- !is.na(filled_lower)
+  explicit_upper <- !is.na(filled_upper)
+
   # Now fill in remainers
   filled_func[is.na(filled_func)] <- "identity"
   filled_lower[is.na(filled_lower) & (filled_func %in% has_lower)] <- 0
   filled_upper[is.na(filled_upper) & (filled_func %in% has_upper)] <- 1
+  lower_inf <- upper_inf <- numeric()
+  if (!is_pre && is.matrix(bound$minmax)) {
+    mm <- bound$minmax
+    for (p in intersect(colnames(mm), p_names)) {
+      if (p %in% plain) next
+      lo <- mm[1, p]
+      hi <- mm[2, p]
+      if (filled_func[[p]] %in% has_lower && !explicit_lower[[p]] &&
+          is.finite(lo) && lo > filled_lower[[p]]) {
+        lower_inf[[p]] <- filled_lower[[p]]
+        filled_lower[[p]] <- lo
+      }
+      if (filled_func[[p]] %in% has_upper && !explicit_upper[[p]] &&
+          is.finite(hi) && hi < filled_upper[[p]]) {
+        upper_inf[[p]] <- filled_upper[[p]]
+        filled_upper[[p]] <- hi
+      }
+    }
+  }
   # Remainers must be identity and have no bounds
   filled_lower[is.na(filled_lower)] <- -Inf
   filled_upper[is.na(filled_upper)] <- Inf
   out <- list(func=filled_func,lower=filled_lower,upper=filled_upper)
+  if (length(lower_inf)) out$lower_inf <- lower_inf
+  if (length(upper_inf)) out$upper_inf <- upper_inf
+  if (!is_pre) check_transform_bound(out, bound)
   if (!is.null(transform$pre_sum_terms) && !is_pre) {
     out$pre_sum_terms <- transform$pre_sum_terms
   }
   return(out)
+}
+
+# The natural-scale values a transform can reach must overlap the declared
+# bound, otherwise no sampled value is ever in bounds.
+check_transform_bound <- function(transform, bound) {
+  mm <- bound$minmax
+  if (!is.matrix(mm)) return(invisible(NULL))
+  for (p in intersect(colnames(mm), names(transform$func))) {
+    func <- transform$func[[p]]
+    reach <- switch(func,
+                    exp = c(transform$lower[[p]], Inf),
+                    pnorm = c(transform$lower[[p]], transform$upper[[p]]),
+                    c(-Inf, Inf))
+    if (max(reach[1], mm[1, p]) >= min(reach[2], mm[2, p]))
+      stop("bound for '", p, "' [", mm[1, p], ", ", mm[2, p],
+           "] lies outside the values its ", func, " transform can reach (",
+           reach[1], ", ", reach[2], ")")
+  }
+  invisible(NULL)
+}
+
+# Readable links for the non-identity parameters in `p_names`, e.g.
+# "0.05 + exp(x)".
+transform_labels <- function(transform, p_names) {
+  p_names <- intersect(p_names, names(transform$func))
+  out <- vapply(p_names, function(p) {
+    lo <- transform$lower[[p]]
+    up <- transform$upper[[p]]
+    num <- function(z) format(z, digits = 4)
+    switch(transform$func[[p]],
+           exp = if (lo == 0) "exp(x)" else paste0(num(lo), " + exp(x)"),
+           pnorm = if (lo == 0 && up == 1) "pnorm(x)" else
+             paste0(num(lo), " + ", num(up - lo), " * pnorm(x)"),
+           NA_character_)
+  }, character(1))
+  out[!is.na(out)]
+}
+
+# Parameters with a design column fixed by `constants` (`map` is the
+# per-parameter design matrices from sampled_pars(doMap = TRUE)). These keep
+# the plain link in fill_transform.
+constant_p_types <- function(constants, map, p_names) {
+  if (!length(constants)) return(character())
+  if (is.null(map)) return(intersect(names(constants), p_names))
+  hit <- vapply(map, function(m) any(colnames(m) %in% names(constants)),
+                logical(1))
+  names(map)[hit]
 }
 
 # `bound$exception` entries may repeat a name to declare several permitted

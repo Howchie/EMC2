@@ -8,7 +8,7 @@ fade_pars <- function(n, alpha = 2, beta = 3, lambda = 1.3, kappa = 0.7,
 
 fade_calc_ll <- function(dat, TC = list()) {
   matchfun <- function(d) as.character(d$S) == as.character(d$lR)
-  des <- design(data = dat, model = FRQfade, matchfun = matchfun,
+  des <- design(data = dat, model = plain_link(FRQfade), matchfun = matchfun,
     formula = list(alpha ~ 1, beta ~ 1, lambda ~ 1, kappa ~ 1, t0 ~ 1),
     TC = TC)
   emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,

@@ -132,7 +132,7 @@ test_that("point-start pair branches remain continuous and finite", {
 })
 
 make_exact_context <- function(dat, posdrift = TRUE, rho = .6) {
-  model <- BAwLcorr(posdrift = posdrift)
+  model <- plain_link(BAwLcorr(posdrift = posdrift))
   formula <- list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1,
                   k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
   des <- design(

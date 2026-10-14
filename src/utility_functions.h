@@ -566,6 +566,21 @@ inline std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List 
     }
   }
 
+  // param_name -> values at a sampled -Inf / +Inf (see TransformSpec)
+  std::unordered_map<std::string,double> lowerInfMap, upperInfMap;
+  if (transform.containsElementNamed("lower_inf")) {
+    NumericVector v = transform["lower_inf"];
+    CharacterVector nm = v.names();
+    for (int i = 0; i < v.size(); i++)
+      lowerInfMap[Rcpp::as<std::string>(nm[i])] = v[i];
+  }
+  if (transform.containsElementNamed("upper_inf")) {
+    NumericVector v = transform["upper_inf"];
+    CharacterVector nm = v.names();
+    for (int i = 0; i < v.size(); i++)
+      upperInfMap[Rcpp::as<std::string>(nm[i])] = v[i];
+  }
+
   // Now fill specs for each col in pars
   for (int j = 0; j < ncol; j++) {
     std::string colname = Rcpp::as<std::string>(cparnames[j]);
@@ -580,6 +595,10 @@ inline std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List 
       sp.lower = 0.0;  // or default
       sp.upper = 1.0;  // or default
     }
+    auto li = lowerInfMap.find(colname);
+    if (li != lowerInfMap.end()) sp.lower_inf = li->second;
+    auto ui = upperInfMap.find(colname);
+    if (ui != upperInfMap.end()) sp.upper_inf = ui->second;
     specs[j] = sp;
   }
 
@@ -628,22 +647,26 @@ inline NumericMatrix c_do_transform(NumericMatrix pars,
     TransformCode c      = sp.code;
     double        lw     = sp.lower;
     double        up     = sp.upper;
+    // Values at a sampled -Inf / +Inf (see TransformSpec).
+    const double lo_inf = std::isnan(sp.lower_inf) ? lw : sp.lower_inf;
 
     switch (c) {
     case EXP: {
       for (int i = 0; i < nrow; i++) {
       // lower + exp(real)
-      pars(i, col_idx) = lw + std::exp(pars(i, col_idx));
+      const double x = pars(i, col_idx);
+      pars(i, col_idx) = x == R_NegInf ? lo_inf : lw + std::exp(x);
     }
       break;
     }
     case PNORM: {
       double range = up - lw;
+      const double hi_inf = std::isnan(sp.upper_inf) ? lw + range : sp.upper_inf;
       for (int i = 0; i < nrow; i++) {
         // lower + range * Φ(real)
-        pars(i, col_idx) = lw +
-          range * R::pnorm(pars(i, col_idx), 0.0, 1.0,
-                           /*lower_tail=*/1, /*log_p=*/0);
+        const double x = pars(i, col_idx);
+        pars(i, col_idx) = x == R_NegInf ? lo_inf : x == R_PosInf ? hi_inf :
+          lw + range * R::pnorm(x, 0.0, 1.0, /*lower_tail=*/1, /*log_p=*/0);
       }
       break;
     }

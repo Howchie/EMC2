@@ -90,12 +90,22 @@ the remaining coefficients added linearly on the natural scale.}
 
 \item{transform}{A list with custom transformations to be applied to the parameters of the model,
 if the conventional transformations aren't desired.
-See \code{DDM()} for an example of such transformations}
+See \code{DDM()} for an example of such transformations. A \code{lower} or \code{upper}
+given here (or by the model) is used as is; any side left unspecified is
+taken from the parameter's bound (see \code{bound}).}
 
 \item{bound}{A list with custom bounds to be applied to the parameters of the model,
 if the conventional bound aren't desired.
-see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
-the likelihood landscape that cannot reasonable be achieved with \code{transform}}
+see \code{DDM()} for an example of such bounds. Where the transform can represent
+a side of the bound (the lower side of \code{exp}, both sides of \code{pnorm}), that
+side becomes the transform's limit, so every sampled value maps inside the
+bound: with the default t0 bound of 0.05, t0 = 0.05 + exp(x). Parameters
+with any design column fixed in \code{constants} keep the plain link
+(t0 = exp(x)) so that constants keep their natural values. Sides the
+transform cannot represent, and values pushed outside the bound after the
+transform (for example by a \code{"posttransform"} trend), are still checked:
+the likelihood of those trials is floored. \code{summary()} of a design prints
+each parameter's link.}
 
 \item{TC}{Optional list of truncation/censoring settings (\code{LT}, \code{LC}, \code{UC},
 \code{UT}, \code{pContaminant}, \code{guess_exclude}, ..., as for

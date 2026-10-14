@@ -1,6 +1,9 @@
 #ifndef EMC2_UTILITY_TYPES_H
 #define EMC2_UTILITY_TYPES_H
 
+#include <cmath>
+#include <limits>
+
 // Shared struct/enum type definitions used by utility_functions.h and transform_utils.h.
 // No function bodies here — only types.
 
@@ -30,6 +33,12 @@ struct TransformSpec {
   TransformCode code;
   double lower;
   double upper;
+  // Natural values at a sampled -Inf / +Inf; NaN means lower / upper. They
+  // differ for a side linked to a declared bound, whose plain endpoint (0, or
+  // 1 for a pnorm upper side) stays reachable so that log(0) and qnorm(0)
+  // still give exception values such as t0 = 0 or pGuess = 0.
+  double lower_inf = std::numeric_limits<double>::quiet_NaN();
+  double upper_inf = std::numeric_limits<double>::quiet_NaN();
 };
 
 // For pretransform

@@ -571,8 +571,9 @@ design_fmri <- function(design_matrix,
   n_pars <- length(par_names)
 
   # Fill up final results
-  model_list$transform <- fill_transform(dots$transform,model)
   model_list$bound <- fill_bound(dots$bound,model)
+  model_list$transform <- fill_transform(dots$transform, model,
+                                         bound = model_list$bound)
   model_list$pre_transform <- fill_transform(dots$pre_transform, model = model, p_vector = model_list$p_types, is_pre = TRUE)
   model <- function(){return(model_list)}
 

@@ -66,13 +66,13 @@ test_that("RT at and below t0 floors rather than producing a NaN", {
   # parameter-only term that forgot the RT-dependent guard would show up here as
   # a NaN or an Inf rather than as a floor.
   for (model in c("LBA", "RDM", "DDM")) {
-    fx <- audit_fixture(model, n_trials = 60L, n_particles = 1L)
+    fx <- audit_fixture(model, n_trials = 60L, n_particles = 1L, plain = TRUE)
     t0 <- exp(fx$centre[["t0"]])
     for (tag in c("below", "at", "just above")) {
       rt <- switch(tag, below = t0 / 2, at = t0, `just above` = t0 + 1e-7)
       dat <- fx$data
       dat$rt <- rt
-      corner <- audit_fixture(model, data = dat, n_particles = 1L)
+      corner <- audit_fixture(model, data = dat, n_particles = 1L, plain = TRUE)
       corner$prop <- fx$prop
       ll <- audit_ll_direct(corner)
       expect_all_finite(ll, paste(model, tag, "t0"))
@@ -147,7 +147,7 @@ test_that("out-of-bound parameters floor the whole particle", {
   # Bounds are checked per row but a failure floors the particle's total.  Each
   # of these is a different bound, so a bounds rewrite that dropped one would
   # leave the others passing.
-  fx <- audit_fixture("LBA", n_trials = 60L, n_particles = 1L)
+  fx <- audit_fixture("LBA", n_trials = 60L, n_particles = 1L, plain = TRUE)
   corners <- list(
     "t0 under its lower bound" = c(t0 = log(1e-9)),
     "B negative"               = c(B = -50),
@@ -167,7 +167,7 @@ test_that("one invalid particle does not floor its neighbours", {
   # The batch is the unit of the call but not of the verdict.  A scheduling or
   # chunking change that let one particle's rejection leak sideways would be
   # invisible in a single-particle test.
-  fx <- audit_fixture("LBA", n_trials = 60L, n_particles = 4L)
+  fx <- audit_fixture("LBA", n_trials = 60L, n_particles = 4L, plain = TRUE)
   base <- audit_ll_direct(fx)
   bad <- fx
   bad$prop[2L, "t0"] <- log(1e-9)

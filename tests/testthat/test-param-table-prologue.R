@@ -21,7 +21,8 @@ RNGkind("L'Ecuyer-CMRG")
 prologue_fixture <- function(formula, n_trials = 60, n_particles = 7,
                              covariates = NULL, cov_data = NULL,
                              constants = c(sv = log(1)), trend = NULL,
-                             pre_transform_terms = NULL, seed = 11) {
+                             pre_transform_terms = NULL, seed = 11,
+                             model = LBA) {
   set.seed(seed)
   dat <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1L], ]
   dat <- dat[rep(seq_len(nrow(dat)), length.out = n_trials), , drop = FALSE]
@@ -30,7 +31,7 @@ prologue_fixture <- function(formula, n_trials = 60, n_particles = 7,
   if (!is.null(cov_data)) for (nm in names(cov_data)) dat[[nm]] <- cov_data[[nm]]
   rownames(dat) <- NULL
 
-  args <- list(data = dat, model = LBA, matchfun = function(d) d$S == d$lR,
+  args <- list(data = dat, model = model, matchfun = function(d) d$S == d$lR,
                formula = formula, constants = constants)
   if (!is.null(covariates)) args$covariates <- covariates
   if (!is.null(trend)) args$trend <- trend
@@ -141,7 +142,8 @@ test_that("bound verdicts are per row, not per column", {
   # B ~ E with one level pushed below its lower bound: the trials in that cell
   # must be rejected and the others kept.  A row-constant short cut that
   # collapsed the column would fail this in whichever direction it got wrong.
-  fx <- prologue_fixture(list(v ~ 1, B ~ E, A ~ 1, t0 ~ 1), n_particles = 1)
+  fx <- prologue_fixture(list(v ~ 1, B ~ E, A ~ 1, t0 ~ 1), n_particles = 1,
+                         model = plain_link(LBA))
   ok_all <- run_prologue(fx)$ok
   expect_true(all(ok_all))
 

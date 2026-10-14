@@ -7,6 +7,7 @@
 #include <utility>
 #include <numeric>
 #include <cstring>
+#include <limits>
 #include "utility_types.h"
 #include "emc_scratch.h"
 using Rcpp::_;
@@ -53,6 +54,8 @@ struct DesignEntry {
   TransformCode split_code;      // transform to apply to pre-sum
   double split_lower;
   double split_upper;
+  double split_lower_inf;        // value at a pre-sum of -Inf / +Inf (see
+  double split_upper_inf;        // TransformSpec); NaN means lower / upper
   std::vector<char> coef_in_pre_sum; // length K; whether this design column contributes to pre-sum
   // 0-based row map for a compressed design matrix; empty means identity.
   std::vector<int> expand_idx;
@@ -208,6 +211,7 @@ struct ParamTable {
   std::unordered_map<std::string, std::unordered_set<std::string>> pre_sum_term_map_;
   std::unordered_map<std::string, TransformCode> split_code_map_;
   std::unordered_map<std::string, std::pair<double, double>> split_bounds_map_;
+  std::unordered_map<std::string, std::pair<double, double>> split_inf_map_;
 
   ParamTable() = default;
 
@@ -276,6 +280,7 @@ struct ParamTable {
     pre_sum_term_map_.clear();
     split_code_map_.clear();
     split_bounds_map_.clear();
+    split_inf_map_.clear();
 
     if (!transform.containsElementNamed("pre_sum_terms")) return;
     Rcpp::List pre_sum_terms = transform["pre_sum_terms"];
@@ -314,6 +319,18 @@ struct ParamTable {
         split_bounds_map_[Rcpp::as<std::string>(unames[i])].second = upper[i];
       }
     }
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (const char* side : {"lower_inf", "upper_inf"}) {
+      if (!transform.containsElementNamed(side)) continue;
+      Rcpp::NumericVector v = transform[side];
+      Rcpp::CharacterVector vnames = v.names();
+      const bool is_lower = std::string(side) == "lower_inf";
+      for (int i = 0; i < v.size(); ++i) {
+        auto it = split_inf_map_.emplace(Rcpp::as<std::string>(vnames[i]),
+                                         std::make_pair(nan, nan)).first;
+        (is_lower ? it->second.first : it->second.second) = v[i];
+      }
+    }
   }
 
   void init_design_plan(const Rcpp::List& designs) {
@@ -338,6 +355,8 @@ struct ParamTable {
       entry.split_code = IDENTITY;
       entry.split_lower = 0.0;
       entry.split_upper = 1.0;
+      entry.split_lower_inf = std::numeric_limits<double>::quiet_NaN();
+      entry.split_upper_inf = std::numeric_limits<double>::quiet_NaN();
       entry.expand_idx.clear();
       entry.single_cell = false;
       entry.cell_usable = false;
@@ -393,6 +412,11 @@ struct ParamTable {
         if (bound_it != split_bounds_map_.end()) {
           entry.split_lower = bound_it->second.first;
           entry.split_upper = bound_it->second.second;
+        }
+        auto inf_it = split_inf_map_.find(out_name);
+        if (inf_it != split_inf_map_.end()) {
+          entry.split_lower_inf = inf_it->second.first;
+          entry.split_upper_inf = inf_it->second.second;
         }
       }
 
@@ -458,12 +482,16 @@ struct ParamTable {
     }
   }
 
-  static inline double apply_split_transform_scalar(double x, TransformCode code,
-                                                    double lower, double upper) {
-    switch (code) {
+  static inline double apply_split_transform_scalar(double x, const DesignEntry& e) {
+    const double lower = e.split_lower;
+    const double upper = e.split_upper;
+    switch (e.split_code) {
     case EXP:
+      if (x == R_NegInf) return std::isnan(e.split_lower_inf) ? lower : e.split_lower_inf;
       return lower + std::exp(x);
     case PNORM:
+      if (x == R_NegInf) return std::isnan(e.split_lower_inf) ? lower : e.split_lower_inf;
+      if (x == R_PosInf) return std::isnan(e.split_upper_inf) ? upper : e.split_upper_inf;
       return lower + (upper - lower) * R::pnorm(x, 0.0, 1.0, 1, 0);
     case IDENTITY:
     default:
@@ -771,8 +799,7 @@ struct ParamTable {
             else post += contrib;
           }
           const double v = entry.split_transform
-            ? apply_split_transform_scalar(pre, entry.split_code,
-                                           entry.split_lower, entry.split_upper) + post
+            ? apply_split_transform_scalar(pre, entry) + post
             : post;
           std::fill(outc, outc + T, v);
           continue;
@@ -838,9 +865,7 @@ struct ParamTable {
             }
             if (entry.split_transform) {
               for (int c = 0; c < n_cells; ++c) {
-                post_val[c] = apply_split_transform_scalar(
-                  pre_val[c], entry.split_code, entry.split_lower,
-                  entry.split_upper) + post_val[c];
+                post_val[c] = apply_split_transform_scalar(pre_val[c], entry) + post_val[c];
               }
             }
             for (int r = 0; r < T; ++r) outc[r] = post_val[ex[r]];
@@ -893,9 +918,7 @@ struct ParamTable {
         }
 
         for (int r = 0; r < T; ++r) {
-          out[r] = apply_split_transform_scalar(
-            pre_acc[r], entry.split_code, entry.split_lower, entry.split_upper
-          ) + post_acc[r];
+          out[r] = apply_split_transform_scalar(pre_acc[r], entry) + post_acc[r];
         }
       } else {
         for (int j = 0; j < K; ++j) {

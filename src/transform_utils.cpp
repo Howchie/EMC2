@@ -34,6 +34,27 @@ make_transform_specs_for_paramtable(const ParamTable& pt,
     }
   }
 
+  std::unordered_map<std::string, std::pair<double,double>> infMap;
+  {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    if (transform.containsElementNamed("lower_inf")) {
+      NumericVector v = transform["lower_inf"];
+      CharacterVector nm = v.names();
+      for (int i = 0; i < v.size(); i++) {
+        auto& e = infMap.emplace(as<std::string>(nm[i]), std::make_pair(nan, nan)).first->second;
+        e.first = v[i];
+      }
+    }
+    if (transform.containsElementNamed("upper_inf")) {
+      NumericVector v = transform["upper_inf"];
+      CharacterVector nm = v.names();
+      for (int i = 0; i < v.size(); i++) {
+        auto& e = infMap.emplace(as<std::string>(nm[i]), std::make_pair(nan, nan)).first->second;
+        e.second = v[i];
+      }
+    }
+  }
+
   std::vector<TransformSpec> specs;
   specs.reserve(pt.base_names.size());
 
@@ -52,6 +73,11 @@ make_transform_specs_for_paramtable(const ParamTable& pt,
     } else {
       s.lower = 0.0;
       s.upper = 1.0;
+    }
+    auto iti = infMap.find(name);
+    if (iti != infMap.end()) {
+      s.lower_inf = iti->second.first;
+      s.upper_inf = iti->second.second;
     }
 
     specs.push_back(s);
@@ -250,6 +276,16 @@ void c_do_transform_pt(ParamTable& pt,
     const TransformCode c = sp.code;
     const double lw = sp.lower;
     const double up = sp.upper;
+    // Values at a sampled -Inf / +Inf (see TransformSpec).
+    const double lo_inf = std::isnan(sp.lower_inf) ? lw : sp.lower_inf;
+    const double hi_inf = std::isnan(sp.upper_inf) ? lw + (up - lw) : sp.upper_inf;
+    const double neg_inf = R_NegInf;
+    const double pos_inf = R_PosInf;
+    auto f_exp = [&](double x) { return x == neg_inf ? lo_inf : lw + std::exp(x); };
+    auto f_pnorm = [&](double x) {
+      return x == neg_inf ? lo_inf
+           : x == pos_inf ? hi_inf : lw + (up - lw) * pnorm_std(x);
+    };
 
     double* col = &pt.base(0, col_idx);
     // A transform is a pointwise function, so it preserves row-constancy: one
@@ -265,7 +301,7 @@ void c_do_transform_pt(ParamTable& pt,
     switch (c) {
     case EXP: {
       if (cst) {
-        const double v = lw + std::exp(col[0]);
+        const double v = f_exp(col[0]);
         std::fill(col, col + nrow, v);
         break;
       }
@@ -278,20 +314,19 @@ void c_do_transform_pt(ParamTable& pt,
         if (v != nullptr) {
           for (int k = 0; k < ce->n_cells; ++k) {
             const int rep = ce->cell_rep[k];
-            v[k] = (rep >= 0) ? lw + std::exp(col[rep]) : 0.0;
+            v[k] = (rep >= 0) ? f_exp(col[rep]) : 0.0;
           }
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
           break;
         }
       }
-      for (int i = 0; i < nrow; ++i) col[i] = lw + std::exp(col[i]);
+      for (int i = 0; i < nrow; ++i) col[i] = f_exp(col[i]);
       break;
     }
     case PNORM: {
-      const double range = up - lw;
       if (cst) {
-        const double v = lw + range * pnorm_std(col[0]);
+        const double v = f_pnorm(col[0]);
         std::fill(col, col + nrow, v);
         break;
       }
@@ -302,7 +337,7 @@ void c_do_transform_pt(ParamTable& pt,
         if (v != nullptr) {
           for (int k = 0; k < ce->n_cells; ++k) {
             const int rep = ce->cell_rep[k];
-            v[k] = (rep >= 0) ? lw + range * pnorm_std(col[rep]) : 0.0;
+            v[k] = (rep >= 0) ? f_pnorm(col[rep]) : 0.0;
           }
           const int* ex = ce->expand_idx.data();
           for (int i = 0; i < nrow; ++i) col[i] = v[ex[i]];
@@ -310,7 +345,7 @@ void c_do_transform_pt(ParamTable& pt,
         }
       }
       for (int i = 0; i < nrow; ++i) {
-        col[i] = lw + range * pnorm_std(col[i]);
+        col[i] = f_pnorm(col[i]);
       }
       break;
     }

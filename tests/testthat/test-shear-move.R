@@ -402,9 +402,21 @@ test_that("the C++ candidates are the R state, transport and hierarchical terms"
   }
 })
 
-test_that("transport walls come from the model's declared bounds and the subject's closest one", {
+test_that("bounds the transform enforces leave no transport walls", {
   dat <- droplevels(forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ])
   des <- suppressMessages(design(data = dat, model = LBA, matchfun = function(d) d$S == d$lR,
+                                 formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1),
+                                 constants = c(sv = log(1))))
+  emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))
+  support <- EMC2:::.emc_shear_support(emc[[1]])
+  expect_true(all(lengths(support) == 0L))
+})
+
+test_that("transport walls come from the model's declared bounds and the subject's closest one", {
+  # The plain link leaves the declared bounds inside the transform's range.
+  dat <- droplevels(forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ])
+  des <- suppressMessages(design(data = dat, model = plain_link(LBA),
+                                 matchfun = function(d) d$S == d$lR,
                                  formula = list(v ~ lM, B ~ E, A ~ 1, t0 ~ 1),
                                  constants = c(sv = log(1))))
   emc <- suppressMessages(make_emc(dat, des, n_chains = 1, compress = TRUE))

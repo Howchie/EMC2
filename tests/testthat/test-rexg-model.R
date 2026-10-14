@@ -79,7 +79,7 @@ test_that("REXG compiled likelihood includes zero-truncation normalizer", {
     Rlevels = 1,
     formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
     functions = list(lI = lI_fun),
-    model = REXG
+    model = plain_link(REXG)
   )
   dat <- data.frame(
     subjects = factor(1), S = factor(1), R = factor(1, levels = 1), rt = 0.75

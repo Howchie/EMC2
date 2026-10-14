@@ -1,6 +1,28 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Bounds are part of the transform (model change):** a declared bound
+    side that the transform can represent now sets the transform's limit,
+    so the sampler maps the whole real line inside the bound instead of
+    hitting a likelihood cliff at it. For example, t0 with the default
+    bound of 0.05 is now `t0 = 0.05 + exp(x)` (it was `exp(x)`, floored
+    below 0.05), and `pContaminant` is `0.001 + 0.998 * pnorm(x)`. Lower
+    sides of `exp` and both sides of `pnorm` are linked; `identity` and the
+    upper side of `exp` keep the strict bound check. Sides declared in a
+    model's or user's `transform` are kept as given, and a
+    `design(bound = ...)` override moves the link with it. Parameters with
+    a constant keep the plain link, so constants and exception values
+    (`t0 = log(0)`, `A = log(0)`, ...) mean what they did, and a sampled
+    `log(0)` or `qnorm(0)` still maps to 0 on a linked parameter.
+    This changes the model: the group distribution of t0 is now normal on
+    `log(t0 - 0.05)`, so its implied density goes to zero at the bound
+    rather than being cut off there. Fits whose t0 posteriors sat on 0.05
+    will differ. Sampled-scale numbers (priors, start values, `make_data`
+    parameter vectors, `get_pars(map = FALSE)`) for linked parameters are on
+    the shifted scale; `summary()` of a design prints each link. Designs,
+    priors and fits made before this change keep the transform stored in
+    them and map exactly as before.
+
 -   **One sampler:** the ensemble group update, shear rounds (with bound
     walls), the collapsed move, subject HMC and the move allocator
     always run where the model supports them. The `emc2.*` options that

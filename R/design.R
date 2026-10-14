@@ -151,11 +151,21 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' the remaining coefficients added linearly on the natural scale.
 #' @param transform A list with custom transformations to be applied to the parameters of the model,
 #' if the conventional transformations aren't desired.
-#' See `DDM()` for an example of such transformations
+#' See `DDM()` for an example of such transformations. A `lower` or `upper`
+#' given here (or by the model) is used as is; any side left unspecified is
+#' taken from the parameter's bound (see `bound`).
 #' @param bound A list with custom bounds to be applied to the parameters of the model,
 #' if the conventional bound aren't desired.
-#' see `DDM()` for an example of such bounds. Bounds are used to set limits to
-#' the likelihood landscape that cannot reasonable be achieved with `transform`
+#' see `DDM()` for an example of such bounds. Where the transform can represent
+#' a side of the bound (the lower side of `exp`, both sides of `pnorm`), that
+#' side becomes the transform's limit, so every sampled value maps inside the
+#' bound: with the default t0 bound of 0.05, t0 = 0.05 + exp(x). Parameters
+#' with any design column fixed in `constants` keep the plain link
+#' (t0 = exp(x)) so that constants keep their natural values. Sides the
+#' transform cannot represent, and values pushed outside the bound after the
+#' transform (for example by a `"posttransform"` trend), are still checked:
+#' the likelihood of those trials is floored. `summary()` of a design prints
+#' each parameter's link.
 #' @param marginalise Optional. Names one shared race-model parameter (e.g.
 #' `"t0"`) to be *marginalised* out of the sampler by numerical quadrature
 #' rather than sampled directly. This is available for group-level samplers and
@@ -463,7 +473,9 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     model_list <- model()
     model <- function(){return(model_list)}
   }
-  p_vector <- sampled_pars(design, include_pooled = TRUE)
+  p_vector <- sampled_pars(design, include_pooled = TRUE, doMap = TRUE)
+  p_map <- attr(p_vector, "map")
+  attr(p_vector, "map") <- NULL
   if (!is.null(design$pooled)) {
     bad <- setdiff(design$pooled, names(p_vector))
     if (length(bad))
@@ -481,13 +493,15 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                 " in formula not found in model p_types"))
   }
   model_list <- model()
-  model_list$transform <- fill_transform(transform,model)
+  model_list$bound <- fill_bound(bound,model)
+  model_list$transform <- fill_transform(
+    transform, model, bound = model_list$bound,
+    plain = constant_p_types(constants, p_map, names(model_list$p_types)))
   model_list$transform$pre_sum_terms <- validate_pre_transform_terms(
     pre_transform_terms = pre_transform_terms,
     design = design,
     model = model
   )
-  model_list$bound <- fill_bound(bound,model)
   model_list$pre_transform <- fill_transform(pre_transform, model = model, p_vector = p_vector, is_pre = TRUE)
   model <- function(){return(model_list)}
   design$model <- model
@@ -2415,6 +2429,12 @@ summary.emc.design <- function(object, ...){
   if (length(object$pooled)) {
     cat("\n Pooled (shared by all subjects): \n")
     print(object$pooled)
+  }
+  links <- if (is.function(object$model))
+    transform_labels(object$model()$transform, names(attr(p_vector, "map")))
+  if (length(links)) {
+    cat("\n Transforms (natural value from sampled x): \n")
+    cat(paste0("  ", names(links), " = ", links, collapse = "\n"), "\n")
   }
   cat("\n Design Matrices: \n")
   map_out <- sampled_pars(object,add_da = TRUE, doMap = TRUE, data = list(...)$data)

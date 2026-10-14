@@ -135,7 +135,7 @@ test_that("ordinary self-intercept designs retain their existing mapping", {
   p[] <- 0
   p["t0"] <- log(0.2)
   mapped <- EMC2:::get_pars_matrix_oo(p, dadm, des$model())
-  expect_equal(unique(mapped[, "t0"]), 0.2, tolerance = 1e-12)
+  expect_equal(unique(mapped[, "t0"]), 0.05 + 0.2, tolerance = 1e-12)
 })
 
 test_that("auto factor detection keeps factor inputs used by functions", {
@@ -181,7 +181,7 @@ test_that("pre_transform_terms applies selected race-model contrasts on the natu
 
   design_default <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ E + lM, B ~ 1, A ~ 1, t0 ~ 1),
     contrasts = list(v = list(lM = ADmat)),
@@ -190,7 +190,7 @@ test_that("pre_transform_terms applies selected race-model contrasts on the natu
 
   design_natural <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ E + lM, B ~ 1, A ~ 1, t0 ~ 1),
     contrasts = list(v = list(lM = ADmat)),
@@ -229,7 +229,7 @@ test_that("pre_transform_terms only rejects natural-scale negatives when bounds 
 
   design_pos <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ 1, B ~ E + lM, A ~ 1, t0 ~ 1),
     contrasts = list(B = list(lM = ADmat)),
@@ -239,7 +239,7 @@ test_that("pre_transform_terms only rejects natural-scale negatives when bounds 
 
   design_free <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ 1, B ~ E + lM, A ~ 1, t0 ~ 1),
     contrasts = list(B = list(lM = ADmat)),
@@ -284,7 +284,7 @@ test_that("make_data returns trialwise parameters that respect pre_transform_ter
 
   design_nat <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ E + lM, B ~ 1, A ~ 1, t0 ~ 1),
     contrasts = list(v = list(lM = ADmat)),
@@ -327,7 +327,7 @@ test_that("predict.emc propagates pre_transform_terms through make_data", {
 
   design_nat <- design(
     data = dat,
-    model = RDM,
+    model = plain_link(RDM),
     matchfun = matchfun,
     formula = list(v ~ E + lM, B ~ 1, A ~ 1, t0 ~ 1),
     contrasts = list(v = list(lM = ADmat)),

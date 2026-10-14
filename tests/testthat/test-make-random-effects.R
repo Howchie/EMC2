@@ -87,7 +87,7 @@ test_that("make_random_effects errors when bounded draws cannot be resampled", {
     factors = list(subjects = 1:2, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = BAwL,
+    model = plain_link(BAwL),
     constants = c(sv = log(1)),
     formula = list(v ~ lM, B ~ 1, t0 ~ 1, A ~ 1),
     report_p_vector = FALSE
@@ -140,7 +140,7 @@ test_that("make_random_effects applies the likelihood's strict bounds", {
     factors = list(subjects = 1:2, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = BAwL,
+    model = plain_link(BAwL),
     constants = c(sv = log(1)),
     formula = list(v ~ lM, B ~ 1, t0 ~ 1, A ~ 1, pContaminant ~ 1),
     report_p_vector = FALSE

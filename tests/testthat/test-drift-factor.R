@@ -27,7 +27,7 @@ df_formula <- function(correlated = TRUE) {
 df_design <- function(dat, model, correlated = TRUE) {
   design(data = dat, Rlevels = levels(dat$R), matchfun = df_matchfun,
          formula = df_formula(correlated), constants = c(s = 0, mG = 0, mK = 0),
-         model = model, report_p_vector = FALSE)
+         model = plain_link(model), report_p_vector = FALSE)
 }
 
 # v is on the log scale under posdrift = TRUE and the natural scale otherwise;

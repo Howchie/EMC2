@@ -105,7 +105,7 @@ test_that("the compiled mixture matches the reference on every trial kind", {
   des <- design(
     factors = list(subjects = 1, S = 1), Rlevels = 1,
     formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1, pContaminant ~ 1, pGuess ~ 1),
-    functions = list(lI = lI_single), model = REXG)
+    functions = list(lI = lI_single), model = plain_link(REXG))
   dat <- data.frame(
     subjects = factor(1), S = factor(1), R = factor(1, levels = 1),
     rt = c(0.45, 0.55, 0.70, 0.95, Inf, -Inf, NA),
@@ -146,7 +146,7 @@ test_that("the mixture is proper: it integrates to 1 over the window", {
   des <- design(
     factors = list(subjects = 1, S = 1), Rlevels = c("a", "b"),
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
-    model = RDM, constants = c(s = log(1)))
+    model = plain_link(RDM), constants = c(s = log(1)))
   pG <- 0.2
   p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(pG))
 
@@ -177,7 +177,7 @@ test_that("a two-response DDM on [0, 5] reproduces HDDM's w_outlier = 0.1", {
   des <- design(factors = list(subjects = 1, S = c("left", "right")),
                 Rlevels = c("left", "right"),
                 formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
-                model = DDM, constants = c(s = log(1)))
+                model = plain_link(DDM), constants = c(s = log(1)))
   # A guess window of exactly [0, 5] over two responses is HDDM's setup.
   dat <- data.frame(subjects = factor(1), S = factor("left", levels = c("left", "right")),
                     R = factor(c("left", "right"), levels = c("left", "right")),
@@ -214,7 +214,7 @@ test_that("a guess window narrower than the data is refused, not silently widene
   des <- design(factors = list(subjects = 1, S = c("left", "right")),
                 Rlevels = c("left", "right"),
                 formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
-                model = DDM, constants = c(s = log(1)))
+                model = plain_link(DDM), constants = c(s = log(1)))
   dat <- data.frame(subjects = factor(1),
                     S = factor("left", levels = c("left", "right")),
                     R = factor("left", levels = c("left", "right")),
@@ -252,7 +252,7 @@ test_that("expand and compressed branches agree with pGuess active", {
   des <- design(
     factors = list(subjects = 1, S = 1), Rlevels = 1,
     formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1, pContaminant ~ 1, pGuess ~ 1),
-    functions = list(lI = lI_single), model = REXG)
+    functions = list(lI = lI_single), model = plain_link(REXG))
   dat <- data.frame(
     subjects = factor(1), S = factor(1), R = factor(1, levels = 1),
     rt = c(0.45, 0.55, 0.70, 0.95, -Inf, Inf),
@@ -393,7 +393,7 @@ test_that("guess_exclude removes excluded levels during simulation", {
   des <- design(factors = list(subjects = 1, S = c("left", "right")),
                 Rlevels = c("left", "right"), matchfun = matchfun,
                 formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
-                model = RDM, constants = c(s = log(1)),
+                model = plain_link(RDM), constants = c(s = log(1)),
                 TC = list(guess_exclude = "right", guess_window = c(2, 4)))
   p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(0.999))
   sim_dat <- make_data(p, des, n_trials = 200)
@@ -408,7 +408,7 @@ test_that("guess_exclude modifies guess density and sets floor only on eligible 
   des <- design(factors = list(subjects = 1, S = c("left", "right")),
                 Rlevels = c("left", "right"),
                 formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
-                model = DDM, constants = c(s = log(1)),
+                model = plain_link(DDM), constants = c(s = log(1)),
                 TC = list(guess_window = c(0, 5), guess_exclude = "right"))
   dat <- data.frame(subjects = factor(1), S = factor("left", levels = c("left", "right")),
                     R = factor(c("left", "right"), levels = c("left", "right")),
@@ -443,7 +443,7 @@ test_that("guess_exclude works in race models across fast and slow paths", {
   des <- design(factors = list(subjects = 1, S = c("r1", "r2", "r3")),
                 Rlevels = c("r1", "r2", "r3"), matchfun = matchfun,
                 formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
-                model = RDM, constants = c(s = log(1)),
+                model = plain_link(RDM), constants = c(s = log(1)),
                 TC = list(guess_window = c(0, 10), guess_exclude = "r2"))
   dat <- data.frame(
     subjects = factor(1),
@@ -487,7 +487,7 @@ test_that("guess_exclude preserves propriety: total mass across responses integr
   des <- design(factors = list(subjects = 1, S = c("a", "b")),
                 Rlevels = c("a", "b"), matchfun = matchfun,
                 formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
-                model = RDM, constants = c(s = log(1)),
+                model = plain_link(RDM), constants = c(s = log(1)),
                 TC = list(guess_window = c(0, 10), guess_exclude = "b"))
   pG <- 0.35
   p <- c(v = log(2), B = log(1), A = log(0.3), t0 = log(0.2), pGuess = qnorm(pG))
@@ -521,7 +521,7 @@ test_that("guess_exclude works in LogicalRules", {
     fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
                                      levels = c("A", "B", "n_A", "n_B")),
     matchfun = matchfun,
-    model = LogicalRulesRDMSWTN,
+    model = plain_link(LogicalRulesRDMSWTN),
     formula = list(v ~ 0 + GoA + GoB + NegA + NegB,
                    B ~ 0 + GoA + GoB + NegA + NegB,
                    t0 ~ 1, A ~ 1, s ~ 1, pGuess ~ 1),
@@ -573,7 +573,7 @@ test_that("guess_exclude works in BAwLcorr", {
   des <- design(
     data = dat, Rlevels = c("left", "right"), matchfun = matchfun,
     formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1, rho ~ 1, pGuess ~ 1),
-    constants = c(sv = log(1), k = log(0), mG = 0, mK = 0), model = m_corr,
+    constants = c(sv = log(1), k = log(0), mG = 0, mK = 0), model = plain_link(m_corr),
     TC = list(guess_window = c(0, 10), guess_exclude = "right")
   )
   dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
@@ -614,7 +614,7 @@ test_that("guess_exclude is respected in the BAwLcorr quadrature fallback", {
     data = dat, Rlevels = response_levels, matchfun = matchfun,
     formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1,
                    rho ~ 1, pGuess ~ 1),
-    constants = c(sv = log(1), k = 0, mG = 0, mK = 0), model = m_corr,
+    constants = c(sv = log(1), k = 0, mG = 0, mK = 0), model = plain_link(m_corr),
     TC = list(guess_window = c(0, 10), guess_exclude = "pm")
   )
   dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
@@ -660,7 +660,7 @@ test_that("guess_exclude works in RDMSWTNcorr", {
     formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1,
                    mG ~ 1, mK ~ 1, rho ~ 1, pGuess ~ 1),
     constants = c(s = 0, mG = 0, mK = 0),
-    model = RDMSWTNcorr,
+    model = plain_link(RDMSWTNcorr),
     TC = list(guess_window = c(0, 10), guess_exclude = "b")
   )
   dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
@@ -690,7 +690,7 @@ test_that("guess_exclude applies 1/W guess density to missing responses (R = NA)
     factors = list(subjects = 1, S = c("s1", "s2")),
     Rlevels = c("r1", "r2", "r3"),
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, pGuess ~ 1),
-    model = RDM,
+    model = plain_link(RDM),
     constants = c(s = log(1)),
     TC = list(guess_window = c(0, 10), guess_exclude = "r2")
   )
@@ -721,7 +721,7 @@ test_that("guess_exclude applies 1/W guess density to missing responses (R = NA)
     factors = list(subjects = 1, S = c("left", "right")),
     Rlevels = c("left", "right"),
     formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
-    model = DDM,
+    model = plain_link(DDM),
     constants = c(s = log(1)),
     TC = list(guess_window = c(0, 5), guess_exclude = "right")
   )

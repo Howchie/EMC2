@@ -6,7 +6,7 @@ bin_design <- function(model, formula) {
   design(factors = list(subjects = 1, S = c("left", "right")),
          Rlevels = c("left", "right"),
          matchfun = function(d) d$S == d$lR,
-         formula = formula, model = model, verbose = FALSE)
+         formula = formula, model = plain_link(model), verbose = FALSE)
 }
 
 bin_dadm <- function(dat, des, rt_resolution, compress = FALSE) {
@@ -271,7 +271,7 @@ test_that("drift and copula races retain their boundary-bin probability", {
 
 test_that("timed bins retain responses before the response accumulator onset", {
   des <- design(factors = list(subjects = 1, S = "stim"),
-    Rlevels = c("left", "right", "time"), model = LNR,
+    Rlevels = c("left", "right", "time"), model = plain_link(LNR),
     formula = list(m ~ 0 + lR, s ~ 1, t0 ~ 0 + lR), verbose = FALSE,
     report_p_vector = FALSE)
   dat <- data.frame(subjects = factor(1), S = factor("stim"),

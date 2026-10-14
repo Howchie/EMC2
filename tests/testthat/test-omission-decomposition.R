@@ -27,7 +27,7 @@ omx_test_emc <- function(model, tc = list()) {
   m <- if (is.function(model)) model() else model
   formula <- lapply(names(m$p_types), function(nm)
     stats::as.formula(paste0(nm, " ~ 1")))
-  des <- design(data = data, model = model, formula = formula, TC = tc)
+  des <- design(data = data, model = plain_link(model), formula = formula, TC = tc)
   emc <- make_emc(data, des, type = "single", compress = FALSE, n_chains = 1)
   pnames <- names(sampled_pars(des))
   values <- omx_test_values(model)[pnames]
