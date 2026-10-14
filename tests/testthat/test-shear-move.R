@@ -365,54 +365,20 @@ test_that("the full transport inverts and composes from below the wall too", {
 test_that("the C++ candidates are the R state, transport and hierarchical terms", {
   for (type in c("standard", "diagonal-gamma")) {
     f <- shear_fixture(type)
-    p <- length(f$mu); n <- ncol(f$alpha)
+    p <- length(f$mu)
     fits <- f$ctx$fits; prior <- f$sampler$prior; spec <- f$ctx$spec
     walls <- shear_walls(f)
     cur <- EMC2:::.emc_shear_state(f$mu, f$V, fits, prior, spec)
     cur_hier <- EMC2:::.emc_shear_log_hier(f$alpha, cur)
-    # Curved frames: random coefficients around each fixed fit.
-    q <- 1:2
-    nf <- 1 + p + length(q) * (length(q) + 1) / 2
-    set.seed(11)
-    B <- lapply(seq_len(n), function(s) {
-      if (is.null(fits[[s]])) return(NULL)
-      quad <- s > 1
-      coef <- matrix(rnorm((if (quad) nf else 1 + p) * (p + p * p), 0, 0.05), if (quad) nf else 1 + p)
-      coef[1, ] <- c(fits[[s]]$lin, as.vector(fits[[s]]$prec))
-      list(coef = coef, quad = quad)
-    })
-    curve <- list(mu0 = f$mu + 0.1, T = diag(p), q = q, B = B,
-                  sets = EMC2:::.emc_shear_curve_sets(B, q))
-    # Curved in the log sds too: the features gain the standardised log sds.
-    l <- c(2L, 1L)
-    B_l <- lapply(B, function(b) {
-      if (is.null(b)) return(NULL)
-      extra <- matrix(rnorm(length(l) * ncol(b$coef), 0, 0.05), length(l))
-      list(coef = rbind(b$coef[1:(1 + p), , drop = FALSE], extra,
-                        b$coef[-(1:(1 + p)), , drop = FALSE]), quad = b$quad)
-    })
-    curve_l <- list(mu0 = f$mu + 0.1, T = diag(p), q = q, l = l,
-                    lsd0 = 0.5 * log(diag(f$V))[l] - 0.2, lsd_scale = c(0.4, 0.7), B = B_l,
-                    sets = EMC2:::.emc_shear_curve_sets(B_l, q))
-    lsd_only <- list(mu0 = f$mu, T = matrix(0, 0, p), q = integer(0), l = l,
-                     lsd0 = curve_l$lsd0, lsd_scale = curve_l$lsd_scale,
-                     # A range the candidates leave, so the held coordinates count.
-                     lsd_range = 0.3,
-                     B = lapply(B_l, function(b) if (is.null(b)) NULL else
-                       list(coef = b$coef[c(1, 1 + p + seq_along(l)), , drop = FALSE], quad = FALSE)))
-    lsd_only$sets <- EMC2:::.emc_shear_curve_sets(lsd_only$B, integer(0))
     t <- c(-1.3, -0.2, 0.7, 2.1)
-    for (cv in list(NULL, curve, curve_l, lsd_only)) for (w in list(NULL, walls))
+    for (w in list(NULL, walls))
       for (v in list(f$u, replace(f$u, p + seq_len(p), 0))) {
-        cand <- EMC2:::.emc_shear_candidates(cur, v, t, f$alpha, fits, prior, spec, cv, w)
+        cand <- EMC2:::.emc_shear_candidates(cur, v, t, f$alpha, fits, prior, spec, w)
         for (i in seq_along(t)) {
           u <- t[i] * v
           d <- exp(u[p + seq_len(p)])
           mu1 <- f$mu + u[seq_len(p)]
-          new <- EMC2:::.emc_shear_state(mu1, f$V * outer(d, d),
-                                         EMC2:::.emc_shear_fits_at(list(packed = EMC2:::.emc_shear_pack(fits, p), curve = cv),
-                                                                   mu1, f$V * outer(d, d)),
-                                         prior, spec)
+          new <- EMC2:::.emc_shear_state(mu1, f$V * outer(d, d), fits, prior, spec)
           tr <- if (is.null(new)) NULL else EMC2:::.emc_shear_transport(f$alpha, cur, new, w)
           if (is.null(tr) || !all(tr$ok)) { expect_null(cand[[i]]); next }
           ci <- cand[[i]]
@@ -424,7 +390,7 @@ test_that("the C++ candidates are the R state, transport and hierarchical terms"
                          new$logdet + sum(tr$jac), tolerance = 1e-8)
         }
       }
-    # Without walls or curve a mean step's candidates lie on the line.
+    # Without walls a mean step's candidates lie on the line.
     d <- f$u[seq_len(p)]
     line <- EMC2:::.emc_shear_line(cur, d, f$alpha, t, prior)
     cand <- EMC2:::.emc_shear_candidates(cur, c(d, numeric(p)), t, f$alpha, fits, prior, spec)
@@ -668,113 +634,6 @@ test_that("the shear move leaves the joint posterior invariant with the group va
     z_mean <- abs(colMeans(after) - colMeans(before)) / se
     z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
     if (isTRUE(run$broken)) {
-      expect_gt(max(z_mean, z_var), 6)
-    } else {
-      expect_true(all(z_mean < 4.5))
-      expect_true(all(z_var < 4.5))
-    }
-  }
-})
-
-test_that("curved frames with arbitrary coefficients leave the joint posterior invariant", {
-  # The diagonal hierarchy above, with each subject's likelihood fit an
-  # arbitrary quadratic function of the group mean (and then also linear in
-  # the group log sds); every step then takes the full map and must carry its
-  # Jacobian (the broken control drops it).
-  p <- 2; n <- 5
-  S <- c(2, 1.5); m0 <- 0; P0 <- 0.5; shape <- 2; rate <- 0.3
-  set.seed(21)
-  y <- matrix(rnorm(p * n, 0.5, 1.5), p)
-  N <- 4000
-  grid_draws <- function(k) {
-    mu_g <- seq(-6, 6, length.out = 301); ls_g <- seq(-5, 2.5, length.out = 301)
-    lp <- outer(mu_g, ls_g, Vectorize(function(m, l) {
-      tau <- exp(-2 * l)
-      dnorm(m, m0, sqrt(1 / P0), log = TRUE) +
-        sum(dnorm(y[k, ], m, sqrt(S[k] + exp(2 * l)), log = TRUE)) +
-        dgamma(tau, shape, rate, log = TRUE) + log(2 * tau)
-    }))
-    w <- exp(lp - max(lp))
-    cell <- sample(length(w), N, TRUE, prob = w)
-    hm <- diff(mu_g[1:2]); hl <- diff(ls_g[1:2])
-    cbind(mu = mu_g[row(w)[cell]] + runif(N, -hm / 2, hm / 2),
-          lsd = ls_g[col(w)[cell]] + runif(N, -hl / 2, hl / 2))
-  }
-  g <- lapply(seq_len(p), grid_draws)
-  mu <- sapply(g, function(x) x[, "mu"]); lsd <- sapply(g, function(x) x[, "lsd"])
-  a <- array(NA_real_, c(N, p, n))
-  for (k in seq_len(p)) {
-    v <- exp(2 * lsd[, k])
-    post_var <- 1 / (1 / S[k] + 1 / v)
-    for (s in seq_len(n))
-      a[, k, s] <- rnorm(N, post_var * (y[k, s] / S[k] + mu[, k] / v), sqrt(post_var))
-  }
-  before <- cbind(mu, lsd, matrix(a, N))
-  Si <- diag(1 / S)
-  local_mocked_bindings(
-    calc_ll_manager = function(proposals, dadm, ...) {
-      dd <- sweep(proposals, 2, dadm)
-      -0.5 * rowSums((dd %*% Si) * dd)
-    },
-    .package = "EMC2")
-  pn <- c("x1", "x2")
-  lik <- lapply(seq_len(n), function(s)
-    list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check))
-  prior <- list(theta_mu_mean = rep(m0, p), theta_mu_invar = diag(P0, p),
-                shape = rep(shape, p), rate = rep(rate, p))
-  plan <- EMC2:::.emc_shear_plan(lik, prior, diag(exp(2 * colMeans(lsd))))
-  plan <- shear_ready(plan, n, 2)
-  q <- seq_len(p)
-  nf <- 1 + p + p * (p + 1) / 2
-  B <- lapply(seq_len(n), function(s) {
-    quad <- s > 1
-    rows <- if (quad) nf else 1 + p
-    coef <- matrix(rnorm(rows * (p + p * p), 0, 0.3), rows)
-    coef[1, ] <- c(lik[[s]]$lin, as.vector(lik[[s]]$prec))
-    list(coef = coef, quad = quad)
-  })
-  curve <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, B = B,
-                sets = EMC2:::.emc_shear_curve_sets(B, q))
-  l <- seq_len(p)
-  B_l <- lapply(B, function(b) list(
-    coef = rbind(b$coef[1:(1 + p), , drop = FALSE],
-                 matrix(rnorm(p * ncol(b$coef), 0, 0.3), p), b$coef[-(1:(1 + p)), , drop = FALSE]),
-    quad = b$quad))
-  curve_l <- list(mu0 = colMeans(mu), T = solve(plan$dirs), q = q, l = l,
-                  lsd0 = colMeans(lsd), lsd_scale = apply(lsd, 2, sd), lsd_range = 0.5,
-                  B = B_l, sets = EMC2:::.emc_shear_curve_sets(B_l, q))
-  for (case in list(list(curve_l, FALSE), list(curve, FALSE), list(curve, TRUE))) {
-    curve <- case[[1]]
-    broken <- case[[2]]
-    if (broken) {
-      candidates <- EMC2:::.emc_shear_candidates
-      local_mocked_bindings(.emc_shear_candidates = function(...) {
-        lapply(candidates(...), function(out) {
-          if (!is.null(out)) out$log_jac <- 0
-          out
-        })
-      }, .package = "EMC2")
-    }
-    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
-                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
-                    model = NULL, prior = prior, lik_laplace = lik, rng = list(),
-                    shear = list(plan = plan, curve = curve))
-    expect_false(is.null(EMC2:::.emc_shear_context(sampler)$curve))
-    set.seed(5)
-    after <- t(vapply(seq_len(N), function(i) {
-      V <- diag(exp(2 * lsd[i, ]))
-      al <- matrix(a[i, , ], p, dimnames = list(pn, NULL))
-      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / S), 0)
-      out <- EMC2:::.emc_shear_move(sampler, list(tmu = setNames(mu[i, ], pn), tvar = V,
-                                                  tvinv = solve(V)),
-                                    rbind(al, ll), "sample")
-      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
-    }, numeric(2 * p + p * n)))
-    expect_gt(mean(after[, 1] != before[, 1]), 0.1)
-    se <- apply(before, 2, sd) / sqrt(N)
-    z_mean <- abs(colMeans(after) - colMeans(before)) / se
-    z_var <- abs(apply(after, 2, var) / apply(before, 2, var) - 1) / sqrt(2 / N)
-    if (broken) {
       expect_gt(max(z_mean, z_var), 6)
     } else {
       expect_true(all(z_mean < 4.5))
@@ -1147,21 +1006,6 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   expect_equal(ch$shear$plan$pool$n[sd_k], integer(p))
   ch <- rebuild(ch, "burn", 2L, 1L, 1)
   expect_equal(ch$shear$plan$last$n[sd_k], rep(2L, p))
-})
-
-test_that("atlas nodes go to the subjects whose fixed-frame orbit contribution varies", {
-  local_mocked_bindings(
-    .emc_shear_context = function(sampler) list(packed = NULL),
-    .emc_shear_orbit_spread = function(ch, idx, ks, fits_of, n_cores) cbind(ch$spread),
-    .package = "EMC2")
-  pick <- function(spread, ks = 1L)
-    EMC2:::.emc_shear_atlas_subjects(list(n_subjects = length(spread), spread = spread),
-                                     1:10, ks, 1L)
-  floor <- EMC2:::.EMC_SHEAR_ATLAS_MIN_SPREAD
-  # An outlier does not crowd out the others; a failed orbit is always fitted.
-  expect_identical(pick(c(1e5, floor, floor / 2, 3 * floor, Inf, 0)), c(1L, 2L, 4L, 5L))
-  expect_identical(pick(c(0, 0, 0)), integer(0))
-  expect_identical(pick(c(1, 2), ks = integer(0)), 1:2)
 })
 
 test_that("an orbit's width is measured whatever scale the grid starts at", {
