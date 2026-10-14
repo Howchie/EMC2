@@ -1,8 +1,8 @@
 # EMC2 3.4.0
 ## Development
 
--   **One sampler:** the ensemble group update, shear rounds (with bound
-    walls), the collapsed move, subject HMC and the move allocator
+-   **One sampler:** the ensemble group update, shear rounds (curved frames
+    and bound walls), the collapsed move, subject HMC and the move allocator
     always run where the model supports them. The `emc2.*` options that
     switched them off or changed their schedules (`emc2.ensemble*`,
     `emc2.group_move*`, `emc2.shear_*`, `emc2.collapsed_move`,
@@ -28,11 +28,16 @@
     unmeasured move is promising; production-stage movement continues to pool
     over the sample stage.
 
--   **Shear transport at declared bounds:** subjects sitting near a
-    declared lower bound (for example `t0` in the LBA) are transported with a
-    map that keeps the bound's half-space, so candidates near the bound are
-    no longer lost to the likelihood floor; the collapsed group move uses the
-    same walls. The map keeps the move's exact Jacobian, composition and
+-   **Shear transport on curved ridges and at declared bounds:** each
+    subject's likelihood approximation is now a function of the group mean,
+    refitted at the conditional mode under group states the chain visited and
+    regressed on the slow mean directions, so the shear's transported
+    subjects follow a curved ridge (threshold, start-point and
+    non-decision-time trade-offs) instead of leaving it. Subjects sitting
+    near a declared lower bound (for example `t0` in the LBA) are transported
+    with a map that keeps the bound's half-space, so candidates near the bound
+    are no longer lost to the likelihood floor; the collapsed group move uses
+    the same walls. Both maps keep the move's exact Jacobian, composition and
     inversion. The benchmark harness gained a fixed-length continuation
     protocol (`benchmarks/subject-hmc/continue_arm.R`) that scores arms by
     effective sample size per CPU second on the slowest group direction from

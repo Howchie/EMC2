@@ -174,11 +174,25 @@ Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
                             Rcpp::Named("ok") = Rcpp::wrap(res.ok), Rcpp::Named("r1sq") = res.r1sq);
 }
 
+// Quadratic features of t over the directions q (0-based), as
+// .emc_shear_atlas_features: 1, t, then the upper triangle (with diagonal)
+// of t[q] t[q]' by columns.
+static arma::rowvec shear_features(const arma::vec& t, const arma::uvec& q) {
+  const arma::uword nq = q.n_elem, nt = t.n_elem;
+  arma::rowvec f(1 + nt + nq * (nq + 1) / 2);
+  f(0) = 1.0;
+  for (arma::uword i = 0; i < nt; ++i) f(1 + i) = t(i);
+  arma::uword k = 1 + nt;
+  for (arma::uword c = 0; c < nq; ++c)
+    for (arma::uword r = 0; r <= c; ++r) f(k++) = t(q(r)) * t(q(c));
+  return f;
+}
+
 // The candidates of one shear round (R/shear_move.R .emc_shear_candidates):
 // for each offset t[k] the group state moves by u = t[k] v (mean part, then
-// log-sd part), the frames are rebuilt there from every subject's
-// likelihood approximation and the subjects transported from the current
-// frames (m0, R0).
+// log-sd part), every subject's likelihood approximation is evaluated there
+// (the curved frames' regression when curve is given), the frames are
+// rebuilt and the subjects transported from the current frames (m0, R0).
 // Per candidate: whether it is valid, the moved subjects, the new frames
 // (m, R, logdet), the inverse and upper Cholesky factor of the moved V, the
 // summed log N(a_s | mu, V) of the moved subjects and the transport's log
@@ -191,12 +205,52 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
                                     const arma::mat& m0, const arma::cube& R0,
                                     const arma::vec& logdet0,
                                     const arma::cube& prec, const arma::mat& lin,
+                                    Rcpp::Nullable<Rcpp::List> curve,
                                     const Rcpp::LogicalVector& has,
                                     const arma::mat& U, const arma::vec& b,
                                     const arma::cube& Uperp) {
   const arma::uword p = alpha.n_rows, n = alpha.n_cols, K = t.n_elem;
   const double logdet0_sum = arma::accu(logdet0);
+  // The curved frames: per feature set its subjects, quadratic directions
+  // and stacked coefficients.
+  bool curved = curve.isNotNull();
+  arma::mat T;
+  arma::vec mu0, lsd0, lsd_scale;
+  double lsd_range = R_PosInf;
+  arma::uvec l;
+  std::vector<arma::uvec> set_idx, set_q;
+  std::vector<arma::mat> set_coef;
+  if (curved) {
+    Rcpp::List cv(curve.get());
+    T = Rcpp::as<arma::mat>(cv["T"]);
+    mu0 = Rcpp::as<arma::vec>(cv["mu0"]);
+    // Log-sd coordinates of the curve (R/shear_move.R .emc_shear_curve_coords).
+    if (cv.containsElementNamed("l") && !Rf_isNull(cv["l"])) {
+      Rcpp::IntegerVector ll = cv["l"];
+      l.set_size(ll.size());
+      for (R_xlen_t j = 0; j < ll.size(); ++j) l(j) = ll[j] - 1;
+      if (l.n_elem) {
+        lsd0 = Rcpp::as<arma::vec>(cv["lsd0"]);
+        lsd_scale = Rcpp::as<arma::vec>(cv["lsd_scale"]);
+        if (cv.containsElementNamed("lsd_range") && !Rf_isNull(cv["lsd_range"]))
+          lsd_range = Rcpp::as<double>(cv["lsd_range"]);
+      }
+    }
+    Rcpp::List sets = cv["sets"];
+    for (R_xlen_t i = 0; i < sets.size(); ++i) {
+      Rcpp::List st = sets[i];
+      arma::uvec idx = Rcpp::as<arma::uvec>(st["idx"]) - 1;
+      Rcpp::IntegerVector qq = st["q"];
+      arma::uvec q(qq.size());
+      for (R_xlen_t j = 0; j < qq.size(); ++j) q(j) = qq[j] - 1;
+      set_idx.push_back(idx);
+      set_q.push_back(q);
+      set_coef.push_back(Rcpp::as<arma::mat>(st["coef"]));
+    }
+  }
   Rcpp::List out(K);
+  arma::cube P(prec);
+  arma::mat L(lin);
   arma::mat m1(p, n), Rs, Q, cholV, Ri, Vi;
   arma::cube R1(p, p, n);
   arma::vec logdet1(n), rhs;
@@ -212,11 +266,37 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
       Ri = upper_solve(cholV, arma::eye(p, p));
       Vi = Ri * Ri.t();
       const arma::vec Vi_mu = Vi * mu1;
+      if (curved) {
+        P = prec;
+        L = lin;
+        arma::vec tc = T * (mu1 - mu0);
+        if (l.n_elem) {
+          arma::vec tl(l.n_elem);
+          for (arma::uword j = 0; j < l.n_elem; ++j)
+            tl(j) = std::min(lsd_range, std::max(-lsd_range,
+              (0.5 * std::log(V1(l(j), l(j))) - lsd0(j)) / lsd_scale(j)));
+          tc = arma::join_cols(tc, tl);
+        }
+        for (std::size_t si = 0; si < set_idx.size(); ++si) {
+          const arma::rowvec y = shear_features(tc, set_q[si]) * set_coef[si];
+          const arma::uword w = p + p * p;
+          for (arma::uword j = 0; j < set_idx[si].n_elem; ++j) {
+            const arma::uword s = set_idx[si](j);
+            const arma::uword off = j * w;
+            for (arma::uword r = 0; r < p; ++r) L(r, s) = y(off + r);
+            arma::mat Ps(p, p);
+            for (arma::uword c = 0; c < p * p; ++c) Ps(c) = y(off + p + c);
+            P.slice(s) = 0.5 * (Ps + Ps.t());
+          }
+        }
+      }
+      const arma::cube& Pk = curved ? P : prec;
+      const arma::mat& Lk = curved ? L : lin;
       for (arma::uword s = 0; s < n && ok; ++s) {
-        Q = prec.slice(s) + Vi;
+        Q = Pk.slice(s) + Vi;
         if (!arma::chol(Rs, Q)) { ok = false; break; }
         R1.slice(s) = Rs;
-        rhs = lin.col(s) + Vi_mu;
+        rhs = Lk.col(s) + Vi_mu;
         m1.col(s) = upper_solve(Rs, upper_t_solve(Rs, rhs));
         logdet1(s) = arma::sum(arma::log(Rs.diag()));
       }
