@@ -230,13 +230,15 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.supports_batched_defective_truncation = true;
     out.ctx.frq_cache = std::make_shared<FrqCache>();
   } else if (type_std.find("FRQ") != std::string::npos) {
-    // FRQ_FADE shares the prefix and is dispatched above.
-    out.pdf1_ptr       = &dfrq_scalar;
-    out.cdf1_ptr       = &pfrq_scalar;
-    out.model_dfun_raw = &dfrq_raw;
-    out.model_pfun_raw = &pfrq_raw;
-    out.logS_at_t_ptr  = &frq_logS_at_t;
-    out.col_spec       = emc2col::frq::spec();
+    // FRQ_FADE shares the prefix and is dispatched above.  FRQ_CV is the cv
+    // chart: the rate CV in sv's column, otherwise the same adapters.
+    const bool cv_chart = (type_std.find("FRQ_CV") != std::string::npos);
+    out.pdf1_ptr       = cv_chart ? &dfrq_cv_scalar : &dfrq_scalar;
+    out.cdf1_ptr       = cv_chart ? &pfrq_cv_scalar : &pfrq_scalar;
+    out.model_dfun_raw = cv_chart ? &dfrq_cv_raw : &dfrq_raw;
+    out.model_pfun_raw = cv_chart ? &pfrq_cv_raw : &pfrq_raw;
+    out.logS_at_t_ptr  = cv_chart ? &frq_cv_logS_at_t : &frq_logS_at_t;
+    out.col_spec       = cv_chart ? emc2col::frq_cv::spec() : emc2col::frq::spec();
     out.ctx.t0_index   = emc2col::frq::t0;
     // FRQ supports a defective atom 1 - h at +Inf, with p = 1 as the explicit
     // proper boundary. Keeping the capability enabled lets the same adapter

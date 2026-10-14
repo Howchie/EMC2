@@ -15,11 +15,25 @@
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
-  need <- c("K", "v", "sv", "h", "t0")
+  need <- c("K", "v", "h", "t0")
   missing <- setdiff(need, colnames(pars))
+  if (!any(c("sv", "cv") %in% colnames(pars))) missing <- c(missing, "sv")
   if (length(missing))
     stop("FRQ requires parameter columns ", paste(missing, collapse = ", "))
   invisible(NULL)
+}
+
+# Rate SD per row: the sv column, or cv * v under the cv chart.
+.frq_sv <- function(pars) {
+  if ("sv" %in% colnames(pars)) pars[, "sv"] else pars[, "cv"] * pars[, "v"]
+}
+
+# pars with an sv column, for the entry points that take the rate SD.
+.frq_with_sv <- function(pars) {
+  if ("sv" %in% colnames(pars)) return(pars)
+  out <- cbind(pars, sv = .frq_sv(pars))
+  attr(out, "ok") <- attr(pars, "ok")
+  out
 }
 
 .frq_opt <- function(pars, ok, nm, default) {
@@ -34,7 +48,7 @@ dFRQ <- function(rt, pars) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- dfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
-                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     delta = .frq_opt(pars, ok, "delta", 0),
                     clock = .frq_opt(pars, ok, "clock", 1))
   }
@@ -51,7 +65,7 @@ pFRQ <- function(rt, pars) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
-                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     delta = .frq_opt(pars, ok, "delta", 0),
                     clock = .frq_opt(pars, ok, "clock", 1))
   }
@@ -69,7 +83,7 @@ sFRQ <- function(rt, pars) {
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
-                    sv = pars[ok, "sv"], h = pars[ok, "h"],
+                    sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     delta = .frq_opt(pars, ok, "delta", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
                     lower_tail = FALSE)
@@ -118,7 +132,7 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   ok <- .frq_check_race(lR, pars, ok, "FRQ")
   dt <- rep(Inf, nrow(pars))
   idx <- which(ok & is.finite(pars[, "t0"]))
-  if (length(idx)) dt[idx] <- .frq_draw_dt(pars[idx, , drop = FALSE])
+  if (length(idx)) dt[idx] <- .frq_draw_dt(.frq_with_sv(pars[idx, , drop = FALSE]))
   .frq_race(lR, dt, pars[, "t0"], ok)
 }
 
@@ -248,6 +262,16 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `clock = 0` are exact bound exceptions and can be set as constants.
 #' `K` is real-valued.
 #'
+#' `parameterization = "cv"` samples *cv* = *sv*/*v*, the between-trial CV of
+#' the input rate, in place of *sv*:
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *cv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = 1/*cv*^2, *sv* = *cv* *v* | Between-trial CV of the input rate |
+#'
+#' `cv = 0` is the same exact limit as `sv = 0`. At equal values of *sv* and
+#' *cv* *v* the two parameterizations give the same likelihood.
+#'
 #' With `delta > 0` the model is `F(u) = H(I_q(u)(K, beta))`, the closed-form
 #' marginal over a shift `eps ~ Uniform(-delta, delta)` of the log-odds of the
 #' quorum percentile, and `p` is derived from `H^{-1}(h)`. `eps` is drawn
@@ -256,11 +280,14 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'
 #' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
 #' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
-#' at `h = 1`), `cv` = `sv / v` and `sQ` = `delta / sqrt(3)`.
+#' at `h = 1`), `cv` = `sv / v` (`sv` = `cv * v` under
+#' `parameterization = "cv"`) and `sQ` = `delta / sqrt(3)`.
 #'
 #' Optional nuisance parameters are `pContaminant`, an omission probability
 #' outside the accumulators, and `pGuess`, a uniform-outlier probability.
 #'
+#' @param parameterization Rate-variability coordinate: `"sv"` (the default)
+#'   samples the rate SD *sv*; `"cv"` samples the rate CV *cv* = *sv*/*v*.
 #' @return A model list defining the FRQ race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -274,33 +301,50 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                      constants = c(h = qnorm(1))) # non-defective race
 #' # For all parameters that are not defined in the formula, default values are
 #' # assumed (see Table above).
+#' # The cv parameterization.
+#' design_FRQ_cv <- design(data = forstmann,
+#'                         model = function() FRQ(parameterization = "cv"),
+#'                         matchfun = matchfun,
+#'                         formula = list(K ~ 1, v ~ lM + E, cv ~ lM, h ~ 1,
+#'                                        t0 ~ 1),
+#'                         contrasts = list(v = list(lM = ADmat)),
+#'                         constants = c(h = qnorm(1)))
 #' @export
-FRQ <- function() {
+FRQ <- function(parameterization = c("sv", "cv")) {
+  parameterization <- match.arg(parameterization)
+  # The rate-variability coordinate in kernel column 3: the rate SD sv, or the
+  # rate CV cv = sv / v (the cv chart, c_name FRQ_CV).
+  rv <- parameterization
   # K on an OFFSET log scale, K = 1 + exp(x): the sampler coordinate is
   # unbounded while K keeps its K >= 1 support, below which the density is
   # singular at t0 and the likelihood unbounded as t0 -> min(rt).
   p_types <- c("K" = log(2), "v" = log(6),
                # sv = 0 (log(0)) is the exact no-rate-variability counter.
-               "sv" = log(0),
+               "rv" = log(0),
                "h" = qnorm(1), "t0" = log(0),
                "delta" = log(0),
                # A constant-rate evidence clock.
                "clock" = log(1))
-  transform <- c(K = "exp", v = "exp", sv = "exp", h = "pnorm", t0 = "exp",
+  transform <- c(K = "exp", v = "exp", rv = "exp", h = "pnorm", t0 = "exp",
                  delta = "exp", clock = "exp")
   transform_lower <- c(K = 1)
-  # sv has no upper bound: sv > v (beta < 1) is a valid, very variable rate,
-  # and the kernel solves 1 - p from its own quantile.  Its lower guard keeps
-  # a sampled sv off the exact sv = 0 branch, which is reachable as a constant.
+  # sv (or cv) has no upper bound: sv > v (beta < 1) is a valid, very variable
+  # rate, and the kernel solves 1 - p from its own quantile.  Its lower guard
+  # keeps a sampled value off the exact zero branch, which is reachable as a
+  # constant.
   # The free h upper bound stops short of one so that a sampler can keep a
   # finite defective mass; h = 1 is reachable through the exception.
   # delta is capped at 6: cosh(delta/2)^2 is already 101 there, and H^{-1}
   # shrinks 1 - h by delta/sinh(delta), so a bigger cap pushes p's complement
   # under double precision at h = 1 - 1e-9.
-  minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), sv = c(1e-4, Inf),
+  minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
                   h = c(1e-6, 1), t0 = c(0.05, Inf), delta = c(1e-4, 6),
                   clock = c(1e-4, Inf))
-  exception <- c(t0 = 0, delta = 0, clock = 0, h = 1, K = 1, sv = 0)
+  exception <- c(t0 = 0, delta = 0, clock = 0, h = 1, K = 1, rv = 0)
+  names(p_types)[names(p_types) == "rv"] <- rv
+  names(transform)[names(transform) == "rv"] <- rv
+  colnames(minmax)[colnames(minmax) == "rv"] <- rv
+  names(exception)[names(exception) == "rv"] <- rv
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   # pContaminant is redundant with 1 - h unless an omission mechanism outside
@@ -311,9 +355,9 @@ FRQ <- function() {
 
   list(
     type = "RACE",
-    c_name = "FRQ",
+    c_name = if (rv == "cv") "FRQ_CV" else "FRQ",
     p_types = p_types,
-    p_types_canonical = c("K", "v", "sv", "h", "t0"),
+    p_types_canonical = c("K", "v", rv, "h", "t0"),
     transform = list(func = transform, lower = transform_lower),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
@@ -321,14 +365,17 @@ FRQ <- function() {
       # path (see src/utils.h); the kernel derives the same quantities itself.
       dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
       cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
-      g <- frq_rate(pars[, "K"], pars[, "v"], pars[, "sv"], pars[, "h"], dl, cu)
+      sv <- .frq_sv(pars)
+      g <- frq_rate(pars[, "K"], pars[, "v"], sv, pars[, "h"], dl, cu)
       # Built as a bare matrix first: cbind()ing named scalars onto a one-row
       # `pars` makes R invent row names from the argument names, which would
       # then travel with the parameter matrix.
+      # The other rate-variability coordinate.
+      other <- if (rv == "cv") cbind(sv = as.numeric(sv)) else
+        cbind(cv = as.numeric(sv / pars[, "v"]))
       add <- cbind(beta = as.numeric(g[, "beta"]), p = as.numeric(g[, "p"]),
                    lambda = as.numeric(g[, "lambda"]), Etot = as.numeric(g[, "Etot"]),
-                   cv = as.numeric(pars[, "sv"] / pars[, "v"]),
-                   sQ = as.numeric(dl) / sqrt(3))
+                   other, sQ = as.numeric(dl) / sqrt(3))
       rownames(add) <- NULL
       cbind(pars, add)
     },

@@ -369,7 +369,7 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(unname(m$bound$minmax[, "clock"]), c(1e-4, Inf))
   expect_equal(unname(m$bound$exception[c("sv", "delta", "clock", "h", "K")]),
                c(0, 0, 0, 1, 1))
-  expect_length(formals(FRQ), 0L)
+  expect_identical(names(formals(FRQ)), "parameterization")
 })
 
 test_that("the counter coordinates are representable on the whole bounded box", {
@@ -972,4 +972,57 @@ test_that("a per-row K matches a fresh derive in every state", {
   expect_equal(EMC2:::sFRQ(rt, P), one(EMC2:::sFRQ), tolerance = 1e-14)
   expect_equal(EMC2:::pFRQ(rt[1:3], P[1:3, ]),
                pgamma(4 * (rt[1:3] - 0.1), P[1:3, "K"]), tolerance = 1e-12)
+})
+
+test_that("the cv parameterization is the same model at sv = cv * v", {
+  skip_on_cran()
+  set.seed(20261014)
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  dat <- dat[seq_len(80), ]
+  dat$LT <- 0.2; dat$UT <- 1.5
+  dat <- dat[dat$rt >= 0.2 & dat$rt <= 1.5, ]
+  FRQcv <- function() FRQ(parameterization = "cv")
+  mk <- function(model, rv) {
+    f <- list(K ~ 1, v ~ 0 + lM, h ~ lM, t0 ~ 1)
+    f[[length(f) + 1]] <- stats::as.formula(paste(rv, "~ 0 + lM"))
+    des <- suppressMessages(design(data = dat, model = model, matchfun = matchfun,
+                                   formula = f))
+    emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
+                                     compress = FALSE, rt_resolution = NULL))
+    list(des = des, emc = emc)
+  }
+  a <- mk(FRQcv, "cv"); b <- mk(FRQ, "sv")
+  m <- a$emc[[1]]$model()
+  expect_identical(m$c_name, "FRQ_CV")
+  expect_identical(names(m$p_types)[1:3], c("K", "v", "cv"))
+  pa <- sampled_pars(a$des)
+  pa[] <- c(log(1.5), log(4), log(2.5), qnorm(0.9), 0.4, log(0.15),
+            log(0.35), log(0.6))[seq_along(pa)]
+  pa[grepl("^cv", names(pa))] <- c(log(0.35), log(0.6))
+  dadm <- a$emc[[1]]$data[[1]]
+  pars_a <- EMC2:::get_pars_matrix_oo(pa, dadm, m)
+  expect_equal(unname(pars_a[, "sv"]), unname(pars_a[, "cv"] * pars_a[, "v"]))
+  # The sv chart at the same per-cell rate SD (the link adds the 1e-4 floor).
+  pb <- pa
+  names(pb) <- sub("^cv", "sv", names(pb))
+  for (lev in c("FALSE", "TRUE")) {
+    sv_nat <- unique(pars_a[as.character(dadm$lM) == lev, "sv"])
+    pb[paste0("sv_lM", lev)] <- log(sv_nat - 1e-4)
+  }
+  pb <- pb[names(sampled_pars(b$des))]
+  ll_a <- frq_ll(a$emc, pa); ll_b <- frq_ll(b$emc, pb)
+  expect_true(is.finite(ll_a))
+  expect_equal(ll_a, ll_b, tolerance = 1e-10)
+  # cv = 0 is the same Poisson counter as sv = 0.
+  pa0 <- pa; pa0[grepl("^cv", names(pa0))] <- log(0)
+  pb0 <- pb; pb0[grepl("^sv", names(pb0))] <- log(0)
+  expect_equal(frq_ll(a$emc, pa0), frq_ll(b$emc, pb0), tolerance = 1e-12)
+  # The simulators read the same rate SD.
+  pars_b <- EMC2:::get_pars_matrix_oo(pb, b$emc[[1]]$data[[1]], b$emc[[1]]$model())
+  set.seed(5); ra <- m$rfun(dadm, pars_a)
+  set.seed(5); rb <- b$emc[[1]]$model()$rfun(b$emc[[1]]$data[[1]], pars_b)
+  expect_equal(ra$rt, rb$rt, tolerance = 1e-10)
+  expect_identical(ra$R, rb$R)
 })

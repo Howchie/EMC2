@@ -38,23 +38,41 @@ inline double lgammafn_cached(double a) {
   return s.val;
 }
 
+// Stirling series of log Gamma(y) - [(y - 1/2) log y - y + log(2 pi)/2]
+// through 1/y^13; below rounding for y >= 12.
+inline double lgamma_stirling_series(double y) {
+  const double r = 1.0 / y, r2 = r * r;
+  return r * (1.0 / 12 + r2 * (-1.0 / 360 + r2 * (1.0 / 1260
+    + r2 * (-1.0 / 1680 + r2 * (1.0 / 1188 + r2 * (-691.0 / 360360
+    + r2 * (1.0 / 156)))))));
+}
+
 // log Gamma(a) for a >= 0.5, for orders that change per row and so miss any
-// cache: the recurrence shifts to y >= 12, then the Stirling series through
-// 1/y^13.  Within ~1e-14 absolute of R::lgammafn (the cancellation against
-// log(prod) near a = 1), at a third of its cost.
+// cache: the recurrence shifts to y >= 12, then the Stirling series.  Within
+// ~1e-14 absolute of R::lgammafn (the cancellation against log(prod) near
+// a = 1), at a third of its cost.
 inline double lgamma_pos(double a) {
   double y = a, prod = 1.0;
   while (y < 12.0) { prod *= y; y += 1.0; }
-  const double r = 1.0 / y, r2 = r * r;
-  const double series = r * (1.0 / 12 + r2 * (-1.0 / 360 + r2 * (1.0 / 1260
-    + r2 * (-1.0 / 1680 + r2 * (1.0 / 1188 + r2 * (-691.0 / 360360
-    + r2 * (1.0 / 156)))))));
-  return (y - 0.5) * std::log(y) - y + 0.91893853320467274178 + series -
-    std::log(prod);
+  return (y - 0.5) * std::log(y) - y + 0.91893853320467274178 +
+    lgamma_stirling_series(y) - std::log(prod);
 }
 
 inline double lgamma_fast(double a) {
   return (a >= 0.5 && emc2_isfinite(a)) ? lgamma_pos(a) : R::lgammafn(a);
+}
+
+// log B(a, b) for a, b >= 0.5.  With the larger argument l >= 12,
+// lgamma(l) - lgamma(s + l) is the Stirling difference with
+// log(s + l) = log l + log1p(s / l), so nothing cancels however large l is.
+// Within ~2e-14 relative of R::lbeta at under half its cost.
+inline double lbeta_fast(double a, double b) {
+  const double sm = std::fmin(a, b), lg = std::fmax(a, b);
+  if (!(sm >= 0.5) || !emc2_isfinite(lg)) return R::lbeta(a, b);
+  if (lg < 12.0) return lgamma_pos(sm) + lgamma_pos(lg) - lgamma_pos(sm + lg);
+  const double sl = sm + lg;
+  return lgamma_pos(sm) - sm * std::log(lg) - (sl - 0.5) * std::log1p(sm / lg) +
+    sm + lgamma_stirling_series(lg) - lgamma_stirling_series(sl);
 }
 
 // P(a,z) and Q(a,z), the regularized lower and upper incomplete gamma.

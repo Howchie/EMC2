@@ -35,7 +35,7 @@
 \maketitle
 
 \begin{abstract}
-This note is the mathematical specification of the Finite Reservoir Quorum race model (\textsc{FRQ}) as implemented in EMC2. In \textsc{FRQ}, evidence is a set of discrete registration events, and an accumulator responds once a quorum of them has arrived. Its first-passage law is a regularized incomplete beta function, so the likelihood is closed form. The note's central result is an exact counter reading of that law. Every \textsc{FRQ} accumulator is a Poisson counter that runs on an operational clock, has a Gamma-distributed trial intensity, and has a threshold of $K$ events. This reading gives the fitted coordinates $(K, v, sv, h)$: event threshold, mean initial input rate, between-trial SD of that rate, and eventual completion probability. A shape parameter $\cvu$ (\texttt{clock}) fixes the clock. At $sv=0$ the model reduces to an exact Poisson counter with no rate variability. The classic Poisson counter race, its gamma-mixed-rate extension and its linear self-exciting extension are all exact submodels with real-valued $K$, so the former \textsc{PCOUNTER} model was removed as redundant. We also give the closed-form threshold-variability extension $\delta$, the error-RT signature of each mechanism, measured identification results, and what the kernel does not cover.
+This note is the mathematical specification of the Finite Reservoir Quorum race model (\textsc{FRQ}) as implemented in EMC2. In \textsc{FRQ}, evidence is a set of discrete registration events, and an accumulator responds once a quorum of them has arrived. Its first-passage law is a regularized incomplete beta function, so the likelihood is closed form. The note's central result is an exact counter reading of that law. Every \textsc{FRQ} accumulator is a Poisson counter that runs on an operational clock, has a Gamma-distributed trial intensity, and has a threshold of $K$ events. This reading gives the fitted coordinates $(K, v, sv, h)$: event threshold, mean initial input rate, between-trial SD of that rate, and eventual completion probability. A shape parameter $\cvu$ (\texttt{clock}) fixes the clock. At $sv=0$ the model reduces to an exact Poisson counter with no rate variability. The classic Poisson counter race, its gamma-mixed-rate extension and its linear self-exciting extension are all exact submodels with real-valued $K$. These were the independent-counter submodels of the former \textsc{PCOUNTER} model, which was removed; Section~\ref{sec:notcovered} lists the parts of it that \textsc{FRQ} does not reproduce. We also give the closed-form log-odds frailty extension $\delta$, the error-RT signature of each mechanism, measured identification results, and what the kernel does not cover.
 \end{abstract}
 
 \tableofcontents
@@ -125,7 +125,9 @@ The three FRQ ingredients then read as counter mechanisms.
   \item \textbf{Between-trial rate variability.} The trial intensity $W$ has mean $\beta$ and CV $1/\sqrt{\beta}$. The mean initial input rate is $E[W]\,\phi'(0) = \beta p \lambda$.
   \item \textbf{Evidence ceiling.} For $p<1$ the clock saturates at $\phi(\infty) = p/(1-p)$. The trial then has a finite expected total of evidence, $\beta p/(1-p)$ events, and the defect $1-h$ is the probability that this total falls short of $K$.
 \end{itemize}
-In reservoir terms, $\beta p\lambda \approx Np\lambda$: it is the expected number of available units times the per-unit rate, which is the initial total registration rate.
+Proposition~\ref{prop:counter} is an equality of first-passage laws, not of counting processes. At $p = 1$, $\cvu = 0$ and $N = K = 3$ ($\beta = 1$), the reservoir registers its three units at total rates $3\lambda, 2\lambda, \lambda$ (depletion), while the counter's successive event rates are $\lambda, 2\lambda, 3\lambda$ (reinforcement, Proposition~\ref{prop:intensity}). Both give $F(u) = (1 - \e^{-\lambda u})^3$. The two mechanisms are observationally equivalent when only completion times are observed.
+
+For the same reason, $\beta p\lambda = (N - K + 1)p\lambda$ is the counter-equivalent initial rate. The reservoir's own initial aggregate registration rate is $Np\lambda$, which is larger whenever $K > 1$ (in the example above, $3\lambda$ against $\lambda$).
 
 \subsection{Clock Shape and Contagion}
 At $p = 1$, the clock is $\phi(u) = (1 + \cvu^2\lambda u)^{1/\cvu^2} - 1$. It is accelerating for $\cvu < 1$ (exponential, $\e^{\lambda u} - 1$, at $\cvu = 0$), exactly linear ($\lambda u$) at $\cvu = 1$, and decelerating for $\cvu > 1$. For $p<1$ every clock saturates at $p/(1-p)$, so "constant rate" is exact only at $h = 1$.
@@ -146,7 +148,7 @@ Proposition~\ref{prop:intensity} shows that between-trial rate variability and s
   \item at $\cvu = 0$, $p = 1$: $\lambda_n = \beta\lambda + \lambda n$, a linear pure-birth process with base rate $\nu = \beta\lambda$ and self-excitation $\gamma = \lambda$, with no time dependence;
   \item at $\cvu = 1$, $p = 1$: $\lambda_n(u) = (\nu + \lambda n)/(1 + \lambda u)$, the Pólya process of a gamma-mixed Poisson counter, where the contagion decays in time.
 \end{itemize}
-This is why the clock shape and the rate CV cannot both be estimated (Section~\ref{sec:ident}).
+At $p = 1$ and any $\cvu$, the intensity is $\lambda_n(u) = v(1 + n/\beta)/(1 + \cvu^2 v u/\beta)$. At $K = 1$ this gives $F(u) = 1 - (1 + \cvu^2 v u/\beta)^{-\beta/\cvu^2}$, which depends on $\cvu$ and $\beta$ only through $\beta/\cvu^2$, so at $K = 1$ the two are exactly confounded (and at $\cvu = 0$ the law is exponential with rate $v$, free of $\beta$). For $K > 1$ the factor $1 + n/\beta$ separates them in principle, but in practice they are severely confounded (Section~\ref{sec:ident}).
 
 \subsection{Real-Valued Thresholds}
 For real $K$, Proposition~\ref{prop:counter} still defines the model: the accumulator responds when the operational time $W\phi(u)$ passes a $\GammaDist(K,1)$ level, which has mean $K$ and variance $K$. For integer $K$ this level is exactly the $K$th arrival of a unit-rate Poisson process. For non-integer $K$ it interpolates between counts and is not the first passage of an integer-valued count process. The fitted model keeps $K \ge 1$: the density near onset is proportional to $u^{K-1}$, so for $K < 1$ it is singular at $t_0$ and the likelihood is unbounded as $t_0 \to \min(\mathrm{rt})$.
@@ -169,7 +171,33 @@ In words, $K$ is the event threshold, $v$ is the mean initial input rate (events
 \end{equation}
 where $Q_{\alpha,\beta}$ is the beta quantile function and $H_\delta^{-1}$ is the identity at $\delta = 0$. The quantile depends only on $(K, sv/v, h, \delta)$, and the kernel caches it on those four arguments. A rate $v$ that varies per trial therefore costs a quantile per distinct value only when $sv > 0$ and $h < 1$: at $h = 1$ there is no quantile, and at $sv = 0$ the key does not involve $v$. At $h = 1$, $p = 1$ exactly and the accumulator is proper.
 
-In this chart, $v$ and $h$ separate ``how fast evidence arrives'' from ``how much evidence exists'', and the onset behaviour is controlled by $v$ alone: at $K = 1$, $f(0^+) = v$ for every $sv$, $h$ and $\cvu$.
+In this chart, $v$ and $h$ separate ``how fast evidence arrives'' from ``how much evidence exists'', and at $\delta = 0$ the onset behaviour is controlled by $v$ alone: at $K = 1$, $f(0^+) = v$ for every $sv$, $h$ and $\cvu$. With $\delta > 0$, $f(0^+) = v\sinh(\delta)/\delta$ (Section~\ref{sec:delta}).
+
+\subsection{The CV Chart}\label{sec:cvchart}
+\texttt{FRQ(parameterization = "cv")} samples the rate CV in place of $sv$:
+\begin{equation}
+  \mathit{cv} = \frac{sv}{v} = \beta^{-1/2}, \qquad sv = \mathit{cv}\, v .
+\end{equation}
+The map $(v, sv) \leftrightarrow (v, \mathit{cv})$ is a bijection on $v > 0$, so the two charts are the same model and give the same likelihood at $sv = \mathit{cv}\,v$; $\mathit{cv} = 0$ is the same exact branch as $sv = 0$. What differs is what a design holds fixed when $v$ varies.
+
+\begin{proposition}[Rate as a time scale]\label{prop:timescale}
+With $(K, \mathit{cv}, h, \delta, \cvu)$ fixed, the decision time scales as $T_v \overset{d}{=} T_1/v$:
+\begin{equation}
+  F(u; v) = F(v u; 1).
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+$\beta = \mathit{cv}^{-2}$ is free of $v$, and so is $p = Q_{\alpha,\beta}\big(H_\delta^{-1}(h)\big)$. Then $\lambda = v/(\beta p)$ is proportional to $v$, and $G(u)$, hence $q(u) = pG(u)$ and $F(u) = H_\delta\big(I_{q(u)}(\alpha, \beta)\big)$, depends on $u$ only through $\lambda u$. In the $\mathit{cv} = 0$ branch $E$ is free of $v$ and the argument is $vu$ (at $h = 1$) or $E\,G(u)$ with $\lambda = v/E$.
+\end{proof}
+
+In the $sv$ chart the same holds only along $sv \propto v$; at fixed $sv$, a change of $v$ changes $\beta$ and therefore the shape. In a race whose accumulators share $t_0$, a common factor on every accumulator's $v$ rescales the race's decision time and leaves the choice probabilities unchanged (with unequal $t_0$ it can change which accumulator finishes first); changes in the ratio of the rates change both. The quantile key $(K, \mathit{cv}, h, \delta)$ is free of $v$, so in this chart a per-trial $v$ never costs a beta quantile.
+
+At $h = 1$ and $\cvu = 1$, $T = Y/\Lambda$ with $Y \sim \GammaDist(K, 1)$ and $\Lambda \sim \GammaDist(\beta, \text{rate } \beta/v)$, so
+\begin{equation}
+  \operatorname{CV}^2(T) = \Big(1 + \frac{1}{K}\Big)\frac{\beta - 1}{\beta - 2} - 1 \approx \frac{1}{K} + \mathit{cv}^2 + \frac{\mathit{cv}^2}{K} \qquad (\beta > 2),
+\end{equation}
+the Poisson counter's $1/K$ plus the rate variability, and $P(T > t) \sim c\,t^{-\beta}$ as $t \to \infty$. In the CV chart, a shared CV (\texttt{cv \textasciitilde{} 1}) is the equal-CV model of Table~\ref{tab:share}.
 
 \subsection{The \texorpdfstring{$sv = 0$}{sv = 0} Limit}
 \begin{proposition}[Exact Poisson counter]\label{prop:poisson}
@@ -206,18 +234,25 @@ and the model becomes $F_\delta(u) = H_\delta\big(I_{q(u)}(\alpha,\beta)\big)$, 
   \item \textbf{Analytic inverse.} $H_\delta^{-1}(y) = \sinh(\delta y)/\big[\sinh(\delta y) + \sinh(\delta(1-y))\big]$, which is what keeps Eq.~\eqref{eq:chart-inverse} closed form.
   \item \textbf{Elementary derivative.} $H_\delta'(z) = \dfrac{\sinh(\delta)/\delta}{1 + 2z(1-z)(\cosh\delta - 1)}$.
 \end{enumerate}
+
+$\delta$ is a proportional-odds frailty: on each trial it multiplies the accumulator's completion odds by $\e^{\varepsilon}$. It is not a variation in the number of events required. Even at integer $K$ and $\delta > 0$, the first passage is no longer the time of the $K$th Poisson event. Its effects on the law are:
+\begin{itemize}
+  \item \textbf{Both tails scale by the same factor.} $H_\delta'(0) = H_\delta'(1) = \sinh(\delta)/\delta$, so near onset $F_\delta \approx (\sinh\delta/\delta)F$ and in the tail $S_\delta \approx (\sinh\delta/\delta)S$. At $K = 1$, $f_\delta(0^+) = v\sinh(\delta)/\delta$. Neither the onset order $u^K$ nor the power-law tail exponent changes. Rate CV, by contrast, sets the tail exponent ($S \sim c\,t^{-\beta}$ at $\cvu = 1$, $h = 1$).
+  \item \textbf{The bulk spreads at second order.} $H_\delta(z) = z + \tfrac{\delta^2}{6}z(1-z)(1-2z) + O(\delta^4)$, which moves mass from the middle of the distribution to both ends.
+  \item \textbf{It is confounded with $K$, not with rate CV.} Fitted to a $\delta$ truth ($K = 3$, $v = 10$, $sv = 0$, one accumulator), the best $(K, v, \mathit{cv})$ mimic sets $\mathit{cv} = 0$ and lowers $K$ and $v$: $K = 2.77$ at $\delta = 1$, $2.28$ at $\delta = 2$ and $1.80$ at $\delta = 3$. It falls 3 nats behind after about 5000, 420 and 120 trials.
+\end{itemize}
 The state $\varepsilon$ is marginalized inside each accumulator's CDF, so it is drawn independently for each accumulator on every trial. That holds even when the spread $\delta$ is shared across accumulators (\texttt{delta \textasciitilde{} 1}), in the same way that LBA start points are drawn per accumulator from a shared $A$; a shared $K$ likewise shares the mean threshold, not a trial draw. A single draw applied to every accumulator, so that a liberal trial is liberal for all of them, would correlate their finishing times. It would not factor through Eq.~\eqref{eq:race-likelihood} and would need quadrature over $\varepsilon$.
 
 %======================================================================
 \section{Classic Poisson Counters as Exact Submodels}\label{sec:submodels}
 %======================================================================
 
-Write $\nu$ for a counter's base input rate, $sv$ for the between-trial SD of that rate, and $\gamma$ for linear self-excitation, so the counter's transition rate is $\nu + \gamma n$. Every combination except $sv$ and $\gamma$ together is an exact \textsc{FRQ} submodel at $h = 1$, and in each one $v = \nu$.
+Write $\nu$ for a counter's base input rate, $sv$ for the between-trial SD of that rate, and $\gamma$ for linear self-excitation, so the counter's transition rate is $\nu + \gamma n$. Every combination except $sv$ and $\gamma$ together is an exact \textsc{FRQ} submodel at $h = 1$ and $\delta = 0$, and in each one $v = \nu$. With $\delta > 0$ each CDF in Table~\ref{tab:submodels} is replaced by its image under $H_\delta$.
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Classic counter submodels. All identities hold to machine precision in the implemented kernel. Real $K \ge 1$ is allowed in every row.}
+\caption{Classic counter submodels, all at $\delta = 0$. All identities hold to machine precision in the implemented kernel. Real $K \ge 1$ is allowed in every row.}
 \label{tab:submodels}
 \begin{tabular}{L{4.4cm} L{4.6cm} L{5.4cm}}
 \toprule
@@ -255,7 +290,14 @@ The results below were measured in two-accumulator races calibrated to 80\% accu
   \item \textbf{Between-trial rate variability, CV shared} ($\cvu = 1$): slow errors. Errors are 13\%, 16\%, 46\% and 139\% slower at $\mathit{cv} \approx 0.03$, $0.18$, $0.58$ and $1$.
   \item \textbf{Evidence-ceiling difference} (unequal $h$ at a common $v$): fast errors, 25--52\% faster than correct responses, with omission rates around $5\times10^{-4}$. The weaker accumulator runs out of evidence, so it can only win early.
   \item \textbf{Threshold below one} ($K<1$): strong fast errors, but the likelihood is unbounded at $t_0 \to \min(\mathrm{rt})$, so $K \ge 1$ is enforced.
+  \item \textbf{Log-odds frailty $\delta$, drawn per accumulator:} slow errors that grow slightly with $\delta$ (14\%, 16\% and 19\% at $\delta = 1, 2, 3$, against 13\% at $\delta = 0$).
 \end{itemize}
+\paragraph{When errors can be fast.} In an independent race with any number of accumulators, the error density from accumulator $j$ divided by the correct density is proportional to the hazard ratio $\eta_j(u)/\eta_c(u)$, because the shared survivors cancel. Errors are slower than correct responses at every quantile exactly when that ratio rises in $u$. When accumulators differ only in $v$, every law is a time rescaling of one base law with hazard $\eta$, and
+\begin{equation}
+  \frac{\dd \log(\eta_j/\eta_c)}{\dd \log u} = \epsilon(v_j u) - \epsilon(v_c u), \qquad \epsilon(x) = \frac{\dd \log \eta(x)}{\dd \log x}.
+\end{equation}
+With $v_j < v_c$, errors are slow wherever $\epsilon$ falls and fast wherever it rises. On a grid of 144 \textsc{FRQ} members at $\delta = 0$ ($K \in [1, 8]$, $\mathit{cv} \in [0, 2]$, $h \in [0.5, 1]$, all three clocks), $\epsilon$ never rises. A rate difference alone therefore gives slow errors at every quantile. Fast errors need either a shape that differs between accumulators (unequal $h$, $\mathit{cv}$ or $K$), or a base law whose log-hazard is convex in log time somewhere, such as an early, near-exponential component (low $K$) mixed with a later one.
+
 The kernel therefore separates two mechanisms cleanly: a rate difference with a shared rate CV gives slow errors, with size set by $\mathit{cv}$, and an evidence-ceiling difference gives fast errors. With a rate SD per accumulator, the sign depends on their ratio (Section~\ref{sec:share}).
 
 \subsection{Rate CV Versus Geometric Threshold Excess}
@@ -308,16 +350,21 @@ Designs give each accumulator its own rate SD (\texttt{sv \textasciitilde{} lM})
 Because the rate is Gamma rather than normal, the sign of the error effect depends on the ratio $sv_e/sv_c$. With equal CVs, errors are slow. With equal SDs, the weaker accumulator has the larger CV: most of its rates lie near zero, its wins come from the long right tail, and at large variability errors are fast. At $h = 0.97$ and small CV, $\log sv_c$ is very poorly identified (per-trial SD about 300), the usual non-regular boundary at zero variability.
 
 \subsection{Clock Shape Versus Rate CV}
-With the clock fixed at $\cvu = 1$, the full race identifies the rate variability: the per-trial SD of $\log\beta$ is 4.2, about 0.19 at 500 trials. With $\cvu$ and the rate variability both free, their posterior correlation is 1.000 and $\operatorname{SD}(\log\beta)$ is 263. Both produce the same contagion signature (Proposition~\ref{prop:intensity}), so one of them must be fixed. The constructor fixes $\cvu = 1$.
+With the clock fixed at $\cvu = 1$, the full race identifies the rate variability: the per-trial SD of $\log\beta$ is 4.2, about 0.19 at 500 trials. With $\cvu$ and the rate variability both free, their posterior correlation is 1.000 and $\operatorname{SD}(\log\beta)$ is 263. Both produce the same contagion signature (Proposition~\ref{prop:intensity}). At $K = 1$ they are exactly confounded, since only $\beta/\cvu^2$ enters the law. At $K = 3$ they are distinct in principle, but this design cannot separate them in practice. The constructor fixes $\cvu = 1$.
 
 %======================================================================
-\section{What the Kernel Does Not Cover}
+\section{What the Kernel Does Not Cover}\label{sec:notcovered}
 %======================================================================
 \begin{itemize}
-  \item \textbf{Rate variability and self-excitation together.} No closed form exists. Intermediate clocks ($0 < \cvu < 1$) come within $10^{-3}$ nats per trial of it, but their parameters do not split into separate $sv$ and $\gamma$. Both are contagion, so the joint model would be weakly identified in any case.
+  \item \textbf{Rate variability and self-excitation together.} For integer $K$ the law is a finite sum, which \textsc{PCOUNTER} evaluated by a Stirling recurrence. That sum does not extend to real $K$, and no closed form for real $K$ is known. Intermediate clocks ($0 < \cvu < 1$) come within $10^{-3}$ nats per trial of it, but their parameters do not split into separate $sv$ and $\gamma$. Both are contagion, so the joint model would be weakly identified in any case.
   \item \textbf{Geometric threshold excess} $\omega$. It was omitted on the evidence of Table~\ref{tab:cv-omega}.
   \item \textbf{Rates correlated across accumulators.} The accumulators race independently. The removed \textsc{PCOUNTERcorr} model used a shared-component gamma construction, and its derivation is in \texttt{Math/PCOUNTER\_correlated\_rates.md}. An \textsc{FRQ} version would need quadrature over the shared factor. The old implementation can be recovered from git at commit \texttt{75582521}.
-  \item \textbf{A threshold shift shared across the race.} $\varepsilon$ is drawn per accumulator, even with $\delta$ shared (Section~\ref{sec:delta}).
+  \item \textbf{Caution shared across the race.} $\varepsilon$ is drawn per accumulator, even with $\delta$ shared (Section~\ref{sec:delta}). Every per-accumulator variability in the kernel gives slow errors at equal CVs. A single draw shared by the race gives fast errors, because liberal trials are both fast and inaccurate. For example, at 80\% accuracy, $sv = 0$:
+  \begin{itemize}
+    \item a shared $\varepsilon$ at $K = 3$ makes errors $+3\%$, $-21\%$ and $-45\%$ slower than correct responses at $\delta = 2, 4, 6$;
+    \item a shared real threshold $K \sim \operatorname{Uniform}(1.5, 11.5)$ makes them $-15\%$ slower, against $+13\%$ at a fixed $K = 4$.
+  \end{itemize}
+  Rate CV offsets the effect: at $\mathit{cv} = 0.3$ the uniform threshold gives $+2\%$. The race likelihood then no longer factors over accumulators and needs quadrature over the shared draw. For a bounded draw, 16 Gauss--Legendre nodes give about $10^{-8}$ relative accuracy.
 \end{itemize}
 
 %======================================================================
@@ -337,6 +384,7 @@ Table~\ref{tab:contract} lists the sampled parameters of \texttt{FRQ()}. Bounds 
 $K$ & $1 + \exp$ & $[1, \infty)$ & 3 & event threshold \\
 $v$ & $\log$ & $[10^{-4}, \infty)$ & 6 & mean initial input rate (events/s) \\
 $sv$ & $\log$ & $[10^{-4}, \infty)$, or exactly 0 & 0 & between-trial rate SD; $\beta = (v/sv)^2$ \\
+$\mathit{cv}$ & $\log$ & $[10^{-4}, \infty)$, or exactly 0 & 0 & rate CV, in $sv$'s place under \texttt{parameterization = "cv"}; $\beta = \mathit{cv}^{-2}$ \\
 $h$ & probit & $[10^{-6}, 1]$ & 1 & eventual completion probability \\
 $t_0$ & $\log$ & $[0.05, \infty)$ & 0 & non-decision time \\
 $\delta$ & $\log$ & $[10^{-4}, 6]$, or exactly 0 & 0 & log-odds threshold variability \\
@@ -348,7 +396,8 @@ $\delta$ & $\log$ & $[10^{-4}, 6]$, or exactly 0 & 0 & log-odds threshold variab
 \begin{itemize}
   \item The exact boundary values $t_0 = 0$, $\delta = 0$, $\cvu = 0$, $h = 1$, $K = 1$ and $sv = 0$ are bound exceptions, so they can be fixed without being a limiting approximation.
   \item $sv$ has no upper bound: $sv > v$ ($\beta < 1$) is a valid, very variable rate. Then $p$ lies within rounding of one, so the kernel solves $1 - p$ from its own quantile, $1 - p = Q_{\beta,K}\big(H_\delta^{-1}(1-h)\big)$, and returns $F(\infty) = h$ and $S(\infty) = 1-h$ directly. For $\beta < 1$ the complements $1-p$ and $1-q(u) = (1-p) + pS_G(u)$ underflow while $(1-q)^\beta$ is still of order one, so both are held as logarithms, and the incomplete beta takes $\log q$ and $\log(1-q)$ directly. Where the beta quantile underflows, its log is the leading term of $I_x(a,b) = x^a/(aB(a,b))\,(1 + O(x))$. The simulators draw the complement $1-U \sim \BetaDist(\beta, K)$ by inversion on the same log scale. The lower guard $10^{-4}$ keeps a sampled $sv$ off the exact $sv = 0$ branch, which is reachable by fixing $sv$ as a constant. The upper bound on $\delta$ guards the quantile, since $H_\delta^{-1}$ shrinks $1-h$ by $\delta/\sinh\delta$.
-  \item The mapping layer reports derived quantities: $\beta$, $p$, $\lambda$, the expected total evidence $\beta p/(1-p)$, or $E$ at $sv=0$ (column \texttt{Etot}, infinite at $h=1$), the rate CV $\mathit{cv} = sv/v$, and the threshold-shift SD \texttt{sQ} $= \delta/\sqrt{3}$. They are not fitted coordinates.
+  \item The mapping layer reports derived quantities: $\beta$, $p$, $\lambda$, the expected total evidence $\beta p/(1-p)$, or $E$ at $sv=0$ (column \texttt{Etot}, infinite at $h=1$), the rate CV $\mathit{cv} = sv/v$ (the rate SD $sv = \mathit{cv}\,v$ in the CV chart), and the threshold-shift SD \texttt{sQ} $= \delta/\sqrt{3}$. They are not fitted coordinates.
+  \item The CV chart is the compiled model \texttt{FRQ\_CV}: the same kernel with $\mathit{cv}$ in the third column, read without dividing by $v$. Its bound, default and exception are $sv$'s.
   \item The likelihood uses Rmath's \texttt{qbeta} and \texttt{qgamma}, a continued-fraction incomplete beta of its own in the general branch, and the package's series and continued-fraction incomplete gamma (\texttt{src/inc\_gamma.h}) in the $sv = 0$ branch, which evaluates only the tail it needs. It is evaluated on the log scale throughout.
 \end{itemize}
 
@@ -370,6 +419,8 @@ Operational time is capped at $1/\kappa$, so the completion probability is deriv
 The expected total evidence a trial can deliver is $\mathbb{E}[W]\,\phi(1/\kappa)$: $v/\kappa$ at $sv = 0$, $\beta q/(1-q)$ at the cap otherwise, and infinite at $\kappa = 0$. The mapping layer reports it as \texttt{Etot}, with $h$, $\beta$, $\lambda$, $\mathit{cv}$ and \texttt{sQ}. The simulator draws the $h = 1$ decision time $x$ and returns $u = -\log(1 - \kappa x)/\kappa$, with $x \ge 1/\kappa$ an omission.
 
 The sampled parameters are those of Table~\ref{tab:contract} with $h$ replaced by $\kappa$ (log link, $[10^{-4}, \infty)$ or exactly 0, default 0.5). At $\kappa = 0$ the model is \textsc{FRQ} with $h = 1$. Every \textsc{FRQ} submodel of Table~\ref{tab:submodels} therefore has a fading counterpart on the clock $A(u)$. In particular, $sv = 0$ gives $F(u) = P_K\big(vA(u)\big)$, and $sv = 0$, $K = 1$ gives the exponential with a fading rate.
+
+At $sv = 0$, \textsc{FRQfade} is contained in \textsc{FRQ}. With the exponential clock ($\cvu = 0$), \textsc{FRQ}'s $sv = 0$ branch is $H_\delta\big[P_K(E(1 - \e^{-\lambda u}))\big]$, and \textsc{FRQfade} is $H_\delta\big[P_K\big((v/\kappa)(1 - \e^{-\kappa u})\big)\big]$. The two are identical at every $u$ when $E = v/\kappa$, $\lambda = \kappa$ and $h = H_\delta\big[P_K(v/\kappa)\big]$, which gives the same $v = \lambda E$. For $sv > 0$ the operational clocks differ ($\phi = a(1 - \e^{-\kappa u})$ against $p(1 - \e^{-\lambda u})/(1 - p(1 - \e^{-\lambda u}))$), so the families separate. A claim that fading and a finite evidence ceiling have been distinguished empirically must therefore rest on $sv > 0$ or on a clock other than $\cvu = 0$.
 
 %======================================================================
 \begin{thebibliography}{9}

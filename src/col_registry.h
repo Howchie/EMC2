@@ -451,7 +451,7 @@ namespace bawdpsplit {
 }
 
 // R/model_FRQ.R — FRQ (finite reservoir quorum) in counter coordinates: K is
-// the event threshold (Beta shape alpha), v the mean initial input rate, cv
+// the event threshold (Beta shape alpha), v the mean initial input rate, sv
 // the between-trial SD of that rate (beta = (v/sv)^2), h the completion
 // probability; p and lambda are derived in the kernel.  delta is threshold
 // variability and clock the registration clock shape.  Both are REQUIRED:
@@ -462,6 +462,18 @@ namespace frq {
   inline ColSpec spec() {
     static const char* n[] = {"K", "v", "sv", "h", "t0", "delta", "clock"};
     return {n, N_REQ, "FRQ"};
+  }
+}
+
+// R/model_FRQ.R — FRQ(parameterization = "cv"): the same layout with the rate
+// CV sv / v in sv's position, so the adapters index it through frq::.
+namespace frq_cv {
+  enum : int { K = 0, v, cv, h, t0, delta, clock, N_REQ };
+  static_assert(int(cv) == int(frq::sv) && int(N_REQ) == int(frq::N_REQ),
+                "frq_cv must share frq's positions");
+  inline ColSpec spec() {
+    static const char* n[] = {"K", "v", "cv", "h", "t0", "delta", "clock"};
+    return {n, N_REQ, "FRQ_CV"};
   }
 }
 

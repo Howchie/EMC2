@@ -78,6 +78,15 @@ tails at \(u=\infty\) return \(h\) and \(1-h\) directly. \(1-p\) and
 \(1-q(u)\) are held as logarithms, since for \(\beta<1\) they underflow while
 \((1-q)^\beta\) is still of order one.
 
+**The cv chart.** `FRQ(parameterization = "cv")` samples
+\(cv=sv/v=\beta^{-1/2}\) in `sv`'s place, with `sv`'s link, bound, default
+and exception. The charts are the same model (equal likelihood at
+\(sv=cv\,v\)); \(cv=0\) is the \(sv=0\) branch. With
+\((K,cv,h,\delta,\mathrm{clock})\) fixed, \(v\) is a pure time scale,
+\(F(u;v)=F(vu;1)\), and the quantile key is free of \(v\). In the `sv`
+chart this holds only along \(sv\propto v\). The mapping layer then reports
+`sv` in place of `cv`.
+
 **The \(sv=0\) branch** is exact, not a limit approximation. The kernel also
 takes it whenever \(cv<10^{-4}\), where the beta branch is within about
 \(5\times10^{-9}\) of the limit. Let \(P_K\) be
@@ -89,8 +98,9 @@ the regularised lower incomplete gamma function.
   evidence. Then the rate is \(\lambda=v/E\) and \(F(u)=P_K(E\,G(u))\).
 
 **Clock and rate variability.** `clock` and `sv` carry the same contagion
-signature, and with both free their posterior correlation is 1. The
-constructor therefore fixes `clock = 1`, the constant-rate counter in which
+signature. At \(K=1\) only \(\beta/c^2\) enters the law, so they are exactly
+confounded. At \(K=3\) they are distinct in principle, but with both free their
+measured posterior correlation is 1. The constructor therefore fixes `clock = 1`, the constant-rate counter in which
 \(sv\) is exactly gamma-mixed rate variability. `clock = 0` is the
 accelerating variant, which is exactly the linear self-exciting counter with
 \(\gamma=\lambda\) and \(\nu=v\).
@@ -121,10 +131,24 @@ properties:
 - an elementary derivative:
   \(H_\delta'(z)=(\sinh\delta/\delta)/(1+2z(1-z)(\cosh\delta-1))\).
 
+\(\delta\) is a proportional-odds frailty (completion odds times
+\(e^{\varepsilon}\)), not a variation in the number of events required. Its
+effects on the law:
+
+- both tails scale by \(\sinh\delta/\delta\), so at \(K=1\)
+  \(f(0^+)=v\sinh(\delta)/\delta\);
+- neither the onset order \(u^K\) nor the tail exponent changes;
+- the bulk spreads at second order in \(\delta\);
+- it is confounded with \(K\) and \(v\), not with `cv`. The best mimic of a
+  \(\delta\) truth lowers \(K\) and keeps \(cv=0\).
+
+The classic submodels hold at \(\delta=0\).
+
 \(\varepsilon\) is drawn independently for each accumulator on every trial,
 even when \(\delta\) is shared (`delta ~ 1`), as LBA start points are drawn
-per accumulator from a shared `A`. A single draw shared by the race would
-need quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
+per accumulator from a shared `A`. Drawn this way it gives slow errors. A
+single draw shared by the race gives fast errors at large \(\delta\), but needs
+quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
 
 ## 5. Contract
 
@@ -133,10 +157,13 @@ need quadrature. \(\mathrm{SD}(\varepsilon)=\delta/\sqrt3\) is reported as `sQ`.
 | `K`       | 1 + exp | [1, Inf)               | 3       | 1         |
 | `v`       | log     | [1e-4, Inf)            | 6       |           |
 | `sv`      | log     | [1e-4, Inf)            | 0       | 0         |
+| `cv`      | log     | [1e-4, Inf)            | 0       | 0         |
 | `h`       | probit  | [1e-6, 1]              | 1       | 1         |
 | `t0`      | log     | [0.05, Inf)            | 0       | 0         |
 | `delta`   | log     | [1e-4, 6]              | 0       | 0         |
 | `clock`   | log     | [1e-4, Inf)            | 1       | 0         |
+
+`cv` replaces `sv` under `parameterization = "cv"`.
 
 The bounds are numerical guards, with one exception: the `t0` floor is a
 psychological floor.

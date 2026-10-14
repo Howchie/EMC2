@@ -132,6 +132,7 @@
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
+#include <utility>
 #include "inc_gamma.h"
 
 using namespace Rcpp;
@@ -349,15 +350,15 @@ struct FrqPars {
   bool ok = false;
 };
 
-inline FrqAvail frq_derive_avail(double K, double cv, double h,
-                                 double delta = 0.0) {
-  FrqAvail s;
-  if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return s;
-  if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return s;
-  if (!(cv >= 0.0) || !R_FINITE(cv)) return s;
-  if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return s;
+inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
+                                  double delta = 0.0) {
+  s = FrqAvail();
+  if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return;
+  if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return;
+  if (!(cv >= 0.0) || !R_FINITE(cv)) return;
+  if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return;
   s.hh = frq_h_make(delta);
-  if (!s.hh.ok) return s;
+  if (!s.hh.ok) return;
   s.alpha = K;
   s.alpha_minus_1 = K - 1.0;
   s.h = h;
@@ -374,16 +375,16 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
       s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
     } else {
       const double E = R::qgamma(frq_h_inv(h, s.hh), K, 1.0, 1, 0);
-      if (!(E > 0.0) || !R_FINITE(E)) return s;
+      if (!(E > 0.0) || !R_FINITE(E)) return;
       s.E = E; s.log_E = std::log(E);
       s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
     }
     s.ok = true;
-    return s;
+    return;
   }
 
   const double beta = 1.0 / (cv * cv);
-  if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return s;
+  if (!(beta >= FRQ_SHAPE_MIN) || !R_FINITE(beta)) return;
   // h = 1 maps exactly to p = 1 for any shape or threshold-variability map;
   // skipping qbeta there matters because the proper boundary is the common
   // case.  Below one, 1 - p comes from the complementary quantile
@@ -392,14 +393,14 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
   // so its complement is H^{-1}(1 - h).  p itself is re-solved only when it is
   // the small side.  Both sides are held as logs, so a 1 - p that underflows
   // still enters log(1 - q(x)) exactly.
-  const double lb = R::lbeta(K, beta);
+  const double lb = lbeta_fast(K, beta);
   double log_p = 0.0, log_om_p = R_NegInf;
   if (h < 1.0) {
     log_om_p = frq_log_qbeta(frq_h_inv(1.0 - h, s.hh), beta, K, lb);
-    if (ISNAN(log_om_p) || !(log_om_p < 0.0)) return s;
+    if (ISNAN(log_om_p) || !(log_om_p < 0.0)) return;
     log_p = (log_om_p > -M_LN2) ? frq_log_qbeta(frq_h_inv(h, s.hh), K, beta, lb)
                                 : frq_log1mexp(log_om_p);
-    if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return s;
+    if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return;
   }
 
   s.beta = beta;
@@ -413,6 +414,12 @@ inline FrqAvail frq_derive_avail(double K, double cv, double h,
   s.log_p_minus_lbeta = s.log_p - s.lbeta_val;
   s.beta_minus_1 = beta - 1.0;
   s.ok = true;
+}
+
+inline FrqAvail frq_derive_avail(double K, double cv, double h,
+                                 double delta = 0.0) {
+  FrqAvail s;
+  frq_derive_avail_into(s, K, cv, h, delta);
   return s;
 }
 
@@ -595,57 +602,45 @@ inline FrqState frq_state(double x, const FrqPars& s) {
 
 // ---------------------------------------------------------------------------
 // Regularized incomplete beta log-evaluator: log I_x(a, b), with omx = 1 - x.
-// Uses Modified Lentz's method on Gauss's continued fraction in the convergent
-// regime x < (a + 1)/(a + b + 2) and the symmetry transformation
-// I_x(a, b) = 1 - I_{1-x}(b, a) elsewhere. Special-cases a == 1 and b == 1
-// algebraically to eliminate all loops.
+// Evaluates Gauss's continued fraction in the convergent regime
+// x < (a + 1)/(a + b + 2) and uses the symmetry I_x(a, b) = 1 - I_{1-x}(b, a)
+// elsewhere. Special-cases a == 1 and b == 1 algebraically.
+//
+// The fraction f = 1 + d_1/(1 + d_2/(1 + ...)) is evaluated by the forward
+// recurrence on its convergents, A_n = A_{n-1} + d_n A_{n-2} (B likewise),
+// which needs no division per step; the pair is rescaled when B leaves
+// [1e-100, 1e100], and convergence is |A_n B_{n-1} - A_{n-1} B_n| small
+// against A_n B_{n-1}.
 // ---------------------------------------------------------------------------
 inline double frq_ibeta_cf_log(double x, double a, double b, double log_x,
                                double log_omx, double lbeta_val) {
-  const double FPMIN = 1e-300;
   const double EPS = 1e-15;
   const int MAXIT = 200;
+  const double apb = a + b;
 
-  double f = 1.0;
-  double c = 1.0;
-  double d = 0.0;
-
-  const double a1 = - (a + b) * x / (a + 1.0);
-  d = 1.0 + a1 * d;
-  if (std::abs(d) < FPMIN) d = FPMIN;
-  c = 1.0 + a1 / c;
-  if (std::abs(c) < FPMIN) c = FPMIN;
-  d = 1.0 / d;
-  double delta = c * d;
-  f *= delta;
-
+  double Am2 = 1.0, Bm2 = 0.0, Am1 = 1.0, Bm1 = 1.0;
+  const double d1 = -apb * x / (a + 1.0);
+  double A = Am1 + d1 * Am2, B = Bm1 + d1 * Bm2;
+  Am2 = Am1; Bm2 = Bm1; Am1 = A; Bm1 = B;
   for (int m = 1; m <= MAXIT; ++m) {
-    const int m2 = 2 * m;
-    // Step 2m (even)
-    const double a_even = (m * (b - m) * x) / ((a + m2 - 1.0) * (a + m2));
-    d = 1.0 + a_even * d;
-    if (std::abs(d) < FPMIN) d = FPMIN;
-    c = 1.0 + a_even / c;
-    if (std::abs(c) < FPMIN) c = FPMIN;
-    d = 1.0 / d;
-    delta = c * d;
-    f *= delta;
-
-    // Step 2m + 1 (odd)
-    const double a_odd = - ((a + m) * (a + b + m) * x) / ((a + m2) * (a + m2 + 1.0));
-    d = 1.0 + a_odd * d;
-    if (std::abs(d) < FPMIN) d = FPMIN;
-    c = 1.0 + a_odd / c;
-    if (std::abs(c) < FPMIN) c = FPMIN;
-    d = 1.0 / d;
-    delta = c * d;
-    f *= delta;
-
-    if (std::abs(delta - 1.0) < EPS) break;
+    const double m2 = 2.0 * m;
+    const double d_even = (m * (b - m) * x) / ((a + m2 - 1.0) * (a + m2));
+    A = Am1 + d_even * Am2; B = Bm1 + d_even * Bm2;
+    Am2 = Am1; Bm2 = Bm1; Am1 = A; Bm1 = B;
+    const double d_odd = -((a + m) * (apb + m) * x) / ((a + m2) * (a + m2 + 1.0));
+    A = Am1 + d_odd * Am2; B = Bm1 + d_odd * Bm2;
+    const double diff = A * Bm1 - Am1 * B;
+    Am2 = Am1; Bm2 = Bm1; Am1 = A; Bm1 = B;
+    if (std::abs(diff) <= EPS * std::abs(A * Bm2)) break;
+    const double scale = std::abs(B);
+    if (scale > 1e100 || scale < 1e-100) {
+      const double r = 1.0 / scale;
+      Am1 *= r; Bm1 *= r; Am2 *= r; Bm2 *= r;
+    }
   }
 
   const double log_pref = a * log_x + b * log_omx - std::log(a) - lbeta_val;
-  return log_pref - std::log(f);
+  return log_pref - std::log(A / B);
 }
 
 // The prefactor takes log x and log(1 - x) directly: either side may underflow
@@ -849,63 +844,102 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
 // against constant shapes -- redoes one log rather than one beta quantile.
 // The likelihood adapters hand it the per-particle FrqCache; the exported
 // entry points run without one and memoise locally.
-// True when `a` is a valid proper (h = 1) Poisson-limit state and K is a valid
-// threshold, i.e. when a new K changes nothing but alpha and lgamma(K).
-inline bool frq_poisson_proper_k(const FrqAvail& a, double K) {
-  return a.ok && a.poisson && a.h == 1.0 && K >= FRQ_SHAPE_MIN && R_FINITE(K);
+// At h = 1 there is no beta quantile (p = 1), so a valid proper state depends
+// on K only through alpha and lgamma(K) (sv = 0) or lbeta(K, beta) (sv > 0),
+// and a K that changes per row (a trend) updates those instead of
+// re-deriving.  The rate half is K-free.
+inline bool frq_proper_k_update(const FrqAvail& a, double K) {
+  return a.ok && a.h == 1.0 && K >= FRQ_SHAPE_MIN && R_FINITE(K);
 }
 
 template <class S>
-inline void frq_set_poisson_proper_k(S& s, double K, double lgamma_K) {
+inline void frq_set_proper_k(S& s, double K, double lg) {
   s.alpha = K;
   s.alpha_minus_1 = K - 1.0;
-  s.lgamma_K = lgamma_K;
+  if (s.poisson) {
+    s.lgamma_K = lg;
+  } else {
+    s.lbeta_val = lg;
+    s.log_p_minus_lbeta = s.log_p - lg;
+  }
+}
+
+// lgamma(K) or lbeta(K, beta), whichever the proper state carries.
+inline double frq_proper_k_term(const FrqAvail& a, double K) {
+  return a.poisson ? lgamma_fast(K) : lbeta_fast(K, a.beta);
 }
 
 struct FrqMemo {
   FrqCache* shared = nullptr;
-  double K = R_NaN, cv = R_NaN, h = R_NaN, delta = R_NaN;
+  // Two availability states, keyed on (K, sv/v, h, delta), so rows that
+  // alternate between two keys (the accumulators of one trial) find theirs
+  // without a re-derive.  The memo owns its copies rather than pointing into
+  // the shared cache, so its lifetime is independent of when that is cleared.
+  struct Slot {
+    double K = R_NaN, cv = R_NaN, h = R_NaN, delta = R_NaN;
+    FrqAvail avail;
+    bool matches(double k, double c, double hh, double d) const {
+      return k == K && c == cv && hh == h && d == delta;
+    }
+  };
+  Slot slot[2];
+  int cur = 0;
   double v = R_NaN, clock = R_NaN;
-  // The memo owns its copy rather than holding a pointer into the shared
-  // cache: the copy runs only when the shape key changes -- the same branch
-  // that would otherwise pay a hash lookup or a beta quantile -- and it keeps
-  // the memo's lifetime independent of when the cache is cleared.
-  FrqAvail avail;
   FrqPars value;
 
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
   const FrqPars& get(double k, double vv, double sv, double hh,
                      double d = 0.0, double cu = 1.0) {
+    return get_cv(k, vv, frq_rate_cv(sv, vv), hh, d, cu);
+  }
+
+  // The same state from the rate CV c = sv / v directly (the cv chart).
+  const FrqPars& get_cv(double k, double vv, double c, double hh,
+                        double d = 0.0, double cu = 1.0) {
     // NaN never compares equal, so a NaN parameter always re-derives, and the
     // NaN-initialised keys make the first call always miss.
-    const double c = frq_rate_cv(sv, vv);
-    const bool same_avail = k == K && c == cv && hh == h && d == delta;
-    if (same_avail && vv == v && cu == clock) return value;
-    if (!same_avail) {
-      if (c == cv && hh == h && d == delta && frq_poisson_proper_k(avail, k)) {
-        // The proper sv = 0 state depends on K only through alpha and
-        // lgamma(K), so a K that varies per row (a trend) skips the derive.
-        K = k;
-        const double lg = lgamma_fast(k);
-        frq_set_poisson_proper_k(avail, k, lg);
-        frq_set_poisson_proper_k(value, k, lg);
-        if (vv == v && cu == clock) return value;   // rate half is K-free
+    Slot& s0 = slot[cur];
+    if (!s0.matches(k, c, hh, d)) {
+      Slot& s1 = slot[cur ^ 1];
+      if (c == s0.cv && hh == s0.h && d == s0.delta &&
+          frq_proper_k_update(s0.avail, k)) {
+        s0.K = k;
+        const double lg = frq_proper_k_term(s0.avail, k);
+        frq_set_proper_k(s0.avail, k, lg);
+        frq_set_proper_k(value, k, lg);
+        if (vv == v && cu == clock) return value;
+      } else if (s1.matches(k, c, hh, d)) {
+        cur ^= 1;
+        frq_copy_avail(value, s1.avail);
       } else {
-        K = k; cv = c; h = hh; delta = d;
-        avail = (shared != nullptr) ? shared->get(k, c, hh, d)
-                                    : frq_derive_avail(k, c, hh, d);
-        frq_copy_avail(value, avail);
+        cur ^= 1;
+        if (c == s1.cv && hh == s1.h && d == s1.delta &&
+            frq_proper_k_update(s1.avail, k)) {
+          s1.K = k;
+          frq_set_proper_k(s1.avail, k, frq_proper_k_term(s1.avail, k));
+        } else {
+          s1.K = k; s1.cv = c; s1.h = hh; s1.delta = d;
+          // h = 1 needs no beta quantile, so the derive is cheaper than a
+          // shared-cache lookup and insert.
+          if (shared != nullptr && hh != 1.0) s1.avail = shared->get(k, c, hh, d);
+          else frq_derive_avail_into(s1.avail, k, c, hh, d);
+        }
+        frq_copy_avail(value, s1.avail);
       }
+    } else if (vv == v && cu == clock) {
+      return value;
     }
     v = vv; clock = cu;
-    frq_set_rate(value, avail.ok, vv, cu);
+    frq_set_rate(value, slot[cur].avail.ok, vv, cu);
     return value;
   }
 };
 
 // Race adapters used by the particle likelihood dispatch.  Definitions live
-// in model_FRQ.cpp so this header remains safe for model_rng.cpp.
+// in model_FRQ.cpp so this header remains safe for model_rng.cpp.  The
+// `_cv` set reads the rate CV (column "cv") where the default reads sv; the
+// layouts are otherwise identical.
 double dfrq_scalar(double t, const double* par, void* /*ctx_*/);
 double pfrq_scalar(double t, const double* par, void* /*ctx_*/);
 void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
@@ -918,5 +952,17 @@ void frq_logS_at_t(double t, const double* const* cols,
                    int /*n_rows_total*/, int n_lR, int /*n_par*/,
                    const int* trunc_mask, int n_unique_trials,
                    const int* isok_all, void* /*ctx_*/, double* logS_out);
+double dfrq_cv_scalar(double t, const double* par, void* /*ctx_*/);
+double pfrq_cv_scalar(double t, const double* par, void* /*ctx_*/);
+void dfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
+                 const int* mask, const int* isok,
+                 double* out, double min_ll, void* ctx_);
+void pfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
+                 const int* mask, const int* isok,
+                 double* out, double min_ll, void* ctx_);
+void frq_cv_logS_at_t(double t, const double* const* cols,
+                      int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                      const int* trunc_mask, int n_unique_trials,
+                      const int* isok_all, void* /*ctx_*/, double* logS_out);
 
 #endif  // EMC2_MODEL_FRQ_H

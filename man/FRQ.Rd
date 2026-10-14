@@ -4,7 +4,11 @@
 \alias{FRQ}
 \title{The Finite Reservoir Quorum Process (FRQ)}
 \usage{
-FRQ()
+FRQ(parameterization = c("sv", "cv"))
+}
+\arguments{
+\item{parameterization}{Rate-variability coordinate: \code{"sv"} (the default)
+samples the rate SD \emph{sv}; \code{"cv"} samples the rate CV \emph{cv} = \emph{sv}/\emph{v}.}
 }
 \value{
 A model list defining the FRQ race model.
@@ -44,6 +48,16 @@ The values \code{K = 1}, \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{delta
 \code{clock = 0} are exact bound exceptions and can be set as constants.
 \code{K} is real-valued.
 
+\code{parameterization = "cv"} samples \emph{cv} = \emph{sv}/\emph{v}, the between-trial CV of
+the input rate, in place of \emph{sv}:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{cv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = 1/\emph{cv}^2, \emph{sv} = \emph{cv} \emph{v} \tab Between-trial CV of the input rate \cr
+}
+
+
+\code{cv = 0} is the same exact limit as \code{sv = 0}. At equal values of \emph{sv} and
+\emph{cv} \emph{v} the two parameterizations give the same likelihood.
+
 With \code{delta > 0} the model is \code{F(u) = H(I_q(u)(K, beta))}, the closed-form
 marginal over a shift \code{eps ~ Uniform(-delta, delta)} of the log-odds of the
 quorum percentile, and \code{p} is derived from \code{H^{-1}(h)}. \code{eps} is drawn
@@ -52,7 +66,8 @@ is shared across accumulators.
 
 \code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
 (expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}
-at \code{h = 1}), \code{cv} = \code{sv / v} and \code{sQ} = \code{delta / sqrt(3)}.
+at \code{h = 1}), \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
+\code{parameterization = "cv"}) and \code{sQ} = \code{delta / sqrt(3)}.
 
 Optional nuisance parameters are \code{pContaminant}, an omission probability
 outside the accumulators, and \code{pGuess}, a uniform-outlier probability.
@@ -69,4 +84,12 @@ design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
                      constants = c(h = qnorm(1))) # non-defective race
 # For all parameters that are not defined in the formula, default values are
 # assumed (see Table above).
+# The cv parameterization.
+design_FRQ_cv <- design(data = forstmann,
+                        model = function() FRQ(parameterization = "cv"),
+                        matchfun = matchfun,
+                        formula = list(K ~ 1, v ~ lM + E, cv ~ lM, h ~ 1,
+                                       t0 ~ 1),
+                        contrasts = list(v = list(lM = ADmat)),
+                        constants = c(h = qnorm(1)))
 }

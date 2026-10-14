@@ -148,7 +148,8 @@ NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
 
 // ============================================================
 // FRQ (Finite Reservoir Quorum) adapters
-// Column layout: K=0, v=1, sv=2, h=3, t0=4, delta=5, clock=6.
+// Column layout: K=0, v=1, sv=2, h=3, t0=4, delta=5, clock=6; the cv chart
+// (FRQ_CV) holds the rate CV sv / v in column 2.
 // delta is the threshold-variability half-width (zero by default) and clock the
 // registration clock shape (one by default, a constant-rate counter).
 //
@@ -161,38 +162,51 @@ NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
 // and (v, clock), which is recomputed per row for the cost of one log.
 // ============================================================
 
+// Rate-variability column: sv, or the rate CV under the cv chart.  Both
+// layouts put it at the same position.
+template <bool CV>
+inline const FrqPars& frq_memo_row(FrqMemo& memo, double k, double v,
+                                   double x, double h, double d, double cu) {
+  return CV ? memo.get_cv(k, v, x, h, d, cu) : memo.get(k, v, x, h, d, cu);
+}
+
 // The scalar entry points are called once per evaluation point, often several
 // times on one row (bin edges and midpoint), so they share a per-thread memo.
 // Its keys are the parameter values themselves, so a hit is valid across
 // particles; only a miss consults the per-particle cache.
+template <bool CV>
 static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
   static thread_local FrqMemo memo;
   memo.shared = frq_cache_from_context(ctx_);
-  return memo.get(par[emc2col::frq::K], par[emc2col::frq::v],
-                  par[emc2col::frq::sv], par[emc2col::frq::h],
-                  par[emc2col::frq::delta], par[emc2col::frq::clock]);
+  return frq_memo_row<CV>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
+                          par[emc2col::frq::sv], par[emc2col::frq::h],
+                          par[emc2col::frq::delta], par[emc2col::frq::clock]);
 }
 
-double dfrq_scalar(double t, const double* par, void* ctx_) {
+template <bool CV>
+static double dfrq_scalar_impl(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
       !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
-  return frq_pdf_natural_dt(tt, frq_scalar_row(par, ctx_));
+  return frq_pdf_natural_dt(tt, frq_scalar_row<CV>(par, ctx_));
 }
-double pfrq_scalar(double t, const double* par, void* ctx_) {
+
+template <bool CV>
+static double pfrq_scalar_impl(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
       !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   // tt == Inf deliberately reaches the kernel: the CDF there is h, not one
   // when h < 1, and is one at the proper h = 1 boundary.
-  return frq_cdf_natural_dt(tt, frq_scalar_row(par, ctx_));
+  return frq_cdf_natural_dt(tt, frq_scalar_row<CV>(par, ctx_));
 }
 
-void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* ctx_) {
+template <bool CV>
+static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_rows,
+                          const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* k_  = cols[emc2col::frq::K];
   const double* v_  = cols[emc2col::frq::v];
@@ -213,7 +227,8 @@ void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    const FrqPars& s = memo.get(k_[i], v_[i], sv_[i], h_[i], de_[i], cu_[i]);
+    const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
+                                        de_[i], cu_[i]);
     const double log_pdf = frq_log_pdf_dt(tt, s);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -221,9 +236,10 @@ void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
   }
 }
 
-void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* ctx_) {
+template <bool CV>
+static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_rows,
+                          const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* k_  = cols[emc2col::frq::K];
   const double* v_  = cols[emc2col::frq::v];
@@ -242,7 +258,8 @@ void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
     }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const FrqPars& s = memo.get(k_[i], v_[i], sv_[i], h_[i], de_[i], cu_[i]);
+    const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
+                                        de_[i], cu_[i]);
     const double log_surv = frq_log_surv_dt(tt, s);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
@@ -250,10 +267,11 @@ void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
   }
 }
 
-void frq_logS_at_t(double t, const double* const* cols,
-                          int /*n_rows_total*/, int n_lR, int /*n_par*/,
-                          const int* trunc_mask, int n_unique_trials,
-                          const int* isok_all, void* ctx_, double* logS_out) {
+template <bool CV>
+static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_,
+                               double* logS_out) {
   const double* k_  = cols[emc2col::frq::K];
   const double* v_  = cols[emc2col::frq::v];
   const double* sv_ = cols[emc2col::frq::sv];
@@ -274,7 +292,8 @@ void frq_logS_at_t(double t, const double* const* cols,
       }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const FrqPars& s = memo.get(k_[r], v_[r], sv_[r], h_[r], de_[r], cu_[r]);
+      const FrqPars& s = frq_memo_row<CV>(memo, k_[r], v_[r], sv_[r], h_[r],
+                                          de_[r], cu_[r]);
       const double log_surv = !R_FINITE(t)
         ? (s.ok ? frq_log_surv_dt(R_PosInf, s) : R_NaN)
         : frq_log_surv_dt(tt, s);
@@ -283,4 +302,52 @@ void frq_logS_at_t(double t, const double* const* cols,
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
+}
+
+double dfrq_scalar(double t, const double* par, void* ctx_) {
+  return dfrq_scalar_impl<false>(t, par, ctx_);
+}
+double pfrq_scalar(double t, const double* par, void* ctx_) {
+  return pfrq_scalar_impl<false>(t, par, ctx_);
+}
+void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
+              const int* mask, const int* isok,
+              double* out, double min_ll, void* ctx_) {
+  dfrq_raw_impl<false>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
+              const int* mask, const int* isok,
+              double* out, double min_ll, void* ctx_) {
+  pfrq_raw_impl<false>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void frq_logS_at_t(double t, const double* const* cols,
+                   int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                   const int* trunc_mask, int n_unique_trials,
+                   const int* isok_all, void* ctx_, double* logS_out) {
+  frq_logS_at_t_impl<false>(t, cols, n_lR, trunc_mask, n_unique_trials,
+                            isok_all, ctx_, logS_out);
+}
+
+double dfrq_cv_scalar(double t, const double* par, void* ctx_) {
+  return dfrq_scalar_impl<true>(t, par, ctx_);
+}
+double pfrq_cv_scalar(double t, const double* par, void* ctx_) {
+  return pfrq_scalar_impl<true>(t, par, ctx_);
+}
+void dfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
+                 const int* mask, const int* isok,
+                 double* out, double min_ll, void* ctx_) {
+  dfrq_raw_impl<true>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void pfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
+                 const int* mask, const int* isok,
+                 double* out, double min_ll, void* ctx_) {
+  pfrq_raw_impl<true>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void frq_cv_logS_at_t(double t, const double* const* cols,
+                      int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                      const int* trunc_mask, int n_unique_trials,
+                      const int* isok_all, void* ctx_, double* logS_out) {
+  frq_logS_at_t_impl<true>(t, cols, n_lR, trunc_mask, n_unique_trials,
+                           isok_all, ctx_, logS_out);
 }

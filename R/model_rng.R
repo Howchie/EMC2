@@ -190,7 +190,7 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
 .rfun_FRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   if (.use_cpp_rfun()) {
-    res <- rfrq_cpp(pars, levels(lR), ok)
+    res <- rfrq_cpp(.frq_with_sv(pars), levels(lR), ok)
     out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
     return(.apply_timed_guess_winner(out, levels(lR)))
   }
