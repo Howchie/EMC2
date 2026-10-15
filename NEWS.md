@@ -23,9 +23,12 @@
     priors and fits made before this change keep the transform stored in
     them and map exactly as before.
 
--   **One sampler:** the ensemble group update, shear rounds (with bound
-    walls), the collapsed move, subject HMC and the move allocator
-    always run where the model supports them. The `emc2.*` options that
+-   **One sampler:** ensemble updates support standard, diagonal-gamma,
+    factor, SEM and infinite-factor hierarchies without nuisance parameters.
+    Shear, collapsed moves and subject HMC additionally require standard or
+    diagonal-gamma without group designs, nuisance parameters or a joint
+    likelihood. Standard models with covariates on `mu` use the ensemble and
+    particle updates. The `emc2.*` options that
     switched them off or changed their schedules (`emc2.ensemble*`,
     `emc2.group_move*`, `emc2.shear_*`, `emc2.collapsed_move`,
     `emc2.subject_hmc*`, `emc2.alloc_*`, `emc2.independent_chains`,

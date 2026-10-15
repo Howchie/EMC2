@@ -1442,6 +1442,15 @@
   rejects <- if (length(outs)) Reduce(`+`, lapply(outs, `[[`, "rejects"))
              else stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                                   .EMC_REJECT_CLASSES)
+  ensemble_rejects <- list(
+    counts = stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES),
+    msgs = list())
+  for (out in outs) if (!is.null(out$ensemble_rejects)) {
+    ensemble_rejects$counts <- ensemble_rejects$counts + out$ensemble_rejects$counts
+    for (cls in names(out$ensemble_rejects$msgs))
+      if (is.null(ensemble_rejects$msgs[[cls]]))
+        ensemble_rejects$msgs[[cls]] <- out$ensemble_rejects$msgs[[cls]]
+  }
   list(subs = got,
        props = if (length(outs)) do.call(cbind, lapply(outs, `[[`, "props"))
                else matrix(0, ctx$n_pars + 1L, 0L),
@@ -1451,7 +1460,8 @@
        extra_ll = if (is.null(inp$extra)) NULL else do.call(c, lapply(outs, `[[`, "extra_ll")),
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(spent[["user.self"]] + spent[["sys.self"]]),
-       elapsed = unname(spent[["elapsed"]]), rejects = rejects)
+       elapsed = unname(spent[["elapsed"]]), rejects = rejects,
+       ensemble_rejects = ensemble_rejects)
 }
 
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
@@ -1472,6 +1482,7 @@
   t_recv <- Sys.time()
   w_started <- proc.time()
   rejects_before <- .emc_reject_counts("particle")
+  ensemble_rejects_before <- .emc_reject_counts("ensemble")
   for (k in seq_along(subs)) {
     s <- subs[k]
     data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
@@ -1511,11 +1522,18 @@
                                                   ctx$model)
   }
   w_spent <- proc.time() - w_started
+  ensemble_delta <- .emc_reject_delta(ensemble_rejects_before, "ensemble")
+  reject_messages <- .emc_reject_messages()
+  ensemble_msgs <- lapply(names(ensemble_delta), function(cls)
+    reject_messages[[paste("ensemble", cls, sep = ".")]])
+  names(ensemble_msgs) <- names(ensemble_delta)
+  ensemble_msgs <- ensemble_msgs[ensemble_delta > 0L]
   list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
        elapsed = unname(w_spent[["elapsed"]]),
-       rejects = .emc_reject_delta(rejects_before, "particle"))
+       rejects = .emc_reject_delta(rejects_before, "particle"),
+       ensemble_rejects = list(counts = ensemble_delta, msgs = ensemble_msgs))
 })
 
 .emc_wpool_ll <- function(proposals, s, component = NULL, dynamic = FALSE,
@@ -1832,6 +1850,9 @@
   fallback_subjects <- 0L
   rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
                              .EMC_REJECT_CLASSES)
+  ensemble_rejects <- list(
+    counts = stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES),
+    msgs = list())
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   if (was_alive && !is.null(shared_file)) {
     if (claim) emc_claim_reset(claim_map$ptr, request)
@@ -1865,6 +1886,12 @@
     stored[subs] <<- TRUE
     if (!is.null(extra) && !is.null(res$extra_ll)) extra_ll[subs] <<- res$extra_ll
     if (!is.null(res$rejects)) rejects <<- rejects + res$rejects
+    if (!is.null(res$ensemble_rejects)) {
+      ensemble_rejects$counts <<- ensemble_rejects$counts + res$ensemble_rejects$counts
+      for (cls in names(res$ensemble_rejects$msgs))
+        if (is.null(ensemble_rejects$msgs[[cls]]))
+          ensemble_rejects$msgs[[cls]] <<- res$ensemble_rejects$msgs[[cls]]
+    }
     if (identical(source, "master") && was_alive) {
       fallback_workers <<- fallback_workers + 1L
       fallback_subjects <<- fallback_subjects + length(subs)
@@ -2022,7 +2049,8 @@
   } else if (measure_wire) 0 else NA_real_
   worker_load <- vapply(assigned, function(subs) sum(times[subs]), numeric(1))
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       extra_ll = extra_ll, alive = pool$alive, rejects = rejects, worker_cpu = cpu_total,
+       extra_ll = extra_ll, alive = pool$alive, rejects = rejects,
+       ensemble_rejects = ensemble_rejects, worker_cpu = cpu_total,
        profile = if (profile) list(
          elapsed = proc.time()[["elapsed"]] - iter_started,
          shared_serialize = shared_elapsed,

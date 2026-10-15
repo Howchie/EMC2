@@ -279,9 +279,13 @@
   M1 <- nrow(pools$rows[[1L]])
   ll <- pools$ll
   if (is.null(ll)) ll <- vector("list", n)
-  for (s in seq_len(n)) if (is.null(ll[[s]]) || length(ll[[s]]) != M1)
-    ll[[s]] <- .emc_ensemble_ll_candidate(pools$rows[[s]], sampler$data[[s]],
-                                          sampler$model)
+  for (s in seq_len(n)) if (is.null(ll[[s]]) || length(ll[[s]]) != M1) {
+    ll[[s]] <- tryCatch(
+      .emc_ensemble_ll_checked(pools$rows[[s]], sampler$data[[s]], sampler$model),
+      error = function(e) vapply(seq_len(M1), function(i)
+        .emc_ensemble_ll_candidate(pools$rows[[s]][i, , drop = FALSE],
+                                   sampler$data[[s]], sampler$model), numeric(1)))
+  }
   ll_new <- matrix(unlist(ll), nrow = M1)
   if (anyNA(ll_new) || any(ll_new == Inf))
     stop("Invalid ensemble pool likelihood")
@@ -360,6 +364,26 @@
 
 .emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
                                wpool_part, pools) {
+  keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
+  if (is.null(pools)) return(keep)
+  out <- tryCatch(.emc_ensemble_move_impl(sampler, pars, proposals, stage,
+                                          wpool, wpool_ctx, wpool_part, pools),
+                  error = identity)
+  if (!inherits(out, "error")) return(out)
+  cls <- if (inherits(out, "emc_failure") && length(out$emc_class))
+    out$emc_class else .emc_classify_failure(out)
+  already_recorded <- inherits(out, "emc_failure") &&
+    identical(out$emc_source, "ensemble")
+  if (!already_recorded) .emc_reject_record(out, "ensemble")
+  if (identical(.emc_failure_action(cls), "abort"))
+    .emc_failure_abort(cls, "ensemble", out)
+  if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+    keep$sampler$rng$gibbs <- get(".Random.seed", envir = globalenv())
+  keep
+}
+
+.emc_ensemble_move_impl <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
+                                    wpool_part, pools) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
   if (is.null(pools)) return(keep)
   cfg <- .emc_ensemble_options()

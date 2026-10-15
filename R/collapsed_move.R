@@ -346,34 +346,27 @@
   eps <- .emc_collapsed_tune_eps(phi, C, eps0, ctx)
   chain$rng$gibbs <- get(".Random.seed", envir = globalenv())
   zero <- .emc_collapsed_record(NULL, p)
-  # Outside production, do not pool movement across nonempty blocks because
-  # the fits, mass and step size change at every rebuild. If the allocator
-  # selected too few moves to measure the new block, retain the last measured
-  # block instead of reverting to an optimistic prior; across a stage change
-  # it carries at the evidence decay, so the exploration floor re-measures it.
-  # Production blocks run settled kernels on a stationary chain, so their
-  # measurements pool over the sample stage.
+  # Discount movement evidence across rebuilds so the exploration floor
+  # re-probes moves at a diminishing rate.
   blk <- .emc_collapsed_record(if (is.list(old$block)) old$block, p)
   blk$iters <- .emc_alloc_block_iters(chain)
-  pooled <- identical(stage, "sample") && identical(old$stage, "sample")
-  pool <- if (pooled) {
-    prev <- .emc_collapsed_record(if (is.list(old$pool)) old$pool, p)
-    d <- .EMC_ALLOC_EVIDENCE_DECAY
-    list(E = d * prev$E + blk$E, n = d * prev$n + blk$n, acc = d * prev$acc + blk$acc,
-         moved = d * prev$moved + blk$moved, N = d * prev$N + blk$N,
-         K = .emc_alloc_khist_sum(d * prev$K, blk$K), iters = d * prev$iters + blk$iters)
+  same_stage <- identical(stage, old$stage)
+  production_pool <- identical(stage, "sample") && same_stage
+  prev <- if (production_pool || !identical(stage, "sample")) {
+    .emc_collapsed_record(if (same_stage) old$pool else old$last, p)
   } else zero
-  last <- if (pooled) pool else blk
-  if (last$n < 5L) {
-    previous <- if (!pooled) .emc_collapsed_record(old$last, p) else zero
-    if (previous$n < 5L) previous <- zero
-    else if (!identical(stage, old$stage)) {
-      d <- .EMC_ALLOC_EVIDENCE_DECAY
-      previous <- list(E = d * previous$E, n = d * previous$n, acc = d * previous$acc,
-                       moved = d * previous$moved, N = d * previous$N,
-                       K = d * previous$K, iters = d * previous$iters)
-    }
-    last <- previous
+  if (!same_stage && !identical(stage, "sample") && prev$n < 5L) prev <- zero
+  if (production_pool || !identical(stage, "sample")) {
+    d <- .EMC_ALLOC_EVIDENCE_DECAY
+    pool <- list(E = d * prev$E + blk$E, n = d * prev$n + blk$n,
+                 acc = d * prev$acc + blk$acc, moved = d * prev$moved + blk$moved,
+                 N = d * prev$N + blk$N,
+                 K = .emc_alloc_khist_sum(d * prev$K, blk$K),
+                 iters = d * prev$iters + blk$iters)
+    last <- pool
+  } else {
+    pool <- zero
+    last <- blk
   }
   st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim, stage = stage,
                   last = last, pool = pool, block = zero)

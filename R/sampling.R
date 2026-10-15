@@ -999,9 +999,10 @@ run_stage <- function(pmwgs,
       wpool_streams <- it$seeds
       wpool$alive <- it$alive
       pool_profile <- it$profile
-      if (!is.null(it$rejects)) {
+      if (!is.null(it$rejects))
         stage_rejects$particle <- stage_rejects$particle + it$rejects
-      }
+      if (!is.null(it$ensemble_rejects))
+        .emc_reject_add(it$ensemble_rejects, "ensemble")
       ran <- if (is.null(part_skip)) rep(TRUE, length(it$times)) else !part_skip
       if (any(it$times[ran] > 0)) {
         fresh <- pmax(it$times, min(it$times[ran & it$times > 0]))
@@ -1829,7 +1830,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         if (inherits(lw, "error"))
           lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
                                          data, model, comp_arg)
+        lw[!is.finite(lw)] <- -Inf
       }
+
       lp <- if (p_idx > 0) {
         fast_dmvnorm_rooti(x = proposals_idx, mean = group_mu[idx],
                            rooti = rootis[[1]], log_const = log_consts[[1]])

@@ -75,9 +75,11 @@
 # half-space: the complement of u moves by the affine map between the
 # frames' marginals there, and u'a by the quantile map between the frames'
 # conditionals given the complement, truncated at the wall. The maps still
-# compose and invert, and the Jacobian is exact, so the rounds stay valid;
-# far from the wall the map is an affine frame map. The collapsed move
-# transports subjects with the same walls.
+# compose and invert, and the Jacobian is exact, so the rounds stay valid.
+# Far from the wall the map is an affine frame map with a different whitening
+# order from the unbounded transport. Assigning or dropping a wall at a
+# rebuild can therefore change a subject's orbit. The collapsed move uses the
+# same walls.
 #
 # Supported hierarchies: those in which every subject's prior mean is the
 # group mean (standard without group designs, diagonal-gamma); the others
@@ -405,9 +407,7 @@
   plan$stage <- stage
   zero <- .emc_shear_record(NULL, p)
   recent <- plan$pool <- zero
-  # Production blocks run settled kernels on a stationary chain, so their
-  # rounds pool over the sample stage (from its first block on).
-  pooled <- identical(stage, "sample") && identical(old$stage, "sample")
+  same_stage <- identical(stage, old$stage)
   if (is.list(old) && is.matrix(old$dirs) && all(dim(old$dirs) == p)) {
     scale <- c(rep(NA_real_, p), rep(1, p))
     match <- c(rep(NA_integer_, p), p + seq_len(p))
@@ -439,8 +439,18 @@
     }
     recent <- carry(blk)
     recent$iters[got] <- .emc_alloc_block_iters(chain)
-    if (pooled) {
-      prev <- carry(old$pool)
+    production_pool <- identical(stage, "sample") && same_stage
+    if (production_pool || !identical(stage, "sample")) {
+      prev <- carry(if (same_stage) old$pool else old$last)
+      if (!same_stage && !identical(stage, "sample")) {
+        low <- prev$n < 5L
+        prev$E[low] <- 0
+        prev$n[low] <- 0L
+        prev$moved[low] <- 0L
+        prev$N[low] <- 0
+        prev$K[low, ] <- 0L
+        prev$iters[low] <- 0
+      }
       d <- .EMC_ALLOC_EVIDENCE_DECAY
       plan$pool <- list(E = d * prev$E + recent$E, n = d * prev$n + recent$n,
                         moved = d * prev$moved + recent$moved, N = d * prev$N + recent$N,
@@ -448,9 +458,7 @@
                         iters = d * prev$iters + recent$iters)
     }
   }
-  # The allocation measures a coordinate's rounds from the pooled production
-  # blocks, or else the last block alone. Step scales follow the last block.
-  plan$last <- if (pooled) plan$pool else recent
+  plan$last <- if (identical(stage, "sample") && !same_stage) recent else plan$pool
   # Discarded stages adapt the scales round by round; production only here.
   if (identical(stage, "sample")) plan <- .emc_shear_tune_steps(plan, recent)
   plan$block <- zero

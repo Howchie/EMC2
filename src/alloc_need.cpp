@@ -12,6 +12,7 @@
 // makes the target unreachable. NaN propagates as R's pmax does.
 // [[Rcpp::export]]
 Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
+                                               const Rcpp::NumericVector& b_share,
                                                const Rcpp::NumericVector& p,
                                                Rcpp::Nullable<Rcpp::NumericVector> h_,
                                                const Rcpp::NumericVector& level,
@@ -30,11 +31,15 @@ Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
       for (int i = 0; i < n_i; ++i) {
         const double K = std::min(rs[t], level[i]);
         const double P = p[i];
+        const double b = b_share[i];
         const double alone = 1.0 - q * (1.0 - P);
-        if (!(rho[i] * alone > K * (1.0 + 1e-12))) continue;
+        const double base = b + (1.0 - b) * rho[i] * alone;
+        if (!(base > K * (1.0 + 1e-12))) continue;
         if (!has_h || h[i] >= 1.0) { rn = inf; continue; }
         const double H = h[i];
-        const double tt = K / rho[i];
+        const double den = (1.0 - b) * rho[i];
+        if (!(den > 0.0)) { rn = inf; continue; }
+        const double tt = (K - b) / den;
         const double r1 = (alone - tt) / (1.0 - H);
         const double knee = 1.0 - q;
         double val;
@@ -59,6 +64,7 @@ Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
 // particle step (q = 1).
 // [[Rcpp::export]]
 Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
+                                       const Rcpp::NumericVector& b_share,
                                        const Rcpp::NumericVector& p,
                                        const Rcpp::NumericVector& h,
                                        const Rcpp::NumericVector& level,
@@ -108,11 +114,15 @@ Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
         for (int i = off[u]; i < off[u + 1]; ++i) {
           const double K = std::min(rs[t], level[i]);
           const double P = p[i];
+          const double b = b_share[i];
           const double alone = 1.0 - q * (1.0 - P);
-          if (!(rho[i] * alone > K * (1.0 + 1e-12))) continue;
+          const double base = b + (1.0 - b) * rho[i] * alone;
+          if (!(base > K * (1.0 + 1e-12))) continue;
           if (!hh || h[i] >= 1.0) { r = inf; continue; }
           const double H = h[i];
-          const double tt = K / rho[i];
+          const double den = (1.0 - b) * rho[i];
+          if (!(den > 0.0)) { r = inf; continue; }
+          const double tt = (K - b) / den;
           const double r1 = (alone - tt) / (1.0 - H);
           const double knee = 1.0 - q;
           double val;
@@ -230,6 +240,7 @@ static inline double alloc_factor_inverse(double g, double a, double t) {
 // reach it, raised to the floor and Inf beyond the cap.
 // [[Rcpp::export]]
 Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
+                                     const Rcpp::NumericVector& b_share,
                                      const Rcpp::NumericVector& g,
                                      const Rcpp::NumericVector& a,
                                      const Rcpp::NumericVector& cost,
@@ -244,8 +255,11 @@ Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
     Rcpp::NumericVector X(n_t), C(n_t), Q(n_t, 1.0);
     for (int t = 0; t < n_t; ++t) {
       double x = floor[i];
-      if (rho[i] > rs[t]) {
-        x = reach ? alloc_factor_inverse(g[i], a[i], rs[t] / rho[i]) : inf;
+      const double base = b_share[i] + (1.0 - b_share[i]) * rho[i];
+      if (base > rs[t]) {
+        const double den = (1.0 - b_share[i]) * rho[i];
+        const double target = den > 0.0 ? (rs[t] - b_share[i]) / den : -inf;
+        x = reach ? alloc_factor_inverse(g[i], a[i], target) : inf;
         if (!std::isnan(x) && x < floor[i]) x = floor[i];
         if (!std::isfinite(x) || x > cap[i] + 1e-9) x = inf;
       }

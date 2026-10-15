@@ -501,8 +501,7 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   chain <- rebuild(chain, "sample", block(8L, 1))
   expect_identical(chain$collapsed$plan$last$n, 8L)
   expect_identical(chain$collapsed$plan$pool$n, 0L)
-  # Production blocks then add up, a thin one included, the earlier ones
-  # discounted at each rebuild.
+  # Production blocks discount earlier production evidence at each rebuild.
   chain <- rebuild(chain, "sample", block(20L, 2))
   chain <- rebuild(chain, "sample", block(3L, 3))
   last <- chain$collapsed$plan$last
@@ -510,20 +509,20 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   expect_equal(last$n, d * 20 + 3)
   expect_equal(last$E, diag(d * 2 + 3, 2 * p))
   expect_equal(last$acc, d * 10 + 1.5)
-  # Outside production, nonempty blocks are not pooled. A thin or empty block
-  # in the same stage retains the last usable measurement.
+  # Burn and adapt blocks carry discounted evidence forward, so a thin or
+  # empty block re-arms exploration gradually rather than resetting it.
+  n_burn1 <- d * (d * 20 + 3) + 6
+  n_burn2 <- d * n_burn1 + 3
   chain <- rebuild(chain, "burn", block(6L, 1))
-  expect_identical(chain$collapsed$plan$last$n, 6L)
-  expect_identical(chain$collapsed$plan$pool$n, 0L)
+  expect_equal(chain$collapsed$plan$last$n, n_burn1)
+  expect_equal(chain$collapsed$plan$pool$n, n_burn1)
   chain <- rebuild(chain, "burn", block(3L, 3))
-  expect_identical(chain$collapsed$plan$last$n, 6L)
+  expect_equal(chain$collapsed$plan$last$n, n_burn2)
   chain <- rebuild(chain, "burn", block(0L, 0))
-  expect_identical(chain$collapsed$plan$last$n, 6L)
-  # A new stage carries the last measurement at the evidence decay, so the
-  # exploration floor re-measures the move instead of crediting the prior.
+  expect_equal(chain$collapsed$plan$last$n, d * n_burn2)
+  # Evidence below five moves does not qualify as a new-stage measurement.
   chain <- rebuild(chain, "adapt", block(0L, 0))
-  expect_equal(chain$collapsed$plan$last$n, d * 6)
-  expect_equal(chain$collapsed$plan$last$E, diag(d * 1, 2 * p))
+  expect_equal(chain$collapsed$plan$last$n, 0)
   u <- EMC2:::.emc_alloc_units(list(s_rho = matrix(0.5, 1, 1), g_rho = rep(0.99, 2 * p),
     g_fac = rep(0.5, 2 * p), g_measured = rep(FALSE, 2 * p), C_rest = 1, c_round = 0.05,
     coll = TRUE, c_fac = rep(1, 2 * p), c_measured = TRUE, c_n = d * 6, c_coll = 0.1, c_rate = 0,
@@ -532,5 +531,5 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   # Without a usable measurement a new stage starts unmeasured.
   chain$collapsed$plan$last$n <- 2
   chain <- rebuild(chain, "burn", block(0L, 0))
-  expect_identical(chain$collapsed$plan$last$n, 0L)
+  expect_equal(chain$collapsed$plan$last$n, 0)
 })

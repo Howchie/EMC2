@@ -51,16 +51,22 @@ test_that("filtering skips named fixed state but rejects unknown out-of-range hi
 })
 
 test_that("failed particle proposal is rejected to previous subject state", {
-  pm_settings <- list(list(epsilon = 1))
-  parameters <- list(alpha = matrix(c(1, 2), ncol = 1))
+  withr::local_options(emc2.failure_policy = "silent")
+  local_mocked_bindings(
+    calc_ll_pooled = function(...) stop("intentional particle likelihood failure"),
+    .emc_particle_ll_rowwise = function(err, ...) stop(err),
+    .package = "EMC2")
+  pm_settings <- list(list(epsilon = 1, mix = c(.5, .5), n_particles = 2L))
+  parameters <- list(
+    alpha = matrix(c(1, 2), ncol = 1,
+                   dimnames = list(c("a", "b"), NULL)),
+    subj_mu = matrix(c(0, 0), ncol = 1,
+                     dimnames = list(c("a", "b"), NULL)),
+    tvar = diag(2)
+  )
   out <- safe_new_particle(
-    s = 1,
-    data = NULL,
-    pm_settings = pm_settings,
-    prev_ll = -7,
-    parameters = parameters,
-    model = NULL,
-    stage = "preburn",
+    s = 1, data = NULL, pm_settings = pm_settings, prev_ll = -7,
+    parameters = parameters, model = NULL, stage = "preburn",
     type = "standard",
     tune = list(components = c(1, 1), shared_ll_idx = c(1, 1)),
     r_cores = 1
@@ -72,7 +78,12 @@ test_that("failed particle proposal is rejected to previous subject state", {
 })
 
 test_that("direct worker state rejects to its local current alpha", {
-  pm_settings <- list(list(epsilon = 1))
+  withr::local_options(emc2.failure_policy = "silent")
+  local_mocked_bindings(
+    calc_ll_pooled = function(...) stop("intentional particle likelihood failure"),
+    .emc_particle_ll_rowwise = function(err, ...) stop(err),
+    .package = "EMC2")
+  pm_settings <- list(list(epsilon = 1, mix = c(.5, .5), n_particles = 2L))
   out <- safe_new_particle(
     s = 9,
     data = NULL,

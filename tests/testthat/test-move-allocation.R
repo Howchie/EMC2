@@ -167,6 +167,24 @@ test_that("the rest of the iteration is recorded against the previous final stat
   expect_identical(w$hmc_att, c(0L, 1L, 0L))
 })
 
+test_that("the allocation preserves the between-chain rho floor", {
+  rho <- c(0.2, 0.8)
+  b <- c(0.5, 0.5)
+  expect_equal(EMC2:::.emc_alloc_remove_floor(0.6, 0.2, 0.5), 1)
+  unit <- list(kind = "shear", rho = rho, b_share = b, g = c(0.1, 0.2),
+               cost = 0, cap = 100)
+  predicted <- EMC2:::.emc_alloc_predict(list(unit),
+    list(x = 100, q = 1, joint = NULL), max_rounds = 100)[[1]]
+  expect_true(all(predicted >= b - 1e-12))
+  expect_equal(predicted, b + (1 - b) * rho * unit$g^100, tolerance = 1e-12)
+
+  hmc <- list(kind = "subject", rho = c(0.2, 0.8), b_share = b,
+              p = c(1, 1), h = c(0, 0), c_p = 0, c_h = 0)
+  need <- EMC2:::.emc_alloc_unit_need(hmc, rs = c(0.49, 0.5, 0.7), max_rounds = 4)
+  expect_true(all(is.infinite(need$cost[1])))
+  expect_equal(need$x[2:3], c(1, 0.5))
+})
+
 test_that("a chain held in one region measures slow against the pooled spread", {
   local_test_rng(3)
   p <- 1; n <- 1; m <- 200
@@ -357,8 +375,9 @@ test_that("particle rates held below one keep the plan with HMC", {
 })
 
 test_that("every chain runs the HMC choice with the least summed objective", {
-  opts <- list(c(none = 10, "0" = 9, "1" = 9.5), c(none = 10, "0" = 9.6, "1" = 9),
-               c(none = 10, "0" = 9.6, "1" = 9.1))
+  opts <- list(c(none = 10, "0" = 8, "1" = 9.5),
+               c(none = 10, "0" = 8.5, "1" = 8),
+               c(none = 10, "0" = 9.8, "1" = 9.9))
   local_mocked_bindings(
     .emc_alloc_wanted = function(sampler) TRUE,
     .emc_prepare_chain_rng = function(emc) emc,
@@ -384,9 +403,11 @@ test_that("every chain runs the HMC choice with the least summed objective", {
     samples = list(theta_var = array(1, c(1L, 1L, 1L))),
     alloc = list(window = NULL, history = list()))
   out <- EMC2:::.emc_alloc_rebuild(list(chain(), chain(), chain()), "sample", 1L, 10L)
-  # Chain 1's own choice (0) is outvoted by the summed objectives.
+  # Chain 1's own choice (0) wins after summing the options. Chain 3's
+  # objective does not clear the local gain threshold, but it is finite and
+  # the aggregate HMC objective clears the threshold.
   expect_identical(out[[1]]$alloc$history[[1]]$choice, "0")
-  expect_identical(vapply(out, function(ch) ch$alloc$last$choice, ""), rep("1", 3))
+  expect_identical(vapply(out, function(ch) ch$alloc$last$choice, ""), rep("0", 3))
   expect_true(out[[1]]$alloc$last$choice_fixed)
 })
 
@@ -411,10 +432,13 @@ test_that("production measurements use every production draw and pool the stage'
   prod <- EMC2:::.emc_alloc_measure(emc, 1, NULL, diag(1), "sample")
   x <- c(emc[[1]]$samples$theta_mu[burn + seq_len(m)],
          emc[[2]]$samples$theta_mu[burn + seq_len(m)])
-  expect_equal(prod$g_var[1], stats::var(x))
+  within_g <- mean(c(stats::var(emc[[1]]$samples$theta_mu[burn + seq_len(m)]),
+                     stats::var(emc[[2]]$samples$theta_mu[burn + seq_len(m)])))
+  expect_equal(prod$g_var[1], within_g)
   expect_identical(prod$pairs[["group"]], w_n + 50L)
   expect_equal(prod$pool$G, diag(c(50, 0)))
-  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho(50 / (w_n + 50), stats::var(x)))
+  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho(50 / (w_n + 50), within_g))
+  expect_equal(prod$g_b_share[1], max(0, stats::var(x) - within_g) / stats::var(x))
   # The first production rebuild measures the window alone and starts the pool.
   first <- emc
   first[[1]]$alloc$stage <- "adapt"
@@ -424,8 +448,9 @@ test_that("production measurements use every production draw and pool the stage'
   # Outside production: the window's draws, the window's jumps.
   b <- EMC2:::.emc_alloc_measure(emc, 1, NULL, diag(1), "burn")
   k <- EMC2:::.emc_alloc_draws(emc[[1]], w_n)
-  expect_equal(b$g_var[1], stats::var(c(emc[[1]]$samples$theta_mu[k],
-                                        emc[[2]]$samples$theta_mu[k])))
+  within_b <- mean(c(stats::var(emc[[1]]$samples$theta_mu[k]),
+                     stats::var(emc[[2]]$samples$theta_mu[k])))
+  expect_equal(b$g_var[1], within_b)
   expect_identical(b$pairs[["group"]], w_n)
 })
 
@@ -968,18 +993,29 @@ test_that("chains measured from shared pooled covariances match direct variances
     alone <- EMC2:::.emc_alloc_measure(emc, j, hst, diag(p), "sample")
     expect_equal(shared, alone, tolerance = 1e-12)
   }
-  # Against the variances of the transformed draws themselves.
-  mu <- do.call(cbind, lapply(emc, function(ch) ch$samples$theta_mu))
-  lsd <- do.call(cbind, lapply(emc, function(ch)
-    vapply(seq_len(k), function(t) EMC2:::.emc_alloc_lsd(ch$samples$theta_var[, , t]), numeric(p))))
+  # Against each chain's transformed draws: the solver uses within-chain
+  # variance and carries the between-chain share as a separate rho floor.
+  mu_by_chain <- lapply(emc, function(ch) ch$samples$theta_mu)
+  lsd_by_chain <- lapply(emc, function(ch)
+    vapply(seq_len(k), function(t) EMC2:::.emc_alloc_lsd(ch$samples$theta_var[, , t]), numeric(p)))
   Dinv <- solve(emc[[1]]$shear$plan$dirs)
-  expect_equal(unname(shared$g_var), apply(rbind(Dinv %*% mu, lsd), 1L, stats::var), tolerance = 1e-12)
+  group_by_chain <- lapply(seq_along(emc), function(i)
+    rbind(Dinv %*% mu_by_chain[[i]], lsd_by_chain[[i]]))
+  group_within <- Reduce(`+`, lapply(group_by_chain, function(x)
+    apply(x, 1L, stats::var))) / length(emc)
+  expect_equal(unname(shared$g_var), group_within, tolerance = 1e-12)
+  pooled_group <- do.call(cbind, group_by_chain)
+  group_total <- apply(pooled_group, 1L, stats::var)
+  expect_equal(shared$g_b_share, pmin(1, pmax(0, (group_total - group_within) / group_total)),
+               tolerance = 1e-12)
   for (s in seq_len(n)) {
-    x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, s, ]))
-    expect_equal(shared$s_var[s, ], apply(hst$subjects[[s]]$W %*% x, 1L, stats::var), tolerance = 1e-12)
+    xs <- lapply(emc, function(ch) hst$subjects[[s]]$W %*% ch$samples$alpha[, s, ])
+    within <- Reduce(`+`, lapply(xs, function(x) apply(x, 1L, stats::var))) / length(xs)
+    expect_equal(shared$s_var[s, ], within, tolerance = 1e-12)
   }
   # The deviations' covariance, computed once the window asks for it.
   st <- EMC2:::.emc_alloc_draw_stats(emc, lapply(emc, function(ch) seq_len(k)), TRUE)
+  mu <- do.call(cbind, mu_by_chain)
   x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, 2, ]))
   expect_equal(st$d_cov[[2]], stats::cov(t(x - mu)), tolerance = 1e-12)
 })
@@ -993,6 +1029,13 @@ test_that("a subject's deviations join its unit as coordinates the particle step
   expect_equal(d$h, c(0.4, 0.5, 0.9, 0.2))
   # The measured deviation rho has the particle step's factor at its rate divided out.
   expect_equal(d$rho[3:4], c(0.7, 0.3) / (1 - 0.5 * (1 - c(0.5, 0.95))))
+  uf <- u
+  uf$b_share <- c(0.2, 0.4)
+  uf$d_b_share <- c(0.3, 0.6)
+  df <- EMC2:::.emc_alloc_dev_rows(uf)
+  den <- 1 - uf$q_old * (1 - uf$p_dev)
+  expect_equal(df$rho[3:4],
+    (uf$d_rho - uf$d_b_share) / ((1 - uf$d_b_share) * den))
   # Without deviation factors for a kernel the unit has, nothing is added.
   expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "h_dev")]), u[setdiff(names(u), "h_dev")])
   expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "d_rho")]), u[setdiff(names(u), "d_rho")])

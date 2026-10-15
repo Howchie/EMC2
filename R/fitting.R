@@ -438,7 +438,14 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
   # Shear rounds and subject HMC rates (R/move_allocation.R) on the same
   # rebuild clock, after the likelihood fits are checked and the shear plans
   # built; block_iter transitions run before the next.
-  emc <- .emc_alloc_rebuild(emc, stage, n_cores, block_iter)
+  emc <- tryCatch(.emc_alloc_rebuild(emc, stage, n_cores, block_iter),
+    error = function(e) {
+      cls <- .emc_classify_failure(e)
+      .emc_reject_record(e, "allocator")
+      if (identical(.emc_failure_action(cls), "abort"))
+        .emc_failure_abort(cls, "allocator", e)
+      emc
+    })
   if (prof) {
     split[["chain"]] <- proc.time()[["elapsed"]] - proposal_started - split[["eff"]]
     .emc_profile_state$proposal_split <- split
@@ -993,7 +1000,7 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     new_prop_var[bad_var] <- .5
     if(stage != "sample"){
       old_prop_var <- attr(emc[[j]], "prop_var")
-      prop_var_ratio <- if(is.null(old_prop_var)) rep(2, n_subjects) else {
+    prop_var_ratio <- if(is.null(old_prop_var)) rep(1, n_subjects) else {
         if(length(old_prop_var) == 1L) old_prop_var <- rep(old_prop_var, n_subjects)
         if(length(old_prop_var) != n_subjects) rep(1, n_subjects) else {
           r <- old_prop_var / new_prop_var
@@ -1014,8 +1021,8 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
     # is replaced by the window moments as a pair.
     ens_q <- lapply(seq_len(n_subjects), function(sub) {
       v <- win_cov[[sub]]
+      ens_v <- v
       if (do_block) v[block_idx] <- 0
-      # The chain and ensemble proposals use the same blocked window matrix.
       informative <- window_informative[sub]
       raw_ok <- window_ok[sub]
       if (stage == "burn" && length(burn_mode_var) >= sub &&
@@ -1040,10 +1047,13 @@ create_chain_proposals <- function(emc, samples_idx = NULL, do_block = TRUE,
         if (old_ok) return(old_q)
         return(list(mu = chains_mu[[sub]], var = chains_var[[sub]]))
       }
-      if (stage == "sample" && !raw_ok && old_ok) return(old_q)
-      if (informative && !raw_ok) v <- .emc_regularize_covariance(v)
-      if (informative && (raw_ok || .emc_empirical_covariance_ok(v, subject = sub)))
-        return(list(mu = m, var = v))
+      ens_informative <- is.matrix(ens_v) && nrow(ens_v) == n_pars &&
+        ncol(ens_v) == n_pars && all(is.finite(ens_v)) && any(diag(ens_v) > 0)
+      ens_ok <- ens_informative && .emc_empirical_covariance_ok(ens_v, subject = sub)
+      if (stage == "sample" && !ens_ok && old_ok) return(old_q)
+      if (ens_informative && !ens_ok) ens_v <- .emc_regularize_covariance(ens_v)
+      if (ens_informative && .emc_empirical_covariance_ok(ens_v, subject = sub))
+        return(list(mu = m, var = ens_v))
       if (old_ok) return(old_q)
       list(mu = m, var = chains_var[[sub]])
     })
@@ -1101,7 +1111,11 @@ update_epsilon_scale <- function(pmwgs, prop_var_ratio = NULL){
     x <- pm_settings[[s]]
     for(i in seq_along(x)){
       epsilon <- x[[i]]$epsilon
-      epsilon <- epsilon * scale[s]
+      layout <- x[[i]]$step_layout
+      if (length(layout) == length(epsilon)) {
+        use_scale <- layout == "chains"
+        epsilon[use_scale] <- epsilon[use_scale] * scale[s]
+      }
       epsilon[!is.finite(epsilon) | epsilon <= 0] <- 1
       x[[i]]$epsilon <- pmin(epsilon_bounds[2],
                              pmax(epsilon_bounds[1], epsilon))
