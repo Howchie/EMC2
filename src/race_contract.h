@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "col_registry.h"
 
@@ -104,6 +106,31 @@ struct TimeWarpPlan {
   bool installed() const { return par_index >= 0 && base_pdf1 != nullptr; }
 };
 
+// Two-state accumulator mixture.  Installed by configure_state_mixture_context()
+// (state_mixture.h) as an outer layer over the five adapter entry points, the
+// same way TimeWarpPlan is.  With probability `pmix` an accumulator runs in its
+// alternative state, in which every column with a twin takes the twin's value
+// (`<par>_mix`), or the base value minus (`<par>_below`) or plus
+// (`<par>_above`) the twin.  Because an independent race is linear in each accumulator's
+// density and survivor, mixing those per accumulator is the exact trial-level
+// mixture; every accumulator with pmix > 0 draws its state independently.
+struct MixturePlan {
+  int p_index = -1;                           // keep_names position of pmix
+  int n_par = 0;                              // keep_names length (scalar row width)
+  struct Swap {
+    int col;                                  // base column
+    int twin;                                 // twin column
+    int sign;                                 // 0 = twin value, -1 = base - twin, +1 = base + twin
+  };
+  std::vector<Swap> swaps;
+  RacePdf1Fun     base_pdf1  = nullptr;
+  RaceCdf1Fun     base_cdf1  = nullptr;
+  RaceRawFun      base_d_raw = nullptr;
+  RaceRawFun      base_p_raw = nullptr;
+  RaceLogSAtTFun  base_logS  = nullptr;
+  bool installed() const { return p_index >= 0 && !swaps.empty(); }
+};
+
 struct gsl_race_params_scalar {
   const double* pars;   // row-major, length n_lR * n_par
   int n_lR;
@@ -134,6 +161,7 @@ struct ContextForRaceModels {
     bool gng = false;
     int t0_index = -1;
     TimeWarpPlan tw;
+    MixturePlan mix;
     // Column indices for the Erlang timer mean parameters (mG, mK) in the raw
     // particle parameter matrix that calc_ll_oo passes to the C++ likelihood.
     // These store the user-visible means, NOT rates.  Call erlang_lambda_from_mean()
