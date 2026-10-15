@@ -189,9 +189,10 @@ test_that("a chain held in one region measures slow against the pooled spread", 
   rho <- function(emc, j) EMC2:::.emc_alloc_measure(emc, j, NULL, diag(1))$s_rho[1, 1]
   expect_lt(rho(mixed, 1), 0.2)
   expect_gt(rho(held, 2), 0.99)
-  # The lower bound only removes noise: a stuck coordinate stays stuck.
-  expect_equal(EMC2:::.emc_alloc_rho_lo(0, 1, 10), 1)
-  expect_lt(EMC2:::.emc_alloc_rho_lo(2, 1, 100), 0.05)
+  # A stuck coordinate reads one; a jump of twice the variance reads zero.
+  expect_equal(EMC2:::.emc_alloc_rho(0, 1), 1)
+  expect_equal(EMC2:::.emc_alloc_rho(2, 1), 0)
+  expect_equal(EMC2:::.emc_alloc_rho(0.5, 1), 0.75)
 })
 
 # rho of a subject unit under particle rate q and HMC rate r.
@@ -373,7 +374,7 @@ test_that("every chain runs the HMC choice with the least summed objective", {
     },
     .emc_alloc_solve_units = function(u) {
       o <- opts[[u$chain_id]]
-      choice <- if (is.null(u$regime_fixed)) names(o)[which.min(o)] else u$regime_fixed
+      choice <- if (is.null(u$choice_fixed)) names(o)[which.min(o)] else u$choice_fixed
       list(x = 0, joint = 0, tau = 1, tau0 = 1, cost = 1, objective = o[[choice]],
            objective0 = 10, options = o, choice = choice)
     },
@@ -383,7 +384,7 @@ test_that("every chain runs the HMC choice with the least summed objective", {
     samples = list(theta_var = array(1, c(1L, 1L, 1L))),
     alloc = list(window = NULL, history = list()))
   out <- EMC2:::.emc_alloc_rebuild(list(chain(), chain(), chain()), "sample", 1L, 10L)
-  # Chain 1's own choice (regime 0) is outvoted by the summed objectives.
+  # Chain 1's own choice (0) is outvoted by the summed objectives.
   expect_identical(out[[1]]$alloc$history[[1]]$choice, "0")
   expect_identical(vapply(out, function(ch) ch$alloc$last$choice, ""), rep("1", 3))
   expect_true(out[[1]]$alloc$last$choice_fixed)
@@ -413,7 +414,7 @@ test_that("production measurements use every production draw and pool the stage'
   expect_equal(prod$g_var[1], stats::var(x))
   expect_identical(prod$pairs[["group"]], w_n + 50L)
   expect_equal(prod$pool$G, diag(c(50, 0)))
-  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho_lo(50 / (w_n + 50), stats::var(x), w_n + 50))
+  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho(50 / (w_n + 50), stats::var(x)))
   # The first production rebuild measures the window alone and starts the pool.
   first <- emc
   first[[1]]$alloc$stage <- "adapt"
@@ -496,44 +497,6 @@ test_that("a measured collapsed move that never moves earns no credit", {
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
   obs <- c(1 - 0.1 / (2 * ms$g_var[1]), rep(1, 3))
   expect_equal(ms$c_fac, (600 * obs + 20 * mean(obs)) / 620)
-})
-
-test_that("a regime is a lower bound on one total HMC rate, and identity at rate zero", {
-  tau <- EMC2:::.emc_alloc_tau
-  subj <- list(kind = "subject", rho = c(0.86, 0.5), p = c(0.65, 0.6), c_p = 0.38,
-               h = c(0.18, 0.2), h_dev = c(0.18, 0.2), d_rho = c(0.52, 0.4), c_h = 0.125)
-  u <- list(units = list(list(kind = "shear", rho = 0.84, g = 0.96, cost = 0.16), subj),
-            C_rest = 1, hmc_fixed = 0.01, joint = NULL, r_bar = 0.46, g_floor = 0.1)
-  reg <- EMC2:::.emc_alloc_regime(u, 0.5)
-  expect_identical(reg$units[[2]]$r_min, 0.5)
-  expect_equal(reg$units[[2]]$rho, subj$rho)
-  expect_equal(reg$cost, 0.5 * subj$c_h)
-  # The regime alone: the subject's level is its particle step and the rate.
-  expect_equal(EMC2:::.emc_alloc_level(reg$units[[2]]),
-               subj$rho * subj$p * (1 - 0.5 * (1 - subj$h)))
-  # A supplement x on top runs at the total rate 0.5 + x once: the need at a
-  # target is solved on one factor and priced above the regime's share.
-  need <- EMC2:::.emc_alloc_unit_need(reg$units[[2]], rs = 0.3, max_rounds = 4)
-  tot <- 0.5 + need$x
-  expect_lte(max(subj$rho * (1 - need$q * (1 - subj$p)) * (1 - tot * (1 - subj$h))), 0.3 + 1e-9)
-  expect_equal(need$cost, need$q * subj$c_p + need$x * subj$c_h)
-  # At a target the regime already meets, the plan costs no more than the
-  # particle step alone.
-  need0 <- EMC2:::.emc_alloc_unit_need(reg$units[[2]], rs = 0.6, max_rounds = 4)
-  expect_lte(need0$cost, subj$c_p + 1e-9)
-  expect_lte(max(subj$rho * (1 - need0$q * (1 - subj$p)) * (1 - (0.5 + need0$x) * (1 - subj$h))),
-             0.6 + 1e-9)
-  # A regime at rate zero changes no coordinate, whichever subjects it covers.
-  mixed <- list(units = list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01),
-                             subj, list(kind = "subject", rho = 0.8, h = NULL, c_h = 0,
-                                        d_rho = c(0.2, 0.3))),
-                r_bar = 0.6, g_floor = 0.5)
-  reg0 <- EMC2:::.emc_alloc_regime(mixed, 0)
-  expect_equal(reg0$units[[1]]$rho, 0.9)
-  expect_equal(reg0$cost, 0)
-  # The full solve never schedules more than the executed total rate.
-  sol <- EMC2:::.emc_alloc_solve_units(u)
-  expect_lte((if (is.null(sol$regime)) 0 else sol$regime) + sol$x[2], 1 + 1e-9)
 })
 
 test_that("subject HMC factors weigh their transitions against the subjects' pooled factor", {
@@ -800,7 +763,7 @@ test_that("a family's fixed cost is charged at the plan's activation probability
   # independent fractional rounds; a whole round always activates
   expect_equal(act(list(sh, sh), cbind(c(0.1, 0.2), c(1.5, 0)), c(0, 0), 10, 0),
                10 * c(1 - 0.9 * 0.8, 1))
-  # HMC subjects at their total rates, including a regime's floor
+  # HMC subjects at their total rates, including a held floor
   expect_equal(act(list(subj, subj, sh), cbind(c(0.5, 0.5, 3)), c(0, 0.5, 0), 0, 4),
                4 * (1 - 0.5 * 0))
   expect_equal(act(list(subj, sh), cbind(c(0, 1)), c(0, 0), 0, 4), 0)
@@ -817,85 +780,6 @@ test_that("a family's fixed cost is charged at the plan's activation probability
   sol <- EMC2:::.emc_alloc_solve(list(sh), 1, shear_fixed = 0.5)
   expect_gt(sol$x, 0)
   expect_equal(sol$cost, 1 + sol$x * 0.05 + 0.5 * min(1, sol$x))
-})
-
-test_that("the group credit follows the subjects' joint kernel rates, anchored at the measured plan", {
-  dev <- EMC2:::.emc_alloc_dev_factor
-  # The joint selection's retention (the proposal's stationary check: .536).
-  expect_equal(dev(0.6, 0.7, 0.4, 0.8), 0.3 * 0.4 + 0.4 * 0.8 + 0.3 * 0.4 * 0.8)
-  expect_equal(dev(0.6, 0.7, 0.4, 0.8), 0.536)
-  expect_equal(dev(1, 0, 0.4, 0.8), 0.4)
-  expect_equal(dev(0, 1, 0.4, 0.8), 0.8)
-  # q + r < 1 leaves some iterations without either kernel.
-  expect_equal(dev(0.3, 0.2, 0.4, 0.8), 0.5 + 0.3 * 0.4 + 0.2 * 0.8)
-  subj <- function(q_old, r_old) list(kind = "subject", rho = c(0.95, 0.9), p = c(0.6, 0.5),
-                                      c_p = 1, h = c(0.5, 0.5), c_h = 0.2, d_rho = c(0.9, 0.85),
-                                      p_dev = c(0.2, 0.3), h_dev = c(0.95, 0.9),
-                                      q_old = q_old, r_old = r_old)
-  units <- list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01), subj(1, 0), subj(0.5, 0.75))
-  ratio <- EMC2:::.emc_alloc_dev_ratio
-  # Identity at the measured plan.
-  expect_equal(ratio(units, c(1, 1, 0.5), c(0, 0, 0.75)), 1)
-  # Standing a particle step down for HMC that moves the deviations less
-  # slows them; adding particle steps speeds them.
-  expect_gt(ratio(units, c(1, 0.25, 0.5), c(0, 0.75, 0.75)), 1)
-  expect_lt(ratio(units, c(1, 1, 1), c(0, 0, 0.75)), 1)
-  # Without a measured particle factor a subject's particle rate is held.
-  nop <- units; nop[[2]]$p_dev <- NULL
-  expect_equal(ratio(nop, c(1, 0, 0.5), c(0, 0, 0.75)), 1)
-
-  # HMC is cheap and moves each subject's own coordinates, but barely moves
-  # their deviations, which the particle step moves well: the plan that
-  # stands the particle steps down is credited at the group movement it
-  # gives, so it does not stand in for them for free.
-  u <- list(units = list(list(kind = "shear", rho = 0.9, g = 0.7, cost = 0.01),
-                         subj(1, 0), subj(1, 0)),
-            C_rest = 1, joint = NULL, hmc_fixed = 0, g_floor = 0.5)
-  raw <- EMC2:::.emc_alloc_solve(u$units, u$C_rest)
-  expect_true(any(raw$q[2:3] < 1))
-  sol <- EMC2:::.emc_alloc_solve_units(u)
-  rates <- EMC2:::.emc_alloc_plan_rates(u$units, sol)
-  r_dev <- ratio(u$units, rates$q, rates$r)
-  # The plan's group coordinate was solved at the movement its rates give.
-  credited <- EMC2:::.emc_alloc_credit(u$units[1], u$g_floor, r_dev)[[1]]$rho
-  expect_lte(EMC2:::.emc_alloc_tau(credited * EMC2:::.emc_alloc_factor(0.7, sol$x[1], 0.7)),
-             sol$tau * (1 + 1e-6))
-  expect_gte(sol$objective, raw$objective - 1e-9)
-})
-
-test_that("a regime's HMC rate does not hold a subject's particle step", {
-  # HMC at rate 1 moves this subject better than its particle step does, so
-  # at a target HMC alone reaches (rho h) the particle step stands down,
-  # although the regime's level (both kernels) is lower still.
-  u <- list(kind = "subject", rho = c(0.9, 0.8), p = c(0.7, 0.7), c_p = 1,
-            h = c(0.5, 0.5), c_h = 0.2, r_min = 1)
-  target <- max(u$rho * u$h)
-  expect_lt(max(EMC2:::.emc_alloc_level(u)), target)
-  need <- EMC2:::.emc_alloc_unit_need(u, rs = target, max_rounds = 4)
-  expect_true(is.finite(need$cost))
-  expect_equal(need$q, 0)
-  expect_equal(need$x, 0)
-  # A subject whose HMC moves it worse than its particle step keeps it.
-  w <- u; w$h <- c(0.95, 0.95)
-  need_w <- EMC2:::.emc_alloc_unit_need(w, rs = max(EMC2:::.emc_alloc_subject_base(w)),
-                                        max_rounds = 4)
-  expect_gt(need_w$q, 0)
-})
-
-test_that("the group credit saturates below one when the subjects slow", {
-  credit <- function(rho, f, ratio)
-    EMC2:::.emc_alloc_credit(list(list(kind = "fixed", rho = rho)), f, ratio)[[1]]$rho
-  expect_equal(credit(0.94, 0.6, 1), 0.94)
-  expect_equal(credit(0.94, 0.6, 0.7), 0.6 + 0.34 * 0.7)
-  for (ratio in c(1.01, 1.3, 2)) {
-    r <- credit(0.94, 0.6, ratio)
-    expect_lt(r, 1)
-    expect_gt(r, 0.94)
-    expect_lte(r, 0.6 + 0.34 * ratio)
-  }
-  # The slope at the measured plan is the line's.
-  h <- 1e-6
-  expect_equal((credit(0.7, 0.3, 1 + h) - 0.7) / h, 0.4, tolerance = 1e-4)
 })
 
 test_that("a subject's rates are priced as the kernels are selected, jointly", {
@@ -1008,7 +892,7 @@ test_that("the solver's objective is the model's objective at the plan it return
          c_p = stats::runif(1, 0.05, 0.4), h = stats::runif(1, 0, 0.9),
          c_h = stats::runif(1, 0.02, 0.4), d_rho = stats::runif(1, 0.1, 0.9),
          p_dev = stats::runif(1, 0.1, 0.9), h_dev = stats::runif(1, 0.2, 1),
-         q_old = 1, r_old = 0)
+         q_old = 1)
   }
   tau <- EMC2:::.emc_alloc_tau
   for (trial in 1:25) {
@@ -1016,21 +900,20 @@ test_that("the solver's objective is the model's objective at the plan it return
     u <- list(units = list(list(kind = "shear", rho = rho_g, g = stats::runif(1, 0.2, 0.95),
                                 cost = stats::runif(1, 0.01, 0.2)), subj(), subj()),
               C_rest = 1, joint = NULL, hmc_fixed = stats::runif(1, 0, 0.2),
-              g_floor = stats::runif(1, 0, rho_g))
+              shear_fixed = 0)
+    # The subjects' deviations are coordinates of their units.
+    u$units[2:3] <- lapply(u$units[2:3], EMC2:::.emc_alloc_dev_rows)
     sol <- EMC2:::.emc_alloc_solve_units(u)
     rates <- EMC2:::.emc_alloc_plan_rates(u$units, sol)
     q <- rates$q; r <- rates$r
-    reg <- if (is.null(sol$regime)) 0 else sol$regime
-    r[2:3] <- pmin(1, r[2:3] + reg)
-    # The group coordinate is credited at the rates the plan runs.
-    R <- EMC2:::.emc_alloc_dev_ratio(u$units, q, r)
-    g <- EMC2:::.emc_alloc_credit(u$units[1], u$g_floor, R)[[1]]
+    g <- u$units[[1]]
     rho <- g$rho * EMC2:::.emc_alloc_factor(g$g, sol$x[1], g$g)
     for (i in 2:3) {
       s <- u$units[[i]]
       rho_s <- alloc_subject_rho(s, q[i], r[i])
-      # No subject coordinate slower than under its particle step alone.
-      expect_lte(rho_s, s$rho * s$p + 1e-9)
+      # No subject coordinate, its deviations included, slower than under its
+      # particle step alone.
+      expect_true(all(rho_s <= s$rho * s$p + 1e-9))
       rho <- max(rho, rho_s)
     }
     cost <- 1 + sol$x[1] * u$units[[1]]$cost +
@@ -1099,4 +982,34 @@ test_that("chains measured from shared pooled covariances match direct variances
   st <- EMC2:::.emc_alloc_draw_stats(emc, lapply(emc, function(ch) seq_len(k)), TRUE)
   x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, 2, ]))
   expect_equal(st$d_cov[[2]], stats::cov(t(x - mu)), tolerance = 1e-12)
+})
+
+test_that("a subject's deviations join its unit as coordinates the particle step must keep refreshed", {
+  u <- list(kind = "subject", rho = c(0.5, 0.6), p = c(0.8, 0.9), c_p = 0.1, h = c(0.4, 0.5), c_h = 0.05,
+            d_rho = c(0.7, 0.3), p_dev = c(0.5, 0.95), h_dev = c(0.9, 0.2), q_old = 0.5)
+  d <- EMC2:::.emc_alloc_dev_rows(u)
+  expect_length(d$rho, 4L)
+  expect_equal(d$p, c(0.8, 0.9, 0.5, 0.95))
+  expect_equal(d$h, c(0.4, 0.5, 0.9, 0.2))
+  # The measured deviation rho has the particle step's factor at its rate divided out.
+  expect_equal(d$rho[3:4], c(0.7, 0.3) / (1 - 0.5 * (1 - c(0.5, 0.95))))
+  # Without deviation factors for a kernel the unit has, nothing is added.
+  expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "h_dev")]), u[setdiff(names(u), "h_dev")])
+  expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "d_rho")]), u[setdiff(names(u), "d_rho")])
+  # A particle step that refreshes a deviation HMC barely moves cannot be stood down.
+  rs <- seq(0.3, 0.95, by = 0.05)
+  nd <- EMC2:::.emc_alloc_unit_need(d, rs, 4)
+  expect_true(all(nd$q[is.finite(nd$cost)] == 1))
+  nd0 <- EMC2:::.emc_alloc_unit_need(u, rs, 4)
+  expect_true(any(nd0$q[is.finite(nd0$cost)] < 1))
+})
+
+test_that("a cheaper HMC option within the minimum gain of the best is chosen", {
+  o <- c(none = 10, "0" = 9.5, "1" = 9.2)
+  expect_identical(EMC2:::.emc_alloc_choose(o, c(5, 4, 6)), "0")
+  expect_identical(EMC2:::.emc_alloc_choose(o, c(3, 4, 6)), "none")
+  expect_identical(EMC2:::.emc_alloc_choose(o, c(6, 6, 6)), "1")
+  expect_identical(EMC2:::.emc_alloc_choose(c(none = 10, "0" = 8, "1" = 7.5), c(3, 4, 6)), "0")
+  expect_identical(EMC2:::.emc_alloc_choose(o), "1")
+  expect_identical(EMC2:::.emc_alloc_choose(c(none = Inf, "0" = 9, "1" = 9.5), c(Inf, 4, 6)), "0")
 })

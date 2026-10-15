@@ -1,0 +1,766 @@
+diff --git a/R/move_allocation.R b/R/move_allocation.R
+index 68937d0c..90113304 100644
+--- a/R/move_allocation.R
++++ b/R/move_allocation.R
+@@ -26,12 +26,27 @@
+ # chain's production draws, and group jumps (the rest of the iteration's,
+ # each shear coordinate's, the collapsed move's) pool over the stage's
+ # blocks: a short window underestimates a slow coordinate's variance, and
+-# one slow spell in it makes a coordinate look like the slowest. An upper
+-# confidence bound on ESJD makes rho a lower bound, so noise in a short
+-# window buys no moves. Group coordinates are mu along the shear's mean
++# one slow spell in it makes a coordinate look like the slowest. rho is the
++# point estimate: a bound below it makes every coordinate, and every plan's
++# prediction, faster than measured; a small predicted gain buys nothing
++# (.EMC_ALLOC_MIN_GAIN). Group coordinates are mu along the shear's mean
+ # directions and the log group sds; subject coordinates are alpha_s
+ # whitened in the reference frame of its likelihood fit.
+ #
++# Group coordinates are scored on transport rather than on lag-one jumps:
++# a slow coordinate's lag-one jumps are mostly undone within the
++# conditional the subjects hold it in, and an offset between chains does
++# not show in them. Every iteration each chain records the change each move
++# family (particle steps, the ensemble update, shear rounds, collapsed
++# moves, subject HMC) makes to the state statistic (.emc_alloc_state). At a
++# rebuild each family's share of a coordinate's transport over L
++# iterations, per move, comes from those paths against the pooled variance
++# (.emc_alloc_group_transport); a plan's transport is the sum of its moves'
++# shares at its rates, and the coordinate's rho the AR(1)'s with that
++# transport (.emc_alloc_transport_rho). Subject moves are credited with
++# their share at the plan's mean rates. Without recorded paths the lag-one
++# rho and the deviation credit below stand in.
++#
+ # A shear round on group coordinate k multiplies its rho by g_k, and an HMC
+ # transition taken with probability r multiplies subject coordinate i's by
+ # 1 - r + r h_i; g and h come from the moves' own jumps, measured the same
+@@ -205,6 +220,30 @@
+   w
+ }
+ 
++# The moves of one iteration in order, each recorded by the change it makes
++# to the state statistic (.emc_alloc_state).
++.EMC_ALLOC_PATH_FAMILIES <- c("particle", "group", "shear", "collapsed", "hmc")
++
++# The state statistic the moves' paths are recorded in: the group mean, the
++# log group sds, the subjects' mean and the subjects' log spread.
++.emc_alloc_state <- function(mu, var, alpha) {
++  a <- matrix(alpha, length(mu))
++  c(as.numeric(mu), .emc_alloc_lsd(var), rowMeans(a),
++    0.5 * log(pmax(.emc_alloc_row_var(a), .Machine$double.xmin)))
++}
++
++# One iteration's path: states holds the statistic at the iteration's start
++# and after each family of .EMC_ALLOC_PATH_FAMILIES (rows); each family's
++# change is appended as one row of the window's Z.
++.emc_alloc_record_path <- function(sampler, states) {
++  d <- as.numeric(t(diff(states)))
++  if (!all(is.finite(d))) return(sampler)
++  w <- .emc_alloc_window(sampler)
++  w$Z <- rbind(w$Z, d)
++  sampler$alloc$window <- w
++  sampler
++}
++
+ # The group state the rest of the iteration produced, against the previous
+ # iteration's final (stored) one.
+ .emc_alloc_record_group <- function(sampler, pars) {
+@@ -301,12 +340,9 @@
+   sampler
+ }
+ 
+-# Lower bound on rho from a mean squared jump over n pairs and the
+-# coordinate's variance.
+-.emc_alloc_rho_lo <- function(esjd, var, n) {
+-  m <- esjd / (2 * pmax(var, .Machine$double.xmin))
+-  m_hi <- m * (1 + 2 * sqrt(2 / max(1, n)))
+-  pmin(1, pmax(0, 1 - m_hi))
++# rho from a mean squared jump and the coordinate's variance.
++.emc_alloc_rho <- function(esjd, var) {
++  pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
+ }
+ 
+ .emc_alloc_tau <- function(rho) {
+@@ -358,6 +394,137 @@
+   out
+ }
+ 
++# A group coordinate's transport at horizon L: the mean squared change over
++# L iterations per iteration, against the coordinate's variance, which is
++# 2 (1 - rho^L) / L for an AR(1) of lag-one rho. A slow coordinate's lag-one
++# jumps are mostly undone within its conditional, so the allocation scores
++# the group on transport, and each move on its share of it: the coordinate's
++# rho is the AR(1)'s whose transport matches.
++.emc_alloc_transport_rho <- function(t, L) pmax(0, 1 - pmax(t, 0) * L / 2)^(1 / L)
++
++.emc_alloc_rho_transport <- function(rho, L) 2 * (1 - pmin(pmax(rho, 0), 1)^L) / L
++
++# One chain's transport per iteration by move family (rows, in the order of
++# .EMC_ALLOC_PATH_FAMILIES) and group coordinate (columns), against the
++# coordinates' variances v: P is its recorded path (.emc_alloc_record_path,
++# one row per iteration, the families' changes of the state statistic side
++# by side) and M maps the statistic to the coordinates. A family's share is
++# the covariance of its changes with the coordinate's change summed over
++# lags within L (Bartlett weights, rescaled at the window's ends to the
++# weight they hold): the shares add to the transport, and a move the
++# iterations around it undo earns nothing for it.
++.emc_alloc_transport_shares <- function(P, M, v, L) {
++  n_f <- length(.EMC_ALLOC_PATH_FAMILIES)
++  d_s <- ncol(M)
++  n <- nrow(P)
++  d <- lapply(seq_len(n_f), function(f)
++    P[, (f - 1L) * d_s + seq_len(d_s), drop = FALSE] %*% t(M))
++  tot <- Reduce(`+`, d)
++  w <- 1 - abs(seq.int(-(L - 1L), L - 1L)) / L
++  lagsum <- function(z) {
++    pad <- c(numeric(L - 1L), z, numeric(L - 1L))
++    stats::filter(pad, w, sides = 2L)[L - 1L + seq_len(n)]
++  }
++  held <- lagsum(rep(1, n))
++  sm <- apply(tot, 2L, lagsum) * (L / held)
++  sm <- matrix(sm, n)
++  out <- do.call(rbind, lapply(d, function(df) colMeans(df * sm) / v))
++  rownames(out) <- .EMC_ALLOC_PATH_FAMILIES
++  out
++}
++
++# Each move family's transport per move on chain j's group coordinates
++# (.emc_alloc_transport_shares), from every chain's window: mu along chain
++# j's shear directions (Dinv) and the log group sds, each measured on its
++# collective value, half the group's and half the subjects' (their mean,
++# their log spread), so moves of the subjects are credited for carrying the
++# group with them. Variances pool every chain's window draws, so a chain
++# held in one region moves little against them. A family's moves per
++# iteration pool over the chains: the subject moves per subject, shear
++# rounds per coordinate (a chain's own rounds on its mean directions, every
++# chain's on the log sds, which all chains share). A share below zero counts
++# as none; a family that did not run is NA. NULL without recorded paths.
++.emc_alloc_group_transport <- function(emc, j, Dinv, draws) {
++  ch <- emc[[j]]
++  p <- ch$n_pars
++  n_f <- length(.EMC_ALLOC_PATH_FAMILIES)
++  ok <- vapply(emc, function(x) {
++    w <- x$alloc$window
++    is.list(w) && is.matrix(w$Z) && nrow(w$Z) >= .EMC_ALLOC_MIN_PAIRS &&
++      ncol(w$Z) == n_f * 4L * p
++  }, logical(1))
++  if (!ok[j]) return(NULL)
++  zero <- matrix(0, p, p)
++  M <- 0.5 * rbind(cbind(Dinv, zero, Dinv, zero), cbind(zero, diag(p), zero, diag(p)))
++  X <- do.call(rbind, lapply(seq_along(emc), function(i) {
++    s <- emc[[i]]$samples
++    t(vapply(draws[[i]], function(t) .emc_alloc_state(s$theta_mu[, t], s$theta_var[, , t],
++                                                        s$alpha[, , t]), numeric(4L * p)))
++  }))
++  X <- X[apply(is.finite(X), 1L, all), , drop = FALSE]
++  if (nrow(X) < 3L) return(NULL)
++  v <- pmax(.emc_alloc_row_var(M %*% t(X)), .Machine$double.xmin)
++  n <- min(vapply(emc[ok], function(x) nrow(x$alloc$window$Z), numeric(1)))
++  L <- as.integer(max(2L, min(25L, floor(n / 4))))
++  n_g <- 2L * p
++  fam <- .EMC_ALLOC_PATH_FAMILIES
++  num <- matrix(0, n_f, n_g, dimnames = list(fam, NULL))
++  den <- matrix(0, n_f, n_g, dimnames = list(fam, NULL))
++  total <- numeric(n_g)
++  mean_k <- seq_len(p)
++  for (i in which(ok)) {
++    x <- emc[[i]]
++    w <- x$alloc$window
++    sh <- .emc_alloc_transport_shares(w$Z, M, v, L)
++    total <- total + colSums(sh)
++    it <- max(1, w$n)
++    ns <- x$n_subjects
++    per <- c(particle = if (is.null(w$nP)) 0 else sum(w$nP) / (ns * it),
++             group = 1,
++             collapsed = if (is.null(w$fam)) 0 else w$fam$collapsed$moves / it,
++             hmc = sum(w$hmc_att) / (ns * it))
++    for (f in names(per)) {
++      num[f, ] <- num[f, ] + sh[f, ]
++      den[f, ] <- den[f, ] + per[[f]]
++    }
++    if (.emc_shear_active(x) && is.list(x$shear$plan)) {
++      rec <- .emc_shear_record(x$shear$plan$last, p)
++      rate <- ifelse(rec$iters > 0, rec$n / pmax(rec$iters, 1), 0)
++      use <- rep(TRUE, n_g)
++      if (i != j) use[mean_k] <- FALSE
++      num["shear", use] <- num["shear", use] + sh["shear", use]
++      den["shear", use] <- den["shear", use] + rate[use]
++    }
++  }
++  per_move <- ifelse(den > 0, pmax(0, num) / pmax(den, .Machine$double.xmin), NA_real_)
++  list(t = per_move, moves = den, total = total / sum(ok), L = L, chains = sum(ok))
++}
++
++# A transport unit's rho at x expected shear rounds per iteration: its
++# transport from the moves that always run (base), its rounds at their
++# measured transport each, and any collapsed moves (extra).
++.emc_alloc_transport_unit_rho <- function(u, x, extra = 0)
++  .emc_alloc_transport_rho(u$base + extra + x * u$b, u$L)
++
++# A transport unit at mean particle rate q and mean HMC rate r over the
++# subjects: its base transport and its rho with no rounds bought.
++.emc_alloc_transport_at <- function(u, q, r) {
++  u$base <- u$t_group + u$t_part * q + u$t_hmc * r
++  u$rho <- .emc_alloc_transport_unit_rho(u, 0)
++  u
++}
++
++# The subjects' mean particle and HMC rates under per-unit rates q and r.
++.emc_alloc_mean_rates <- function(units, q, r) {
++  subj <- which(vapply(units, function(x) identical(x$kind, "subject"), logical(1)))
++  if (!length(subj)) return(c(q = 1, r = 0))
++  c(q = mean(q[subj]), r = mean(r[subj]))
++}
++
++# Units that buy shear rounds.
++.emc_alloc_is_shear <- function(u)
++  identical(u$kind, "shear") || identical(u$kind, "transport") && isTRUE(u$shear)
++
+ # Iteration counts by the number of moves k >= 1 they ran (column k), one
+ # row per coordinate, and the sum of two such tables.
+ .emc_alloc_khist_add <- function(K, rows, k) {
+@@ -500,8 +667,14 @@
+     if (xc == 0) return(units)
+     fac <- .emc_alloc_factor(joint$g, xc, if (is.null(joint$a)) joint$g else joint$a)
+     moved <- units
+-    for (i in seq_along(moved_idx))
+-      moved[[moved_idx[i]]]$rho <- moved[[moved_idx[i]]]$rho * fac[i]
++    for (i in seq_along(moved_idx)) {
++      m <- moved[[moved_idx[i]]]
++      if (identical(m$kind, "transport")) {
++        m$base <- m$base + m$coll * xc
++        m$rho <- .emc_alloc_transport_unit_rho(m, 0)
++      } else m$rho <- m$rho * fac[i]
++      moved[[moved_idx[i]]] <- m
++    }
+     moved
+   })
+   # Only the moved units' levels change with the collapsed rate.
+@@ -522,7 +695,7 @@
+     numeric(1)))
+   # The plan with nothing chosen still runs every move's exploration.
+   x0 <- vapply(units, function(u)
+-    if (identical(u$kind, "shear") && !is.null(u$floor)) u$floor else 0, numeric(1))
++    if (.emc_alloc_is_shear(u) && !is.null(u$floor)) u$floor else 0, numeric(1))
+   r_min <- vapply(units, function(u)
+     if (identical(u$kind, "subject") && !is.null(u$h) && !is.null(u$r_min)) u$r_min else 0,
+     numeric(1))
+@@ -537,9 +710,11 @@
+                objective = .emc_alloc_tau(r00$hi) * (C_rest + c_p0 + c_f0),
+                joint = j_floor)
+   lo <- min(vapply(ranges, `[[`, numeric(1), "lo"))
+-  # The plan with nothing chosen runs every particle step, so particle rates
+-  # held below one leave it as the reference only.
+-  held <- .emc_alloc_particle_held(units)
++  # The plan with nothing chosen runs every particle step and no HMC, so
++  # particle rates held below one, or HMC rates held above zero (the group
++  # was credited at them), leave it as the reference only.
++  held <- .emc_alloc_particle_held(units) || any(vapply(units, function(x)
++    identical(x$kind, "subject") && !is.null(x$h) && isTRUE(x$r_fixed > 0), logical(1)))
+   best <- if (held) list(objective = Inf) else zero
+   if (r0$hi > lo + 1e-12 || c_p0 > 0 || held) {
+     tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(r0$hi)),
+@@ -619,10 +794,11 @@
+     u <- .emc_alloc_as_subject(units[[i]])
+     rho <- u$rho
+     k <- match(i, idx)
+-    if (!is.null(fac_c) && !is.na(k)) rho <- rho * fac_c[k]
++    if (!is.null(fac_c) && !is.na(k) && !identical(u$kind, "transport")) rho <- rho * fac_c[k]
+     x <- if (length(sol$x) >= i && is.finite(sol$x[i])) sol$x[i] else 0
+     switch(u$kind,
+       fixed = rho,
++      transport = .emc_alloc_transport_unit_rho(u, x, if (is.na(k)) 0 else u$coll * xc),
+       shear = rho * .emc_alloc_factor(u$g, x, if (is.null(u$a)) u$g else u$a),
+       subject = {
+         q <- if (is.null(u$p) || length(sol$q) < i) 1 else sol$q[i]
+@@ -651,7 +827,7 @@
+ 
+ # The units whose allocation activates each family's fixed cost.
+ .emc_alloc_act_rows <- function(units) list(
+-  shear = which(vapply(units, function(u) identical(u$kind, "shear"), logical(1))),
++  shear = which(vapply(units, .emc_alloc_is_shear, logical(1))),
+   hmc = which(vapply(units, function(u) identical(u$kind, "subject") && !is.null(u$h),
+                      logical(1))))
+ 
+@@ -680,6 +856,7 @@
+   levels = vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1)),
+   best = vapply(units, function(u) switch(u$kind,
+     fixed = max(u$rho),
++    transport = .emc_alloc_transport_unit_rho(u, u$cap),
+     shear = u$rho * .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap,
+                                       if (is.null(u$a)) u$g else u$a),
+     subject = max(if (is.null(u$h)) .emc_alloc_level(u) else
+@@ -729,7 +906,10 @@
+   if (!is.null(joint)) {
+     idx <- as.integer(joint$idx)
+     g <- rep_len(joint$g, length(idx))
+-    movable[idx] <- movable[idx] | (is.finite(g) & g < 1 - 1e-9)
++    tr <- vapply(units[idx], function(u) identical(u$kind, "transport"), logical(1))
++    reach <- ifelse(tr, vapply(units[idx], function(u) isTRUE(u$coll > 0), logical(1)),
++                    is.finite(g) & g < 1 - 1e-9)
++    movable[idx] <- movable[idx] | reach
+   }
+   movable
+ }
+@@ -738,7 +918,7 @@
+ # particle step (if priced) running.
+ .emc_alloc_unit_still <- function(u, n_t) {
+   c_p <- if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0
+-  fl <- if (identical(u$kind, "shear") && !is.null(u$floor)) u$floor else 0
++  fl <- if (.emc_alloc_is_shear(u) && !is.null(u$floor)) u$floor else 0
+   list(x = rep(fl, n_t), q = rep(1, n_t), cost = rep(c_p + fl * (if (is.null(u$cost)) 0 else u$cost), n_t))
+ }
+ 
+@@ -753,6 +933,7 @@
+ # A unit's rho with nothing allocated: subjects run their particle step and
+ # any HMC rate a regime holds them to.
+ .emc_alloc_level <- function(u) {
++  if (identical(u$kind, "transport")) return(.emc_alloc_transport_unit_rho(u, u$floor))
+   if (identical(u$kind, "shear") && !is.null(u$floor) && u$floor > 0)
+     return(u$rho * .emc_alloc_factor(u$g, u$floor, if (is.null(u$a)) u$g else u$a))
+   if (!identical(u$kind, "subject")) return(u$rho)
+@@ -767,6 +948,20 @@
+   if (identical(u$kind, "fixed"))
+     return(list(x = numeric(n_t), q = rep(1, n_t),
+                 cost = ifelse(max(u$rho) > rs, Inf, 0)))
++  if (identical(u$kind, "transport")) {
++    # Rounds bring the transport to the target's: x = (T(rho*) - base) / b.
++    lev <- .emc_alloc_level(u)
++    x <- rep(u$floor, n_t)
++    over <- lev > rs
++    if (any(over)) {
++      xo <- if (u$b > 0) (.emc_alloc_rho_transport(rs[over], u$L) - u$base) / u$b else
++        rep(Inf, sum(over))
++      xo <- pmax(xo, u$floor)
++      xo[!is.finite(xo) | xo > u$cap + 1e-9] <- Inf
++      x[over] <- xo
++    }
++    return(list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)))
++  }
+   if (identical(u$kind, "shear")) {
+     r <- u$rho
+     g <- u$g
+@@ -989,11 +1184,12 @@
+     Dinv <- diag(p)
+   }
+   T_g <- rbind(cbind(Dinv, matrix(0, p, p)), cbind(matrix(0, p, p), diag(p)))
++  transport <- if (!stored) .emc_alloc_group_transport(emc, j, Dinv, draws)
+   has_D <- !stored && !is.null(w$D) && w$nA > 0
+   ds <- .emc_alloc_draw_stats(emc, vdraws, has_D, cache)
+   g_var <- c(.emc_alloc_quad_diag(Dinv, ds$mu_cov), ds$lsd_var)
+   g_esjd <- if (w$nG > 0) rowSums((T_g %*% w$G) * T_g) / w$nG else rep(0, 2L * p)
+-  g_rho <- if (w$nG > 0) .emc_alloc_rho_lo(g_esjd, g_var, w$nG) else rep(0, 2L * p)
++  g_rho <- if (w$nG > 0) .emc_alloc_rho(g_esjd, g_var) else rep(0, 2L * p)
+   g_fac <- g_sat <- rep(NA_real_, 2L * p)
+   g_measured <- logical(2L * p)
+   if (shear) {
+@@ -1069,12 +1265,12 @@
+   d_rho <- matrix(NA_real_, n, p)
+   for (s in seq_len(n)) {
+     s_var[s, ] <- .emc_alloc_quad_diag(W[[s]], ds$a_cov[[s]])
+-    if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho_lo(
+-      rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ], w$nA)
++    if (w$nA > 0) s_rho[s, ] <- .emc_alloc_rho(
++      rowSums((W[[s]] %*% w$A[[s]]) * W[[s]]) / w$nA, s_var[s, ])
+     if (has_D) {
+       d_var[s, ] <- .emc_alloc_quad_diag(W[[s]], ds$d_cov[[s]])
+-      d_rho[s, ] <- .emc_alloc_rho_lo(
+-        rowSums((W[[s]] %*% w$D[[s]]) * W[[s]]) / w$nA, d_var[s, ], w$nA)
++      d_rho[s, ] <- .emc_alloc_rho(
++        rowSums((W[[s]] %*% w$D[[s]]) * W[[s]]) / w$nA, d_var[s, ])
+     }
+   }
+   # The group's lag-1 autocorrelation under perfectly re-equilibrated
+@@ -1135,7 +1331,8 @@
+     .emc_alloc_marginal(if (stored) NULL else w, f, ch$alloc$last)), .EMC_ALLOC_FAMILIES)
+   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), pool = pool,
+        shear = shear,
+-       g_rho = g_rho, g_var = g_var, g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
++       g_rho = g_rho, g_var = g_var, g_fac = g_fac,
++       path = if (!stored) w$Z, transport = transport, g_sat = g_sat, g_measured = g_measured,
+        g_n = if (shear) last_n else numeric(2L * p),
+        g_iters = if (shear) last_iters else numeric(2L * p),
+        c_n = if (coll && c_measured) last$n else 0,
+@@ -1174,6 +1371,47 @@
+ # evidence was gathered at (its moves over the iterations they span, both
+ # discounted alike): trust grows with evidence, and a move measured as
+ # useless fades with it.
++# Group units scored on transport (.emc_alloc_group_transport). A
++# coordinate's transport per shear round is shrunk towards its kind's
++# (mean directions, log sds) by the rounds behind it, as the factors are
++# (.emc_alloc_shrink_g); an unmeasured coordinate takes its kind's, then
++# either kind's, else none beyond its exploration rounds.
++.emc_alloc_transport_units <- function(ms, tr, shear_on, c_round, bounds) {
++  n_g <- length(ms$g_rho)
++  p <- n_g / 2L
++  kind <- rep(1:2, each = p)
++  t0 <- function(f) { x <- tr$t[f, ]; ifelse(is.finite(x), x, 0) }
++  n_ev <- if (is.null(ms$g_n)) numeric(n_g) else ms$g_n
++  b_obs <- tr$t["shear", ]
++  meas <- is.finite(b_obs) & n_ev > 0
++  ref_of <- function(sel) if (any(sel)) sum(n_ev[sel] * b_obs[sel]) / sum(n_ev[sel]) else NA_real_
++  ref_all <- ref_of(meas)
++  n0 <- .EMC_ALLOC_ROUND_EVIDENCE
++  b <- numeric(n_g)
++  for (kk in 1:2) {
++    sel <- kind == kk
++    ref <- ref_of(meas & sel)
++    if (!is.finite(ref)) ref <- ref_all
++    if (!is.finite(ref)) ref <- 0
++    b[sel] <- ifelse(meas[sel], (n_ev[sel] * b_obs[sel] + n0 * ref) / (n_ev[sel] + n0), ref)
++  }
++  rate <- tr$moves[, 1L] / tr$chains
++  lapply(seq_len(n_g), function(k) {
++    u <- list(kind = "transport", t_group = t0("group")[k], t_part = t0("particle")[k],
++              t_hmc = t0("hmc")[k], coll = t0("collapsed")[k], L = tr$L,
++              b = 0, cost = 0, floor = 0, cap = 0, rho_lag1 = ms$g_rho[k])
++    if (shear_on && is.finite(ms$g_fac[k])) {
++      bd <- bounds(n_ev[k], if (is.null(ms$g_iters)) 0 else ms$g_iters[k])
++      u$shear <- TRUE
++      u$b <- b[k]
++      u$cost <- c_round
++      u$floor <- min(bd$floor, .EMC_ALLOC_MAX_ROUNDS)
++      u$cap <- min(bd$cap, .EMC_ALLOC_MAX_ROUNDS)
++    }
++    .emc_alloc_transport_at(u, rate[["particle"]], rate[["hmc"]])
++  })
++}
++
+ .emc_alloc_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
+   n <- nrow(ms$s_rho)
+   bounds <- function(n_ev, iters) {
+@@ -1187,7 +1425,9 @@
+   # Unmeasured costs are guessed against the whole iteration's.
+   C_iter <- C_rest + sum(ms$c_part[is.finite(ms$c_part)])
+   c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_iter
+-  units <- lapply(seq_along(ms$g_rho), function(k)
++  tr <- ms$transport
++  if (!is.null(tr)) units <- .emc_alloc_transport_units(ms, tr, shear_on, c_round, bounds)
++  else units <- lapply(seq_along(ms$g_rho), function(k)
+     if (shear_on && is.finite(ms$g_fac[k])) {
+       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
+                   if (is.null(ms$g_iters)) 0 else ms$g_iters[k])
+@@ -1314,10 +1554,17 @@
+ # Where the subjects slow down (ratio > 1) the extrapolation saturates
+ # instead, 1 - rho_k' = (1 - rho_k) exp(-(rho_k - f_k)(ratio - 1)/(1 - rho_k)):
+ # the same slope at the measured plan, never above the line and never at one,
+-# so no plan is priced as a coordinate that never mixes.
+-.emc_alloc_credit <- function(units, g_floor, ratio) {
++# so no plan is priced as a coordinate that never mixes. A transport unit
++# instead takes the subject moves' transport at the plan's mean rates
++# (rates: c(q, r), .emc_alloc_mean_rates).
++.emc_alloc_credit <- function(units, g_floor, ratio, rates = NULL) {
+   for (k in seq_along(g_floor)) {
+     x <- units[[k]]
++    if (identical(x$kind, "transport")) {
++      if (!is.null(rates)) units[[k]] <- .emc_alloc_transport_at(x, rates[["q"]], rates[["r"]])
++      next
++    }
++    if (!is.finite(ratio)) next
+     s <- x$rho - g_floor[k]
+     units[[k]]$rho <- if (ratio <= 1 || x$rho >= 1) min(1, g_floor[k] + s * ratio) else
+       1 - (1 - x$rho) * exp(-s * (ratio - 1) / (1 - x$rho))
+@@ -1347,7 +1594,8 @@
+   if (!covered) return(NULL)
+   ratio <- .emc_alloc_dev_ratio(units, q, r_new)
+   if (!is.finite(ratio)) return(NULL)
+-  list(units = .emc_alloc_credit(units, u$g_floor, ratio), cost = cost, credit = ratio)
++  list(units = .emc_alloc_credit(units, u$g_floor, ratio, .emc_alloc_mean_rates(units, q, r_new)),
++       cost = cost, credit = ratio)
+ }
+ 
+ # A solved plan's particle and total HMC rates per unit.
+@@ -1368,12 +1616,19 @@
+ # plan is priced again with the group credited at its own rates, and
+ # against the same plan with every particle step kept: the cheaper by the
+ # objective stands. Both hold the subjects' rates the credit was computed
+-# at, so only the group's moves are solved again.
++# at, so only the group's moves are solved again. Transport units are
++# credited at the plan's mean rates the same way, where those lower their
++# transport.
+ .emc_alloc_settle <- function(u, sol, units, credit, C_rest, movable, shear_act, hmc_fixed) {
+   rates <- .emc_alloc_plan_rates(units, sol)
+   ratio <- .emc_alloc_dev_ratio(units, rates$q, rates$r)
+-  if (!is.finite(ratio) || ratio <= credit * (1 + 1e-6)) return(sol)
+   n_g <- length(u$g_floor)
++  mr <- .emc_alloc_mean_rates(units, rates$q, rates$r)
++  tr <- which(vapply(units[seq_len(n_g)], function(x) identical(x$kind, "transport"), logical(1)))
++  slower <- if (length(tr)) any(vapply(units[tr], function(x)
++    .emc_alloc_transport_at(x, mr[["q"]], mr[["r"]])$base < x$base - 1e-12, logical(1))) else
++    is.finite(ratio) && ratio > credit * (1 + 1e-6)
++  if (!slower) return(sol)
+   held <- .emc_alloc_particle_held(units)
+   raw <- u$units
+   hold <- function(us, q, r) {
+@@ -1387,7 +1642,7 @@
+   solve <- function(us) .emc_alloc_solve(us, C_rest, joint = u$joint, movable = movable,
+                                          shear_fixed = shear_act, hmc_fixed = hmc_fixed)
+   own <- units
+-  own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio)
++  own[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio, mr)
+   own <- solve(hold(own, rates$q, rates$r))
+   # Particle rates held below one (shared across chains) rule out keeping
+   # every particle step.
+@@ -1401,8 +1656,8 @@
+   all_q <- rep(1, length(units))
+   kept <- units
+   ratio_k <- .emc_alloc_dev_ratio(units, all_q, rates$r)
+-  if (is.finite(ratio_k))
+-    kept[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio_k)
++  kept[seq_len(n_g)] <- .emc_alloc_credit(raw[seq_len(n_g)], u$g_floor, ratio_k,
++                                          .emc_alloc_mean_rates(units, all_q, rates$r))
+   kept <- solve(hold(kept, all_q, rates$r))
+   best <- if (isTRUE(own$objective < kept$objective)) own else kept
+   best$regime <- sol$regime
+@@ -1426,7 +1681,7 @@
+ # moves under the plan (.emc_alloc_solve).
+ .emc_alloc_solve_units <- function(u) {
+   fixed_shear <- if (is.null(u$shear_fixed)) 0 else u$shear_fixed
+-  if (fixed_shear > 0 && any(vapply(u$units, function(x) identical(x$kind, "shear"), logical(1)))) {
++  if (fixed_shear > 0 && any(vapply(u$units, .emc_alloc_is_shear, logical(1)))) {
+     # Both sides are judged on the coordinates the full kernel can move.
+     movable <- .emc_alloc_movable(u$units, .EMC_ALLOC_MAX_ROUNDS, u$joint)
+     # Exploration rounds run either way: a floored coordinate keeps its floor
+@@ -1435,12 +1690,17 @@
+     no_shear <- u
+     explored <- FALSE
+     no_shear$units <- lapply(u$units, function(x) {
+-      if (!identical(x$kind, "shear")) return(x)
++      if (!.emc_alloc_is_shear(x)) return(x)
+       if (!is.null(x$floor) && x$floor > 0) {
+         explored <<- TRUE
+         x$cap <- x$floor
+         return(x)
+       }
++      if (identical(x$kind, "transport")) {
++        x$shear <- FALSE
++        x$b <- x$cost <- x$cap <- 0
++        return(x)
++      }
+       list(kind = "fixed", rho = x$rho, cost = 0)
+     })
+     no_shear$shear_fixed <- 0
+@@ -1492,10 +1752,8 @@
+   # rates in force).
+   if (has_h && !is.null(u$g_floor)) {
+     ratio <- .emc_alloc_dev_ratio(u$units, rep(1, length(u$units)), numeric(length(u$units)))
+-    if (is.finite(ratio)) {
+-      n_g <- length(u$g_floor)
+-      off[seq_len(n_g)] <- .emc_alloc_credit(off[seq_len(n_g)], u$g_floor, ratio)
+-    }
++    n_g <- length(u$g_floor)
++    off[seq_len(n_g)] <- .emc_alloc_credit(off[seq_len(n_g)], u$g_floor, ratio, c(q = 1, r = 0))
+   }
+   without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable,
+                               shear_fixed = shear_act)
+@@ -1661,6 +1919,12 @@
+       pred0_group = m$g_rho,
+       pred0_subject = do.call(rbind, lapply(u$units[n_g + seq_len(ch$n_subjects)],
+                                             .emc_alloc_subject_base)),
++      path = if (isTRUE(getOption("emc2.alloc_keep_path"))) m$path,
++      # Each move family's transport per move on the group coordinates, and
++      # the coordinates' rho from the transport measured, when scored on it.
++      transport = if (!is.null(m$transport)) m$transport[c("t", "moves", "total", "L")],
++      transport_rho = if (!is.null(m$transport))
++        .emc_alloc_transport_rho(m$transport$total, m$transport$L),
+       group_rho = m$g_rho, group_g = m$g_fac, group_a = m$g_sat,
+       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
+       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,
+diff --git a/R/sampling.R b/R/sampling.R
+index d27f19b3..59494bb0 100644
+--- a/R/sampling.R
++++ b/R/sampling.R
+@@ -1066,6 +1066,11 @@ run_stage <- function(pmwgs,
+     proposals <- assembled$proposals
+     }
+     if (alloc_on) {
++      path_states <- rbind(
++        .emc_alloc_state(pmwgs$samples$theta_mu[, j - 1L], pmwgs$samples$theta_var[, , j - 1L],
++                         pmwgs$samples$alpha[, , j - 1L]),
++        .emc_alloc_state(pmwgs$samples$theta_mu[, j - 1L], pmwgs$samples$theta_var[, , j - 1L],
++                         proposals[seq_len(pmwgs$n_pars), , drop = FALSE]))
+       pmwgs <- .emc_alloc_record_particle(
+         pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
+         proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
+@@ -1085,7 +1090,12 @@ run_stage <- function(pmwgs,
+     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
+     shear_build_el <- shear_ll_el <- 0
+     shear_rounds <- 0L
+-    if (alloc_on) ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
++    path_state <- function(pars, proposals)
++      .emc_alloc_state(pars$tmu, pars$tvar, proposals[seq_len(pmwgs$n_pars), , drop = FALSE])
++    if (alloc_on) {
++      ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
++      path_states <- rbind(path_states, path_state(ens$pars, ens$proposals))
++    }
+     if (.emc_shear_active(ens$sampler)) {
+       shear_started <- .emc_cpu_self()
+       shear_el0 <- proc.time()[["elapsed"]]
+@@ -1107,6 +1117,7 @@ run_stage <- function(pmwgs,
+         shear_round_cpu <- .emc_reserved_cost(shear_round_el, cores_it)
+       }
+     }
++    if (alloc_on) path_states <- rbind(path_states, path_state(ens$pars, ens$proposals))
+     # Then the collapsed move (R/collapsed_move.R): the whole group state
+     # with the subjects in their conditional frames.
+     coll_cpu <- coll_el <- coll_round_cpu <- 0
+@@ -1129,6 +1140,7 @@ run_stage <- function(pmwgs,
+         coll_round_cpu <- .emc_reserved_cost(if (is.null(cm$round_el)) 0 else cm$round_el, cores_it)
+       }
+     }
++    if (alloc_on) path_states <- rbind(path_states, path_state(ens$pars, ens$proposals))
+     ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
+     ensemble_rejects <- .emc_reject_counts("ensemble")
+     stage_rejects$ensemble <- stage_rejects$ensemble + ensemble_delta
+@@ -1198,6 +1210,8 @@ run_stage <- function(pmwgs,
+       pmwgs$subject_hmc <- .emc_hmc_record_tasks(pmwgs$subject_hmc, hmc_tasks)
+     }
+ 
++    if (alloc_on)
++      pmwgs <- .emc_alloc_record_path(pmwgs, rbind(path_states, path_state(pars, proposals)))
+     fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
+     if (is.null(ens_pools) && pmwgs$type %in% c("factor", "infnt_factor", "SEM") &&
+         !any(pmwgs$nuisance) && !any(as.logical(pmwgs$marginalised_idx), na.rm = TRUE)) {
+diff --git a/tests/testthat/test-move-allocation.R b/tests/testthat/test-move-allocation.R
+index ec872eea..576e863b 100644
+--- a/tests/testthat/test-move-allocation.R
++++ b/tests/testthat/test-move-allocation.R
+@@ -189,9 +189,10 @@ test_that("a chain held in one region measures slow against the pooled spread",
+   rho <- function(emc, j) EMC2:::.emc_alloc_measure(emc, j, NULL, diag(1))$s_rho[1, 1]
+   expect_lt(rho(mixed, 1), 0.2)
+   expect_gt(rho(held, 2), 0.99)
+-  # The lower bound only removes noise: a stuck coordinate stays stuck.
+-  expect_equal(EMC2:::.emc_alloc_rho_lo(0, 1, 10), 1)
+-  expect_lt(EMC2:::.emc_alloc_rho_lo(2, 1, 100), 0.05)
++  # A stuck coordinate reads one; a jump of twice the variance reads zero.
++  expect_equal(EMC2:::.emc_alloc_rho(0, 1), 1)
++  expect_equal(EMC2:::.emc_alloc_rho(2, 1), 0)
++  expect_equal(EMC2:::.emc_alloc_rho(0.5, 1), 0.75)
+ })
+ 
+ # rho of a subject unit under particle rate q and HMC rate r.
+@@ -413,7 +414,7 @@ test_that("production measurements use every production draw and pool the stage'
+   expect_equal(prod$g_var[1], stats::var(x))
+   expect_identical(prod$pairs[["group"]], w_n + 50L)
+   expect_equal(prod$pool$G, diag(c(50, 0)))
+-  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho_lo(50 / (w_n + 50), stats::var(x), w_n + 50))
++  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho(50 / (w_n + 50), stats::var(x)))
+   # The first production rebuild measures the window alone and starts the pool.
+   first <- emc
+   first[[1]]$alloc$stage <- "adapt"
+@@ -1100,3 +1101,116 @@ test_that("chains measured from shared pooled covariances match direct variances
+   x <- do.call(cbind, lapply(emc, function(ch) ch$samples$alpha[, 2, ]))
+   expect_equal(st$d_cov[[2]], stats::cov(t(x - mu)), tolerance = 1e-12)
+ })
++
++test_that("transport shares add to the L-step transport and credit only lasting moves", {
++  set.seed(31)
++  n <- 4000L
++  L <- 10L
++  rho <- 0.9
++  x <- numeric(n + 1L)
++  for (t in seq_len(n)) x[t + 1L] <- rho * x[t] + stats::rnorm(1, sd = sqrt(1 - rho^2))
++  # Five families on a one-coordinate statistic (d_s = 4, only the first
++  # entry moves): "group" carries the AR(1) step, "shear" adds a jump that
++  # "hmc" undoes within the same iteration.
++  jump <- stats::rnorm(n)
++  P <- matrix(0, n, 5L * 4L)
++  fam <- EMC2:::.EMC_ALLOC_PATH_FAMILIES
++  col <- function(f) (match(f, fam) - 1L) * 4L + 1L
++  P[, col("group")] <- diff(x)
++  P[, col("shear")] <- jump
++  P[, col("hmc")] <- -jump
++  M <- matrix(c(1, 0, 0, 0), 1L)
++  sh <- EMC2:::.emc_alloc_transport_shares(P, M, 1, L)
++  expected <- EMC2:::.emc_alloc_rho_transport(rho, L)
++  expect_equal(sum(sh), expected, tolerance = 0.15)
++  expect_equal(unname(sh["group", 1]), expected, tolerance = 0.15)
++  expect_lt(abs(sh[match("shear", fam), 1] + sh[match("hmc", fam), 1]), 0.02)
++  # rho from transport inverts the AR(1) map.
++  rs <- c(0, 0.3, 0.8, 0.97)
++  expect_equal(EMC2:::.emc_alloc_transport_rho(EMC2:::.emc_alloc_rho_transport(rs, L), L), rs,
++               tolerance = 1e-9)
++})
++
++test_that("a transport unit buys the rounds that bring it to the target", {
++  u <- list(kind = "transport", t_group = 0.002, t_part = 0.001, t_hmc = 0.004, coll = 0.003,
++            L = 20L, b = 0.01, cost = 2, floor = 0.1, cap = 4, shear = TRUE)
++  u <- EMC2:::.emc_alloc_transport_at(u, 1, 0)
++  expect_equal(u$base, 0.003)
++  lev <- EMC2:::.emc_alloc_level(u)
++  expect_equal(lev, EMC2:::.emc_alloc_transport_rho(0.003 + 0.1 * 0.01, 20L))
++  rs <- c(lev + 0.01, lev - 0.01, lev - 0.05, 0)
++  nd <- EMC2:::.emc_alloc_unit_need(u, rs, 4)
++  expect_equal(nd$x[1], 0.1)
++  reach <- is.finite(nd$cost)
++  for (i in which(reach & rs < lev))
++    expect_equal(EMC2:::.emc_alloc_transport_unit_rho(u, nd$x[i]), rs[i], tolerance = 1e-9)
++  expect_false(reach[4])
++  expect_equal(nd$cost[reach], 2 * nd$x[reach])
++  # HMC at the plan's mean rate adds its transport; the collapsed move adds
++  # its own per move.
++  cr <- EMC2:::.emc_alloc_credit(list(u), 0, NA_real_, c(q = 0.5, r = 1))
++  expect_equal(cr[[1]]$base, 0.002 + 0.0005 + 0.004)
++  sol <- list(x = 1, q = 1, joint = 2)
++  pr <- EMC2:::.emc_alloc_predict(list(u), sol, list(idx = 1L, g = 0.5))
++  expect_equal(pr[[1]], EMC2:::.emc_alloc_transport_rho(0.003 + 0.01 + 2 * 0.003, 20L))
++  # Without shear, rounds are out of reach, and the solver keeps the unit's level.
++  v <- u
++  v$shear <- FALSE
++  v$b <- v$cost <- v$floor <- v$cap <- 0
++  nd <- EMC2:::.emc_alloc_unit_need(v, c(0.5, 0.999), 4)
++  expect_equal(is.finite(nd$cost), EMC2:::.emc_alloc_level(v) <= c(0.5, 0.999))
++})
++
++test_that("the solver prices transport units against subject units", {
++  g <- function(tg, b) EMC2:::.emc_alloc_transport_at(list(
++    kind = "transport", t_group = tg, t_part = 0, t_hmc = 0, coll = 0, L = 20L, b = b,
++    cost = 1, floor = 0, cap = 4, shear = TRUE), 1, 0)
++  units <- list(g(0.002, 0.02), g(0.1, 0.02),
++                list(kind = "subject", rho = c(0.5, 0.6), p = NULL, c_p = 0, h = NULL, c_h = 0))
++  sol <- EMC2:::.emc_alloc_solve(units, C_rest = 10)
++  # Rounds go to the slow coordinate (the other already moves its whole
++  # variance within L), where they lower the objective.
++  expect_gt(sol$x[1], 0)
++  expect_equal(sol$x[2], 0)
++  expect_lt(sol$objective, sol$objective0)
++  expect_equal(sol$pred[[1]], EMC2:::.emc_alloc_transport_unit_rho(units[[1]], sol$x[1]))
++})
++
++test_that("group transport pools the families' moves over chains", {
++  set.seed(7)
++  p <- 2L
++  ns <- 5L
++  k <- 60L
++  fam <- EMC2:::.EMC_ALLOC_PATH_FAMILIES
++  chain <- function() {
++    mu <- matrix(cumsum(stats::rnorm(k * p, sd = 0.1)), p)
++    al <- array(stats::rnorm(p * ns * k), c(p, ns, k))
++    for (t in seq_len(k)) al[, , t] <- al[, , t] + mu[, t]
++    tv <- array(diag(p), c(p, p, k))
++    st <- t(vapply(seq_len(k), function(t) EMC2:::.emc_alloc_state(mu[, t], tv[, , t], al[, , t]),
++                   numeric(4L * p)))
++    # The whole iteration's change goes to the ensemble update.
++    Z <- matrix(0, k - 1L, length(fam) * 4L * p)
++    g <- (match("group", fam) - 1L) * 4L * p + seq_len(4L * p)
++    Z[, g] <- diff(st)
++    list(n_pars = p, n_subjects = ns,
++         samples = list(idx = k, theta_mu = mu, theta_var = tv, alpha = al),
++         alloc = list(window = list(n = k - 1L, Z = Z, nP = rep(k - 1L, ns),
++                                    hmc_att = integer(ns),
++                                    fam = list(collapsed = list(moves = 0L)))))
++  }
++  emc <- list(chain(), chain(), chain())
++  local_mocked_bindings(.emc_shear_active = function(sampler) FALSE, .package = "EMC2")
++  draws <- lapply(emc, function(ch) seq_len(k))
++  tr <- EMC2:::.emc_alloc_group_transport(emc, 1L, diag(p), draws)
++  expect_equal(rownames(tr$t), fam)
++  expect_equal(tr$chains, 3L)
++  expect_true(all(tr$t["group", ] >= 0))
++  expect_true(all(is.na(tr$t[c("shear", "collapsed", "hmc"), ])))
++  expect_equal(unname(tr$t["particle", ]), rep(0, 2L * p))
++  # Every chain's whole change is the ensemble update's, so its share is the total.
++  expect_equal(unname(tr$t["group", ]), pmax(0, tr$total))
++  # Without a recorded path for the chain, no transport.
++  emc[[1]]$alloc$window$Z <- NULL
++  expect_null(EMC2:::.emc_alloc_group_transport(emc, 1L, diag(p), draws))
++})
