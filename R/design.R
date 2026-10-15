@@ -1,3 +1,22 @@
+# An infinite constant on a design column that is zero in some cells (e.g.
+# `pmix_lMFALSE = qnorm(0)` under `pmix ~ 0 + lM`) makes those cells 0 * Inf =
+# NaN.  Under an exp or pnorm link a constant of +-1000 reaches the same natural
+# value (0, or 1 for pnorm) exactly, so it replaces the infinity there.
+finite_infinite_constants <- function(constants, map, model, transform = NULL) {
+  inf <- names(constants)[is.infinite(constants)]
+  if (!length(inf) || is.null(map)) return(constants)
+  func <- model()$transform$func
+  func[names(transform$func)] <- transform$func
+  for (p in names(map)) {
+    m <- map[[p]]
+    if (!(isTRUE(func[p] %in% c("exp", "pnorm")))) next
+    for (cn in intersect(inf, colnames(m))) {
+      if (any(m[, cn] == 0)) constants[[cn]] <- sign(constants[[cn]]) * 1000
+    }
+  }
+  constants
+}
+
 normalize_marginalise <- function(marginalise) {
   if (is.null(marginalise)) return(NULL)
   param <- NULL
@@ -476,6 +495,9 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   p_vector <- sampled_pars(design, include_pooled = TRUE, doMap = TRUE)
   p_map <- attr(p_vector, "map")
   attr(p_vector, "map") <- NULL
+  design$constants <- finite_infinite_constants(design$constants, p_map,
+                                                model, transform)
+  constants <- design$constants
   if (!is.null(design$pooled)) {
     bad <- setdiff(design$pooled, names(p_vector))
     if (length(bad))
