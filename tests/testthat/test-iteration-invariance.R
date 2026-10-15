@@ -11,6 +11,8 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
   data <- lapply(seq_len(n), function(s) data.frame(subject = s))
   attr(data, "components") <- stats::setNames(rep(1L, p), pn)
   attr(data, "shared_ll_idx") <- stats::setNames(rep(1L, p), pn)
+  broken_mode <- FALSE
+  hmc_round <- EMC2:::.emc_hmc_round
   local_mocked_bindings(
     calc_ll_manager = function(proposals, dadm, ...) {
       x <- as.matrix(proposals)
@@ -21,6 +23,12 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
     },
     .emc_ensemble_options = function() list(pool = 8L, rounds = 2L,
       tail_weight = 0.25, tail_df = 4, tail_excess = 3),
+    .emc_hmc_round = function(plan, proposals, pars, type, streams, data, model,
+      wpool = NULL, n_cores = 1L, r_cores = 1L, par_names, pick = NULL) {
+      if (broken_mode) pick <- proposals[1L, ] > h$y[1L, ]
+      hmc_round(plan, proposals, pars, type, streams, data, model, wpool,
+                n_cores, r_cores, par_names, pick)
+    },
     .package = "EMC2")
 
   zero_move <- list(E = numeric(2L * p), n = integer(2L * p),
@@ -30,6 +38,7 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
     list(type = "diagonal-gamma", n_pars = p, n_subjects = n,
          par_group = seq_len(p), is_blocked = rep(FALSE, p), prior = h$prior)), p)$dim
   run <- function(broken = FALSE) {
+    broken_mode <<- broken
     local_test_rng(if (broken) 132L else 131L)
     i <- sample.int(N, 1L)
     mu <- h$mu[i, ]; names(mu) <- pn
@@ -44,10 +53,11 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
       theta_var = array(V, c(p, p, 1L), dimnames = list(pn, pn, NULL)),
       alpha = array(alpha, c(p, n, 1L), dimnames = list(pn, NULL, NULL)),
       subj_ll = matrix(ll0, n, 1L), last_theta_var_inv = solve(V))
-    pm <- lapply(seq_len(n), function(s) list(
+    pm <- lapply(seq_len(n), function(s) list(list(
       mix = c(0.05, 0.3, 0.3, 0.35), epsilon = rep(0.5, 3L),
       n_particles = 24L, iter = 100L, proposal_counts = integer(4L),
-      acc_counts = integer(4L), jump_counts = numeric(4L), gd_good = FALSE))
+      acc_counts = integer(4L), jump_counts = numeric(4L), gd_good = FALSE,
+      sel = list())))
     attr(samples, "pm_settings") <- pm
     ybar <- lapply(seq_len(n), function(s) stats::setNames(h$y[, s], pn))
     proposal_var <- diag(c(4, 3), p)
@@ -79,20 +89,8 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
         totals = list(attempts = 0L, accepted = 0L, aborts = 0L, rows = 0,
                       cpu = 0, calib_cpu = 0)),
       alloc = list(window = NULL, history = list(),
-        particle = list(rate = rep(0.5, n)), last = list(rate = rep(0.5, n))))
-
-    if (broken) {
-      hmc_round <- EMC2:::.emc_hmc_round
-      local_mocked_bindings(.emc_hmc_round = function(plan, proposals, pars, type,
-        streams, data, model, wpool = NULL, n_cores = 1L, r_cores = 1L,
-        par_names, pick = NULL) {
-        # Deliberately state-dependent selection: this is not a valid mixture
-        # of invariant kernels and should move the bounded coordinate's law.
-        pick <- proposals[1L, ] > 0
-        hmc_round(plan, proposals, pars, type, streams, data, model, wpool,
-                  n_cores, r_cores, par_names, pick)
-      }, .package = "EMC2")
-    }
+        particle = list(rate = rep(if (broken) 0 else 0.5, n)),
+        last = list(rate = rep(0.5, n))))
     out <- EMC2:::run_stage(sampler, stage = "sample", iter = N,
       particles = 24L, n_cores = 1L, tune = list(), verbose = FALSE,
       verboseProgress = FALSE, r_cores = 1L)

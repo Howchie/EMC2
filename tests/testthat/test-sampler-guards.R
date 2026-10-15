@@ -2,13 +2,16 @@ test_that("inter-block proposal scaling converts variance to standard deviation"
   pmwgs <- list(
     samples = structure(
       list(),
-      pm_settings = list(list(list(epsilon = c(1, 2))))
+      pm_settings = list(list(list(epsilon = c(1, 2),
+                                  step_layout = c("group", "chains"))))
     )
   )
 
   out <- update_epsilon_scale(pmwgs, prop_var_ratio = 4)
   expect_equal(attr(out$samples, "pm_settings")[[1]][[1]]$epsilon,
-               c(2, 4))
+               c(1, 4))
+  expect_identical(attr(out$samples, "pm_settings")[[1]][[1]]$step_layout,
+                   c("group", "chains"))
 
   bounded <- update_epsilon_scale(pmwgs, prop_var_ratio = 1e100)
   expect_true(all(is.finite(attr(bounded$samples, "pm_settings")[[1]][[1]]$epsilon)))
@@ -71,10 +74,14 @@ test_that("long runs of identical sample iterations are detectable", {
 
 test_that("proposal multipliers scale per subject", {
   pm <- lapply(1:3, function(s) list(list(epsilon = c(.2, .3))))
+  pm <- lapply(pm, function(x) {
+    x[[1]]$step_layout <- c("group", "chains")
+    x
+  })
   pmwgs <- list(samples = list()); attr(pmwgs$samples, "pm_settings") <- pm
   out <- update_epsilon_scale(pmwgs, prop_var_ratio = c(4, 1, NA))
   eps <- lapply(attr(out$samples, "pm_settings"), function(x) x[[1]]$epsilon)
-  expect_equal(eps[[1]], c(.4, .6))
+  expect_equal(eps[[1]], c(.2, .6))
   expect_equal(eps[[2]], c(.2, .3))
   expect_equal(eps[[3]], c(.2, .3))
 })

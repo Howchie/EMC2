@@ -1032,6 +1032,7 @@ test_that("a subject's deviations join its unit as coordinates the particle step
   uf <- u
   uf$b_share <- c(0.2, 0.4)
   uf$d_b_share <- c(0.3, 0.6)
+  uf$d_rho <- c(0.7, 0.8)
   df <- EMC2:::.emc_alloc_dev_rows(uf)
   den <- 1 - uf$q_old * (1 - uf$p_dev)
   expect_equal(df$rho[3:4],

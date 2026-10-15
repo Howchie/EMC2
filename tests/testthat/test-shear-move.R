@@ -1013,11 +1013,14 @@ test_that("rebuilds carry step scales to matching directions and record the wind
                pmin(EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[2],
                     pmax(EMC2:::.EMC_SHEAR_LOG_STEP_RANGE[1], step + shift)))
   # Outside production the last block alone measures the rounds.
+  n_burn1 <- d * (d * 10 + 30) + 7
+  n_burn2 <- d * n_burn1 + 2
   ch <- rebuild(ch, "burn", 7L, 1L, 4)
-  expect_equal(ch$shear$plan$last$n[sd_k], rep(7L, p))
-  expect_equal(ch$shear$plan$pool$n[sd_k], integer(p))
+  expect_equal(ch$shear$plan$last$n[sd_k], rep(n_burn1, p))
+  expect_equal(ch$shear$plan$pool$n[sd_k], rep(n_burn1, p))
   ch <- rebuild(ch, "burn", 2L, 1L, 1)
-  expect_equal(ch$shear$plan$last$n[sd_k], rep(2L, p))
+  expect_equal(ch$shear$plan$last$n[sd_k], rep(n_burn2, p))
+  expect_equal(ch$shear$plan$pool$n[sd_k], rep(n_burn2, p))
 })
 
 test_that("an orbit's width is measured whatever scale the grid starts at", {
