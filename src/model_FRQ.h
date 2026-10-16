@@ -218,9 +218,15 @@ inline double frq_low_gamma_tail(double X, double log_X, const FrqLow& L,
 //   T = r^{1-K} [(1 - q) / (1 - r q)]^beta I_{rq}(K, beta),
 //   dF/dq = s r^{1-K} beta (1 - q)^{beta-1} (1 - r q)^{-beta-1}
 //           I_{rq}(K - 1, beta + 1).
-// The survivor and density are sums of positive terms; the CDF loses about
-// log10(1 + omega) digits to its difference.  omega = 0 is the base model and
-// never reaches these paths.
+// The survivor and density are sums of positive terms.  The closed-form CDF
+// is a difference whose relative error grows by up to 1 + omega, so where that
+// costs digits (or the series is short) the CDF uses the geometric-mixture
+// identity
+// J ~ Gamma(K + N), N ~ Geometric(s) on {0, 1, ...}:
+//   F = s sum_m r^m P_{K+m}(M) = sum_j d_j (1 - r^{j+1}),
+// with d_j = P_{K+j} - P_{K+j+1} the positive terms of the lower series
+// (and I_q(K + j, beta) in place of P at cv > 0).  omega = 0 is the base model
+// and never reaches these paths.
 // ---------------------------------------------------------------------------
 
 // Below this K - 1 the (K - 1)-shape factor is one (P_0 = I(0, .) = 1).
@@ -232,6 +238,7 @@ struct FrqOmega {
   double omega = 0.0;
   double log_r = R_NegInf;  // log(omega / (1 + omega))
   double log_s = 0.0;       // log(1 / (1 + omega))
+  double r = 0.0;
   double s = 1.0;
   double log1p_omega = 0.0;
   bool main_unit = true;    // K - 1 below FRQ_OMEGA_UNIT_K
@@ -250,6 +257,7 @@ inline FrqOmega frq_omega_make(double omega) {
   w.log_s = -w.log1p_omega;
   w.log_r = std::log(omega) - w.log1p_omega;
   w.s = 1.0 / (1.0 + omega);
+  w.r = omega / (1.0 + omega);
   return w;
 }
 
@@ -865,6 +873,64 @@ inline double frq_log_ibeta(double x, double omx, double log_x, double log_omx,
 // call; the mixers combine the main and low thresholds with plo.
 // ---------------------------------------------------------------------------
 
+// Positive-term CDF series (see FrqOmega): log F = log_d0 + log sum_j
+// (d_j / d_0) u_j, u_j = s sum_{i <= j} r^i, with d_{j+1} / d_j = ratio(j).
+// The tail after term j is at most d_j rb / (1 - rb), rb = max(ratio, rho_lim)
+// bounding every later ratio.  Returns false when `cap` terms do not converge.
+//
+// A series predicted to need at most FRQ_OMEGA_SERIES_SHORT terms replaces the
+// closed form outright.  Otherwise the closed form runs first, and the series
+// (up to FRQ_OMEGA_SERIES_MAX terms) replaces it only when the difference
+// cancelled more than FRQ_OMEGA_CANCEL nats.
+constexpr int FRQ_OMEGA_SERIES_SHORT = 64;
+constexpr int FRQ_OMEGA_SERIES_MAX = 20000;
+constexpr double FRQ_OMEGA_CANCEL = 4.6;   // two digits
+
+template <class Ratio>
+inline bool frq_omega_series_lF(double log_d0, Ratio ratio, double rho_lim,
+                                const FrqOmega& w, int cap, double* lF) {
+  if (log_d0 == R_NegInf) { *lF = R_NegInf; return true; }
+  double d = 1.0, rp = 1.0, u = 0.0, sum = 0.0;
+  for (int j = 0; j < cap; ++j) {
+    u += w.s * rp;
+    rp *= w.r;
+    sum += d * u;
+    const double rho = ratio(j);
+    const double rb = std::fmax(rho, rho_lim);
+    if (rb < 1.0 && d * rb < 1e-17 * (1.0 - rb) * sum) {
+      *lF = log_d0 + std::log(sum);
+      return true;
+    }
+    d *= rho;
+    if (d > 1e200) { d *= 1e-200; sum *= 1e-200; log_d0 += 200.0 * M_LN10; }
+  }
+  return false;
+}
+
+// Predicted length: offset of the term peak plus about 37 e-folds of decay.
+inline bool frq_omega_series_beta(double log_q, double log_omq, double Kc,
+                                  double beta, double lb_c, const FrqOmega& w,
+                                  int cap, double* lF) {
+  if (!(log_q < 0.0) || log_omq == R_NegInf) return false;
+  const double q = std::exp(log_q), omq = std::exp(log_omq);
+  const double peak = std::fmax(0.0, (q * beta - 1.0) / omq - Kc);
+  if (!(peak + 37.0 / -log_q <= cap)) return false;
+  const double log_d0 = Kc * log_q + beta * log_omq - std::log(Kc) - lb_c;
+  return frq_omega_series_lF(
+    log_d0,
+    [&](int j) { const double a = Kc + j; return q * (a + beta) / (a + 1.0); },
+    q, w, cap, lF);
+}
+
+inline bool frq_omega_series_pois(double X, double log_X, double Kc,
+                                  double lg_c, const FrqOmega& w, int cap,
+                                  double* lF) {
+  if (!(std::fmax(0.0, X - Kc) + 40.0 + 4.0 * std::sqrt(X) <= cap)) return false;
+  const double log_d0 = Kc * log_X - X - lg_c - std::log(Kc);
+  return frq_omega_series_lF(
+    log_d0, [&](int j) { return X / (Kc + j + 1.0); }, 0.0, w, cap, lF);
+}
+
 inline FrqOmComp frq_omega_beta_comp(double log_q, double log_omq, double Kc,
                                      double beta, double lb_c, bool unit_c,
                                      double lb_c1, const FrqOmega& w,
@@ -876,14 +942,20 @@ inline FrqOmComp frq_omega_beta_comp(double log_q, double log_omq, double Kc,
   const double log_omrq = frq_logaddexp(w.log_s, w.log_r + log_omq);
   const double omrq = std::exp(log_omrq);
   const double lead = (1.0 - Kc) * w.log_r;
-  if (want & (FRQ_OM_F | FRQ_OM_S)) {
+  const bool series_F = (want & FRQ_OM_F) &&
+    frq_omega_series_beta(log_q, log_omq, Kc, beta, lb_c, w,
+                          FRQ_OMEGA_SERIES_SHORT, &out.lF);
+  if ((want & FRQ_OM_S) || ((want & FRQ_OM_F) && !series_F)) {
     const double T = lead + beta * (log_omq - log_omrq) +
       frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc, beta, lb_c);
     out.lS = frq_logaddexp(frq_log_ibeta(omq, q, log_omq, log_q, beta, Kc, lb_c),
                            T);
-    if (want & FRQ_OM_F) {
+    if ((want & FRQ_OM_F) && !series_F) {
       const double lI = frq_log_ibeta(q, omq, log_q, log_omq, Kc, beta, lb_c);
       out.lF = (T < lI) ? lI + frq_log1mexp(T - lI) : frq_log1mexp(out.lS);
+      if (!(lI - out.lF <= FRQ_OMEGA_CANCEL))
+        frq_omega_series_beta(log_q, log_omq, Kc, beta, lb_c, w,
+                              FRQ_OMEGA_SERIES_MAX, &out.lF);
     }
   }
   if (want & FRQ_OM_FD) {
@@ -920,14 +992,21 @@ inline FrqOmComp frq_omega_pois_comp(double X, double log_X, double Kc,
     return out;
   }
   const double log_rX = w.log_r + log_X, rX = std::exp(log_rX);
-  if (want & (FRQ_OM_F | FRQ_OM_S)) {
+  const bool series_F = (want & FRQ_OM_F) &&
+    frq_omega_series_pois(X, log_X, Kc, lg_c, w, FRQ_OMEGA_SERIES_SHORT,
+                          &out.lF);
+  if ((want & FRQ_OM_S) || ((want & FRQ_OM_F) && !series_F)) {
     double lPr, lP, lQ;
     frq_omega_pgamma(Kc, rX, log_rX, lg_c, &lPr, nullptr);
     frq_omega_pgamma(Kc, X, log_X, lg_c, &lP, &lQ);
     const double T = lead - w.s * X + lPr;
     out.lS = frq_logaddexp(lQ, T);
-    if (want & FRQ_OM_F)
+    if ((want & FRQ_OM_F) && !series_F) {
       out.lF = (T < lP) ? lP + frq_log1mexp(T - lP) : frq_log1mexp(out.lS);
+      if (!(lP - out.lF <= FRQ_OMEGA_CANCEL))
+        frq_omega_series_pois(X, log_X, Kc, lg_c, w, FRQ_OMEGA_SERIES_MAX,
+                              &out.lF);
+    }
   }
   if (want & FRQ_OM_FD) {
     double lf = w.log_s + lead - w.s * X;
