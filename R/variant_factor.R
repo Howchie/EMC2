@@ -273,8 +273,11 @@ gibbs_step_factor <- function(sampler, alpha){
 last_sample_factor <- function(store) {
   list(
     mu = store$theta_mu[, store$idx],
-    eta = store$eta[,,store$idx],
-    lambda = store$lambda_untransf[,,store$idx],
+    eta = matrix(store$eta[, , store$idx], nrow = dim(store$eta)[1L], ncol = dim(store$eta)[2L],
+                 dimnames = dimnames(store$eta)[1:2]),
+    lambda = matrix(store$lambda_untransf[, , store$idx], nrow = dim(store$lambda_untransf)[1L],
+                    ncol = dim(store$lambda_untransf)[2L],
+                    dimnames = dimnames(store$lambda_untransf)[1:2]),
     psi_inv = store$psi_inv[,store$idx],
     sig_err_inv = store$epsilon_inv[,store$idx]
   )

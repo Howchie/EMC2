@@ -170,7 +170,7 @@ test_that("the rest of the iteration is recorded against the previous final stat
 test_that("the allocation preserves the between-chain rho floor", {
   rho <- c(0.2, 0.8)
   b <- c(0.5, 0.5)
-  expect_equal(EMC2:::.emc_alloc_remove_floor(0.6, 0.2, 0.5), 1)
+  expect_equal(EMC2:::.emc_alloc_remove_factor(c(0.3, 0.6, 0.4), c(0.5, 0.5, 0)), c(0.6, 1, 1))
   unit <- list(kind = "shear", rho = rho, b_share = b, g = c(0.1, 0.2),
                cost = 0, cap = 100)
   predicted <- EMC2:::.emc_alloc_predict(list(unit),
@@ -1032,11 +1032,12 @@ test_that("a subject's deviations join its unit as coordinates the particle step
   uf <- u
   uf$b_share <- c(0.2, 0.4)
   uf$d_b_share <- c(0.3, 0.6)
-  uf$d_rho <- c(0.7, 0.8)
   df <- EMC2:::.emc_alloc_dev_rows(uf)
   den <- 1 - uf$q_old * (1 - uf$p_dev)
-  expect_equal(df$rho[3:4],
-    (uf$d_rho - uf$d_b_share) / ((1 - uf$d_b_share) * den))
+  # The measured rho is within-chain: only the particle factor comes out, and
+  # the between-chain share rides along to be added back when priced.
+  expect_equal(df$rho[3:4], pmin(1, uf$d_rho / den))
+  expect_equal(df$b_share, c(uf$b_share, uf$d_b_share))
   # Without deviation factors for a kernel the unit has, nothing is added.
   expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "h_dev")]), u[setdiff(names(u), "h_dev")])
   expect_identical(EMC2:::.emc_alloc_dev_rows(u[setdiff(names(u), "d_rho")]), u[setdiff(names(u), "d_rho")])

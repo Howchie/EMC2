@@ -317,11 +317,13 @@
   b + (1 - b) * rho
 }
 
-.emc_alloc_remove_floor <- function(rho, b_share, factor = 1) {
-  b <- rep_len(if (is.null(b_share)) 0 else b_share, length(rho))
+# A within-chain rho with a kernel's factor divided out. The measured rho is
+# already within-chain (the variance it is taken against is the chains'
+# pooled within variance), so the between-chain floor is not removed here;
+# .emc_alloc_rho_floor adds it back where a plan is priced.
+.emc_alloc_remove_factor <- function(rho, factor = 1) {
   factor <- rep_len(factor, length(rho))
-  adjusted <- (rho - b) / pmax((1 - b) * factor, 1e-6)
-  ifelse(factor > 1e-6 & b < 1, pmin(1, pmax(0, adjusted)), 1)
+  ifelse(factor > 1e-6, pmin(1, rho / pmax(factor, 1e-6)), 1)
 }
 
 .emc_alloc_unit_rho <- function(u, rho = u$rho) {
@@ -935,14 +937,13 @@
 .emc_alloc_within_share <- function(chains) {
   p <- nrow(chains[[1L]])
   all_draws <- do.call(cbind, chains)
-  total <- diag(.emc_alloc_cov(all_draws))
-  within_by_chain <- vapply(chains, function(x) diag(.emc_alloc_cov(x)),
-                            numeric(p))
+  total <- .emc_alloc_row_var(all_draws)
+  within_by_chain <- vapply(chains, .emc_alloc_row_var, numeric(p))
   if (is.null(dim(within_by_chain))) within_by_chain <- matrix(within_by_chain, p)
   within <- rowMeans(within_by_chain, na.rm = TRUE)
   within[!is.finite(within)] <- NA_real_
   between <- pmax(0, total - within)
-  b_share <- between / total
+  b_share <- ifelse(is.finite(total) & is.finite(within) & total == 0, 0, between / total)
   b_share[!is.finite(b_share)] <- NA_real_
   b_share <- pmin(1, pmax(0, b_share))
   list(var = within, total = total, b_share = b_share)
@@ -1197,7 +1198,7 @@
   t_rho <- s_rho
   for (s in which(is.finite(c_part))) {
     den <- 1 - q_old[s] * (1 - p_fac[s, ])
-    t_rho[s, ] <- .emc_alloc_remove_floor(s_rho[s, ], s_b_share[s, ], den)
+    t_rho[s, ] <- .emc_alloc_remove_factor(s_rho[s, ], den)
   }
   # The rest of the iteration, less the particle steps the units now price.
   part_in_rest <- if (stored || is.null(w$cpu_part)) 0 else
@@ -1395,8 +1396,7 @@
   if (!is.null(u$p)) {
     q0 <- if (is.null(u$q_old)) 1 else u$q_old
     den <- 1 - q0 * (1 - u$p_dev)
-    b <- rep_len(if (is.null(u$d_b_share)) 0 else u$d_b_share, length(rho))
-    rho <- .emc_alloc_remove_floor(rho, b, den)
+    rho <- .emc_alloc_remove_factor(rho, den)
     u$p <- c(u$p, u$p_dev)
   }
   if (!is.null(u$h)) u$h <- c(u$h, u$h_dev)
@@ -1465,7 +1465,7 @@
         x$cap <- x$floor
         return(x)
       }
-      list(kind = "fixed", rho = x$rho, cost = 0)
+      list(kind = "fixed", rho = x$rho, b_share = x$b_share, cost = 0)
     })
     no_shear$shear_fixed <- 0
     no_shear$shear_act <- if (explored) fixed_shear else 0
@@ -1605,8 +1605,9 @@
       hst[[j]] <- .emc_hmc_apply_calibration(hst[[j]], s, r)
     }
   }
-  # A shared HMC choice is solved against each chain's local particle rates.
-  plan_chain <- function(j, choice = NULL) {
+  # A chain's plan at an HMC choice; a shared choice is solved against the
+  # chain's local particle rates.
+  solve_chain <- function(j, choice = NULL) {
     ch <- emc[[j]]
     m <- ms[[j]]
     st <- hst[[j]]
@@ -1620,9 +1621,8 @@
     n_g <- length(m$g_rho)
     u$choice_fixed <- choice
     sol <- .emc_alloc_solve_units(u)
-    if (shear_on[j]) ch$shear$plan$rounds <- sol$x[seq_len(n_g)]
-    if (isTRUE(m$coll)) ch$collapsed$plan$rounds <- sol$joint
-    rate <- pmin(1, sol$x[n_g + seq_len(ch$n_subjects)])
+    pr <- .emc_alloc_plan_rates(u$units, sol)
+    rate <- pr$r[n_g + seq_len(ch$n_subjects)]
     q <- rep(1, ch$n_subjects)
     if (!is.null(st) && isTRUE(st$supported)) {
       for (s in seq_len(ch$n_subjects)) {
@@ -1636,6 +1636,21 @@
         st$subjects[[s]] <- sj
       }
     }
+    list(u = u, sol = sol, st = st, q = q,
+         rate = if (is.null(st$subjects)) numeric(ch$n_subjects) else
+           vapply(st$subjects, function(x) x$rate, numeric(1)))
+  }
+  plan_chain <- function(j, pl) {
+    ch <- emc[[j]]
+    m <- ms[[j]]
+    st <- pl$st
+    u <- pl$u
+    sol <- pl$sol
+    q <- pl$q
+    choice <- u$choice_fixed
+    n_g <- length(m$g_rho)
+    if (shear_on[j]) ch$shear$plan$rounds <- sol$x[seq_len(n_g)]
+    if (isTRUE(m$coll)) ch$collapsed$plan$rounds <- sol$joint
     rec <- list(
       stage = stage, B = B, iteration = ch$samples$idx,
       transitions = if (is.null(ch$sample_transitions)) NA_integer_ else
@@ -1668,8 +1683,7 @@
       subject_rho = apply(.emc_alloc_rho_floor(m$s_rho, m$s_b_share), 1L, max),
       hmc_h = vapply(u$units[n_g + seq_len(ch$n_subjects)], function(x)
         if (!is.null(x$h)) max(x$h) else NA_real_, numeric(1)),
-      rate = if (is.null(st$subjects)) numeric(ch$n_subjects) else
-        vapply(st$subjects, function(x) x$rate, numeric(1)),
+      rate = pl$rate,
       particle_rate = q,
       particle_fixed = FALSE, choice_fixed = !is.null(choice),
       particle_p = apply(m$p_fac, 1L, function(x) if (all(is.finite(x))) max(x) else NA_real_),
@@ -1686,13 +1700,12 @@
     }
     ch
   }
-  for (j in seq_len(nch)) emc[[j]] <- plan_chain(j)
+  plans <- lapply(seq_len(nch), function(j) solve_chain(j))
   # One HMC choice for every chain: the choice with the least objective
   # summed over the chains, so chains carry the same work and the choice
   # rests on every chain's measurements rather than on one chain's near-tie.
   # A chain that chose otherwise is solved again at the shared choice.
-  opts <- lapply(emc, function(ch) ch$alloc$last$options)
-  choice <- NULL
+  opts <- lapply(plans, function(pl) pl$sol$options)
   if (all(lengths(opts) > 0L)) {
     keys <- Reduce(intersect, lapply(opts, names))
     if (length(keys)) {
@@ -1702,7 +1715,7 @@
         hmc_keys <- setdiff(keys, "none")
         if (length(hmc_keys)) {
           with_hmc <- vapply(hmc_keys, function(key) sum(vapply(opts, `[[`, numeric(1), key)), 0)
-          objective0 <- sum(vapply(emc, function(ch) ch$alloc$last$objective0, numeric(1)))
+          objective0 <- sum(vapply(plans, function(pl) pl$sol$objective0, numeric(1)))
           held_particle_rate <- any(vapply(opts, function(o)
             "none" %in% names(o) && is.infinite(o[["none"]]), logical(1)))
           hmc_ok[hmc_keys] <- is.finite(with_hmc) &
@@ -1710,12 +1723,13 @@
         }
       }
       tot[!hmc_ok] <- Inf
-      tc <- lapply(emc, function(ch) ch$alloc$last$option_cost)
+      tc <- lapply(plans, function(pl) pl$sol$option_cost)
       tc <- if (all(lengths(tc) >= length(keys))) Reduce(`+`, lapply(tc, `[`, keys))
       choice <- .emc_alloc_choose(tot, tc)
-      for (j in seq_len(nch)) emc[[j]] <- plan_chain(j, choice)
+      plans <- lapply(seq_len(nch), function(j) solve_chain(j, choice))
     }
   }
+  for (j in seq_len(nch)) emc[[j]] <- plan_chain(j, plans[[j]])
   # Each chain keeps its own particle rates because its subject transition is
   # independent of the rates selected for the other chains.
   emc

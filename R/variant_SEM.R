@@ -622,14 +622,18 @@ gibbs_step_SEM <- function(sampler, alpha){
 
 
 last_sample_SEM <- function(store) {
+  slice2d <- function(arr) {
+    matrix(arr[, , store$idx], nrow = dim(arr)[1L], ncol = dim(arr)[2L],
+           dimnames = dimnames(arr)[1:2])
+  }
   list(
     mu = store$theta_mu[, store$idx],
-    eta = store$eta[,,store$idx],
-    lambda = store$lambda[,,store$idx],
-    B = store$B[,,store$idx],
-    K = store$K[,,store$idx],
-    G = store$G[,,store$idx],
-    delta_inv = store$delta_inv[,,store$idx],
+    eta = slice2d(store$eta),
+    lambda = slice2d(store$lambda),
+    B = slice2d(store$B),
+    K = slice2d(store$K),
+    G = slice2d(store$G),
+    delta_inv = slice2d(store$delta_inv),
     epsilon_inv = store$epsilon_inv[,store$idx]
   )
 }

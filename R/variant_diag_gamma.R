@@ -87,9 +87,11 @@ get_startpoints_diag_gamma <- function(pmwgs, start_mu, start_var){
 }
 
 last_sample_diag_gamma <- function(store) {
+  d <- dim(store$theta_var)[1L]
   list(
     tmu = store$theta_mu[, store$idx],
-    tvar = store$theta_var[, , store$idx],
+    tvar = matrix(store$theta_var[, , store$idx], nrow = d, ncol = d,
+                  dimnames = dimnames(store$theta_var)[1:2]),
     tvinv = store$last_theta_var_inv
   )
 }

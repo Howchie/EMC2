@@ -125,3 +125,14 @@ test_that("a one-parameter hierarchy runs its group update", {
     }
   }
 })
+
+test_that("last_sample keeps a one-parameter group covariance as a 1 x 1 matrix", {
+  store <- list(idx = 2L, theta_mu = matrix(c(0.1, 0.2), 1, 2, dimnames = list("v", NULL)),
+                theta_var = array(c(1, 2), c(1, 1, 2), dimnames = list("v", "v", NULL)),
+                a_half = matrix(c(1, 1), 1, 2), last_theta_var_inv = matrix(0.5, 1, 1))
+  for (f in c("last_sample_standard", "last_sample_diag_gamma")) {
+    last <- getFromNamespace(f, "EMC2")(store)
+    expect_true(is.matrix(last$tvar))
+    expect_equal(last$tvar, matrix(2, 1, 1, dimnames = list("v", "v")))
+  }
+})

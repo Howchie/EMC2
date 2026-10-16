@@ -444,9 +444,11 @@ gibbs_step_standard <- function(sampler, alpha) {
 
 
 last_sample_standard <- function(store) {
+  d <- dim(store$theta_var)[1L]
   list(
     tmu = store$theta_mu[, store$idx],  # Now includes beta
-    tvar = store$theta_var[, , store$idx],
+    tvar = matrix(store$theta_var[, , store$idx], nrow = d, ncol = d,
+                  dimnames = dimnames(store$theta_var)[1:2]),
     tvinv = store$last_theta_var_inv,
     a_half = store$a_half[, store$idx]
   )

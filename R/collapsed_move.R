@@ -365,8 +365,19 @@
                  iters = d * prev$iters + blk$iters)
     last <- pool
   } else {
+    # Entering production the pool starts empty; a block that barely ran the
+    # move keeps its discounted warm-up evidence (as the shear does).
     pool <- zero
     last <- blk
+    if (blk$n < 5L) {
+      prev <- .emc_collapsed_record(if (is.list(old$last)) old$last, p)
+      d <- .EMC_ALLOC_EVIDENCE_DECAY
+      last <- list(E = d * prev$E + blk$E, n = d * prev$n + blk$n,
+                   acc = d * prev$acc + blk$acc, moved = d * prev$moved + blk$moved,
+                   N = d * prev$N + blk$N,
+                   K = .emc_alloc_khist_sum(d * prev$K, blk$K),
+                   iters = d * prev$iters + blk$iters)
+    }
   }
   st$plan <- list(C = C, eps = eps, rounds = 0, dim = ctx$chart$dim, stage = stage,
                   last = last, pool = pool, block = zero)

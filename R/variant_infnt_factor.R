@@ -276,10 +276,13 @@ gibbs_step_infnt_factor <- function(sampler, alpha){
 last_sample_infnt_factor <- function(store) {
   list(
     mu = store$theta_mu[, store$idx],
-    eta = store$eta[,,store$idx],
+    eta = matrix(store$eta[, , store$idx], nrow = dim(store$eta)[1L], ncol = dim(store$eta)[2L],
+                 dimnames = dimnames(store$eta)[1:2]),
     delta = store$delta[,store$idx],
-    lambda = store$lambda[,,store$idx],
-    psi = store$psi[,,store$idx],
+    lambda = matrix(store$lambda[, , store$idx], nrow = dim(store$lambda)[1L],
+                    ncol = dim(store$lambda)[2L], dimnames = dimnames(store$lambda)[1:2]),
+    psi = matrix(store$psi[, , store$idx], nrow = dim(store$psi)[1L],
+                 ncol = dim(store$psi)[2L], dimnames = dimnames(store$psi)[1:2]),
     epsilon_inv = store$epsilon_inv[,store$idx]
   )
 }

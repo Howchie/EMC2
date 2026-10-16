@@ -456,6 +456,19 @@
                         moved = d * prev$moved + recent$moved, N = d * prev$N + recent$N,
                         K = .emc_alloc_khist_sum(d * prev$K, recent$K),
                         iters = d * prev$iters + recent$iters)
+    } else {
+      # Entering production the pool starts empty and the last block alone
+      # measures a coordinate; one it barely ran keeps its discounted
+      # warm-up evidence instead of reverting to the unmeasured prior.
+      prev <- carry(old$last)
+      low <- recent$n < 5L
+      if (any(low)) {
+        d <- .EMC_ALLOC_EVIDENCE_DECAY
+        for (f in c("E", "n", "moved", "N", "iters"))
+          recent[[f]][low] <- d * prev[[f]][low] + recent[[f]][low]
+        prev$K[!low, ] <- 0L
+        recent$K <- .emc_alloc_khist_sum(d * prev$K, recent$K)
+      }
     }
   }
   plan$last <- if (identical(stage, "sample") && !same_stage) recent else plan$pool

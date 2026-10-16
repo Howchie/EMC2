@@ -14,12 +14,14 @@
   .emc_rebuild_queue$busy <- TRUE
   on.exit(.emc_rebuild_queue$busy <- FALSE, add = TRUE)
   map <- .emc_rebuild_queue$map
-  if (is.null(map)) {
+  pid <- Sys.getpid()
+  if (is.null(map) || !identical(.emc_rebuild_queue$pid, pid)) {
     path <- tempfile("emc-rebuild-claim-")
     on.exit(unlink(path), add = TRUE)
     map <- emc_claim_open(path)
     unlink(path)
     .emc_rebuild_queue$map <- map
+    .emc_rebuild_queue$pid <- pid
   }
   emc_claim_reset(map, 1L)
   parts <- auto_mclapply(seq_len(cores), function(worker) {
