@@ -41,19 +41,22 @@ NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector plo = NumericVector::create(0.0),
                    bool log_out = false,
                    NumericVector clock = NumericVector::create(1.0),
-                   NumericVector accel = NumericVector::create(0.0)) {
+                   NumericVector accel = NumericVector::create(0.0),
+                   NumericVector omega = NumericVector::create(0.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
   frq_check_len(accel, n, "accel");
+  frq_check_len(omega, n, "omega");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(plo, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i),
+                                pick(omega, i));
     const double lp = frq_accel_log_pdf_dt(t[i], s, pick(accel, i));
     out[i] = log_out ? lp : ((lp > R_NegInf) ? std::exp(lp) : 0.0);
   }
@@ -70,19 +73,22 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector plo = NumericVector::create(0.0),
                    bool lower_tail = true, bool log_out = false,
                    NumericVector clock = NumericVector::create(1.0),
-                   NumericVector accel = NumericVector::create(0.0)) {
+                   NumericVector accel = NumericVector::create(0.0),
+                   NumericVector omega = NumericVector::create(0.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
   frq_check_len(accel, n, "accel");
+  frq_check_len(omega, n, "omega");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(plo, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i),
+                                pick(omega, i));
     const double a = pick(accel, i);
     double lp;
     if (lower_tail) {
@@ -105,22 +111,25 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
 NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
                        NumericVector h,
                        NumericVector plo = NumericVector::create(0.0),
-                       NumericVector clock = NumericVector::create(1.0)) {
+                       NumericVector clock = NumericVector::create(1.0),
+                       NumericVector omega = NumericVector::create(0.0)) {
   // Length is the longest argument, not K's: a scalar K against a vector v has
   // to give one row per v.
-  const int n = static_cast<int>(std::max(std::max(std::max(K.size(), v.size()),
-                                                   std::max(sv.size(), h.size())),
-                                          std::max(plo.size(), clock.size())));
+  const int n = static_cast<int>(std::max({K.size(), v.size(), sv.size(),
+                                           h.size(), plo.size(), clock.size(),
+                                           omega.size()}));
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
+  frq_check_len(omega, n, "omega");
   NumericMatrix out(n, 5);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
-                                pick(h, i), pick(plo, i), pick(clock, i));
+                                pick(h, i), pick(plo, i), pick(clock, i),
+                                pick(omega, i));
     out(i, 0) = s.ok ? s.beta : NA_REAL;
     out(i, 1) = s.ok ? s.p : NA_REAL;
     out(i, 2) = s.ok ? ((s.poisson && s.h == 1.0) ? NA_REAL : s.lambda) : NA_REAL;
@@ -156,9 +165,17 @@ enum FrqChart : int { FRQ_SV = 0, FRQ_CV_CHART = 1, FRQ_ACCEL_CHART = 2 };
 
 template <int CH>
 inline const FrqPars& frq_memo_row(FrqMemo& memo, double k, double v,
-                                   double x, double h, double pl, double cu) {
-  if (CH == FRQ_SV) return memo.get(k, v, x, h, pl, cu);
-  return memo.get_cv(k, v, x, h, pl, CH == FRQ_ACCEL_CHART ? 1.0 : cu);
+                                   double x, double h, double pl, double cu,
+                                   double om) {
+  if (CH == FRQ_SV) return memo.get(k, v, x, h, pl, cu, om);
+  return memo.get_cv(k, v, x, h, pl, CH == FRQ_ACCEL_CHART ? 1.0 : cu, om);
+}
+
+// The excess-criterion column is resolved BY NAME (configure_frq_omega_context
+// in race_dispatch.cpp), so a design without one reads omega = 0.
+static inline int frq_omega_col(void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  return ctx != nullptr ? ctx->frq_omega_index : -1;
 }
 
 template <int CH>
@@ -187,9 +204,11 @@ template <int CH>
 static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
   static thread_local FrqMemo memo;
   memo.shared = frq_cache_from_context(ctx_);
+  const int io = frq_omega_col(ctx_);
   return frq_memo_row<CH>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
                           par[emc2col::frq::sv], par[emc2col::frq::h],
-                          par[emc2col::frq::plo], par[emc2col::frq::clock]);
+                          par[emc2col::frq::plo], par[emc2col::frq::clock],
+                          io >= 0 ? par[io] : 0.0);
 }
 
 template <int CH>
@@ -230,6 +249,8 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const int io = frq_omega_col(ctx_);
+  const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -243,7 +264,7 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
       continue;
     }
     const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        pl_[i], cu_[i]);
+                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0);
     const double log_pdf = frq_chart_log_pdf<CH>(tt, s, cu_[i]);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -263,6 +284,8 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const int io = frq_omega_col(ctx_);
+  const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -274,7 +297,7 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        pl_[i], cu_[i]);
+                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0);
     const double log_surv = frq_chart_log_surv<CH>(tt, s, cu_[i]);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
@@ -294,6 +317,8 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const int io = frq_omega_col(ctx_);
+  const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -308,7 +333,7 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const FrqPars& s = frq_memo_row<CH>(memo, k_[r], v_[r], sv_[r], h_[r],
-                                          pl_[r], cu_[r]);
+                                          pl_[r], cu_[r], om_ ? om_[r] : 0.0);
       const double log_surv = !R_FINITE(t)
         ? (s.ok ? frq_chart_log_surv<CH>(R_PosInf, s, cu_[r]) : R_NaN)
         : frq_chart_log_surv<CH>(tt, s, cu_[r]);

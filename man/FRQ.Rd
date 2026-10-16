@@ -43,11 +43,12 @@ The derivations are in \code{Math/CounterAndQuorumModels.tex}.\tabular{llllll}{
    \emph{t0} \tab log \tab [0.05, Inf] or 0 \tab log(0) \tab  \tab Non-decision time \cr
    \emph{plo} \tab probit \tab [1e-6, 1] or 0 \tab qnorm(0) \tab  \tab Probability of the low-threshold state \cr
    \emph{clock} \tab log \tab [1e-4, Inf] or 0 \tab log(1) \tab  \tab Shape of the registration law \cr
+   \emph{omega} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab  \tab Geometric excess of the last criterion unit \cr
 }
 
 
-The values \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{plo = 0} and
-\code{clock = 0} are exact bound exceptions and can be set as constants.
+The values \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{plo = 0}, \code{clock = 0} and
+\code{omega = 0} are exact bound exceptions and can be set as constants.
 \code{K} is real-valued. A sampled \code{K} is \code{2 + exp(x)}; its link follows the
 lower bound, so a \code{bound} argument to \code{\link[=design]{design()}} moves both. A constant \code{K}
 uses the plain log link.
@@ -89,6 +90,18 @@ With \code{plo > 0} each accumulator independently commits at the low threshold
 clock. \code{p} is solved from
 \code{h = (1 - plo) * I_p(K, beta) + plo * I_p(1, beta)} by a bracketed root
 search when \code{h < 1}.
+
+With \code{omega > 0} the criterion is \code{J = Y_(K-1) + (1 + omega) * Y_1}, with
+independent \code{Y_(K-1) ~ Gamma(K - 1)} and \code{Y_1 ~ Exp(1)}, in place of
+\code{Y_K ~ Gamma(K)}. With \code{r = omega / (1 + omega)},
+
+\verb{F(u) = I_q(u)(K, beta) - r^(1 - K) * ((1 - q) / (1 - r q))^beta * I_(r q)(K, beta)},
+
+and \verb{F(u) = P_K(X) - r^(1 - K) * exp(-X / (1 + omega)) * P_K(r X)} at
+\code{sv = 0}, with \verb{X = v u} (\code{h = 1}) or \code{E * G(u)}. The low state's criterion
+is \code{(1 + omega) * Y_1}. \code{omega > 0} requires \code{K >= 1}. For \code{h < 1}, \code{p} (or
+\code{E}) is solved from \code{h = F(Inf)} by a bracketed root search. \code{omega} is
+available in every parameterization.
 
 \code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
 (expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}

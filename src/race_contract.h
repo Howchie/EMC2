@@ -272,6 +272,10 @@ struct ContextForRaceModels {
     bool rdmswtn_correlated = false;
     int rdmswtn_rho_index = -1;
 
+    // FRQ's excess-criterion column, resolved by name; -1 = absent (omega = 0).
+    bool frq_omega_by_name = false;
+    int frq_omega_index = -1;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;

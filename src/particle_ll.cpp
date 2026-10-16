@@ -1111,6 +1111,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
+    configure_frq_omega_context(adapter, keep_names);
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo");
     configure_state_mixture_context(adapter, keep_names, is_logicalrules, "calc_ll_oo");
     configure_filter_defective(adapter, data, is_logicalrules);
@@ -1745,6 +1746,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_frq_omega_context(adapter, keep_names);
     configure_time_warp_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_state_mixture_context(adapter, keep_names, is_logicalrules, "calc_ll_oo_pw");
     configure_filter_defective(adapter, data, is_logicalrules);

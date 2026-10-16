@@ -206,6 +206,70 @@ inline double frq_low_gamma_tail(double X, double log_X, const FrqLow& L,
 }
 
 // ---------------------------------------------------------------------------
+// Geometric criterion excess (omega).  The criterion is
+//   J = Y_{K-1} + (1 + omega) Y_1,   Y_{K-1} ~ Gamma(K - 1), Y_1 ~ Exp(1),
+// so the last criterion unit is stretched by 1 + omega; the low state's
+// criterion is (1 + omega) Y_1 (K_lo = 1).  With r = omega / (1 + omega),
+// s = 1 - r and the counter's cumulative intensity M,
+//   P(J <= M)   = P_K(M) - r^{1-K} e^{-s M} P_K(r M),
+//   density J   = s r^{1-K} e^{-s M} P_{K-1}(r M),
+// and averaged over W ~ Gamma(beta) at q = phi / (1 + phi),
+//   F = I_q(K, beta) - T,   S = I_{1-q}(beta, K) + T,
+//   T = r^{1-K} [(1 - q) / (1 - r q)]^beta I_{rq}(K, beta),
+//   dF/dq = s r^{1-K} beta (1 - q)^{beta-1} (1 - r q)^{-beta-1}
+//           I_{rq}(K - 1, beta + 1).
+// The survivor and density are sums of positive terms; the CDF loses about
+// log10(1 + omega) digits to its difference.  omega = 0 is the base model and
+// never reaches these paths.
+// ---------------------------------------------------------------------------
+
+// Below this K - 1 the (K - 1)-shape factor is one (P_0 = I(0, .) = 1).
+constexpr double FRQ_OMEGA_UNIT_K = 1e-10;
+
+struct FrqOmega {
+  bool ok = true;           // false only for a rejected omega
+  bool active = false;      // omega > 0
+  double omega = 0.0;
+  double log_r = R_NegInf;  // log(omega / (1 + omega))
+  double log_s = 0.0;       // log(1 / (1 + omega))
+  double s = 1.0;
+  double log1p_omega = 0.0;
+  bool main_unit = true;    // K - 1 below FRQ_OMEGA_UNIT_K
+  double lb_main1 = 0.0;    // lbeta(K - 1, beta + 1), or lgamma(K - 1) at cv = 0
+  bool lo_unit = true;      // K_lo - 1 below FRQ_OMEGA_UNIT_K
+  double lb_lo1 = 0.0;
+};
+
+inline FrqOmega frq_omega_make(double omega) {
+  FrqOmega w;
+  if (ISNAN(omega) || !(omega >= 0.0) || !R_FINITE(omega)) { w.ok = false; return w; }
+  if (omega == 0.0) return w;
+  w.active = true;
+  w.omega = omega;
+  w.log1p_omega = std::log1p(omega);
+  w.log_s = -w.log1p_omega;
+  w.log_r = std::log(omega) - w.log1p_omega;
+  w.s = 1.0 / (1.0 + omega);
+  return w;
+}
+
+// log F, log S and the log density with respect to the clock coordinate (q in
+// the beta branch, the cumulative intensity X at cv = 0).
+struct FrqOmComp {
+  double lF = R_NaN;
+  double lS = R_NaN;
+  double lf = R_NaN;
+};
+enum : int { FRQ_OM_F = 1, FRQ_OM_S = 2, FRQ_OM_FD = 4 };
+
+inline FrqOmComp frq_omega_mix_beta(double log_q, double log_omq, double K,
+                                    double beta, double lb, const FrqLow& L,
+                                    const FrqOmega& w, int want);
+inline FrqOmComp frq_omega_mix_pois(double X, double log_X, double K,
+                                    double lgK, const FrqLow& L,
+                                    const FrqOmega& w, int want);
+
+// ---------------------------------------------------------------------------
 // Compiled state, split by what each half actually depends on.
 //
 // The evidence-level availability p is the expensive half: it comes from the
@@ -250,6 +314,7 @@ struct FrqAvail {
   double alpha_minus_1 = 0.0;
   double beta_minus_1 = 0.0;
   FrqLow lo;
+  FrqOmega om;
   bool ok = false;
 };
 
@@ -278,6 +343,7 @@ struct FrqPars {
   double alpha_minus_1 = 0.0;
   double beta_minus_1 = 0.0;
   FrqLow lo;
+  FrqOmega om;
   bool ok = false;
 };
 
@@ -344,7 +410,7 @@ inline bool frq_mix_solve(double h, double t_a, double t_b, double t_start,
 }
 
 inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
-                                  double plo = 0.0) {
+                                  double plo = 0.0, double omega = 0.0) {
   s = FrqAvail();
   if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return;
   if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return;
@@ -352,7 +418,14 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
   if (!(h > 0.0) || !(h <= 1.0) || !R_FINITE(h)) return;
   s.lo = frq_low_make(plo);
   if (!s.lo.ok) return;
+  s.om = frq_omega_make(omega);
+  if (!s.om.ok) return;
+  // The excess criterion splits off one unit, Y_{K-1}, so it needs K >= 1.
+  if (s.om.active && !(K >= 1.0)) return;
   const FrqLow& L = s.lo;
+  FrqOmega& W = s.om;
+  W.main_unit = !(K - 1.0 >= FRQ_OMEGA_UNIT_K);
+  W.lo_unit = !(L.K_lo - 1.0 >= FRQ_OMEGA_UNIT_K);
   s.alpha = K;
   s.alpha_minus_1 = K - 1.0;
   s.h = h;
@@ -364,9 +437,43 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
     s.poisson = true;
     s.beta = R_PosInf;
     s.lgamma_K = lgamma_fast(K);
+    if (W.active) {
+      if (!W.main_unit) W.lb_main1 = lgamma_fast(K - 1.0);
+      if (!W.lo_unit) W.lb_lo1 = lgamma_fast(L.K_lo - 1.0);
+    }
     if (h == 1.0) {
       s.E = R_PosInf; s.log_E = R_PosInf;
       s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
+    } else if (W.active) {
+      // The excess criterion lies between Y_K and (1 + omega) Y_K, so the root
+      // lies in [E_0, (1 + omega) E_0] for each component's omega = 0 root E_0.
+      double ta = R_PosInf, tb = R_NegInf;
+      if (L.plo < 1.0) {
+        const double E0 = R::qgamma(h, K, 1.0, 1, 0);
+        if (!(E0 > 0.0) || !R_FINITE(E0)) return;
+        ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
+      }
+      if (L.active) {
+        const double E0 = (L.K_lo == 1.0) ? -std::log1p(-h)
+                                          : R::qgamma(h, L.K_lo, 1.0, 1, 0);
+        if (!(E0 > 0.0) || !R_FINITE(E0)) return;
+        ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
+      }
+      tb += W.log1p_omega;
+      const double lgK = s.lgamma_K;
+      auto ev = [&](double t, bool lower) {
+        const FrqOmComp c = frq_omega_mix_pois(
+          std::exp(t), t, K, lgK, L, W,
+          (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
+        FrqMixEval e;
+        e.lm = c.lF; e.l1m = c.lS; e.lD = c.lf + t;
+        return e;
+      };
+      double t;
+      if (!frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, &t)) return;
+      s.E = std::exp(t); s.log_E = t;
+      if (!(s.E > 0.0) || !R_FINITE(s.E)) return;
+      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
     } else {
       double E = (L.plo == 1.0) ? R_NaN : R::qgamma(h, K, 1.0, 1, 0);
       if (L.active) {
@@ -415,8 +522,42 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
   // are held as logs, so a 1 - p that underflows still enters log(1 - q(x))
   // exactly.
   const double lb = lbeta_fast(K, beta);
+  if (W.active) {
+    if (!W.main_unit) W.lb_main1 = lbeta_fast(K - 1.0, beta + 1.0);
+    if (!W.lo_unit) W.lb_lo1 = lbeta_fast(L.K_lo - 1.0, beta + 1.0);
+  }
   double log_p = 0.0, log_om_p = R_NegInf;
-  if (h < 1.0) {
+  if (h < 1.0 && W.active) {
+    // Solved in t = logit p.  The excess criterion lies between Y_K and
+    // (1 + omega) Y_K, which brackets each component's root between its
+    // omega = 0 logit t_0 and t_0 + log(1 + omega).
+    double ta = R_PosInf, tb = R_NegInf;
+    double lp0, lomp0;
+    if (L.plo < 1.0) {
+      if (!frq_beta_quantile_logs(h, K, beta, lb, &lp0, &lomp0)) return;
+      ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
+    }
+    if (L.active) {
+      if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &lp0, &lomp0,
+                                  true)) return;
+      ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
+    }
+    tb += W.log1p_omega;
+    auto ev = [&](double t, bool lower) {
+      const double lp = -frq_log1pexp(-t), lomp = -frq_log1pexp(t);
+      const FrqOmComp c = frq_omega_mix_beta(
+        lp, lomp, K, beta, lb, s.lo, W,
+        (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
+      FrqMixEval e;
+      e.lm = c.lF; e.l1m = c.lS; e.lD = c.lf + lp + lomp;
+      return e;
+    };
+    double t;
+    if (!frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, &t)) return;
+    log_p = -frq_log1pexp(-t);
+    log_om_p = -frq_log1pexp(t);
+    if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return;
+  } else if (h < 1.0) {
     if (L.plo == 1.0) {
       if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &log_p,
                                   &log_om_p, true)) return;
@@ -468,9 +609,9 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
 }
 
 inline FrqAvail frq_derive_avail(double K, double cv, double h,
-                                 double plo = 0.0) {
+                                 double plo = 0.0, double omega = 0.0) {
   FrqAvail s;
-  frq_derive_avail_into(s, K, cv, h, plo);
+  frq_derive_avail_into(s, K, cv, h, plo, omega);
   return s;
 }
 
@@ -493,6 +634,7 @@ inline void frq_copy_avail(FrqPars& s, const FrqAvail& av) {
   s.alpha_minus_1 = av.alpha_minus_1;
   s.beta_minus_1 = av.beta_minus_1;
   s.lo = av.lo;
+  s.om = av.om;
 }
 
 // Fill the rate half from the mean initial input rate v.  The registration
@@ -530,9 +672,10 @@ inline double frq_rate_cv(double sv, double v) {
 
 // One-shot derive, for callers that hold no memo.
 inline FrqPars frq_derive(double K, double v, double sv, double h,
-                          double plo = 0.0, double clock = 1.0) {
+                          double plo = 0.0, double clock = 1.0,
+                          double omega = 0.0) {
   FrqPars s;
-  const FrqAvail av = frq_derive_avail(K, frq_rate_cv(sv, v), h, plo);
+  const FrqAvail av = frq_derive_avail(K, frq_rate_cv(sv, v), h, plo, omega);
   frq_copy_avail(s, av);
   frq_set_rate(s, av.ok, v, clock);
   return s;
@@ -544,10 +687,10 @@ inline FrqPars frq_derive(double K, double v, double sv, double h,
 // particles.  The key is exactly the beta quantile's arguments, so a rate that
 // varies per trial does not multiply the number of inversions.
 struct FrqCacheKey {
-  std::uint64_t bits[4];
+  std::uint64_t bits[5];
 
   bool operator==(const FrqCacheKey& other) const {
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
       if (bits[i] != other.bits[i]) return false;
     }
     return true;
@@ -557,7 +700,7 @@ struct FrqCacheKey {
 struct FrqCacheKeyHash {
   std::size_t operator()(const FrqCacheKey& key) const {
     std::size_t h = 0;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
       h ^= std::hash<std::uint64_t>{}(key.bits[i]) +
            static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) +
            (h << 6) + (h >> 2);
@@ -584,13 +727,15 @@ struct FrqCache {
   // std::unordered_map is node-based, so a reference handed out here survives
   // later insertions; only clear() invalidates it, and that runs between
   // particles, outside any evaluator call.
-  const FrqAvail& get(double K, double cv, double h, double plo) {
+  const FrqAvail& get(double K, double cv, double h, double plo,
+                      double omega = 0.0) {
     const FrqCacheKey key{{frq_cache_bits(K), frq_cache_bits(cv),
-                           frq_cache_bits(h), frq_cache_bits(plo)}};
+                           frq_cache_bits(h), frq_cache_bits(plo),
+                           frq_cache_bits(omega)}};
     const auto found = entries.find(key);
     if (found != entries.end()) return found->second;
     const auto inserted = entries.emplace(
-      key, frq_derive_avail(K, cv, h, plo));
+      key, frq_derive_avail(K, cv, h, plo, omega));
     return inserted.first->second;
   }
 };
@@ -716,6 +861,119 @@ inline double frq_log_ibeta(double x, double omx, double log_x, double log_omx,
 }
 
 // ---------------------------------------------------------------------------
+// Excess-criterion components (see FrqOmega).  One criterion shape Kc per
+// call; the mixers combine the main and low thresholds with plo.
+// ---------------------------------------------------------------------------
+
+inline FrqOmComp frq_omega_beta_comp(double log_q, double log_omq, double Kc,
+                                     double beta, double lb_c, bool unit_c,
+                                     double lb_c1, const FrqOmega& w,
+                                     int want) {
+  FrqOmComp out;
+  const double q = std::exp(log_q), omq = std::exp(log_omq);
+  const double log_rq = w.log_r + log_q, rq = std::exp(log_rq);
+  // 1 - r q = s + r (1 - q), with no cancellation.
+  const double log_omrq = frq_logaddexp(w.log_s, w.log_r + log_omq);
+  const double omrq = std::exp(log_omrq);
+  const double lead = (1.0 - Kc) * w.log_r;
+  if (want & (FRQ_OM_F | FRQ_OM_S)) {
+    const double T = lead + beta * (log_omq - log_omrq) +
+      frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc, beta, lb_c);
+    out.lS = frq_logaddexp(frq_log_ibeta(omq, q, log_omq, log_q, beta, Kc, lb_c),
+                           T);
+    if (want & FRQ_OM_F) {
+      const double lI = frq_log_ibeta(q, omq, log_q, log_omq, Kc, beta, lb_c);
+      out.lF = (T < lI) ? lI + frq_log1mexp(T - lI) : frq_log1mexp(out.lS);
+    }
+  }
+  if (want & FRQ_OM_FD) {
+    double lf = w.log_s + lead + std::log(beta) - (beta + 1.0) * log_omrq;
+    if (beta != 1.0) lf += (beta - 1.0) * log_omq;
+    if (!unit_c)
+      lf += frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc - 1.0, beta + 1.0,
+                          lb_c1);
+    out.lf = lf;
+  }
+  return out;
+}
+
+// log P(a, z) and log Q(a, z); closed form at a = 1.
+inline void frq_omega_pgamma(double a, double z, double log_z, double lga,
+                             double* lp, double* lq) {
+  if (a == 1.0) {
+    if (lp) *lp = frq_log1mexp(-z);
+    if (lq) *lq = -z;
+    return;
+  }
+  gamma_log_pq_fast(a, z, log_z, lga, lp, lq);
+}
+
+inline FrqOmComp frq_omega_pois_comp(double X, double log_X, double Kc,
+                                     double lg_c, bool unit_c, double lg_c1,
+                                     const FrqOmega& w, int want) {
+  FrqOmComp out;
+  const double lead = (1.0 - Kc) * w.log_r;
+  if (!(X > 0.0)) {
+    out.lF = R_NegInf;
+    out.lS = 0.0;
+    out.lf = unit_c ? w.log_s + lead : R_NegInf;
+    return out;
+  }
+  const double log_rX = w.log_r + log_X, rX = std::exp(log_rX);
+  if (want & (FRQ_OM_F | FRQ_OM_S)) {
+    double lPr, lP, lQ;
+    frq_omega_pgamma(Kc, rX, log_rX, lg_c, &lPr, nullptr);
+    frq_omega_pgamma(Kc, X, log_X, lg_c, &lP, &lQ);
+    const double T = lead - w.s * X + lPr;
+    out.lS = frq_logaddexp(lQ, T);
+    if (want & FRQ_OM_F)
+      out.lF = (T < lP) ? lP + frq_log1mexp(T - lP) : frq_log1mexp(out.lS);
+  }
+  if (want & FRQ_OM_FD) {
+    double lf = w.log_s + lead - w.s * X;
+    if (!unit_c) {
+      double lP1;
+      frq_omega_pgamma(Kc - 1.0, rX, log_rX, lg_c1, &lP1, nullptr);
+      lf += lP1;
+    }
+    out.lf = lf;
+  }
+  return out;
+}
+
+inline FrqOmComp frq_omega_mix(const FrqOmComp& m, const FrqOmComp& l,
+                               const FrqLow& L, int want) {
+  FrqOmComp out;
+  if (want & FRQ_OM_F) out.lF = frq_low_mix(m.lF, l.lF, L);
+  if (want & FRQ_OM_S) out.lS = frq_low_mix(m.lS, l.lS, L);
+  if (want & FRQ_OM_FD) out.lf = frq_low_mix(m.lf, l.lf, L);
+  return out;
+}
+
+inline FrqOmComp frq_omega_mix_beta(double log_q, double log_omq, double K,
+                                    double beta, double lb, const FrqLow& L,
+                                    const FrqOmega& w, int want) {
+  const FrqOmComp m = frq_omega_beta_comp(log_q, log_omq, K, beta, lb,
+                                          w.main_unit, w.lb_main1, w, want);
+  if (!L.active) return m;
+  const FrqOmComp l = frq_omega_beta_comp(log_q, log_omq, L.K_lo, beta,
+                                          L.lbeta_lo, w.lo_unit, w.lb_lo1, w,
+                                          want);
+  return frq_omega_mix(m, l, L, want);
+}
+
+inline FrqOmComp frq_omega_mix_pois(double X, double log_X, double K,
+                                    double lgK, const FrqLow& L,
+                                    const FrqOmega& w, int want) {
+  const FrqOmComp m = frq_omega_pois_comp(X, log_X, K, lgK, w.main_unit,
+                                          w.lb_main1, w, want);
+  if (!L.active) return m;
+  const FrqOmComp l = frq_omega_pois_comp(X, log_X, L.K_lo, L.lgamma_lo,
+                                          w.lo_unit, w.lb_lo1, w, want);
+  return frq_omega_mix(m, l, L, want);
+}
+
+// ---------------------------------------------------------------------------
 // Log density / CDF / survivor of the DECISION time x = rt - t0.  Callers are
 // responsible for subtracting t0; x <= 0 is handled here so that the race
 // kernels can pass a negative x without branching.
@@ -786,6 +1044,20 @@ inline double frq_log_pdf_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NegInf;
   if (!(x > 0.0)) return R_NegInf;
   if (!R_FINITE(x)) return R_NegInf;   // no atom at infinity in the density
+  if (s.om.active) {
+    double lp;
+    if (s.poisson) {
+      const FrqPoissonArg a = frq_poisson_arg(x, s);
+      if (!(a.X > 0.0) || !R_FINITE(a.X)) return R_NegInf;
+      lp = frq_omega_mix_pois(a.X, std::log(a.X), s.alpha, s.lgamma_K, s.lo,
+                              s.om, FRQ_OM_FD).lf + a.log_dX;
+    } else {
+      const FrqState z = frq_state(x, s);
+      lp = frq_omega_mix_beta(z.log_q, z.log_omq, s.alpha, s.beta, s.lbeta_val,
+                              s.lo, s.om, FRQ_OM_FD).lf + s.log_p + z.log_g;
+    }
+    return ISNAN(lp) ? R_NegInf : lp;
+  }
   if (s.poisson) return frq_poisson_log_pdf(x, s);
   const FrqState z = frq_state(x, s);
   double lp;
@@ -808,6 +1080,19 @@ inline double frq_log_cdf_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NegInf;
   if (!(x > 0.0)) return R_NegInf;
   if (!R_FINITE(x)) return std::log(s.h);   // F(Inf) = h by construction
+  if (s.om.active) {
+    double out;
+    if (s.poisson) {
+      const FrqPoissonArg a = frq_poisson_arg(x, s);
+      out = frq_omega_mix_pois(a.X, std::log(a.X), s.alpha, s.lgamma_K, s.lo,
+                               s.om, FRQ_OM_F).lF;
+    } else {
+      const FrqState z = frq_state(x, s);
+      out = frq_omega_mix_beta(z.log_q, z.log_omq, s.alpha, s.beta,
+                               s.lbeta_val, s.lo, s.om, FRQ_OM_F).lF;
+    }
+    return ISNAN(out) ? R_NegInf : out;
+  }
   if (s.poisson) {
     const double out = frq_poisson_log_tail(x, s, true);
     return ISNAN(out) ? R_NegInf : out;
@@ -831,6 +1116,19 @@ inline double frq_log_surv_dt(double x, const FrqPars& s) {
   if (!s.ok) return R_NaN;             // caller distinguishes bad from certain
   if (!(x > 0.0)) return 0.0;
   if (!R_FINITE(x)) return std::log1p(-s.h);
+  if (s.om.active) {
+    double out;
+    if (s.poisson) {
+      const FrqPoissonArg a = frq_poisson_arg(x, s);
+      out = frq_omega_mix_pois(a.X, std::log(a.X), s.alpha, s.lgamma_K, s.lo,
+                               s.om, FRQ_OM_S).lS;
+    } else {
+      const FrqState z = frq_state(x, s);
+      out = frq_omega_mix_beta(z.log_q, z.log_omq, s.alpha, s.beta,
+                               s.lbeta_val, s.lo, s.om, FRQ_OM_S).lS;
+    }
+    return ISNAN(out) ? R_NaN : out;
+  }
   if (s.poisson) {
     const double out = frq_poisson_log_tail(x, s, false);
     return ISNAN(out) ? R_NaN : out;
@@ -914,8 +1212,11 @@ inline double frq_accel_log_surv_dt(double u, const FrqPars& s, double a) {
 // on K only through alpha and lgamma(K) (sv = 0) or lbeta(K, beta) (sv > 0),
 // and a K that changes per row (a trend) updates those instead of
 // re-deriving.  The rate half is K-free.
+// The excess criterion's K - 1 terms are not refreshed here, so an active
+// omega always re-derives.
 inline bool frq_proper_k_update(const FrqAvail& a, double K) {
-  return a.ok && a.h == 1.0 && K >= FRQ_SHAPE_MIN && R_FINITE(K);
+  return a.ok && a.h == 1.0 && !a.om.active && K >= FRQ_SHAPE_MIN &&
+         R_FINITE(K);
 }
 
 template <class S>
@@ -942,10 +1243,10 @@ struct FrqMemo {
   // without a re-derive.  The memo owns its copies rather than pointing into
   // the shared cache, so its lifetime is independent of when that is cleared.
   struct Slot {
-    double K = R_NaN, cv = R_NaN, h = R_NaN, plo = R_NaN;
+    double K = R_NaN, cv = R_NaN, h = R_NaN, plo = R_NaN, omega = R_NaN;
     FrqAvail avail;
-    bool matches(double k, double c, double hh, double d) const {
-      return k == K && c == cv && hh == h && d == plo;
+    bool matches(double k, double c, double hh, double d, double o) const {
+      return k == K && c == cv && hh == h && d == plo && o == omega;
     }
   };
   Slot slot[2];
@@ -956,40 +1257,41 @@ struct FrqMemo {
   explicit FrqMemo(FrqCache* shared_cache = nullptr) : shared(shared_cache) {}
 
   const FrqPars& get(double k, double vv, double sv, double hh,
-                     double d = 0.0, double cu = 1.0) {
-    return get_cv(k, vv, frq_rate_cv(sv, vv), hh, d, cu);
+                     double d = 0.0, double cu = 1.0, double o = 0.0) {
+    return get_cv(k, vv, frq_rate_cv(sv, vv), hh, d, cu, o);
   }
 
   // The same state from the rate CV c = sv / v directly (the cv chart).
   const FrqPars& get_cv(double k, double vv, double c, double hh,
-                        double d = 0.0, double cu = 1.0) {
+                        double d = 0.0, double cu = 1.0, double o = 0.0) {
     // NaN never compares equal, so a NaN parameter always re-derives, and the
     // NaN-initialised keys make the first call always miss.
     Slot& s0 = slot[cur];
-    if (!s0.matches(k, c, hh, d)) {
+    if (!s0.matches(k, c, hh, d, o)) {
       Slot& s1 = slot[cur ^ 1];
-      if (c == s0.cv && hh == s0.h && d == s0.plo &&
+      if (c == s0.cv && hh == s0.h && d == s0.plo && o == s0.omega &&
           frq_proper_k_update(s0.avail, k)) {
         s0.K = k;
         const double lg = frq_proper_k_term(s0.avail, k);
         frq_set_proper_k(s0.avail, k, lg);
         frq_set_proper_k(value, k, lg);
         if (vv == v && cu == clock) return value;
-      } else if (s1.matches(k, c, hh, d)) {
+      } else if (s1.matches(k, c, hh, d, o)) {
         cur ^= 1;
         frq_copy_avail(value, s1.avail);
       } else {
         cur ^= 1;
-        if (c == s1.cv && hh == s1.h && d == s1.plo &&
+        if (c == s1.cv && hh == s1.h && d == s1.plo && o == s1.omega &&
             frq_proper_k_update(s1.avail, k)) {
           s1.K = k;
           frq_set_proper_k(s1.avail, k, frq_proper_k_term(s1.avail, k));
         } else {
-          s1.K = k; s1.cv = c; s1.h = hh; s1.plo = d;
+          s1.K = k; s1.cv = c; s1.h = hh; s1.plo = d; s1.omega = o;
           // h = 1 needs no beta quantile, so the derive is cheaper than a
           // shared-cache lookup and insert.
-          if (shared != nullptr && hh != 1.0) s1.avail = shared->get(k, c, hh, d);
-          else frq_derive_avail_into(s1.avail, k, c, hh, d);
+          if (shared != nullptr && hh != 1.0)
+            s1.avail = shared->get(k, c, hh, d, o);
+          else frq_derive_avail_into(s1.avail, k, c, hh, d, o);
         }
         frq_copy_avail(value, s1.avail);
       }

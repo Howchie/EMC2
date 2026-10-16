@@ -329,7 +329,7 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(m$type, "RACE")
   expect_equal(m$c_name, "FRQ")
   expect_equal(names(m$p_types),
-               c("K", "v", "sv", "h", "t0", "plo", "clock",
+               c("K", "v", "sv", "h", "t0", "plo", "clock", "omega",
                  "pContaminant", "pGuess"))
   expect_equal(m$p_types_canonical, c("K", "v", "sv", "h", "t0"))
   expect_equal(unname(m$transform$func[c("K", "v", "sv", "h", "t0",
@@ -347,8 +347,10 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(unname(m$bound$minmax[, "sv"]), c(1e-4, Inf))
   expect_equal(unname(m$bound$minmax[, "plo"]), c(1e-6, 1))
   expect_equal(unname(m$bound$minmax[, "clock"]), c(1e-4, Inf))
-  expect_equal(unname(m$bound$exception[c("sv", "plo", "clock", "h")]),
-               c(0, 0, 0, 1))
+  expect_equal(unname(m$bound$exception[c("sv", "plo", "clock", "h", "omega")]),
+               c(0, 0, 0, 1, 0))
+  expect_equal(exp(m$p_types[["omega"]]), 0)
+  expect_equal(unname(m$bound$minmax[, "omega"]), c(1e-4, Inf))
   expect_false("K" %in% names(m$bound$exception))
   expect_identical(names(formals(FRQ)), "parameterization")
 })
@@ -1153,5 +1155,120 @@ test_that("a sampled K links to its bound and a constant K keeps the log link", 
   expect_equal(lower_K(), 2)
   expect_equal(lower_K(constants = c(K = log(3))), 0)
   expect_equal(lower_K(bound = list(minmax = cbind(K = c(1, Inf)))), 1)
+})
+
+test_that("the geometric criterion excess omega has its closed forms", {
+  Fq <- function(q, K, b, w) {
+    r <- w / (1 + w)
+    pbeta(q, K, b) - r^(1 - K) * ((1 - q) / (1 - r * q))^b * pbeta(r * q, K, b)
+  }
+  FP <- function(M, K, w) {
+    r <- w / (1 + w)
+    pgamma(M, K) - r^(1 - K) * exp(-M / (1 + w)) * pgamma(r * M, K)
+  }
+  u <- c(0.02, 0.1, 0.3, 0.7, 1.5, 4)
+  K <- 2.5; v <- 5; cv <- 0.4; b <- cv^-2; sv <- cv * v; w <- 1.3
+  x <- (v / b) * u
+  q <- x / (1 + x)
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, omega = w), Fq(q, K, b, w),
+               tolerance = 1e-12)
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, omega = w, lower_tail = FALSE),
+               1 - Fq(q, K, b, w), tolerance = 1e-12)
+  expect_equal(EMC2:::pfrq(u, K, v, 0, 1, omega = w), FP(v * u, K, w),
+               tolerance = 1e-12)
+  # The low state's criterion is (1 + omega) Y_1.
+  r <- w / (1 + w)
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, plo = 0.3, omega = w),
+               0.7 * Fq(q, K, b, w) + 0.3 * (1 - ((1 - q) / (1 - r * q))^b),
+               tolerance = 1e-12)
+  # The criterion integral itself, by quadrature.
+  J_cdf <- function(m) integrate(function(y) dgamma(y, K - 1) *
+                                   pexp(pmax(m - y, 0) / (1 + w)), 0, m,
+                                 rel.tol = 1e-12)$value
+  expect_equal(EMC2:::pfrq(0.4, K, v, 0, 1, omega = w), J_cdf(2), tolerance = 1e-9)
+
+  # h < 1: p (or E) solves F(Inf) = h.
+  g <- EMC2:::frq_rate(K, v, sv, 0.8, omega = w)
+  xh <- g[, "lambda"] * u
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 0.8, omega = w),
+               Fq(g[, "p"] * xh / (1 + xh), K, b, w), tolerance = 1e-12)
+  g0 <- EMC2:::frq_rate(K, v, 0, 0.8, omega = w)
+  expect_equal(unname(FP(g0[, "Etot"], K, w)), 0.8, tolerance = 1e-12)
+
+  expect_identical(EMC2:::pfrq(u, K, v, sv, 0.9, plo = 0.2, omega = 0),
+                   EMC2:::pfrq(u, K, v, sv, 0.9, plo = 0.2))
+  expect_identical(EMC2:::dfrq(u, K, v, sv, 0.9, omega = 0),
+                   EMC2:::dfrq(u, K, v, sv, 0.9))
+
+  for (cs in list(c(sv, 1, 0, 0, 1), c(sv, 0.85, 0.3, 0, 1),
+                  c(0, 0.85, 0.3, 0, 1), c(sv, 0.85, 0.3, 1.7, 1),
+                  c(sv, 0.85, 0.3, 0, 0), c(12, 0.7, 0, 0, 1))) {
+    f <- function(t) EMC2:::dfrq(t, K, v, cs[1], cs[2], plo = cs[3],
+                                 accel = cs[4], clock = cs[5], omega = w)
+    Fa <- function(t, lt = TRUE) EMC2:::pfrq(t, K, v, cs[1], cs[2], plo = cs[3],
+                                             accel = cs[4], clock = cs[5],
+                                             omega = w, lower_tail = lt)
+    expect_equal(integrate(f, 0, Inf, rel.tol = 1e-11, subdivisions = 1000)$value,
+                 cs[2], tolerance = 1e-9)
+    expect_equal(Fa(Inf), cs[2])
+    expect_equal((Fa(u + 1e-6) - Fa(u - 1e-6)) / 2e-6, f(u), tolerance = 1e-6)
+    expect_equal(Fa(u) + Fa(u, FALSE), rep(1, length(u)), tolerance = 1e-14)
+  }
+
+  # Both simulators against the CDF, with omissions and the low state.
+  n <- 4e4
+  qs <- c(0.2, 0.5, 1, 2, 4)
+  m <- FRQ()
+  for (cs in list(c(sv, 0.8, 0.2), c(0, 0.8, 0.2))) {
+    P <- cbind(K = K, v = v, sv = cs[1], h = cs[2], t0 = 0.1, plo = cs[3],
+               omega = w)[rep(1, n), ]
+    attr(P, "ok") <- rep(TRUE, n)
+    Fz <- EMC2:::pfrq(qs, K, v, cs[1], cs[2], plo = cs[3], omega = w)
+    ec <- function(s) vapply(qs, function(z) mean(is.finite(s$rt) & s$rt - 0.1 <= z),
+                             numeric(1))
+    set.seed(3); sc <- m$rfun(data.frame(lR = factor(rep("a", n))), P)
+    expect_equal(ec(sc), Fz, tolerance = 0.015)
+    op <- options(emc2.cpp_rfun = FALSE)
+    set.seed(3); sr <- m$rfun(data.frame(lR = factor(rep("a", n))), P)
+    options(op)
+    expect_equal(ec(sr), Fz, tolerance = 0.015)
+  }
+
+  # The compiled race likelihood, and a design without an omega column (as in
+  # a fit saved before omega existed) reads omega = 0.
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  dat <- dat[seq_len(80), ]
+  mk <- function(model, f, trunc) {
+    d <- dat
+    if (trunc) { d$LT <- 0.2; d$UT <- 1.5; d <- d[d$rt >= 0.2 & d$rt <= 1.5, ] }
+    des <- suppressMessages(design(data = d, model = model, matchfun = matchfun,
+                                   formula = f, report_p_vector = FALSE))
+    list(des = des, emc = suppressMessages(make_emc(d, des, type = "single",
+      n_chains = 1, compress = FALSE, rt_resolution = NULL)))
+  }
+  f <- list(K ~ 1, v ~ 0 + lM, sv ~ 1, h ~ lM, t0 ~ 1, plo ~ 1, omega ~ 1)
+  A <- mk(FRQ, f, FALSE)
+  pa <- sampled_pars(A$des)
+  pa[] <- c(log(1.5), log(4), log(2.5), log(1.5), qnorm(0.9), 0.4, log(0.15),
+            qnorm(0.1), log(0.8))
+  dadm <- A$emc[[1]]$data[[1]]
+  pars <- EMC2:::get_pars_matrix_oo(pa, dadm, A$emc[[1]]$model())
+  expect_equal(frq_ll(A$emc, pa), ref_race_ll(dadm, pars), tolerance = 1e-10)
+  no_omega <- function() {
+    m <- FRQ()
+    m$p_types <- m$p_types[names(m$p_types) != "omega"]
+    m$transform$func <- m$transform$func[names(m$transform$func) != "omega"]
+    m$bound$minmax <- m$bound$minmax[, colnames(m$bound$minmax) != "omega"]
+    m$bound$exception <- m$bound$exception[names(m$bound$exception) != "omega"]
+    m
+  }
+  for (trunc in c(FALSE, TRUE)) {
+    O <- mk(no_omega, f[-7], trunc)
+    N <- mk(FRQ, f[-7], trunc)
+    p0 <- pa[names(sampled_pars(O$des))]
+    expect_identical(frq_ll(O$emc, p0), frq_ll(N$emc, p0))
+  }
 })
 

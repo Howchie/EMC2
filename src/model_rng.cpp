@@ -1277,6 +1277,37 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 static double frq_draw_decision(const FrqPars& s) {
   const bool low = s.lo.active && R::unif_rand() < s.lo.plo;
   const double k = low ? s.lo.K_lo : s.alpha;
+  if (s.om.active) {
+    // Excess criterion J = Y_{k-1} + (1 + omega) Y_1, drawn directly.  The
+    // counter crosses J when its cumulative intensity W phi(x) reaches it.
+    const bool unit = low ? s.om.lo_unit : s.om.main_unit;
+    const double J = (unit ? 0.0 : R::rgamma(k - 1.0, 1.0)) +
+      (1.0 + s.om.omega) * R::exp_rand();
+    double d;
+    if (s.poisson) {
+      if (s.h == 1.0) {
+        d = J / s.v;
+      } else {
+        if (!(J < s.E)) return R_PosInf;       // evidence exhausted: omission
+        d = frq_registration_inv(J / s.E, s);
+      }
+      return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+    }
+    // log W ~ log Gamma(beta), drawn as Gamma(beta + 1) U^{1/beta} so that a
+    // small beta cannot underflow it.  1 - q(x) = W / (J + W) at the crossing.
+    const double lW = std::log(R::rgamma(s.beta + 1.0, 1.0)) +
+      std::log(R::unif_rand()) / s.beta;
+    const double lJ = std::log(J);
+    const double lw = lW - frq_logaddexp(lJ, lW);
+    if (s.h < 1.0 && !(lw > s.log_om_p)) return R_PosInf;
+    double log_sr = (s.h < 1.0) ? lw + frq_log1mexp(s.log_om_p - lw) - s.log_p
+                                : lw;
+    if (ISNAN(log_sr) || log_sr == R_NegInf)
+      log_sr = std::log(std::numeric_limits<double>::min());
+    if (log_sr > 0.0) log_sr = 0.0;
+    d = frq_registration_inv_logsurv(log_sr, s);
+    return (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+  }
   if (s.poisson) {
     const double y = R::rgamma(k, 1.0);
     double d;
@@ -1350,6 +1381,8 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int icu = ci.count("clock") ? ci.at("clock") : -1;
   // The accel chart's clock acceleration; absent means a = 0.
   const int iac = ci.count("accel") ? ci.at("accel") : -1;
+  // The excess criterion; absent means omega = 0.
+  const int iom = ci.count("omega") ? ci.at("omega") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1364,7 +1397,8 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     }
     const FrqPars& s = memo.get(pars(r, ik), pars(r, iv), pars(r, isv),
                                 pars(r, ih), ipl >= 0 ? pars(r, ipl) : 0.0,
-                                icu >= 0 ? pars(r, icu) : 1.0);
+                                icu >= 0 ? pars(r, icu) : 1.0,
+                                iom >= 0 ? pars(r, iom) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes
     if (iac < 0) { dt[r] = frq_draw_decision(s); continue; }
     const double a = pars(r, iac);

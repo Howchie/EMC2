@@ -54,7 +54,8 @@ dFRQ <- function(rt, pars) {
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
-                    accel = .frq_opt(pars, ok, "accel", 0))
+                    accel = .frq_opt(pars, ok, "accel", 0),
+                    omega = .frq_opt(pars, ok, "omega", 0))
   }
   out
 }
@@ -72,7 +73,8 @@ pFRQ <- function(rt, pars) {
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
-                    accel = .frq_opt(pars, ok, "accel", 0))
+                    accel = .frq_opt(pars, ok, "accel", 0),
+                    omega = .frq_opt(pars, ok, "omega", 0))
   }
   out
 }
@@ -92,6 +94,7 @@ sFRQ <- function(rt, pars) {
                     plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
                     accel = .frq_opt(pars, ok, "accel", 0),
+                    omega = .frq_opt(pars, ok, "omega", 0),
                     lower_tail = FALSE)
   }
   out
@@ -159,10 +162,14 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 .frq_draw_dt <- function(p) {
   pl <- if ("plo" %in% colnames(p)) p[, "plo"] else rep(0, nrow(p))
   cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
-  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], pl, cu)
+  om <- if ("omega" %in% colnames(p)) p[, "omega"] else rep(0, nrow(p))
+  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], pl, cu, om)
   valid <- !is.na(g[, "p"])
-  pois <- valid & !is.finite(g[, "beta"])
-  beta_r <- valid & !pois
+  # Rows with an excess criterion are drawn last, so omega = 0 rows consume
+  # the same uniforms as the base model.
+  exc <- valid & om > 0
+  pois <- valid & !exc & !is.finite(g[, "beta"])
+  beta_r <- valid & !exc & !pois
   # Threshold per row: K_lo = 1 in the low state.  The draw is made only where
   # plo > 0, so the base model consumes the same uniforms as before.
   kk <- p[, "K"]
@@ -197,6 +204,40 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
     hit[i[j][live]] <- .frq_clock_inv(log1p(-Y[j][live] / g[i[j], "Etot"][live]),
                                       g[i[j], "lambda"][live],
                                       cu[i[j]][live])
+  }
+  if (any(exc)) {
+    # J = Y_{k-1} + (1 + omega) Y_1, crossed when W phi(x) reaches J.
+    i <- which(exc)
+    k1 <- kk[i] - 1
+    J <- ifelse(k1 >= 1e-10, rgamma(length(i), pmax(k1, 1e-10)), 0) +
+      (1 + om[i]) * rexp(length(i))
+    full <- p[i, "h"] == 1
+    pe <- !is.finite(g[i, "beta"])
+    if (any(pe)) {
+      j <- which(pe)
+      hit[i[j][full[j]]] <- J[j][full[j]] / p[i[j][full[j]], "v"]
+      jj <- j[!full[j] & J[j] < g[i[j], "Etot"]]
+      hit[i[jj]] <- .frq_clock_inv(log1p(-J[jj] / g[i[jj], "Etot"]),
+                                   g[i[jj], "lambda"], cu[i[jj]])
+    }
+    if (any(!pe)) {
+      j <- which(!pe)
+      b <- g[i[j], "beta"]
+      lW <- log(rgamma(length(j), b + 1)) + log(runif(length(j))) / b
+      lJ <- log(J[j])
+      lw <- lW - (pmax(lJ, lW) + log1p(exp(-abs(lJ - lW))))
+      log_om_p <- g[i[j], "log1mp"]
+      live <- full[j] | lw > log_om_p
+      floor <- log(.Machine$double.xmin)
+      log_sr <- lw
+      d <- !full[j] & live
+      log_sr[d] <- lw[d] + .frq_log1mexp(log_om_p[d] - lw[d]) -
+        log(g[i[j], "p"][d])
+      log_sr[!is.finite(log_sr)] <- floor
+      log_sr <- pmin(log_sr, 0)
+      hit[i[j][live]] <- .frq_clock_inv(log_sr[live], g[i[j], "lambda"][live],
+                                        cu[i[j]][live])
+    }
   }
   if ("accel" %in% colnames(p)) {
     # Operational time back to physical time, u = log1p(a x) / a.
@@ -270,9 +311,10 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' | *t0* | log | \[0.05, Inf\] or 0 | log(0) | | Non-decision time |
 #' | *plo* | probit | \[1e-6, 1\] or 0 | qnorm(0) | | Probability of the low-threshold state |
 #' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
+#' | *omega* | log | \[1e-4, Inf\] or 0 | log(0) | | Geometric excess of the last criterion unit |
 #'
-#' The values `sv = 0`, `h = 1`, `t0 = 0`, `plo = 0` and
-#' `clock = 0` are exact bound exceptions and can be set as constants.
+#' The values `sv = 0`, `h = 1`, `t0 = 0`, `plo = 0`, `clock = 0` and
+#' `omega = 0` are exact bound exceptions and can be set as constants.
 #' `K` is real-valued. A sampled `K` is `2 + exp(x)`; its link follows the
 #' lower bound, so a `bound` argument to [design()] moves both. A constant `K`
 #' uses the plain log link.
@@ -315,6 +357,18 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' clock. `p` is solved from
 #' `h = (1 - plo) * I_p(K, beta) + plo * I_p(1, beta)` by a bracketed root
 #' search when `h < 1`.
+#'
+#' With `omega > 0` the criterion is `J = Y_(K-1) + (1 + omega) * Y_1`, with
+#' independent `Y_(K-1) ~ Gamma(K - 1)` and `Y_1 ~ Exp(1)`, in place of
+#' `Y_K ~ Gamma(K)`. With `r = omega / (1 + omega)`,
+#'
+#' `F(u) = I_q(u)(K, beta) - r^(1 - K) * ((1 - q) / (1 - r q))^beta * I_(r q)(K, beta)`,
+#'
+#' and `F(u) = P_K(X) - r^(1 - K) * exp(-X / (1 + omega)) * P_K(r X)` at
+#' `sv = 0`, with `X = v u` (`h = 1`) or `E * G(u)`. The low state's criterion
+#' is `(1 + omega) * Y_1`. `omega > 0` requires `K >= 1`. For `h < 1`, `p` (or
+#' `E`) is solved from `h = F(Inf)` by a bracketed root search. `omega` is
+#' available in every parameterization.
 #'
 #' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
 #' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
@@ -376,9 +430,11 @@ FRQ <- function(parameterization = c("sv", "cv", "accel")) {
                # No low-threshold state.
                "plo" = qnorm(0),
                # A constant-rate evidence clock (no acceleration).
-               "ck" = if (accel) log(0) else log(1))
+               "ck" = if (accel) log(0) else log(1),
+               # No excess criterion.
+               "omega" = log(0))
   transform <- c(K = "exp", v = "exp", rv = "exp", h = "pnorm", t0 = "exp",
-                 plo = "pnorm", ck = "exp")
+                 plo = "pnorm", ck = "exp", omega = "exp")
   # sv (or cv) has no upper bound: sv > v (beta < 1) is a valid, very variable
   # rate, and the kernel solves 1 - p from its own quantile.  Its lower guard
   # keeps a sampled value off the exact zero branch, which is reachable as a
@@ -386,11 +442,11 @@ FRQ <- function(parameterization = c("sv", "cv", "accel")) {
   # The free h upper bound stops short of one so that a sampler can keep a
   # finite defective mass; h = 1 is reachable through the exception.
   # plo's lower guard keeps a sampled value off the exact plo = 0 base model,
-  # which is reachable as a constant; likewise clock's and accel's.
+  # which is reachable as a constant; likewise clock's, accel's and omega's.
   minmax <- cbind(K = c(2, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
                   h = c(1e-6, 1), t0 = c(0.05, Inf), plo = c(1e-6, 1),
-                  ck = c(1e-4, Inf))
-  exception <- c(t0 = 0, plo = 0, ck = 0, h = 1, rv = 0)
+                  ck = c(1e-4, Inf), omega = c(1e-4, Inf))
+  exception <- c(t0 = 0, plo = 0, ck = 0, h = 1, rv = 0, omega = 0)
   .rn <- function(x) { x[x == "rv"] <- rv; x[x == "ck"] <- ck; x }
   names(p_types) <- .rn(names(p_types))
   names(transform) <- .rn(names(transform))
@@ -416,8 +472,9 @@ FRQ <- function(parameterization = c("sv", "cv", "accel")) {
       # path (see src/utils.h); the kernel derives the same quantities itself.
       pl <- if ("plo" %in% colnames(pars)) pars[, "plo"] else rep(0, nrow(pars))
       cu <- if ("clock" %in% colnames(pars)) pars[, "clock"] else rep(1, nrow(pars))
+      om <- if ("omega" %in% colnames(pars)) pars[, "omega"] else rep(0, nrow(pars))
       sv <- .frq_sv(pars)
-      g <- frq_rate(pars[, "K"], pars[, "v"], sv, pars[, "h"], pl, cu)
+      g <- frq_rate(pars[, "K"], pars[, "v"], sv, pars[, "h"], pl, cu, om)
       # Built as a bare matrix first: cbind()ing named scalars onto a one-row
       # `pars` makes R invent row names from the argument names, which would
       # then travel with the parameter matrix.

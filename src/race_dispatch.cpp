@@ -257,6 +257,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = true;
     out.ctx.supports_batched_defective_truncation = true;
     out.ctx.frq_cache = std::make_shared<FrqCache>();
+    out.ctx.frq_omega_by_name = true;
   } else if (type_std.find("BTAwL_SEPARATE") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_local_race_scalar;
     out.cdf1_ptr       = &pbtawl_local_race_scalar;
@@ -712,6 +713,18 @@ void configure_rdmswtn_corr_context(
   if (adapter.ctx.kill_active) {
     Rcpp::stop("%s: correlated RDMSWTN does not support guess or kill clocks.",
                caller.c_str());
+  }
+}
+
+void configure_frq_omega_context(RaceModelAdapter& adapter,
+                                 const Rcpp::CharacterVector& keep_names) {
+  adapter.ctx.frq_omega_index = -1;
+  if (!adapter.ctx.frq_omega_by_name) return;
+  for (int j = 0; j < keep_names.size(); ++j) {
+    if (Rcpp::as<std::string>(keep_names[j]) == "omega") {
+      adapter.ctx.frq_omega_index = j;
+      return;
+    }
   }
 }
 
