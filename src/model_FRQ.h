@@ -863,6 +863,48 @@ inline double frq_cdf_natural_dt(double x, const FrqPars& s) {
   return (out > 1.0) ? 1.0 : out;
 }
 
+// ---------------------------------------------------------------------------
+// Accelerating clock (the accel chart).  The FRQ state runs on the operational
+// time A(u) = (e^{a u} - 1) / a (A(u) = u at a = 0), so its input intensity
+// is multiplied by e^{a u}:
+//
+//   F(u) = F_s(A(u)),   f(u) = f_s(A(u)) e^{a u},   S(u) = S_s(A(u)).
+//
+// A(Inf) = Inf, so h, p and the defective mass are those of the state itself.
+// a = 0 is a branch, not a limit, so it reproduces the state bit for bit.
+// ---------------------------------------------------------------------------
+
+inline bool frq_accel_ok(double a) { return R_FINITE(a) && a >= 0.0; }
+
+inline double frq_accel_warp(double u, double a) {
+  if (a == 0.0 || !R_FINITE(u)) return u;
+  return std::expm1(a * u) / a;
+}
+
+// Physical time of an operational time x; +Inf stays an omission.
+inline double frq_accel_unwarp(double x, double a) {
+  if (a == 0.0 || !R_FINITE(x)) return x;
+  return std::log1p(a * x) / a;
+}
+
+inline double frq_accel_log_pdf_dt(double u, const FrqPars& s, double a) {
+  if (!frq_accel_ok(a)) return R_NegInf;
+  if (a == 0.0) return frq_log_pdf_dt(u, s);
+  if (!(u > 0.0) || !R_FINITE(u)) return R_NegInf;
+  const double lp = frq_log_pdf_dt(frq_accel_warp(u, a), s);
+  return (lp > R_NegInf) ? lp + a * u : R_NegInf;
+}
+
+inline double frq_accel_log_cdf_dt(double u, const FrqPars& s, double a) {
+  if (!frq_accel_ok(a)) return R_NegInf;
+  return frq_log_cdf_dt(frq_accel_warp(u, a), s);
+}
+
+inline double frq_accel_log_surv_dt(double u, const FrqPars& s, double a) {
+  if (!frq_accel_ok(a)) return R_NaN;
+  return frq_log_surv_dt(frq_accel_warp(u, a), s);
+}
+
 // Front-end memo for every call site.  It keeps the two halves on separate
 // keys, so a row that moves only the rate -- a trend or a covariate on v,
 // against constant shapes -- redoes one log rather than one beta quantile.
@@ -963,7 +1005,8 @@ struct FrqMemo {
 // Race adapters used by the particle likelihood dispatch.  Definitions live
 // in model_FRQ.cpp so this header remains safe for model_rng.cpp.  The
 // `_cv` set reads the rate CV (column "cv") where the default reads sv; the
-// layouts are otherwise identical.
+// `_accel` set reads the rate CV and the clock acceleration (column "accel")
+// in the clock's position.  The layouts are otherwise identical.
 double dfrq_scalar(double t, const double* par, void* /*ctx_*/);
 double pfrq_scalar(double t, const double* par, void* /*ctx_*/);
 void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
@@ -988,5 +1031,17 @@ void frq_cv_logS_at_t(double t, const double* const* cols,
                       int /*n_rows_total*/, int n_lR, int /*n_par*/,
                       const int* trunc_mask, int n_unique_trials,
                       const int* isok_all, void* /*ctx_*/, double* logS_out);
+double dfrq_accel_scalar(double t, const double* par, void* /*ctx_*/);
+double pfrq_accel_scalar(double t, const double* par, void* /*ctx_*/);
+void dfrq_accel_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void pfrq_accel_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void frq_accel_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* /*ctx_*/, double* logS_out);
 
 #endif  // EMC2_MODEL_FRQ_H

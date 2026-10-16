@@ -327,12 +327,12 @@ btawl_vcrit_vec <- function(k, tau, b) {
     .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
 
-dfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), log_out = FALSE, clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_dfrq`, t, K, v, sv, h, plo, log_out, clock)
+dfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), log_out = FALSE, clock = as.numeric( c(1.0)), accel = as.numeric( c(0.0))) {
+    .Call(`_EMC2_dfrq`, t, K, v, sv, h, plo, log_out, clock, accel)
 }
 
-pfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, clock = as.numeric( c(1.0))) {
-    .Call(`_EMC2_pfrq`, t, K, v, sv, h, plo, lower_tail, log_out, clock)
+pfrq <- function(t, K, v, sv, h, plo = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE, clock = as.numeric( c(1.0)), accel = as.numeric( c(0.0))) {
+    .Call(`_EMC2_pfrq`, t, K, v, sv, h, plo, lower_tail, log_out, clock, accel)
 }
 
 frq_rate <- function(K, v, sv, h, plo = as.numeric( c(0.0)), clock = as.numeric( c(1.0))) {

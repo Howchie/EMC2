@@ -478,6 +478,19 @@ namespace frq_cv {
   }
 }
 
+// R/model_FRQ.R — FRQ(parameterization = "accel"): the cv layout with the
+// clock acceleration in the clock's position (the clock shape is one).
+namespace frq_accel {
+  enum : int { K = 0, v, cv, h, t0, plo, accel, N_REQ };
+  static_assert(int(cv) == int(frq::sv) && int(accel) == int(frq::clock) &&
+                int(N_REQ) == int(frq::N_REQ),
+                "frq_accel must share frq's positions");
+  inline ColSpec spec() {
+    static const char* n[] = {"K", "v", "cv", "h", "t0", "plo", "accel"};
+    return {n, N_REQ, "FRQ_ACCEL"};
+  }
+}
+
 // R/model_FRQfade.R — FRQfade: the FRQ counter at h = 1 on the fading time
 // (1 - exp(-kappa u)) / kappa; h is derived.  plo and clock are REQUIRED
 // columns for the same positional reason as FRQ's.

@@ -4,11 +4,13 @@
 \alias{FRQ}
 \title{The Finite Reservoir Quorum Process (FRQ)}
 \usage{
-FRQ(parameterization = c("sv", "cv"))
+FRQ(parameterization = c("sv", "cv", "accel"))
 }
 \arguments{
-\item{parameterization}{Rate-variability coordinate: \code{"sv"} (the default)
-samples the rate SD \emph{sv}; \code{"cv"} samples the rate CV \emph{cv} = \emph{sv}/\emph{v}.}
+\item{parameterization}{Rate-variability and clock coordinates: \code{"sv"}
+(the default) samples the rate SD \emph{sv}; \code{"cv"} samples the rate CV
+\emph{cv} = \emph{sv}/\emph{v}; \code{"accel"} samples \emph{cv} and the clock acceleration
+\emph{accel} in place of \emph{clock}.}
 }
 \value{
 A model list defining the FRQ race model.
@@ -34,7 +36,7 @@ whenever \code{sv / v < 1e-4}. An accumulator never finishes with probability
 \code{1 - h}; a race omission has probability \code{prod(1 - h)} over accumulators.
 The derivations are in \code{Math/CounterAndQuorumModels.tex}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{K} \tab 1 + exp \tab [1, Inf] \tab log(2) (K = 3) \tab \emph{alpha} = \emph{K} \tab Event threshold \cr
+   \emph{K} \tab log \tab [2, Inf] \tab log(3) \tab \emph{alpha} = \emph{K} \tab Event threshold \cr
    \emph{v} \tab log \tab [1e-4, Inf] \tab log(6) \tab \emph{lambda} = \emph{v}/(\emph{beta} \emph{p}) \tab Mean initial input rate \cr
    \emph{sv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = (\emph{v}/\emph{sv})^2 \tab Between-trial SD of the input rate \cr
    \emph{h} \tab probit \tab [1e-6, 1] \tab qnorm(1) \tab \emph{p} = qbeta(\emph{h}, \emph{K}, \emph{beta}) \tab Probability that the accumulator ever responds \cr
@@ -44,9 +46,11 @@ The derivations are in \code{Math/CounterAndQuorumModels.tex}.\tabular{llllll}{
 }
 
 
-The values \code{K = 1}, \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{plo = 0} and
+The values \code{sv = 0}, \code{h = 1}, \code{t0 = 0}, \code{plo = 0} and
 \code{clock = 0} are exact bound exceptions and can be set as constants.
-\code{K} is real-valued.
+\code{K} is real-valued. A sampled \code{K} is \code{2 + exp(x)}; its link follows the
+lower bound, so a \code{bound} argument to \code{\link[=design]{design()}} moves both. A constant \code{K}
+uses the plain log link.
 
 \code{parameterization = "cv"} samples \emph{cv} = \emph{sv}/\emph{v}, the between-trial CV of
 the input rate, in place of \emph{sv}:\tabular{llllll}{
@@ -57,6 +61,26 @@ the input rate, in place of \emph{sv}:\tabular{llllll}{
 
 \code{cv = 0} is the same exact limit as \code{sv = 0}. At equal values of \emph{sv} and
 \emph{cv} \emph{v} the two parameterizations give the same likelihood.
+
+\code{parameterization = "accel"} samples \emph{cv} and replaces \emph{clock} by the clock
+acceleration \emph{accel}. The registration law is the \code{clock = 1} law run on the
+operational time \code{A(u) = (exp(accel * u) - 1) / accel} (\code{A(u) = u} at
+\code{accel = 0}):
+
+\code{F(u) = I_q(u)(K, beta)}, with \code{q(u) = p * x(u) / (1 + x(u))} and
+\code{x(u) = lambda * A(u)},
+
+so that the Gamma-mixed counter's intensity is \code{W * (v / beta) * exp(accel * u)} given its trial rate multiplier \code{W ~ Gamma(beta, 1)}. At
+\code{cv = 0} and \code{h = 1}, \code{F(u) = P_K(v * A(u))}. \code{h}, \code{p} and \code{plo} enter as in
+the other parameterizations, since \code{A(Inf) = Inf}.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{cv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = 1/\emph{cv}^2, \emph{sv} = \emph{cv} \emph{v} \tab Between-trial CV of the input rate \cr
+   \emph{accel} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab  \tab Exponential acceleration rate of the registration clock \cr
+}
+
+
+\code{accel = 0} gives the same likelihood as \code{parameterization = "cv"} with
+\code{clock = 1}.
 
 With \code{plo > 0} each accumulator independently commits at the low threshold
 \code{K_lo = 1} with probability \code{plo} on each trial:
@@ -69,7 +93,7 @@ search when \code{h < 1}.
 \code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
 (expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}
 at \code{h = 1}) and \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
-\code{parameterization = "cv"}).
+\code{parameterization = "cv"} or \code{"accel"}).
 
 Optional nuisance parameters are \code{pContaminant}, an omission probability
 outside the accumulators, and \code{pGuess}, a uniform-outlier probability.
@@ -94,4 +118,12 @@ design_FRQ_cv <- design(data = forstmann,
                                        t0 ~ 1),
                         contrasts = list(v = list(lM = ADmat)),
                         constants = c(h = qnorm(1)))
+# The accel parameterization.
+design_FRQ_accel <- design(data = forstmann,
+                           model = function() FRQ(parameterization = "accel"),
+                           matchfun = matchfun,
+                           formula = list(K ~ 1, v ~ lM + E, cv ~ 1,
+                                          accel ~ 1, h ~ 1, t0 ~ 1),
+                           contrasts = list(v = list(lM = ADmat)),
+                           constants = c(h = qnorm(1)))
 }

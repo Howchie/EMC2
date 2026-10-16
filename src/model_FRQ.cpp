@@ -40,19 +40,21 @@ NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector sv, NumericVector h,
                    NumericVector plo = NumericVector::create(0.0),
                    bool log_out = false,
-                   NumericVector clock = NumericVector::create(1.0)) {
+                   NumericVector clock = NumericVector::create(1.0),
+                   NumericVector accel = NumericVector::create(0.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
+  frq_check_len(accel, n, "accel");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
                                 pick(h, i), pick(plo, i), pick(clock, i));
-    const double lp = frq_log_pdf_dt(t[i], s);
+    const double lp = frq_accel_log_pdf_dt(t[i], s, pick(accel, i));
     out[i] = log_out ? lp : ((lp > R_NegInf) ? std::exp(lp) : 0.0);
   }
   return out;
@@ -67,23 +69,26 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
                    NumericVector sv, NumericVector h,
                    NumericVector plo = NumericVector::create(0.0),
                    bool lower_tail = true, bool log_out = false,
-                   NumericVector clock = NumericVector::create(1.0)) {
+                   NumericVector clock = NumericVector::create(1.0),
+                   NumericVector accel = NumericVector::create(0.0)) {
   const int n = t.size();
   frq_check_len(K, n, "K");         frq_check_len(v, n, "v");
   frq_check_len(sv, n, "sv");       frq_check_len(h, n, "h");
   frq_check_len(plo, n, "plo");
   frq_check_len(clock, n, "clock");
+  frq_check_len(accel, n, "accel");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
                                 pick(h, i), pick(plo, i), pick(clock, i));
+    const double a = pick(accel, i);
     double lp;
     if (lower_tail) {
-      lp = frq_log_cdf_dt(t[i], s);
+      lp = frq_accel_log_cdf_dt(t[i], s, a);
     } else {
-      lp = frq_log_surv_dt(t[i], s);
+      lp = frq_accel_log_surv_dt(t[i], s, a);
       if (ISNAN(lp)) lp = R_NaN;
     }
     if (ISNAN(lp)) { out[i] = R_NaN; continue; }
@@ -130,7 +135,8 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
 // ============================================================
 // FRQ (Finite Reservoir Quorum) adapters
 // Column layout: K=0, v=1, sv=2, h=3, t0=4, plo=5, clock=6; the cv chart
-// (FRQ_CV) holds the rate CV sv / v in column 2.
+// (FRQ_CV) holds the rate CV sv / v in column 2, and the accel chart
+// (FRQ_ACCEL) the rate CV in column 2 and the clock acceleration in column 6.
 // plo is the probability of the low-threshold state (zero by default) and
 // clock the registration clock shape (one by default, a constant-rate counter).
 //
@@ -143,37 +149,61 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
 // and (v, clock), which is recomputed per row for the cost of one log.
 // ============================================================
 
-// Rate-variability column: sv, or the rate CV under the cv chart.  Both
-// layouts put it at the same position.
-template <bool CV>
+// Charts sharing the column layout: column 2 holds sv (FRQ_SV) or the rate CV
+// (FRQ_CV_CHART, FRQ_ACCEL_CHART), and column 6 holds the clock shape, or the
+// clock acceleration under the accel chart (whose clock shape is one).
+enum FrqChart : int { FRQ_SV = 0, FRQ_CV_CHART = 1, FRQ_ACCEL_CHART = 2 };
+
+template <int CH>
 inline const FrqPars& frq_memo_row(FrqMemo& memo, double k, double v,
                                    double x, double h, double pl, double cu) {
-  return CV ? memo.get_cv(k, v, x, h, pl, cu) : memo.get(k, v, x, h, pl, cu);
+  if (CH == FRQ_SV) return memo.get(k, v, x, h, pl, cu);
+  return memo.get_cv(k, v, x, h, pl, CH == FRQ_ACCEL_CHART ? 1.0 : cu);
+}
+
+template <int CH>
+inline double frq_chart_log_pdf(double u, const FrqPars& s, double cu) {
+  return CH == FRQ_ACCEL_CHART ? frq_accel_log_pdf_dt(u, s, cu)
+                               : frq_log_pdf_dt(u, s);
+}
+
+template <int CH>
+inline double frq_chart_log_surv(double u, const FrqPars& s, double cu) {
+  return CH == FRQ_ACCEL_CHART ? frq_accel_log_surv_dt(u, s, cu)
+                               : frq_log_surv_dt(u, s);
+}
+
+template <int CH>
+inline double frq_chart_log_cdf(double u, const FrqPars& s, double cu) {
+  return CH == FRQ_ACCEL_CHART ? frq_accel_log_cdf_dt(u, s, cu)
+                               : frq_log_cdf_dt(u, s);
 }
 
 // The scalar entry points are called once per evaluation point, often several
 // times on one row (bin edges and midpoint), so they share a per-thread memo.
 // Its keys are the parameter values themselves, so a hit is valid across
 // particles; only a miss consults the per-particle cache.
-template <bool CV>
+template <int CH>
 static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
   static thread_local FrqMemo memo;
   memo.shared = frq_cache_from_context(ctx_);
-  return frq_memo_row<CV>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
+  return frq_memo_row<CH>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
                           par[emc2col::frq::sv], par[emc2col::frq::h],
                           par[emc2col::frq::plo], par[emc2col::frq::clock]);
 }
 
-template <bool CV>
+template <int CH>
 static double dfrq_scalar_impl(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
       !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
-  return frq_pdf_natural_dt(tt, frq_scalar_row<CV>(par, ctx_));
+  const double lp = frq_chart_log_pdf<CH>(tt, frq_scalar_row<CH>(par, ctx_),
+                                          par[emc2col::frq::clock]);
+  return (lp > R_NegInf) ? std::exp(lp) : 0.0;
 }
 
-template <bool CV>
+template <int CH>
 static double pfrq_scalar_impl(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[emc2col::frq::K]) ||
       !R_FINITE(par[emc2col::frq::t0])) return 0.0;
@@ -181,10 +211,14 @@ static double pfrq_scalar_impl(double t, const double* par, void* ctx_) {
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   // tt == Inf deliberately reaches the kernel: the CDF there is h, not one
   // when h < 1, and is one at the proper h = 1 boundary.
-  return frq_cdf_natural_dt(tt, frq_scalar_row<CV>(par, ctx_));
+  const double lp = frq_chart_log_cdf<CH>(tt, frq_scalar_row<CH>(par, ctx_),
+                                          par[emc2col::frq::clock]);
+  if (!(lp > R_NegInf)) return 0.0;
+  const double out = std::exp(lp);
+  return (out > 1.0) ? 1.0 : out;
 }
 
-template <bool CV>
+template <int CH>
 static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_rows,
                           const int* mask, const int* isok,
                           double* out, double min_ll, void* ctx_) {
@@ -208,16 +242,16 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
+    const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
                                         pl_[i], cu_[i]);
-    const double log_pdf = frq_log_pdf_dt(tt, s);
+    const double log_pdf = frq_chart_log_pdf<CH>(tt, s, cu_[i]);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
   }
 }
 
-template <bool CV>
+template <int CH>
 static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_rows,
                           const int* mask, const int* isok,
                           double* out, double min_ll, void* ctx_) {
@@ -239,16 +273,16 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
     }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const FrqPars& s = frq_memo_row<CV>(memo, k_[i], v_[i], sv_[i], h_[i],
+    const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
                                         pl_[i], cu_[i]);
-    const double log_surv = frq_log_surv_dt(tt, s);
+    const double log_surv = frq_chart_log_surv<CH>(tt, s, cu_[i]);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
                                    : raw_log_zero(min_ll, floor_raw);
   }
 }
 
-template <bool CV>
+template <int CH>
 static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_,
@@ -273,11 +307,11 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
       }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const FrqPars& s = frq_memo_row<CV>(memo, k_[r], v_[r], sv_[r], h_[r],
+      const FrqPars& s = frq_memo_row<CH>(memo, k_[r], v_[r], sv_[r], h_[r],
                                           pl_[r], cu_[r]);
       const double log_surv = !R_FINITE(t)
-        ? (s.ok ? frq_log_surv_dt(R_PosInf, s) : R_NaN)
-        : frq_log_surv_dt(tt, s);
+        ? (s.ok ? frq_chart_log_surv<CH>(R_PosInf, s, cu_[r]) : R_NaN)
+        : frq_chart_log_surv<CH>(tt, s, cu_[r]);
       if (ISNAN(log_surv)) { bad = true; break; }
       logS += log_surv;
     }
@@ -286,49 +320,73 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
 }
 
 double dfrq_scalar(double t, const double* par, void* ctx_) {
-  return dfrq_scalar_impl<false>(t, par, ctx_);
+  return dfrq_scalar_impl<FRQ_SV>(t, par, ctx_);
 }
 double pfrq_scalar(double t, const double* par, void* ctx_) {
-  return pfrq_scalar_impl<false>(t, par, ctx_);
+  return pfrq_scalar_impl<FRQ_SV>(t, par, ctx_);
 }
 void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
               const int* mask, const int* isok,
               double* out, double min_ll, void* ctx_) {
-  dfrq_raw_impl<false>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+  dfrq_raw_impl<FRQ_SV>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
 }
 void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
               const int* mask, const int* isok,
               double* out, double min_ll, void* ctx_) {
-  pfrq_raw_impl<false>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+  pfrq_raw_impl<FRQ_SV>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
 }
 void frq_logS_at_t(double t, const double* const* cols,
                    int /*n_rows_total*/, int n_lR, int /*n_par*/,
                    const int* trunc_mask, int n_unique_trials,
                    const int* isok_all, void* ctx_, double* logS_out) {
-  frq_logS_at_t_impl<false>(t, cols, n_lR, trunc_mask, n_unique_trials,
+  frq_logS_at_t_impl<FRQ_SV>(t, cols, n_lR, trunc_mask, n_unique_trials,
                             isok_all, ctx_, logS_out);
 }
 
 double dfrq_cv_scalar(double t, const double* par, void* ctx_) {
-  return dfrq_scalar_impl<true>(t, par, ctx_);
+  return dfrq_scalar_impl<FRQ_CV_CHART>(t, par, ctx_);
 }
 double pfrq_cv_scalar(double t, const double* par, void* ctx_) {
-  return pfrq_scalar_impl<true>(t, par, ctx_);
+  return pfrq_scalar_impl<FRQ_CV_CHART>(t, par, ctx_);
 }
 void dfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
                  const int* mask, const int* isok,
                  double* out, double min_ll, void* ctx_) {
-  dfrq_raw_impl<true>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+  dfrq_raw_impl<FRQ_CV_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
 }
 void pfrq_cv_raw(const double* rt, const double* const* cols, int n_rows,
                  const int* mask, const int* isok,
                  double* out, double min_ll, void* ctx_) {
-  pfrq_raw_impl<true>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+  pfrq_raw_impl<FRQ_CV_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
 }
 void frq_cv_logS_at_t(double t, const double* const* cols,
                       int /*n_rows_total*/, int n_lR, int /*n_par*/,
                       const int* trunc_mask, int n_unique_trials,
                       const int* isok_all, void* ctx_, double* logS_out) {
-  frq_logS_at_t_impl<true>(t, cols, n_lR, trunc_mask, n_unique_trials,
+  frq_logS_at_t_impl<FRQ_CV_CHART>(t, cols, n_lR, trunc_mask, n_unique_trials,
                            isok_all, ctx_, logS_out);
+}
+
+double dfrq_accel_scalar(double t, const double* par, void* ctx_) {
+  return dfrq_scalar_impl<FRQ_ACCEL_CHART>(t, par, ctx_);
+}
+double pfrq_accel_scalar(double t, const double* par, void* ctx_) {
+  return pfrq_scalar_impl<FRQ_ACCEL_CHART>(t, par, ctx_);
+}
+void dfrq_accel_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  dfrq_raw_impl<FRQ_ACCEL_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void pfrq_accel_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  pfrq_raw_impl<FRQ_ACCEL_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void frq_accel_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* ctx_, double* logS_out) {
+  frq_logS_at_t_impl<FRQ_ACCEL_CHART>(t, cols, n_lR, trunc_mask, n_unique_trials,
+                                      isok_all, ctx_, logS_out);
 }

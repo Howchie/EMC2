@@ -1408,8 +1408,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // dfrq
-NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector plo, bool log_out, NumericVector clock);
-RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP ploSEXP, SEXP log_outSEXP, SEXP clockSEXP) {
+NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector plo, bool log_out, NumericVector clock, NumericVector accel);
+RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP ploSEXP, SEXP log_outSEXP, SEXP clockSEXP, SEXP accelSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1421,13 +1421,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type plo(ploSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type clock(clockSEXP);
-    rcpp_result_gen = Rcpp::wrap(dfrq(t, K, v, sv, h, plo, log_out, clock));
+    Rcpp::traits::input_parameter< NumericVector >::type accel(accelSEXP);
+    rcpp_result_gen = Rcpp::wrap(dfrq(t, K, v, sv, h, plo, log_out, clock, accel));
     return rcpp_result_gen;
 END_RCPP
 }
 // pfrq
-NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector plo, bool lower_tail, bool log_out, NumericVector clock);
-RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP ploSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP, SEXP clockSEXP) {
+NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v, NumericVector sv, NumericVector h, NumericVector plo, bool lower_tail, bool log_out, NumericVector clock, NumericVector accel);
+RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP svSEXP, SEXP hSEXP, SEXP ploSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP, SEXP clockSEXP, SEXP accelSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -1440,7 +1441,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type clock(clockSEXP);
-    rcpp_result_gen = Rcpp::wrap(pfrq(t, K, v, sv, h, plo, lower_tail, log_out, clock));
+    Rcpp::traits::input_parameter< NumericVector >::type accel(accelSEXP);
+    rcpp_result_gen = Rcpp::wrap(pfrq(t, K, v, sv, h, plo, lower_tail, log_out, clock, accel));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3782,8 +3784,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbtawl_local_race_separate", (DL_FUNC) &_EMC2_pbtawl_local_race_separate, 15},
     {"_EMC2_btawl_tmax_vec", (DL_FUNC) &_EMC2_btawl_tmax_vec, 2},
     {"_EMC2_btawl_vcrit_vec", (DL_FUNC) &_EMC2_btawl_vcrit_vec, 3},
-    {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 8},
-    {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 9},
+    {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 9},
+    {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 10},
     {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 6},
     {"_EMC2_dfrqfade", (DL_FUNC) &_EMC2_dfrqfade, 7},
     {"_EMC2_pfrqfade", (DL_FUNC) &_EMC2_pfrqfade, 8},

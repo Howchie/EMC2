@@ -335,18 +335,21 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(unname(m$transform$func[c("K", "v", "sv", "h", "t0",
                                          "plo", "clock")]),
                c("exp", "exp", "exp", "pnorm", "exp", "pnorm", "exp"))
-  expect_equal(unname(m$transform$lower[["K"]]), 1)
+  # K's lower side is linked to its bound by design(), not set by the model.
+  expect_null(m$transform$lower)
+  expect_equal(exp(m$p_types[["K"]]), 3)
   expect_equal(exp(m$p_types[["sv"]]), 0)
   expect_equal(pnorm(m$p_types[["plo"]]), 0)
   expect_equal(exp(m$p_types[["clock"]]), 1)
   expect_equal(pnorm(m$p_types[["h"]]), 1, tolerance = 1e-12)
-  expect_equal(unname(m$bound$minmax[, "K"]), c(1, Inf))
+  expect_equal(unname(m$bound$minmax[, "K"]), c(2, Inf))
   expect_equal(unname(m$bound$minmax[, "v"]), c(1e-4, Inf))
   expect_equal(unname(m$bound$minmax[, "sv"]), c(1e-4, Inf))
   expect_equal(unname(m$bound$minmax[, "plo"]), c(1e-6, 1))
   expect_equal(unname(m$bound$minmax[, "clock"]), c(1e-4, Inf))
-  expect_equal(unname(m$bound$exception[c("sv", "plo", "clock", "h", "K")]),
-               c(0, 0, 0, 1, 1))
+  expect_equal(unname(m$bound$exception[c("sv", "plo", "clock", "h")]),
+               c(0, 0, 0, 1))
+  expect_false("K" %in% names(m$bound$exception))
   expect_identical(names(formals(FRQ)), "parameterization")
 })
 
@@ -1049,3 +1052,106 @@ test_that("the cv parameterization is the same model at sv = cv * v", {
   expect_equal(ra$rt, rb$rt, tolerance = 1e-10)
   expect_identical(ra$R, rb$R)
 })
+
+test_that("the accel parameterization warps the clock = 1 law", {
+  m <- FRQ(parameterization = "accel")
+  expect_identical(m$c_name, "FRQ_ACCEL")
+  expect_identical(names(m$p_types)[1:7],
+                   c("K", "v", "cv", "h", "t0", "plo", "accel"))
+  expect_equal(exp(m$p_types[["accel"]]), 0)
+  expect_equal(unname(m$bound$minmax[, "accel"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$exception[["accel"]]), 0)
+
+  u <- c(0.01, 0.1, 0.3, 0.7, 1.5, 4)
+  K <- 2.5; v <- 5; cv <- 0.4; b <- cv^-2; sv <- cv * v; a <- 1.7
+  A <- expm1(a * u) / a
+  x <- (v / b) * A
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, accel = a), pbeta(x / (1 + x), K, b),
+               tolerance = 1e-12)
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, lower_tail = FALSE, accel = a),
+               pbeta(x / (1 + x), K, b, lower.tail = FALSE), tolerance = 1e-12)
+  expect_equal(EMC2:::pfrq(u, K, v, 0, 1, accel = a), pgamma(v * A, K),
+               tolerance = 1e-12)
+  h <- 0.8
+  g <- EMC2:::frq_rate(K, v, sv, h)
+  xh <- g[, "lambda"] * A
+  expect_equal(EMC2:::pfrq(u, K, v, sv, h, accel = a),
+               pbeta(g[, "p"] * xh / (1 + xh), K, b), tolerance = 1e-12)
+  # accel = lambda is the exponential registration law (clock = 0).
+  expect_equal(EMC2:::pfrq(u, K, v, sv, h, accel = g[, "lambda"]),
+               EMC2:::pfrq(u, K, v, sv, h, clock = 0), tolerance = 1e-12)
+  expect_identical(EMC2:::dfrq(u, K, v, sv, h, accel = 0),
+                   EMC2:::dfrq(u, K, v, sv, h))
+  for (pl in c(0, 0.3)) {
+    f <- function(t) EMC2:::dfrq(t, K, v, sv, h, plo = pl, accel = a)
+    Fa <- function(t) EMC2:::pfrq(t, K, v, sv, h, plo = pl, accel = a)
+    expect_equal(integrate(f, 0, Inf, rel.tol = 1e-10)$value, h, tolerance = 1e-8)
+    expect_equal((Fa(u + 1e-6) - Fa(u - 1e-6)) / 2e-6, f(u), tolerance = 1e-6)
+    expect_equal(Fa(Inf), h)
+  }
+
+  # Both simulators against the CDF, with omissions and the low state.
+  n <- 4e4
+  lR <- factor(rep("a", n))
+  P <- cbind(K = K, v = v, cv = cv, h = h, t0 = 0.1, plo = 0.2, accel = a)[rep(1, n), ]
+  attr(P, "ok") <- rep(TRUE, n)
+  qs <- c(0.2, 0.5, 1, 2)
+  Fq <- EMC2:::pfrq(qs, K, v, sv, h, plo = 0.2, accel = a)
+  ecdf_at <- function(s) vapply(qs, function(q) mean(is.finite(s$rt) & s$rt - 0.1 <= q),
+                                numeric(1))
+  set.seed(11); sc <- m$rfun(data.frame(lR = lR), P)
+  expect_equal(ecdf_at(sc), Fq, tolerance = 0.015)
+  op <- options(emc2.cpp_rfun = FALSE)
+  set.seed(11); sr <- m$rfun(data.frame(lR = lR), P)
+  options(op)
+  expect_equal(ecdf_at(sr), Fq, tolerance = 0.015)
+
+  # The compiled race likelihood: accel = 0 is the cv chart at clock = 1, and
+  # accel > 0 matches the R reference.
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  dat <- dat[seq_len(80), ]
+  mk <- function(model, extra, trunc) {
+    d <- dat
+    if (trunc) { d$LT <- 0.2; d$UT <- 1.5; d <- d[d$rt >= 0.2 & d$rt <= 1.5, ] }
+    f <- c(list(K ~ 1, v ~ 0 + lM, cv ~ 1, h ~ lM, t0 ~ 1, plo ~ 1), extra)
+    des <- suppressMessages(design(data = d, model = model, matchfun = matchfun,
+                                   formula = f, report_p_vector = FALSE))
+    emc <- suppressMessages(make_emc(d, des, type = "single", n_chains = 1,
+                                     compress = FALSE, rt_resolution = NULL))
+    list(des = des, emc = emc)
+  }
+  Facc <- function() FRQ(parameterization = "accel")
+  Fcv <- function() FRQ(parameterization = "cv")
+  for (trunc in c(FALSE, TRUE)) {
+    A1 <- mk(Facc, list(accel ~ 1), trunc)
+    C1 <- mk(Fcv, list(), trunc)
+    pa <- sampled_pars(A1$des)
+    pa[] <- c(log(1.5), log(4), log(2.5), log(0.5), qnorm(0.9), 0.4, log(0.15),
+              qnorm(0.1), log(0.4))[seq_along(pa)]
+    pa0 <- pa
+    pa0[["accel"]] <- log(0)
+    expect_identical(frq_ll(A1$emc, pa0),
+                     frq_ll(C1$emc, pa0[names(sampled_pars(C1$des))]))
+    if (!trunc) {
+      dadm <- A1$emc[[1]]$data[[1]]
+      pars <- EMC2:::get_pars_matrix_oo(pa, dadm, A1$emc[[1]]$model())
+      expect_true(all(pars[, "accel"] > 0))
+      expect_equal(frq_ll(A1$emc, pa), ref_race_ll(dadm, pars), tolerance = 1e-10)
+    }
+  }
+})
+
+test_that("a sampled K links to its bound and a constant K keeps the log link", {
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  f <- list(K ~ 1, v ~ 0 + lM, h ~ 1, t0 ~ 1)
+  lower_K <- function(...) suppressMessages(design(
+    data = dat, model = FRQ, matchfun = matchfun, formula = f,
+    report_p_vector = FALSE, ...))$model()$transform$lower[["K"]]
+  expect_equal(lower_K(), 2)
+  expect_equal(lower_K(constants = c(K = log(3))), 0)
+  expect_equal(lower_K(bound = list(minmax = cbind(K = c(1, Inf)))), 1)
+})
+

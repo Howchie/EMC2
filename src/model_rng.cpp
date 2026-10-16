@@ -1348,6 +1348,8 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   // to a different parameter.
   const int ipl = ci.count("plo") ? ci.at("plo") : -1;
   const int icu = ci.count("clock") ? ci.at("clock") : -1;
+  // The accel chart's clock acceleration; absent means a = 0.
+  const int iac = ci.count("accel") ? ci.at("accel") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1364,7 +1366,10 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                                 pars(r, ih), ipl >= 0 ? pars(r, ipl) : 0.0,
                                 icu >= 0 ? pars(r, icu) : 1.0);
     if (!s.ok) continue;                       // invalid row: never finishes
-    dt[r] = frq_draw_decision(s);
+    if (iac < 0) { dt[r] = frq_draw_decision(s); continue; }
+    const double a = pars(r, iac);
+    if (!frq_accel_ok(a)) continue;
+    dt[r] = frq_accel_unwarp(frq_draw_decision(s), a);
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

@@ -13,7 +13,8 @@
 # (K, v, sv, h, t0, plo, clock); beta, p and lambda are derived in the
 # kernel (src/model_FRQ.h), and sv = 0 is the exact no-variability limit.
 # plo is the probability that an accumulator commits at the low threshold
-# K_lo = 1 instead of K on a trial.
+# K_lo = 1 instead of K on a trial.  The accel chart samples the rate CV and
+# runs the clock = 1 law on the operational time (exp(accel u) - 1) / accel.
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
@@ -52,7 +53,8 @@ dFRQ <- function(rt, pars) {
     out[ok] <- dfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     plo = .frq_opt(pars, ok, "plo", 0),
-                    clock = .frq_opt(pars, ok, "clock", 1))
+                    clock = .frq_opt(pars, ok, "clock", 1),
+                    accel = .frq_opt(pars, ok, "accel", 0))
   }
   out
 }
@@ -69,7 +71,8 @@ pFRQ <- function(rt, pars) {
     out[ok] <- pfrq(t = dt[ok], K = pars[ok, "K"], v = pars[ok, "v"],
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     plo = .frq_opt(pars, ok, "plo", 0),
-                    clock = .frq_opt(pars, ok, "clock", 1))
+                    clock = .frq_opt(pars, ok, "clock", 1),
+                    accel = .frq_opt(pars, ok, "accel", 0))
   }
   out
 }
@@ -88,6 +91,7 @@ sFRQ <- function(rt, pars) {
                     sv = .frq_sv(pars)[ok], h = pars[ok, "h"],
                     plo = .frq_opt(pars, ok, "plo", 0),
                     clock = .frq_opt(pars, ok, "clock", 1),
+                    accel = .frq_opt(pars, ok, "accel", 0),
                     lower_tail = FALSE)
   }
   out
@@ -194,6 +198,13 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
                                       g[i[j], "lambda"][live],
                                       cu[i[j]][live])
   }
+  if ("accel" %in% colnames(p)) {
+    # Operational time back to physical time, u = log1p(a x) / a.
+    a <- p[, "accel"]
+    hit[!(is.finite(a) & a >= 0)] <- Inf
+    w <- is.finite(hit) & is.finite(a) & a > 0
+    hit[w] <- log1p(a[w] * hit[w]) / a[w]
+  }
   hit[!is.finite(hit) | hit < 0] <- Inf
   hit
 }
@@ -252,7 +263,7 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'
 #' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *K* | 1 + exp | \[1, Inf\] | log(2) (K = 3) | *alpha* = *K* | Event threshold |
+#' | *K* | log | \[2, Inf\] | log(3) | *alpha* = *K* | Event threshold |
 #' | *v* | log | \[1e-4, Inf\] | log(6) | *lambda* = *v*/(*beta* *p*) | Mean initial input rate |
 #' | *sv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = (*v*/*sv*)^2 | Between-trial SD of the input rate |
 #' | *h* | probit | \[1e-6, 1\] | qnorm(1) | *p* = qbeta(*h*, *K*, *beta*) | Probability that the accumulator ever responds |
@@ -260,9 +271,11 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' | *plo* | probit | \[1e-6, 1\] or 0 | qnorm(0) | | Probability of the low-threshold state |
 #' | *clock* | log | \[1e-4, Inf\] or 0 | log(1) | | Shape of the registration law |
 #'
-#' The values `K = 1`, `sv = 0`, `h = 1`, `t0 = 0`, `plo = 0` and
+#' The values `sv = 0`, `h = 1`, `t0 = 0`, `plo = 0` and
 #' `clock = 0` are exact bound exceptions and can be set as constants.
-#' `K` is real-valued.
+#' `K` is real-valued. A sampled `K` is `2 + exp(x)`; its link follows the
+#' lower bound, so a `bound` argument to [design()] moves both. A constant `K`
+#' uses the plain log link.
 #'
 #' `parameterization = "cv"` samples *cv* = *sv*/*v*, the between-trial CV of
 #' the input rate, in place of *sv*:
@@ -273,6 +286,27 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'
 #' `cv = 0` is the same exact limit as `sv = 0`. At equal values of *sv* and
 #' *cv* *v* the two parameterizations give the same likelihood.
+#'
+#' `parameterization = "accel"` samples *cv* and replaces *clock* by the clock
+#' acceleration *accel*. The registration law is the `clock = 1` law run on the
+#' operational time `A(u) = (exp(accel * u) - 1) / accel` (`A(u) = u` at
+#' `accel = 0`):
+#'
+#' `F(u) = I_q(u)(K, beta)`, with `q(u) = p * x(u) / (1 + x(u))` and
+#' `x(u) = lambda * A(u)`,
+#'
+#' so that the Gamma-mixed counter's intensity is `W * (v / beta) *
+#' exp(accel * u)` given its trial rate multiplier `W ~ Gamma(beta, 1)`. At
+#' `cv = 0` and `h = 1`, `F(u) = P_K(v * A(u))`. `h`, `p` and `plo` enter as in
+#' the other parameterizations, since `A(Inf) = Inf`.
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *cv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = 1/*cv*^2, *sv* = *cv* *v* | Between-trial CV of the input rate |
+#' | *accel* | log | \[1e-4, Inf\] or 0 | log(0) | | Exponential acceleration rate of the registration clock |
+#'
+#' `accel = 0` gives the same likelihood as `parameterization = "cv"` with
+#' `clock = 1`.
 #'
 #' With `plo > 0` each accumulator independently commits at the low threshold
 #' `K_lo = 1` with probability `plo` on each trial:
@@ -285,13 +319,15 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
 #' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
 #' at `h = 1`) and `cv` = `sv / v` (`sv` = `cv * v` under
-#' `parameterization = "cv"`).
+#' `parameterization = "cv"` or `"accel"`).
 #'
 #' Optional nuisance parameters are `pContaminant`, an omission probability
 #' outside the accumulators, and `pGuess`, a uniform-outlier probability.
 #'
-#' @param parameterization Rate-variability coordinate: `"sv"` (the default)
-#'   samples the rate SD *sv*; `"cv"` samples the rate CV *cv* = *sv*/*v*.
+#' @param parameterization Rate-variability and clock coordinates: `"sv"`
+#'   (the default) samples the rate SD *sv*; `"cv"` samples the rate CV
+#'   *cv* = *sv*/*v*; `"accel"` samples *cv* and the clock acceleration
+#'   *accel* in place of *clock*.
 #' @return A model list defining the FRQ race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -313,26 +349,36 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                                        t0 ~ 1),
 #'                         contrasts = list(v = list(lM = ADmat)),
 #'                         constants = c(h = qnorm(1)))
+#' # The accel parameterization.
+#' design_FRQ_accel <- design(data = forstmann,
+#'                            model = function() FRQ(parameterization = "accel"),
+#'                            matchfun = matchfun,
+#'                            formula = list(K ~ 1, v ~ lM + E, cv ~ 1,
+#'                                           accel ~ 1, h ~ 1, t0 ~ 1),
+#'                            contrasts = list(v = list(lM = ADmat)),
+#'                            constants = c(h = qnorm(1)))
 #' @export
-FRQ <- function(parameterization = c("sv", "cv")) {
+FRQ <- function(parameterization = c("sv", "cv", "accel")) {
   parameterization <- match.arg(parameterization)
+  accel <- parameterization == "accel"
   # The rate-variability coordinate in kernel column 3: the rate SD sv, or the
-  # rate CV cv = sv / v (the cv chart, c_name FRQ_CV).
-  rv <- parameterization
-  # K on an OFFSET log scale, K = 1 + exp(x): the sampler coordinate is
-  # unbounded while K keeps its K >= 1 support, below which the density is
-  # singular at t0 and the likelihood unbounded as t0 -> min(rt).
-  p_types <- c("K" = log(2), "v" = log(6),
+  # rate CV cv = sv / v (the cv and accel charts).
+  rv <- if (accel) "cv" else parameterization
+  # Kernel column 7: the clock shape, or the clock acceleration (accel chart).
+  ck <- if (accel) "accel" else "clock"
+  # K has no explicit transform side: the bound links it, so a sampled K is
+  # K = 2 + exp(x) and follows a user bound, while a constant K keeps the
+  # plain log link.
+  p_types <- c("K" = log(3), "v" = log(6),
                # sv = 0 (log(0)) is the exact no-rate-variability counter.
                "rv" = log(0),
                "h" = qnorm(1), "t0" = log(0),
                # No low-threshold state.
                "plo" = qnorm(0),
-               # A constant-rate evidence clock.
-               "clock" = log(1))
+               # A constant-rate evidence clock (no acceleration).
+               "ck" = if (accel) log(0) else log(1))
   transform <- c(K = "exp", v = "exp", rv = "exp", h = "pnorm", t0 = "exp",
-                 plo = "pnorm", clock = "exp")
-  transform_lower <- c(K = 1)
+                 plo = "pnorm", ck = "exp")
   # sv (or cv) has no upper bound: sv > v (beta < 1) is a valid, very variable
   # rate, and the kernel solves 1 - p from its own quantile.  Its lower guard
   # keeps a sampled value off the exact zero branch, which is reachable as a
@@ -340,15 +386,16 @@ FRQ <- function(parameterization = c("sv", "cv")) {
   # The free h upper bound stops short of one so that a sampler can keep a
   # finite defective mass; h = 1 is reachable through the exception.
   # plo's lower guard keeps a sampled value off the exact plo = 0 base model,
-  # which is reachable as a constant.
-  minmax <- cbind(K = c(1, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
+  # which is reachable as a constant; likewise clock's and accel's.
+  minmax <- cbind(K = c(2, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
                   h = c(1e-6, 1), t0 = c(0.05, Inf), plo = c(1e-6, 1),
-                  clock = c(1e-4, Inf))
-  exception <- c(t0 = 0, plo = 0, clock = 0, h = 1, K = 1, rv = 0)
-  names(p_types)[names(p_types) == "rv"] <- rv
-  names(transform)[names(transform) == "rv"] <- rv
-  colnames(minmax)[colnames(minmax) == "rv"] <- rv
-  names(exception)[names(exception) == "rv"] <- rv
+                  ck = c(1e-4, Inf))
+  exception <- c(t0 = 0, plo = 0, ck = 0, h = 1, rv = 0)
+  .rn <- function(x) { x[x == "rv"] <- rv; x[x == "ck"] <- ck; x }
+  names(p_types) <- .rn(names(p_types))
+  names(transform) <- .rn(names(transform))
+  colnames(minmax) <- .rn(colnames(minmax))
+  names(exception) <- .rn(names(exception))
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   # pContaminant is redundant with 1 - h unless an omission mechanism outside
@@ -359,10 +406,10 @@ FRQ <- function(parameterization = c("sv", "cv")) {
 
   list(
     type = "RACE",
-    c_name = if (rv == "cv") "FRQ_CV" else "FRQ",
+    c_name = if (accel) "FRQ_ACCEL" else if (rv == "cv") "FRQ_CV" else "FRQ",
     p_types = p_types,
     p_types_canonical = c("K", "v", rv, "h", "t0"),
-    transform = list(func = transform, lower = transform_lower),
+    transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       # Reporting only: Ttransform does not run on the compiled likelihood
