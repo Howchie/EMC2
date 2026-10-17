@@ -29,17 +29,27 @@
   invisible(NULL)
 }
 
+# Rate CV per row: the cv column of the ratio chart, zero otherwise.
+.opr_cv <- function(pars) {
+  if ("cv" %in% colnames(pars) && all(c("v", "rho") %in% colnames(pars)))
+    pars[, "cv"] else numeric(nrow(pars))
+}
+
 dOPR <- function(rt, pars) {
   .opr_check_cols(pars)
   r <- .opr_rates(pars)
+  cv <- .opr_cv(pars)
   dt <- rt - pars[, "t0"]
   ok <- is.finite(dt) & dt > 0 & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
-  if (any(ok)) {
-    out[ok] <- dopr(dt[ok], pars[ok, "K"], r$a[ok], r$b[ok])
-    out[ok][is.na(out[ok])] <- 0
-  }
+  fix <- ok & cv == 0
+  mix <- ok & cv > 0
+  if (any(fix)) out[fix] <- dopr(dt[fix], pars[fix, "K"], r$a[fix], r$b[fix])
+  if (any(mix))
+    out[mix] <- dopr_gamma(dt[mix], pars[mix, "K"], pars[mix, "v"],
+                           pars[mix, "rho"], cv[mix])
+  out[ok][is.na(out[ok])] <- 0
   out
 }
 
@@ -47,17 +57,22 @@ dOPR <- function(rt, pars) {
 pOPR <- function(rt, pars) {
   .opr_check_cols(pars)
   r <- .opr_rates(pars)
+  cv <- .opr_cv(pars)
   dt <- rt - pars[, "t0"]
   ok <- !is.na(dt) & dt > 0 & is.finite(pars[, "t0"])
   out <- numeric(length(dt))
-  if (any(ok)) {
-    out[ok] <- popr(dt[ok], pars[ok, "K"], r$a[ok], r$b[ok])
-    out[ok][is.na(out[ok])] <- 0
-  }
+  fix <- ok & cv == 0
+  mix <- ok & cv > 0
+  if (any(fix)) out[fix] <- popr(dt[fix], pars[fix, "K"], r$a[fix], r$b[fix])
+  if (any(mix))
+    out[mix] <- popr_gamma(dt[mix], pars[mix, "K"], pars[mix, "v"],
+                           pars[mix, "rho"], cv[mix])
+  out[ok][is.na(out[ok])] <- 0
   out
 }
 
-# Reference simulator: inverts the analytic survivor per accumulator.
+# Reference simulator: inverts the analytic survivor per accumulator, after
+# drawing the Gamma trial rate where cv > 0.
 rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
   .opr_check_cols(pars)
   nr <- length(levels(lR))
@@ -66,6 +81,13 @@ rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
   r <- .opr_rates(pars)
+  cv <- .opr_cv(pars)
+  mix <- which(cv > 0 & is.finite(cv))
+  if (length(mix)) {
+    V <- rgamma(length(mix), 1 / cv[mix]^2, scale = pars[mix, "v"] * cv[mix]^2)
+    r$a[mix] <- (1 + pars[mix, "rho"]) * V
+    r$b[mix] <- pars[mix, "rho"] * V
+  }
   K <- pars[, "K"]
   t0 <- pars[, "t0"]
   dt <- rep(Inf, nrow(pars))
@@ -126,6 +148,20 @@ rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
 #' | *v* | log | \[1e-4, Inf\] | log(10) | | Net event rate `lambda_p - lambda_m`. |
 #' | *rho* | log | \[0, Inf\] | log(1) | | Negative event rate relative to `v`. |
 #' | *t0* | log | \[0.05, Inf\] | log(0) | | Non-decision time. |
+#' | *cv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = 1/*cv*^2 | Between-trial CV of the net rate. |
+#'
+#' With `cv > 0` the net rate of each accumulator is drawn once per trial from
+#' a Gamma law with mean `v` and shape `beta = 1/cv^2`, and both event rates
+#' scale with it. Each event is then positive with probability
+#' `(1 + rho)/(1 + 2 rho)` whatever the rate, so the accumulator is a Poisson
+#' counter of rate `(1 + 2 rho) V` with the random criterion `K + 2J`, `J` the
+#' number of negative events before absorption, and
+#'
+#' `F(u) = sum_j P(J = j) I_q(K + 2j, beta)`, `q = u/(r + u)`, `r = beta/((1 + 2 rho) v)`,
+#'
+#' with `I_q` the regularized incomplete beta function
+#' (Math/gamma_mixtures.tex). `cv = 0` is the fixed rate. The other
+#' parameterizations have no `cv`.
 #'
 #' `parameterization = "background"` samples the net rate `v` and a background
 #' event rate `lambda0` shared by both streams, with `lambda_p = v + lambda0`
@@ -181,6 +217,7 @@ OPR <- function(parameterization = c("ratio", "background", "rates")) {
   r1 <- if (rates) "lambda_p" else "v"
   r2 <- switch(parameterization, ratio = "rho", background = "lambda0",
                rates = "lambda_m")
+  ratio <- parameterization == "ratio"
   p_types <- c(K = log(3), r1 = if (rates) log(20) else log(10),
                r2 = switch(parameterization, ratio = log(1), log(10)),
                t0 = log(0))
@@ -190,6 +227,13 @@ OPR <- function(parameterization = c("ratio", "background", "rates")) {
   minmax <- cbind(K = c(1, Inf), r1 = c(1e-4, Inf), r2 = c(0, Inf),
                   t0 = c(0.05, Inf))
   exception <- c(t0 = 0)
+  if (ratio) {
+    # The Gamma trial rate; cv = 0 is the fixed rate.
+    p_types <- c(p_types, cv = log(0))
+    transform <- c(transform, cv = "exp")
+    minmax <- cbind(minmax, cv = c(1e-4, Inf))
+    exception <- c(exception, cv = 0)
+  }
   .rn <- function(x) { x[x == "r1"] <- r1; x[x == "r2"] <- r2; x }
   names(p_types) <- .rn(names(p_types))
   names(transform) <- .rn(names(transform))

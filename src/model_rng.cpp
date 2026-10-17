@@ -1415,10 +1415,10 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 }
 
 // Opponent Poisson race simulator.  pars columns: K, the rate chart, t0;
-// chart 0 is (v, rho), chart 1 is (lambda_p, lambda_m), chart 2 is
-// (v, lambda0).  Each decision time
-// is drawn by inverting the analytic survivor (opr::draw_decision); +Inf is
-// an accumulator that never finishes.
+// chart 0 is (v, rho) with an optional rate CV cv (a Gamma trial rate drawn
+// first), chart 1 is (lambda_p, lambda_m), chart 2 is (v, lambda0).  Each
+// decision time is drawn by inverting the analytic survivor
+// (opr::draw_decision); +Inf is an accumulator that never finishes.
 // [[Rcpp::export]]
 Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                     Rcpp::LogicalVector ok, int chart) {
@@ -1434,6 +1434,8 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (const char* nm : {"K", c1, c2, "t0"})
     if (!ci.count(nm)) Rcpp::stop("ropr_cpp: missing parameter column '%s'.", nm);
   const int ik = ci.at("K"), i1 = ci.at(c1), i2 = ci.at(c2), it0 = ci.at("t0");
+  // The rate CV (Gamma rate mixture) exists under the ratio chart only.
+  const int icv = (chart == 0 && ci.count("cv")) ? ci.at("cv") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1443,9 +1445,17 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r] || !R_FINITE(t0col[r])) continue;
-    double a, b;
-    opr::chart_rates(chart, pars(r, i1), pars(r, i2), &a, &b);
-    const double d = opr::draw_decision(pars(r, ik), a, b);
+    const double cv = icv >= 0 ? pars(r, icv) : 0.0;
+    double d;
+    if (cv > 0.0) {
+      d = opr::gm::make_gstate(pars(r, ik), pars(r, i1), pars(r, i2), cv).ok
+        ? opr::gm::draw_decision(pars(r, ik), pars(r, i1), pars(r, i2), cv)
+        : R_PosInf;
+    } else {
+      double a, b;
+      opr::chart_rates(chart, pars(r, i1), pars(r, i2), &a, &b);
+      d = opr::draw_decision(pars(r, ik), a, b);
+    }
     if (ISNAN(d)) ++n_failed;
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
@@ -1459,10 +1469,11 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// Racing subordinator simulator.  pars columns: v, B, A, t0, s.  Each
-// decision time is drawn exactly by rsub::draw_decision: the scaled
+// Racing subordinator simulator.  pars columns: v, B, A, t0, s and an
+// optional rate CV cv.  Each decision time is drawn exactly: the scaled
 // Brownian-bridge maximum for the inverse-Gaussian evidence, the gamma
-// arrival of 1 + Pois(2d/s^2) events for packets.
+// arrival of 1 + Pois(2d/s^2) events for packets, at the Gamma trial rate
+// drawn first where cv > 0.
 // [[Rcpp::export]]
 Rcpp::List rrsub_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                      Rcpp::LogicalVector ok, bool packets) {
@@ -1477,6 +1488,7 @@ Rcpp::List rrsub_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rrsub_cpp: missing parameter column '%s'.", nm);
   const int iv = ci.at("v"), iB = ci.at("B"), iA = ci.at("A"),
             it0 = ci.at("t0"), is = ci.at("s");
+  const int icv = ci.count("cv") ? ci.at("cv") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1485,9 +1497,16 @@ Rcpp::List rrsub_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r] || !R_FINITE(t0col[r])) continue;
-    const double d = packets
-      ? rsub::draw_decision<rsub::cp::Kernel>(pars(r, iv), pars(r, iB), pars(r, iA), pars(r, is))
-      : rsub::draw_decision<rsub::ig::Kernel>(pars(r, iv), pars(r, iB), pars(r, iA), pars(r, is));
+    const double v = pars(r, iv), B = pars(r, iB), A = pars(r, iA), sc = pars(r, is);
+    const double cv = icv >= 0 ? pars(r, icv) : 0.0;
+    double d;
+    if (cv > 0.0) {
+      d = (!rsub::pars_ok(v, B, A, sc, cv) || v == 0.0) ? R_PosInf
+        : (packets ? rsub::cpg::draw(v, B, A, sc, cv) : rsub::igg::draw(v, B, A, sc, cv));
+    } else {
+      d = packets ? rsub::draw_decision<rsub::cp::Kernel>(v, B, A, sc)
+                  : rsub::draw_decision<rsub::ig::Kernel>(v, B, A, sc);
+    }
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 

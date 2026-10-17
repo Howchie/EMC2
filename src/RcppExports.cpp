@@ -1753,6 +1753,39 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dopr_gamma
+NumericVector dopr_gamma(NumericVector t, NumericVector K, NumericVector v, NumericVector rho, NumericVector cv, bool log_out);
+RcppExport SEXP _EMC2_dopr_gamma(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP rhoSEXP, SEXP cvSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type cv(cvSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dopr_gamma(t, K, v, rho, cv, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// popr_gamma
+NumericVector popr_gamma(NumericVector t, NumericVector K, NumericVector v, NumericVector rho, NumericVector cv, bool lower_tail, bool log_out);
+RcppExport SEXP _EMC2_popr_gamma(SEXP tSEXP, SEXP KSEXP, SEXP vSEXP, SEXP rhoSEXP, SEXP cvSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type cv(cvSEXP);
+    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(popr_gamma(t, K, v, rho, cv, lower_tail, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pwald
 double pwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess, bool posdrift, double erlang_omega);
 RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP, SEXP posdriftSEXP, SEXP erlang_omegaSEXP) {
@@ -2118,8 +2151,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // drsub
-NumericVector drsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool log_out);
-RcppExport SEXP _EMC2_drsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP log_outSEXP) {
+NumericVector drsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool log_out, NumericVector cv);
+RcppExport SEXP _EMC2_drsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP log_outSEXP, SEXP cvSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2130,13 +2163,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< bool >::type packets(packetsSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(drsub(t, v, B, A, s, packets, log_out));
+    Rcpp::traits::input_parameter< NumericVector >::type cv(cvSEXP);
+    rcpp_result_gen = Rcpp::wrap(drsub(t, v, B, A, s, packets, log_out, cv));
     return rcpp_result_gen;
 END_RCPP
 }
 // prsub
-NumericVector prsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool lower_tail, bool log_out);
-RcppExport SEXP _EMC2_prsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+NumericVector prsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool lower_tail, bool log_out, NumericVector cv);
+RcppExport SEXP _EMC2_prsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP, SEXP cvSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2148,7 +2182,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type packets(packetsSEXP);
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(prsub(t, v, B, A, s, packets, lower_tail, log_out));
+    Rcpp::traits::input_parameter< NumericVector >::type cv(cvSEXP);
+    rcpp_result_gen = Rcpp::wrap(prsub(t, v, B, A, s, packets, lower_tail, log_out, cv));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3942,6 +3977,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 7},
     {"_EMC2_dopr", (DL_FUNC) &_EMC2_dopr, 5},
     {"_EMC2_popr", (DL_FUNC) &_EMC2_popr, 6},
+    {"_EMC2_dopr_gamma", (DL_FUNC) &_EMC2_dopr_gamma, 6},
+    {"_EMC2_popr_gamma", (DL_FUNC) &_EMC2_popr_gamma, 7},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 13},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 13},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},
@@ -3959,8 +3996,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 15},
     {"_EMC2_dRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_clock_cpp, 11},
     {"_EMC2_pRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_clock_cpp, 11},
-    {"_EMC2_drsub", (DL_FUNC) &_EMC2_drsub, 7},
-    {"_EMC2_prsub", (DL_FUNC) &_EMC2_prsub, 8},
+    {"_EMC2_drsub", (DL_FUNC) &_EMC2_drsub, 8},
+    {"_EMC2_prsub", (DL_FUNC) &_EMC2_prsub, 9},
     {"_EMC2_ss_exg_stop_success_value", (DL_FUNC) &_EMC2_ss_exg_stop_success_value, 8},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 5},
     {"_EMC2_stopfn_exg", (DL_FUNC) &_EMC2_stopfn_exg, 6},

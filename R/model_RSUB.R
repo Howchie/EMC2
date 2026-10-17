@@ -16,6 +16,11 @@
   invisible(NULL)
 }
 
+# Rate CV per row; a missing column is the fixed rate.
+.rsub_cv <- function(pars) {
+  if ("cv" %in% colnames(pars)) pars[, "cv"] else numeric(nrow(pars))
+}
+
 dRSUB <- function(rt, pars, packets = FALSE) {
   .rsub_check_cols(pars)
   dt <- rt - pars[, "t0"]
@@ -24,7 +29,7 @@ dRSUB <- function(rt, pars, packets = FALSE) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- drsub(dt[ok], pars[ok, "v"], pars[ok, "B"], pars[ok, "A"],
-                     pars[ok, "s"], packets = packets)
+                     pars[ok, "s"], packets = packets, cv = .rsub_cv(pars)[ok])
     out[ok][is.na(out[ok])] <- 0
   }
   out
@@ -37,7 +42,7 @@ pRSUB <- function(rt, pars, packets = FALSE) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- prsub(dt[ok], pars[ok, "v"], pars[ok, "B"], pars[ok, "A"],
-                     pars[ok, "s"], packets = packets)
+                     pars[ok, "s"], packets = packets, cv = .rsub_cv(pars)[ok])
     out[ok][is.na(out[ok])] <- 0
   }
   out
@@ -47,7 +52,7 @@ pRSUB <- function(rt, pars, packets = FALSE) {
 # (W(w) + w / s), drawn from the endpoint of the drifted Brownian motion and
 # the maximum of the Brownian bridge through it.  Packets: 1 + Pois(2 d / s^2)
 # packets are needed, so the decision time is their gamma arrival time at
-# rate 2 v / s^2.
+# rate 2 v / s^2.  Where cv > 0 the rate v is first drawn from its Gamma law.
 rRSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, nrow(pars))) {
   .rsub_check_cols(pars)
   nr <- length(levels(lR))
@@ -56,9 +61,13 @@ rRSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, nrow(pars))) {
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
   v <- pars[, "v"]; s <- pars[, "s"]; t0 <- pars[, "t0"]
-  B <- pars[, "B"]; A <- pars[, "A"]
+  B <- pars[, "B"]; A <- pars[, "A"]; cv <- .rsub_cv(pars)
   ok <- ok & is.finite(t0) & is.finite(v) & v > 0 & is.finite(s) & s > 0 &
-    is.finite(B) & B >= 0 & is.finite(A) & A >= 0 & B + A > 0
+    is.finite(B) & B >= 0 & is.finite(A) & A >= 0 & B + A > 0 &
+    is.finite(cv) & cv >= 0
+  mix <- ok & cv > 0
+  if (any(mix))
+    v[mix] <- rgamma(sum(mix), 1 / cv[mix]^2, scale = v[mix] * cv[mix]^2)
   n <- sum(ok)
   dt <- rep(Inf, nrow(pars))
   d <- B[ok] + A[ok] * runif(n)
@@ -127,6 +136,14 @@ rRSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, nrow(pars))) {
 #' | *A* | log | \[1e-4, Inf\] | log(0) | | Range of the uniform start point. |
 #' | *t0* | log | \[0.05, Inf\] | log(0) | | Non-decision time. |
 #' | *s* | log | \[0, Inf\] | log(1) | | Evidence SD per square root of mean evidence (`s^2` is the variance-to-mean ratio). |
+#' | *cv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = 1/*cv*^2 | Between-trial CV of the mean evidence rate. |
+#'
+#' With `cv > 0` the rate `v` of each accumulator is drawn once per trial from
+#' a Gamma law with mean `v` and shape `beta = 1/cv^2`; `cv = 0` is the fixed
+#' rate. For packets the mixture is a series in regularized incomplete beta
+#' functions over the number of packets needed. For dense evidence it is a
+#' Gauss rule over the rate on the conditional forms above
+#' (Math/gamma_mixtures.tex). Start-point variability is integrated in both.
 #'
 #' `mapped_pars()` adds the threshold `b`.
 #'
@@ -151,11 +168,13 @@ rRSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, nrow(pars))) {
 RSUB <- function(evidence = c("dense", "packets")) {
   evidence <- match.arg(evidence)
   packets <- evidence == "packets"
-  p_types <- c(v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1))
-  transform <- c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp")
+  p_types <- c(v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1),
+               cv = log(0))
+  transform <- c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp",
+                 cv = "exp")
   minmax <- cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), s = c(0, Inf))
-  exception <- c(A = 0, v = 0, t0 = 0)
+                  t0 = c(0.05, Inf), s = c(0, Inf), cv = c(1e-4, Inf))
+  exception <- c(A = 0, v = 0, t0 = 0, cv = 0)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   list(
     type = "RACE",

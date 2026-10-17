@@ -75,9 +75,55 @@ NumericVector popr(NumericVector t, NumericVector K, NumericVector lambda_p,
   return out;
 }
 
+// The Gamma rate mixture on the ratio chart: net rate v (the mean of the
+// Gamma), opposing ratio rho and rate CV cv > 0.
+// [[Rcpp::export]]
+NumericVector dopr_gamma(NumericVector t, NumericVector K, NumericVector v,
+                         NumericVector rho, NumericVector cv,
+                         bool log_out = false) {
+  const int n = opr_len({static_cast<int>(t.size()), static_cast<int>(K.size()), static_cast<int>(v.size()), static_cast<int>(rho.size()), static_cast<int>(cv.size())});
+  opr_check_len(t, n, "t");
+  opr_check_len(K, n, "K");
+  opr_check_len(v, n, "v");
+  opr_check_len(rho, n, "rho");
+  opr_check_len(cv, n, "cv");
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double ti = opr_pick(t, i);
+    const opr::gm::GState g = opr::gm::make_gstate(opr_pick(K, i), opr_pick(v, i),
+                                                   opr_pick(rho, i), opr_pick(cv, i));
+    const double lp = (ISNAN(ti) || !g.ok) ? R_NaN : opr::gm::log_pdf(ti, g);
+    out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector popr_gamma(NumericVector t, NumericVector K, NumericVector v,
+                         NumericVector rho, NumericVector cv,
+                         bool lower_tail = true, bool log_out = false) {
+  const int n = opr_len({static_cast<int>(t.size()), static_cast<int>(K.size()), static_cast<int>(v.size()), static_cast<int>(rho.size()), static_cast<int>(cv.size())});
+  opr_check_len(t, n, "t");
+  opr_check_len(K, n, "K");
+  opr_check_len(v, n, "v");
+  opr_check_len(rho, n, "rho");
+  opr_check_len(cv, n, "cv");
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double ti = opr_pick(t, i);
+    const opr::gm::GState g = opr::gm::make_gstate(opr_pick(K, i), opr_pick(v, i),
+                                                   opr_pick(rho, i), opr_pick(cv, i));
+    double lp;
+    if (ISNAN(ti) || !g.ok) lp = R_NaN;
+    else lp = lower_tail ? opr::gm::log_cdf(ti, g) : opr::gm::log_surv(ti, g);
+    out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Race adapters.  Column layout (col_registry.h, emc2col::opr): K, the two
-// rate coordinates, t0.  ctx->opr_chart selects (v, rho), (lambda_p,
+// rate coordinates, t0, and the rate CV under the ratio chart.  ctx->opr_chart selects (v, rho), (lambda_p,
 // lambda_m) or (v, lambda0).  Every accumulator with lambda- > lambda+ is defective.
 // ---------------------------------------------------------------------------
 
@@ -86,19 +132,28 @@ static inline int opr_chart_of(void* ctx_) {
   return ctx != nullptr ? ctx->opr_chart : 0;
 }
 
+// The rate CV column exists under the ratio chart only; elsewhere it is zero.
+static inline const double* opr_cv_col(const double* const* cols, int chart) {
+  return chart == 0 ? cols[emc2col::opr::cv] : nullptr;
+}
+
 // State for one row; null for an invalid row.
-static inline const opr::State* opr_state(opr::StateMemo& memo, double K,
-                                          double c1, double c2, double t0) {
-  if (R_IsNA(K) || R_IsNA(c1) || R_IsNA(c2) || !R_FINITE(t0)) return nullptr;
-  const opr::State& s = memo.get(K, c1, c2);
-  return s.ok ? &s : nullptr;
+static inline const opr::Acc* opr_state(opr::StateMemo& memo, double K,
+                                        double c1, double c2, double t0,
+                                        double cv) {
+  if (R_IsNA(K) || R_IsNA(c1) || R_IsNA(c2) || !R_FINITE(t0) || ISNAN(cv))
+    return nullptr;
+  const opr::Acc& s = memo.get(K, c1, c2, cv);
+  return s.ok() ? &s : nullptr;
 }
 
 double dopr_scalar(double t, const double* par, void* ctx_) {
-  opr::StateMemo memo(opr_chart_of(ctx_));
+  const int chart = opr_chart_of(ctx_);
+  opr::StateMemo memo(chart);
   const double t0 = par[emc2col::opr::t0];
-  const opr::State* s = opr_state(memo, par[emc2col::opr::K],
-                                  par[emc2col::opr::r1], par[emc2col::opr::r2], t0);
+  const double cv = chart == 0 ? par[emc2col::opr::cv] : 0.0;
+  const opr::Acc* s = opr_state(memo, par[emc2col::opr::K],
+                                par[emc2col::opr::r1], par[emc2col::opr::r2], t0, cv);
   if (s == nullptr) return 0.0;
   const double tt = t - t0;
   if (!(tt > 0.0)) return 0.0;
@@ -107,10 +162,12 @@ double dopr_scalar(double t, const double* par, void* ctx_) {
 }
 
 double popr_scalar(double t, const double* par, void* ctx_) {
-  opr::StateMemo memo(opr_chart_of(ctx_));
+  const int chart = opr_chart_of(ctx_);
+  opr::StateMemo memo(chart);
   const double t0 = par[emc2col::opr::t0];
-  const opr::State* s = opr_state(memo, par[emc2col::opr::K],
-                                  par[emc2col::opr::r1], par[emc2col::opr::r2], t0);
+  const double cv = chart == 0 ? par[emc2col::opr::cv] : 0.0;
+  const opr::Acc* s = opr_state(memo, par[emc2col::opr::K],
+                                par[emc2col::opr::r1], par[emc2col::opr::r2], t0, cv);
   if (s == nullptr) return 0.0;
   const double tt = t - t0;
   if (!(tt > 0.0)) return 0.0;
@@ -125,15 +182,18 @@ void dopr_raw(const double* rt, const double* const* cols, int n_rows,
               const int* mask, const int* isok,
               double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  opr::StateMemo memo(opr_chart_of(ctx_));
+  const int chart = opr_chart_of(ctx_);
+  opr::StateMemo memo(chart);
+  const double* cv_ = opr_cv_col(cols, chart);
   const double* k_  = cols[emc2col::opr::K];
   const double* c1_ = cols[emc2col::opr::r1];
   const double* c2_ = cols[emc2col::opr::r2];
   const double* t0_ = cols[emc2col::opr::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    const opr::State* s =
-        isok[i] ? opr_state(memo, k_[i], c1_[i], c2_[i], t0_[i]) : nullptr;
+    const opr::Acc* s =
+        isok[i] ? opr_state(memo, k_[i], c1_[i], c2_[i], t0_[i],
+                            cv_ ? cv_[i] : 0.0) : nullptr;
     if (s == nullptr) {
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
@@ -151,7 +211,9 @@ void popr_raw(const double* rt, const double* const* cols, int n_rows,
               const int* mask, const int* isok,
               double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  opr::StateMemo memo(opr_chart_of(ctx_));
+  const int chart = opr_chart_of(ctx_);
+  opr::StateMemo memo(chart);
+  const double* cv_ = opr_cv_col(cols, chart);
   const double* k_  = cols[emc2col::opr::K];
   const double* c1_ = cols[emc2col::opr::r1];
   const double* c2_ = cols[emc2col::opr::r2];
@@ -160,8 +222,9 @@ void popr_raw(const double* rt, const double* const* cols, int n_rows,
     if (!mask[i]) continue;
     // A loser that cannot be evaluated contributes a survivor of one; the
     // trial is failed by its winner's density.
-    const opr::State* s =
-        isok[i] ? opr_state(memo, k_[i], c1_[i], c2_[i], t0_[i]) : nullptr;
+    const opr::Acc* s =
+        isok[i] ? opr_state(memo, k_[i], c1_[i], c2_[i], t0_[i],
+                            cv_ ? cv_[i] : 0.0) : nullptr;
     if (s == nullptr) {
       out[i] = 0.0;
       continue;
@@ -181,7 +244,9 @@ void opr_logS_at_t(double t, const double* const* cols,
                    int /*n_rows_total*/, int n_lR, int /*n_par*/,
                    const int* trunc_mask, int n_unique_trials,
                    const int* isok_all, void* ctx_, double* logS_out) {
-  opr::StateMemo memo(opr_chart_of(ctx_));
+  const int chart = opr_chart_of(ctx_);
+  opr::StateMemo memo(chart);
+  const double* cv_ = opr_cv_col(cols, chart);
   const double* k_  = cols[emc2col::opr::K];
   const double* c1_ = cols[emc2col::opr::r1];
   const double* c2_ = cols[emc2col::opr::r2];
@@ -193,8 +258,9 @@ void opr_logS_at_t(double t, const double* const* cols,
     bool bad = false;
     for (int kk = 0; kk < n_lR; ++kk) {
       const int r = start + kk;
-      const opr::State* s =
-          isok_all[r] ? opr_state(memo, k_[r], c1_[r], c2_[r], t0_[r]) : nullptr;
+      const opr::Acc* s =
+          isok_all[r] ? opr_state(memo, k_[r], c1_[r], c2_[r], t0_[r],
+                                  cv_ ? cv_[r] : 0.0) : nullptr;
       if (s == nullptr) {
         bad = true; break;
       }

@@ -57,8 +57,16 @@ the stop-loss transform of the evidence state.\tabular{llllll}{
    \emph{A} \tab log \tab [1e-4, Inf] \tab log(0) \tab  \tab Range of the uniform start point. \cr
    \emph{t0} \tab log \tab [0.05, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Evidence SD per square root of mean evidence (\code{s^2} is the variance-to-mean ratio). \cr
+   \emph{cv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = 1/\emph{cv}^2 \tab Between-trial CV of the mean evidence rate. \cr
 }
 
+
+With \code{cv > 0} the rate \code{v} of each accumulator is drawn once per trial from
+a Gamma law with mean \code{v} and shape \code{beta = 1/cv^2}; \code{cv = 0} is the fixed
+rate. For packets the mixture is a series in regularized incomplete beta
+functions over the number of packets needed. For dense evidence it is a
+Gauss rule over the rate on the conditional forms above
+(Math/gamma_mixtures.tex). Start-point variability is integrated in both.
 
 \code{mapped_pars()} adds the threshold \code{b}.
 

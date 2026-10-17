@@ -498,30 +498,31 @@ namespace frq_accel {
 // (v, rho) with lambda+ = (1 + rho) v, lambda- = rho v; (lambda_p, lambda_m)
 // directly under OPR(parameterization = "rates"); or (v, lambda0) with
 // lambda+ = v + lambda0, lambda- = lambda0 under "background".  The charts
-// share the positions; ctx->opr_chart selects the mapping.
+// share the positions; ctx->opr_chart selects the mapping.  Only the ratio
+// chart has the rate CV column (the Gamma rate mixture).
 namespace opr {
-  enum : int { K = 0, r1, r2, t0, N_REQ };
+  enum : int { K = 0, r1, r2, t0, cv, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"K", "v", "rho", "t0"};
+    static const char* n[] = {"K", "v", "rho", "t0", "cv"};
     return {n, N_REQ, "OPR"};
   }
   inline ColSpec spec_rates() {
     static const char* n[] = {"K", "lambda_p", "lambda_m", "t0"};
-    return {n, N_REQ, "OPR_RATES"};
+    return {n, cv, "OPR_RATES"};
   }
   inline ColSpec spec_background() {
     static const char* n[] = {"K", "v", "lambda0", "t0"};
-    return {n, N_REQ, "OPR_BG"};
+    return {n, cv, "OPR_BG"};
   }
 }
 
 // R/model_RSUB.R — racing subordinators.  b = B + A as in RDM; s^2 is the
-// evidence variance per unit of mean evidence.  RSUB_PK (packets) shares the
-// columns.
+// evidence variance per unit of mean evidence and cv the CV of the Gamma
+// trial rate (0: fixed rate).  RSUB_PK (packets) shares the columns.
 namespace rsub {
-  enum : int { v = 0, B, A, t0, s, N_REQ };
+  enum : int { v = 0, B, A, t0, s, cv, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "B", "A", "t0", "s"};
+    static const char* n[] = {"v", "B", "A", "t0", "s", "cv"};
     return {n, N_REQ, "RSUB"};
   }
 }

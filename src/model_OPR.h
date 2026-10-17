@@ -583,13 +583,230 @@ inline void chart_rates(int chart, double c1, double c2, double* a, double* b) {
   else { *a = c1; *b = c2; }
 }
 
-// Two-slot memo of row states keyed on the sampled (K, c1, c2), so that the
-// accumulators of a trial, which alternate, and the rows of a condition reuse
-// theirs.  NaN keys never match, so the first call always derives.
+// ===========================================================================
+// Gamma rate mixture (Math/gamma_mixtures.tex, sec. 2), ratio chart only.
+//
+// The net rate V ~ Gamma(beta, rate beta/v) is drawn once per trial, with
+// beta = 1/cv^2, and lambda+ = (1 + rho) V, lambda- = rho V.  Each event of
+// the superposed stream is positive with probability p+ = (1 + rho)/(1 + 2 rho)
+// whatever V is, so the walk is a homogeneous counter of rate (1 + 2 rho) V
+// with the random criterion K + 2J, J the negative events before absorption:
+//
+//   w_j = P(J = j) = K Gamma(K + 2j) / (j! Gamma(K + j + 1)) p+^(K+j) p-^j,
+//   w_{j+1}/w_j = (K+2j)(K+2j+1) / ((j+1)(K+j+1)) p+ p-  ->  4 p+ p-.
+//
+// Integrating the Gamma(K + 2j) waiting time over V gives beta-prime laws
+// with shape a = K + 2j, tail beta and scale r = beta/((1 + 2 rho) v), so with
+// q = x/(r + x) and h_a = q^a (1-q)^beta / B(a, beta),
+//
+//   f = (1/x) sum_j w_j h_{K+2j},
+//   F = sum_j w_j I_q(K+2j, beta),   S = sum_j w_j I_{1-q}(beta, K+2j).
+//
+// I_q(a, beta) - I_q(a+2, beta) = g_a = (h_a/a)(1 + q(a + beta)/(a + 1)), so
+// F = sum_i g_{K+2i} W_i with W_i = w_0 + ... + w_i the cumulative weight:
+// a forward sum of positive terms that needs no incomplete beta at all.  S is
+// the forward sum of w_j S_j with S_{j+1} = S_j + g_{K+2j} from
+// S_0 = I_{1-q}(beta, K), one library call.  Every series stops when a
+// geometric bound on its remainder is below rounding: h_{a+2}/h_a =
+// q^2 (a+beta)(a+beta+1)/(a(a+1)) falls with a, and the weight ratio stays
+// below max(its current value, 4 p+ p-) (it falls to the limit while above it
+// and rises to it from below).
+//
+// The F series converges at about q^2 per term and the S series at about the
+// weight ratio, so F is summed while the beta-prime median of the first
+// criterion is ahead, S otherwise, and each output is the complement of the
+// other only where that leaves it at least one half.
+// ===========================================================================
+namespace gm {
+
+constexpr double kEps = 1e-17;
+
+struct GState {
+  bool ok = false;
+  double K = 0.0, beta = 0.0;
+  double r = 0.0;        // beta-prime scale beta/((1 + 2 rho) v)
+  double ppm = 0.0;      // p+ p-
+  double w_lim = 0.0;    // 4 p+ p-
+  double log_w0 = 0.0;   // K log p+
+  double lbK = 0.0;      // log B(K, beta)
+  double v = 0.0, rho = 0.0;
+};
+
+// w_0 = p+^K must stay representable: K log(1/p+) <= K log 2.
+inline GState make_gstate(double K, double v, double rho, double cv) {
+  GState g;
+  if (!(K > 0.0 && v > 0.0 && rho >= 0.0 && cv > 0.0) || !R_FINITE(K) ||
+      !R_FINITE(v) || !R_FINITE(rho) || !R_FINITE(cv)) return g;
+  const double beta = 1.0 / (cv * cv);
+  const double tot = 1.0 + 2.0 * rho;
+  const double pm = rho / tot;
+  g.K = K; g.beta = beta; g.v = v; g.rho = rho;
+  g.r = beta / (tot * v);
+  g.ppm = (1.0 - pm) * pm;
+  g.w_lim = 4.0 * g.ppm;
+  g.log_w0 = K * std::log1p(-pm);
+  g.lbK = lbeta_fast(K, beta);
+  g.ok = g.log_w0 > -700.0 && R_FINITE(g.lbK) && g.r > 0.0 && R_FINITE(g.r);
+  return g;
+}
+
+// q, 1 - q and their logs at decision time x, each without cancellation.
+struct QPt { double q, omq, log_q, log_omq; };
+inline QPt qpoint(double x, double r) {
+  const double rx = r + x, lrx = std::log(rx);
+  return {x / rx, r / rx, std::log(x) - lrx, std::log(r) - lrx};
+}
+
+inline double log_h(double a, const QPt& p, double beta, double lb) {
+  return a * p.log_q + beta * p.log_omq - lb;
+}
+
+// log f(x).
+inline double log_pdf(double x, const GState& g) {
+  if (!(x > 0.0) || !R_FINITE(x)) return R_NegInf;
+  const QPt p = qpoint(x, g.r);
+  const double K = g.K, b = g.beta, q2 = p.q * p.q;
+  double L = g.log_w0 + log_h(K, p, b, g.lbK);
+  double t = 1.0, sum = 1.0, a = K;
+  for (int j = 0;; ++j, a += 2.0) {
+    if (j == kMaxTerms) return R_NaN;
+    const double wr = a * (a + 1.0) / ((j + 1.0) * (K + j + 1.0)) * g.ppm;
+    const double hr = q2 * (a + b) * (a + b + 1.0) / (a * (a + 1.0));
+    const double rb = std::max(wr, g.w_lim) * hr;
+    if (rb < 1.0 && t * rb < kEps * sum * (1.0 - rb)) break;
+    t *= wr * hr;
+    sum += t;
+    if (sum > kRescale) { t /= kRescale; sum /= kRescale; L += kLogRescale; }
+  }
+  return L + std::log(sum) - std::log(x);
+}
+
+// log F = log sum_i g_{K+2i} W_i, with h carried relative to exp(L).  The
+// remainder after term i is at most sum_{l>i} g_l <= g_i gam/(1 - gam), gam
+// bounding every later ratio g_{l+2}/g_l (W <= 1).
+inline double log_F_series(const QPt& p, const GState& g) {
+  const double K = g.K, b = g.beta, q = p.q, q2 = q * q;
+  double L = log_h(K, p, b, g.lbK);
+  if (!(L > R_NegInf)) return R_NegInf;
+  double h = 1.0, w = std::exp(g.log_w0), W = w, sum = 0.0, a = K;
+  for (int i = 0;; ++i, a += 2.0) {
+    if (i == kMaxTerms) return R_NaN;
+    const double br = 1.0 + q * (a + b) / (a + 1.0);
+    const double gi = h / a * br;
+    sum += gi * W;
+    const double hr = q2 * (a + b) * (a + b + 1.0) / (a * (a + 1.0));
+    const double gam = (b >= 1.0) ? hr : hr * (1.0 + q) / br;
+    if (gam < 1.0 && gi * gam < kEps * sum * (1.0 - gam)) break;
+    h *= hr;
+    w *= a * (a + 1.0) / ((i + 1.0) * (K + i + 1.0)) * g.ppm;
+    W += w;
+    if (sum > kRescale || h > kRescale) {
+      h /= kRescale; sum /= kRescale; L += kLogRescale;
+    }
+  }
+  return L + std::log(sum);
+}
+
+// log S = log sum_j w_j S_j, with S_j and h carried relative to exp(L).
+// The remainder after term j is at most Smax sum_{l>j} w_l, Smax bounding
+// the later S_l (by one, or by S_{j+1} plus the geometric g tail).
+inline double log_S_series(const QPt& p, const GState& g) {
+  const double K = g.K, b = g.beta, q = p.q, q2 = q * q;
+  const double lS0 = R::pbeta(p.omq, b, K, 1, 1);
+  const double lh0 = log_h(K, p, b, g.lbK);
+  if (ISNAN(lS0)) return R_NaN;
+  double L = std::max(lS0, lh0);
+  if (!(L > R_NegInf)) return R_NegInf;
+  double S = std::exp(lS0 - L), h = std::exp(lh0 - L);
+  double one = std::exp(-L);  // S <= 1 on this scale (may be Inf)
+  double w = std::exp(g.log_w0), sum = 0.0, a = K;
+  for (int j = 0;; ++j, a += 2.0) {
+    if (j == kMaxTerms) return R_NaN;
+    sum += w * S;
+    const double br = 1.0 + q * (a + b) / (a + 1.0);
+    const double gj = h / a * br;
+    const double hr = q2 * (a + b) * (a + b + 1.0) / (a * (a + 1.0));
+    const double wr = a * (a + 1.0) / ((j + 1.0) * (K + j + 1.0)) * g.ppm;
+    S += gj;
+    const double wb = std::max(wr, g.w_lim);
+    if (wb < 1.0) {
+      const double gam = (b >= 1.0) ? hr : hr * (1.0 + q) / br;
+      double smax = one;
+      if (gam < 1.0) smax = std::min(smax, S + gj * gam / (1.0 - gam));
+      if (w * wb * smax < kEps * sum * (1.0 - wb)) break;
+    }
+    h *= hr;
+    w *= wr;
+    if (sum > kRescale || S > kRescale) {
+      S /= kRescale; h /= kRescale; sum /= kRescale; one /= kRescale;
+      L += kLogRescale;
+    }
+  }
+  return L + std::log(sum);
+}
+
+// Whether the beta-prime median of the first criterion K is still ahead,
+// where F <= I_q(K, beta) is the small side.
+inline bool early(const QPt& p, const GState& g) {
+  return p.q * (g.K + g.beta) <= g.K;
+}
+
+inline double log_surv(double x, const GState& g) {
+  if (!(x > 0.0)) return 0.0;
+  if (!R_FINITE(x)) return R_NegInf;
+  const QPt p = qpoint(x, g.r);
+  if (early(p, g)) {
+    const double lF = log_F_series(p, g);
+    if (lF < -M_LN2) return std::log1p(-std::exp(lF));
+  }
+  return log_S_series(p, g);
+}
+
+inline double log_cdf(double x, const GState& g) {
+  if (!(x > 0.0)) return R_NegInf;
+  if (!R_FINITE(x)) return 0.0;
+  const QPt p = qpoint(x, g.r);
+  if (!early(p, g)) {
+    const double lS = log_S_series(p, g);
+    if (lS < -M_LN2) return std::log1p(-std::exp(lS));
+  }
+  return log_F_series(p, g);
+}
+
+// The trial rate, then the fixed-rate decision time at that rate.
+inline double draw_decision(double K, double v, double rho, double cv) {
+  const double V = R::rgamma(1.0 / (cv * cv), v * cv * cv);
+  return opr::draw_decision(K, (1.0 + rho) * V, rho * V);
+}
+
+}  // namespace gm
+
+// One accumulator row: the fixed-rate State, or the Gamma mixture when
+// cv > 0 (ratio chart only).
+struct Acc {
+  bool mix = false;
+  State s;
+  gm::GState g;
+  bool ok() const { return mix ? g.ok : s.ok; }
+};
+
+inline double log_pdf(double u, const Acc& c) {
+  return c.mix ? gm::log_pdf(u, c.g) : log_pdf(u, c.s);
+}
+inline double log_surv(double u, const Acc& c) {
+  return c.mix ? gm::log_surv(u, c.g) : log_surv(u, c.s);
+}
+inline double log_cdf(double u, const Acc& c) {
+  return c.mix ? gm::log_cdf(u, c.g) : log_cdf(u, c.s);
+}
+
+// Two-slot memo of row states keyed on the sampled (K, c1, c2, cv), so that
+// the accumulators of a trial, which alternate, and the rows of a condition
+// reuse theirs.  NaN keys never match, so the first call always derives.
 struct StateMemo {
   struct Slot {
-    double K = R_NaN, c1 = R_NaN, c2 = R_NaN;
-    State s;
+    double K = R_NaN, c1 = R_NaN, c2 = R_NaN, cv = R_NaN;
+    Acc s;
   };
   Slot slot[2];
   int cur = 0;
@@ -597,16 +814,22 @@ struct StateMemo {
 
   explicit StateMemo(int chart_) : chart(chart_) {}
 
-  const State& get(double K, double c1, double c2) {
+  const Acc& get(double K, double c1, double c2, double cv = 0.0) {
     Slot& s0 = slot[cur];
-    if (K == s0.K && c1 == s0.c1 && c2 == s0.c2) return s0.s;
+    if (K == s0.K && c1 == s0.c1 && c2 == s0.c2 && cv == s0.cv) return s0.s;
     cur ^= 1;
     Slot& s1 = slot[cur];
-    if (K == s1.K && c1 == s1.c1 && c2 == s1.c2) return s1.s;
-    double a, b;
-    chart_rates(chart, c1, c2, &a, &b);
-    s1.K = K; s1.c1 = c1; s1.c2 = c2;
-    s1.s = make_state(K, a, b);
+    if (K == s1.K && c1 == s1.c1 && c2 == s1.c2 && cv == s1.cv) return s1.s;
+    s1.K = K; s1.c1 = c1; s1.c2 = c2; s1.cv = cv;
+    s1.s.mix = (cv != 0.0);
+    if (s1.s.mix) {
+      // Only the ratio chart separates the criterion from the rate.
+      s1.s.g = (chart == 0) ? gm::make_gstate(K, c1, c2, cv) : gm::GState();
+    } else {
+      double a, b;
+      chart_rates(chart, c1, c2, &a, &b);
+      s1.s.s = make_state(K, a, b);
+    }
     return s1.s;
   }
 };
@@ -614,7 +837,7 @@ struct StateMemo {
 }  // namespace opr
 
 // Race adapters (model_OPR.cpp).  Column layout: K = 0, then the two rate
-// coordinates, t0 = 3.
+// coordinates, t0 = 3, and cv = 4 under the ratio chart.
 double dopr_scalar(double t, const double* par, void* ctx_);
 double popr_scalar(double t, const double* par, void* ctx_);
 void dopr_raw(const double* rt, const double* const* cols, int n_rows,

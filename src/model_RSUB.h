@@ -63,10 +63,11 @@ constexpr double kCancel = 0.99;
 constexpr double kMillsCancel = 0.9;
 constexpr int kGLNodes = 8;
 
-// v = 0 is valid: the accumulator never finishes.
-inline bool pars_ok(double v, double B, double A, double s) {
+// v = 0 is valid: the accumulator never finishes.  cv = 0 is a fixed rate.
+inline bool pars_ok(double v, double B, double A, double s, double cv = 0.0) {
   return R_FINITE(v) && v >= 0.0 && R_FINITE(B) && B >= 0.0 &&
-         R_FINITE(A) && A >= 0.0 && B + A > 0.0 && R_FINITE(s) && s > 0.0;
+         R_FINITE(A) && A >= 0.0 && B + A > 0.0 && R_FINITE(s) && s > 0.0 &&
+         R_FINITE(cv) && cv >= 0.0;
 }
 
 inline double log_diff(double lx, double ly) {  // log(e^lx - e^ly), lx > ly
@@ -75,6 +76,12 @@ inline double log_diff(double lx, double ly) {  // log(e^lx - e^ly), lx > ly
 
 // min(x, 0) for a log probability, keeping NaN (std::fmin would drop it).
 inline double clamp_log_prob(double x) { return x > 0.0 ? 0.0 : x; }
+
+// log(e^lx - e^ly) for ly below lx, which keeps -Inf operands.
+inline double log_less(double lx, double ly) {
+  if (ly == R_NegInf || lx == R_NegInf) return lx;
+  return lx + std::log1p(-std::exp(ly - lx));
+}
 
 inline double log_add(double lx, double ly) {
   if (lx < ly) std::swap(lx, ly);
@@ -1069,6 +1076,702 @@ struct Kernel {
 }  // namespace cp
 
 // ===========================================================================
+// Gamma rate mixtures (Math/gamma_mixtures.tex, secs. 3 and 4)
+//
+// The trial rate V ~ Gamma(beta, rate beta/v), beta = 1/cv^2, is drawn once
+// per trial.  The rate is a pure time scale, so in mean-evidence units
+// m = V u the mixing law is Gamma(beta, rate lam = beta/mbar), mbar = v u.
+// The averaged density is v E[V' ...] with V' size-biased, which is the same
+// law with shape beta + 1; the J ends, which give the density, are therefore
+// mixed at shape beta + 1 and the H, L ends and point survivors at beta.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Packets.  Given V the decision is the arrival of event 1 + K, K ~ Pois(b),
+// b = 2d/c, at rate 2V/c; over V the event count by time u is negative
+// binomial with P(N >= a) = I_q(a, p), q = abar/(p + abar), abar = 2 mbar/c
+// (the rate, and so q, is the same at shapes beta and beta + 1).  With
+// h_a = q^a (1-q)^p / B(a, p) and g_a = h_a / a = I_q(a, p) - I_q(a + 1, p),
+// and C, T the Poisson(b) CDF and upper tail,
+//
+//   F = sum_{a>=1} g_a C(a-1),              S = (1-q)^beta + sum_a g_a T(a),
+//   H = (c/2) sum_a g_a E(a - K)+,          L = (c/2) [(1-q)^beta b + sum_a g_a E(K - a)+],
+//   J = e^-b + sum_a g'_a P(1 <= K <= a),   Jc = (1-q)^{beta+1}(1 - e^-b) + sum_a g'_a T(a+1),
+//   f = (v/mbar) sum_{a>=1} a P(K = a-1) g_a,
+//
+// (g' at shape beta + 1).  Every weight is log-concave in a, rising
+// (C, E(a-K)+, P(1 <= K <= a), a P(K = a-1) up to its mode) or falling
+// (T, E(K-a)+), and is built by additions in its rising direction: the
+// rising sums run up from a = 1, the falling ones down from a cut a_hi above
+// the peak.  For p >= 1 the summands are log-concave too, so each sweep stops
+// when its current ratio bounds a geometric remainder below rounding; for
+// p < 1 g is log-convex and a downward sweep runs to a = 1.
+// ---------------------------------------------------------------------------
+namespace cpg {
+
+constexpr double kEps = 1e-17;
+constexpr int kMaxTerms = 1000000;
+
+struct QG { double q, log_q, log_omq; };
+
+// q and 1 - q for mean count abar at shape p.
+inline QG qg(double abar, double p) {
+  const double t = p + abar;
+  return {abar / t, std::log(abar) - std::log(t), std::log(p) - std::log(t)};
+}
+
+// Rising weights: init() returns log W_1 and next(a) the ratio W_{a+1}/W_a.
+// Internal state is kept relative to the first weight and renormalised.
+struct WCprev {          // W_a = C(a - 1)
+  double b, pi = 1.0, c = 1.0;
+  explicit WCprev(double b_) : b(b_) {}
+  double init() const { return -b; }
+  double next(double a) {
+    pi *= b / a;
+    const double cn = c + pi, r = cn / c;
+    c = cn;
+    if (c > cp::kRescale) { c /= cp::kRescale; pi /= cp::kRescale; }
+    return r;
+  }
+};
+struct WStop {           // W_a = E(a - K)+ = sum_{n<a} C(n)
+  double b, pi = 1.0, c = 1.0, l = 1.0;
+  explicit WStop(double b_) : b(b_) {}
+  double init() const { return -b; }
+  double next(double a) {
+    pi *= b / a;
+    c += pi;
+    const double ln = l + c, r = ln / l;
+    l = ln;
+    if (l > cp::kRescale) { l /= cp::kRescale; c /= cp::kRescale; pi /= cp::kRescale; }
+    return r;
+  }
+};
+struct WCstar {          // W_a = P(1 <= K <= a)
+  double b, pi = 1.0, c = 1.0;
+  explicit WCstar(double b_) : b(b_) {}
+  double init() const { return std::log(b) - b; }
+  double next(double a) {
+    pi *= b / (a + 1.0);
+    const double cn = c + pi, r = cn / c;
+    c = cn;
+    if (c > cp::kRescale) { c /= cp::kRescale; pi /= cp::kRescale; }
+    return r;
+  }
+};
+struct WDens {           // W_a = a P(K = a - 1)
+  double b;
+  explicit WDens(double b_) : b(b_) {}
+  double init() const { return -b; }
+  double next(double a) { return (a + 1.0) / a * b / a; }
+};
+
+// log sum_{a>=1} g_a W_a at shape p, from g_1 = p q (1-q)^p.  The ratios of
+// a log-concave W only fall, and those of g fall to q (p >= 1) or rise to it
+// (p < 1), so max(g ratio, q) times the current W ratio bounds every later
+// summand ratio.
+template <class W>
+inline double up_sum(const QG& z, double p, W& w) {
+  double L = std::log(p) + z.log_q + p * z.log_omq + w.init();
+  if (!(L > R_NegInf)) return R_NegInf;
+  double t = 1.0, sum = 1.0;
+  for (double a = 1.0;; a += 1.0) {
+    if (a > kMaxTerms) return R_NaN;
+    const double gr = z.q * (a + p) / (a + 1.0);
+    const double r = gr * w.next(a);
+    const double rb = (p >= 1.0) ? r : r / gr * std::max(gr, z.q);
+    t *= r;
+    sum += t;
+    if (rb < 1.0 && t * rb < kEps * sum * (1.0 - rb)) break;
+    if (sum > cp::kRescale) { t /= cp::kRescale; sum /= cp::kRescale; L += cp::kLogRescale; }
+  }
+  return L + std::log(sum);
+}
+
+// Falling weights from a_hi > b: start() sets the state at a_hi from the
+// forward series of the Poisson tail, t_k = b^k a!/(a + k)!, and returns
+// log W_{a_hi}; prev(a) returns W_{a-1}/W_a.  Every falling weight has
+// W_{a+1}/W_a <= b/(a + 1) above b, which bounds the sum above a_hi.
+inline void tail_series(double a, double b, double* s0, double* s1, double* sj) {
+  double t = 1.0, k = 0.0;
+  *s0 = 1.0; *s1 = 0.0; *sj = 0.0;
+  for (int i = 0; i < 100000; ++i) {
+    k += 1.0;
+    t *= b / (a + k);
+    *s1 += t;
+    *sj += k * t;
+    if (t < 1e-18 * *s1) break;
+  }
+  *s0 += *s1;
+}
+struct WT {              // W_a = T(a)
+  double b, p = 1.0, T = 1.0;
+  explicit WT(double b_) : b(b_) {}
+  double start(double a) {
+    double s0, s1, sj;
+    tail_series(a, b, &s0, &s1, &sj);
+    p = 1.0; T = s0;
+    return R::dpois(a, b, 1) + std::log(s0);
+  }
+  double prev(double a) {
+    p *= a / b;
+    const double Tn = T + p, r = Tn / T;
+    T = Tn;
+    if (T > cp::kRescale) { T /= cp::kRescale; p /= cp::kRescale; }
+    return r;
+  }
+};
+struct WT1 {             // W_a = T(a + 1)
+  double b, p = 1.0, T = 1.0;
+  explicit WT1(double b_) : b(b_) {}
+  double start(double a) {
+    double s0, s1, sj;
+    tail_series(a, b, &s0, &s1, &sj);
+    p = 1.0; T = s1;
+    return R::dpois(a, b, 1) + std::log(s1);
+  }
+  double prev(double a) {
+    const double Tn = T + p, r = Tn / T;
+    T = Tn;
+    p *= a / b;
+    if (T > cp::kRescale) { T /= cp::kRescale; p /= cp::kRescale; }
+    return r;
+  }
+};
+struct WU {              // W_a = E(K - a)+ = sum_{n>a} T(n)
+  double b, p = 1.0, T = 1.0, U = 1.0;
+  explicit WU(double b_) : b(b_) {}
+  double start(double a) {
+    double s0, s1, sj;
+    tail_series(a, b, &s0, &s1, &sj);
+    p = 1.0; T = s0; U = sj;
+    return R::dpois(a, b, 1) + std::log(sj);
+  }
+  double prev(double a) {
+    const double Un = U + T, r = Un / U;
+    U = Un;
+    p *= a / b;
+    T += p;
+    if (U > cp::kRescale) { U /= cp::kRescale; T /= cp::kRescale; p /= cp::kRescale; }
+    return r;
+  }
+};
+
+// log sum_{a>=1} g_a W_a for a falling W, swept down from a_hi.  a_hi lies
+// where the summand ratio has fallen below one half (g's ratio q(a+p)/(a+1)
+// times b/(a+1)) and some way beyond; the remainder above it is checked
+// against the finished sum, and the sweep is redone from twice as far up in
+// the rare case that it is not negligible.
+template <class W>
+inline double down_sum(const QG& z, double p, double b, const W& w0) {
+  const double qb = z.q * b;
+  const double a1 = std::max(qb + std::sqrt(qb * qb + 2.0 * qb * (p + 1.0)), b);
+  double a_hi = std::ceil(a1 + 10.0 * std::sqrt(a1) + 30.0);
+  for (int attempt = 0; attempt < 8; ++attempt, a_hi *= 2.0) {
+    if (a_hi > kMaxTerms) return R_NaN;
+    W w = w0;
+    const double L0 = a_hi * z.log_q + p * z.log_omq - lbeta_fast(a_hi, p) -
+                      std::log(a_hi) + w.start(a_hi);
+    if (!(L0 > R_NegInf)) return R_NegInf;
+    double L = L0, t = 1.0, sum = 1.0;
+    for (double a = a_hi; a > 1.0; a -= 1.0) {
+      const double r = a / (z.q * (a - 1.0 + p)) * w.prev(a);
+      t *= r;
+      sum += t;
+      if (p >= 1.0 && r < 1.0 && t * r < kEps * sum * (1.0 - r)) break;
+      if (sum > cp::kRescale) { t /= cp::kRescale; sum /= cp::kRescale; L += cp::kLogRescale; }
+    }
+    // The summands above a_hi fall at least by ru per step.
+    const double ru = std::max(z.q * (a_hi + p) / (a_hi + 1.0), p >= 1.0 ? 0.0 : z.q) *
+                      b / (a_hi + 1.0);
+    const double lsum = L + std::log(sum);
+    if (ru < 0.5 && L0 + std::log(ru / (1.0 - ru)) < lsum + std::log(kEps)) return lsum;
+  }
+  return R_NaN;
+}
+
+struct Kernel {
+  double beta = 1.0;
+
+  // Point survivor and CDF: F is the rising sum, S the falling one plus
+  // (1-q)^beta; whichever the mean count makes small is summed and the other
+  // is its complement once it is below one half.
+  static double log_F(const QG& z, double beta, double b) {
+    WCprev w(b);
+    return up_sum(z, beta, w);
+  }
+  static double log_S(const QG& z, double beta, double b) {
+    return log_add(beta * z.log_omq, down_sum(z, beta, b, WT(b)));
+  }
+  double log_surv_point(double u, double v, double d, double s) const {
+    const double c = s * s, abar = 2.0 * v * u / c, b = 2.0 * d / c;
+    const QG z = qg(abar, beta);
+    if (abar < b + 1.0) {
+      const double lF = log_F(z, beta, b);
+      if (lF < -M_LN2) return std::log1p(-std::exp(lF));
+    }
+    return log_S(z, beta, b);
+  }
+  double log_cdf_point(double u, double v, double d, double s) const {
+    const double c = s * s, abar = 2.0 * v * u / c, b = 2.0 * d / c;
+    const QG z = qg(abar, beta);
+    if (abar >= b + 1.0) {
+      const double lS = log_S(z, beta, b);
+      if (lS < -M_LN2) return std::log1p(-std::exp(lS));
+    }
+    return log_F(z, beta, b);
+  }
+  double log_pdf_point(double u, double v, double d, double s) const {
+    const double c = s * s, m = v * u, b = 2.0 * d / c;
+    const QG z = qg(2.0 * m / c, beta);
+    WDens w(b);
+    return std::log(v / m) + up_sum(z, beta, w);
+  }
+  bool prefer_Jc(double, double, double, double) const { return false; }
+  double log_end_M(double, double, double) const { return R_NaN; }
+  double fast_cdf_surv(double, double, double, double, bool) const { return R_NaN; }
+  double fast_pdf(double, double, double, double, double) const { return R_NaN; }
+
+  // J and Jc at shape beta + 1: J is small while the size-biased mean count
+  // abar (beta + 1)/beta is below b.
+  EndJ end_J(double m, double d, double s, int /*want*/ = 3) const {
+    if (d <= 0.0) return {0.0, R_NegInf};
+    const double c = s * s, abar = 2.0 * m / c, b = 2.0 * d / c, p = beta + 1.0;
+    const QG z = qg(abar * p / beta, p);
+    auto lJ = [&] { WCstar w(b); return log_add(-b, up_sum(z, p, w)); };
+    auto lJc = [&] {
+      return log_add(p * z.log_omq + std::log(-std::expm1(-b)), down_sum(z, p, b, WT1(b)));
+    };
+    EndJ e;
+    if (abar * p / beta < b) {
+      e.lJ = lJ();
+      if (!(e.lJ >= -M_LN2)) { e.lJc = std::log1p(-std::exp(e.lJ)); return e; }
+      e.lJc = lJc();
+      return e;
+    }
+    e.lJc = lJc();
+    e.lJ = (e.lJc < -M_LN2) ? std::log1p(-std::exp(e.lJc)) : lJ();
+    return e;
+  }
+
+  // H - L = mbar - d, so the smaller is summed and the larger added to it.
+  EndHL end_HL(double m, double d, double s) const {
+    if (d <= 0.0) return {std::log(m), R_NegInf};
+    const double c = s * s, abar = 2.0 * m / c, b = 2.0 * d / c;
+    const double lth = std::log(0.5 * c);
+    const QG z = qg(abar, beta);
+    EndHL e;
+    if (m < d) {
+      WStop w(b);
+      e.lH = lth + up_sum(z, beta, w);
+      e.lL = log_add(e.lH, std::log(d - m));
+    } else {
+      e.lL = lth + log_add(beta * z.log_omq + std::log(b), down_sum(z, beta, b, WU(b)));
+      e.lH = (m > d) ? log_add(e.lL, std::log(m - d)) : e.lL;
+    }
+    return e;
+  }
+  void ends_J(double m, double d1, double d2, double s, int want, EndJ* e1, EndJ* e2) const {
+    *e1 = end_J(m, d1, s, want);
+    *e2 = end_J(m, d2, s, want);
+  }
+  void ends_HL(double m, double d1, double d2, double s, EndHL* e1, EndHL* e2) const {
+    *e1 = end_HL(m, d1, s);
+    *e2 = end_HL(m, d2, s);
+  }
+};
+
+// The trial rate, then the fixed-rate packet arrivals at that rate.
+inline double draw(double v, double B, double A, double s, double cv) {
+  const double V = R::rgamma(1.0 / (cv * cv), v * cv * cv);
+  return cp::Kernel::draw(V, B, A, s);
+}
+
+}  // namespace cpg
+
+// ---------------------------------------------------------------------------
+// Inverse-Gaussian evidence.  There is no closed form for real beta, so each
+// mixed quantity is a Gauss rule over m against Gamma(p, rate lam) of the
+// stable conditional forms of namespace ig.  Every conditional form is
+// phi(alpha) times a slowly varying bracket of Mills functions on one side of
+// m = d (alpha = (m - d)/z, z = s sqrt(d)) and a constant or linear limit on
+// the other, so each quantity is split at d into Gaussian-tailed integrals
+// and closed-form Gamma pieces:
+//
+//   S = P_p(lam d) - int_0^d g F + int_d^inf g S,    F <= 1/2 below d,
+//   F = Q_p(lam d) - int_d^inf g S + int_0^d g F,    S <= 1/2 above d,
+//   H = int_0^d g H + E(m - d)+ + int_d^inf g L,     L = H + d - mbar,
+//   J = Q_p(lam d) + int_0^d g J - int_d^inf g Jc,   Jc = 1 - J,
+//   f = v int_0^inf g' j,                            j = f_d / V,
+//
+// so that no subtraction loses more than a bit or two.  Below d, J reaches
+// 1/2 only when z is comparable to d; there J is no longer small and the
+// bracket varies slowly, and Jc is integrated directly instead.
+//
+// The Gaussian-tailed integrands are m^{p-1} e^{-lam m - (m-d)^2/(2 z^2)}
+// times their bracket, so the nodes are placed on that envelope: its maximum
+// on the side, where it is completed-square Gaussian times a power, and the
+// two points kDrop below it.  Where the lower point reaches the origin the
+// power is non-analytic there and goes into a Gauss-Jacobi weight.  This
+// keeps relative accuracy where the Gamma law is narrow against z (large
+// beta) and in the far tails, where a window fixed by z alone misses the
+// product of a Gamma tail and a Gaussian tail.
+// ---------------------------------------------------------------------------
+namespace igg {
+
+constexpr int kNodes = 32;
+constexpr double kDrop = 38.0;
+
+// Gauss-Jacobi rule on [-1, 1] for the weight (1 + u)^c, c > -1, by
+// Golub-Welsch: the eigenvalues of the Jacobi matrix of the Jacobi
+// polynomials P^(0, c), and the squared first components of its
+// eigenvectors, found by implicit QL that carries only those components.
+struct JRule { double c = R_NaN; double x[kNodes], w[kNodes]; };
+
+inline bool jacobi_rule(double c, JRule& r) {
+  constexpr int n = kNodes;
+  double d[n], e[n], z0[n];
+  for (int k = 0; k < n; ++k) {
+    const double s = 2.0 * k + c;
+    d[k] = (k == 0) ? c / (c + 2.0) : c * c / (s * (s + 2.0));
+    if (k > 0) e[k - 1] = 2.0 * k * (k + c) / (s * std::sqrt((s + 1.0) * (s - 1.0)));
+    z0[k] = (k == 0) ? 1.0 : 0.0;
+  }
+  e[n - 1] = 0.0;
+  for (int l = 0; l < n; ++l) {
+    int iter = 0, m;
+    do {
+      for (m = l; m < n - 1; ++m) {
+        const double dd = std::fabs(d[m]) + std::fabs(d[m + 1]);
+        if (std::fabs(e[m]) <= 1e-16 * dd) break;
+      }
+      if (m != l) {
+        if (iter++ == 60) return false;
+        double g = (d[l + 1] - d[l]) / (2.0 * e[l]);
+        double rr = std::hypot(g, 1.0);
+        g = d[m] - d[l] + e[l] / (g + (g >= 0.0 ? rr : -rr));
+        double s = 1.0, cc = 1.0, p = 0.0;
+        int i;
+        for (i = m - 1; i >= l; --i) {
+          double f = s * e[i];
+          const double b = cc * e[i];
+          rr = std::hypot(f, g);
+          e[i + 1] = rr;
+          if (rr == 0.0) { d[i + 1] -= p; e[m] = 0.0; break; }
+          s = f / rr; cc = g / rr;
+          g = d[i + 1] - p;
+          rr = (d[i] - g) * s + 2.0 * cc * b;
+          p = s * rr;
+          d[i + 1] = g + p;
+          g = cc * rr - b;
+          f = z0[i + 1];
+          z0[i + 1] = s * z0[i] + cc * f;
+          z0[i] = cc * z0[i] - s * f;
+        }
+        if (rr == 0.0 && i >= l) continue;
+        d[l] -= p; e[l] = g; e[m] = 0.0;
+      }
+    } while (m != l);
+  }
+  const double mu0 = std::exp((c + 1.0) * M_LN2) / (c + 1.0);
+  for (int k = 0; k < n; ++k) { r.x[k] = d[k]; r.w[k] = mu0 * z0[k] * z0[k]; }
+  r.c = c;
+  return true;
+}
+
+// The rules recur for the shapes of the rows of a condition; a small
+// round-robin cache keyed on c serves them.
+inline const JRule* jrule(double c) {
+  constexpr int kSlots = 8;
+  static thread_local JRule cache[kSlots];
+  static thread_local int next = 0;
+  for (int k = 0; k < kSlots; ++k) if (cache[k].c == c) return &cache[k];
+  JRule& e = cache[next];
+  next = (next + 1) % kSlots;
+  if (!jacobi_rule(c, e)) { e.c = R_NaN; return nullptr; }
+  return &e;
+}
+
+// Gamma(p, rate lam) on m, with lnorm = p log lam - log Gamma(p).
+struct Mix { double p, lam, lnorm; };
+inline Mix mix(double p, double lam) {
+  return {p, lam, p * std::log(lam) - lgamma_fast(p)};
+}
+
+// log int_a^b Gamma(m; p, lam) phi(m) dm, phi = phi_std((m - d)/z) br(m) when
+// gauss, br(m) otherwise.  Nodes sit on the envelope
+// e(m) = pe log m - lam m - [gauss] (m - d)^2/(2 z^2), pe = max(p - 1, 0),
+// between its maximum on [a, b] and the points kDrop below it; for p < 1 the
+// power is left out of the envelope, which only falls faster with it.
+template <class Fn>
+inline double log_integral(const Mix& g, double a, double b, bool gauss, double d,
+                           double z, Fn br) {
+  const double pe = std::max(g.p - 1.0, 0.0), lam = g.lam;
+  const double iz2 = gauss ? 1.0 / (z * z) : 0.0;
+  auto env = [&](double m) {
+    return (pe > 0.0 ? pe * std::log(m) : 0.0) - lam * m - 0.5 * (m - d) * (m - d) * iz2;
+  };
+  auto denv = [&](double m) { return pe / m - lam - (m - d) * iz2; };
+  // Unconstrained maximum: the positive root of m^2 - mu m - pe z^2 = 0,
+  // mu = d - lam z^2 (gauss), or pe/lam.
+  double m0;
+  if (gauss) {
+    const double mu = d - lam * z * z;
+    const double disc = std::sqrt(mu * mu + 4.0 * pe * z * z);
+    m0 = (mu >= 0.0) ? 0.5 * (mu + disc) : 2.0 * pe * z * z / (disc - mu);
+  } else {
+    m0 = pe / lam;
+  }
+  const double ms = std::min(std::max(m0, a), b);
+  const double es = env(ms);
+  const double curv = (ms > 0.0 ? pe / (ms * ms) : 0.0) + iz2;
+  const double sig = curv > 0.0 ? 1.0 / std::sqrt(curv) : 1.0 / lam;
+  const double target = es - kDrop;
+  const double step0 = (curv > 0.0) ? sig * std::sqrt(2.0 * kDrop) : kDrop / lam;
+  // Drop points by Newton from the far side, where it converges monotonically
+  // on the concave envelope.
+  double hi;
+  if (R_FINITE(b) && env(b) >= target) {
+    hi = b;
+  } else {
+    double x = ms + step0;
+    for (int i = 0; i < 60 && env(x) > target; ++i) x = ms + 2.0 * (x - ms);
+    if (R_FINITE(b)) x = std::min(x, b);
+    for (int i = 0; i < 8; ++i) {
+      const double xn = x - (env(x) - target) / denv(x);
+      if (!(xn > ms && xn < x)) break;
+      if (x - xn < 1e-4 * sig) { x = xn; break; }
+      x = xn;
+    }
+    hi = x;
+  }
+  double lo = a;
+  if (ms > a && env(a) < target) {
+    double x = ms - step0;
+    for (int i = 0; i < 60 && x > a && env(x) > target; ++i) x = ms - 2.0 * (ms - x);
+    // log m falls faster than the quadratic the step assumed: approach a
+    // geometrically until the start lies below the target.
+    for (int i = 0; i < 60 && !(x > a && env(x) <= target); ++i) {
+      const double t = std::ldexp(1.0, -(i + 1));
+      x = a + t * (ms - a);
+    }
+    if (x > a && env(x) <= target) {
+      for (int i = 0; i < 8; ++i) {
+        const double xn = x - (env(x) - target) / denv(x);
+        if (!(xn > x && xn < ms)) break;
+        if (xn - x < 1e-4 * sig) { x = xn; break; }
+        x = xn;
+      }
+      lo = x;
+    }
+  }
+  if (!(hi > lo)) return R_NegInf;
+
+  double ex[kNodes], bv[kNodes];
+  double emax = R_NegInf;
+  const double lgau = gauss ? -LOG_SQRT_2PI : 0.0;
+  const JRule* jr = nullptr;
+  // Jacobi carries m^{p-1} exactly; the rest of the integrand must vary by
+  // little enough over [0, hi] for the polynomial degree of the rule.
+  auto rest = [&](double m) { return -lam * m - 0.5 * (m - d) * (m - d) * iz2; };
+  const double mr = std::min(std::max(gauss ? d - lam * z * z : 0.0, 0.0), hi);
+  const bool smooth_rest = rest(mr) - std::min(rest(0.0), rest(hi)) <= 50.0;
+  if (a == 0.0 && g.p != 1.0 && (g.p < 1.0 || (lo < 0.1 * hi && smooth_rest)))
+    jr = jrule(g.p - 1.0);
+  if (jr != nullptr) {
+    // int_0^hi m^{p-1} f(m) dm = (hi/2)^p int (1 + u)^{p-1} f(hi (1 + u)/2) du
+    const double lsc = g.p * std::log(0.5 * hi);
+    for (int i = 0; i < kNodes; ++i) {
+      const double m = 0.5 * hi * (1.0 + jr->x[i]);
+      const double al = gauss ? (m - d) / z : 0.0;
+      bv[i] = (m > 0.0 && jr->w[i] > 0.0) ? br(m) : 0.0;
+      ex[i] = g.lnorm + lsc + std::log(jr->w[i]) - lam * m - 0.5 * al * al + lgau;
+      if (bv[i] > 0.0 && ex[i] > emax) emax = ex[i];
+    }
+  } else {
+    static thread_local const GLRule& gl = gl_get_rule(kNodes);
+    const double h = 0.5 * (hi - lo), c = 0.5 * (hi + lo);
+    const double lh = std::log(h);
+    for (int i = 0; i < kNodes; ++i) {
+      const double m = c + h * gl.x[i];
+      const double al = gauss ? (m - d) / z : 0.0;
+      bv[i] = (m > 0.0) ? br(m) : 0.0;
+      ex[i] = g.lnorm + lh + std::log(gl.w[i]) + (g.p - 1.0) * std::log(m) - lam * m -
+              0.5 * al * al + lgau;
+      if (bv[i] > 0.0 && ex[i] > emax) emax = ex[i];
+    }
+  }
+  if (!(emax > R_NegInf)) return R_NegInf;
+  double sum = 0.0;
+  for (int i = 0; i < kNodes; ++i)
+    if (bv[i] > 0.0) sum += std::exp(ex[i] - emax) * bv[i];
+  return sum > 0.0 ? emax + std::log(sum) : R_NegInf;
+}
+
+// Gamma stop-losses of X ~ Gamma(p, 1), each in the regime where it is the
+// small side.  For y <= p, E(y - X)+ = sum_{j>=1} j y^{p+j} e^{-y}/Gamma(p+j+1).
+inline double log_stoploss_below(double p, double y) {
+  if (!(y > 0.0)) return R_NegInf;
+  const double l1 = (p + 1.0) * std::log(y) - y - lgamma_fast(p + 2.0);
+  double t = 1.0, sum = 1.0;
+  for (double j = 1.0; j < 1e6; j += 1.0) {
+    const double r = (j + 1.0) / j * y / (p + j + 1.0);
+    t *= r;
+    sum += t;
+    if (r < 1.0 && t * r < 1e-17 * sum * (1.0 - r)) break;
+  }
+  return l1 + std::log(sum);
+}
+
+// For y >= p, E(X - y)+ = y^p e^{-y}/Gamma(p) (1 - T)/(y + 1 - p - T), with
+// T = 1(1-p)/(y+3-p - 2(2-p)/(y+5-p - ...)) the tail of Legendre's fraction
+// for Gamma(p, y).  1 - T > 2/3 (T <= 0 for p >= 1), so nothing cancels.
+inline double log_stoploss_above(double p, double y) {
+  constexpr double tiny = 1e-300;
+  double f = tiny, C = f, D = 0.0;
+  for (int k = 1; k < 2000; ++k) {
+    const double ak = (k == 1) ? (1.0 - p) : -(k * (k - p));
+    const double bk = y + 2.0 * k + 1.0 - p;
+    D = bk + ak * D;
+    if (std::fabs(D) < tiny) D = tiny;
+    C = bk + ak / C;
+    if (std::fabs(C) < tiny) C = tiny;
+    D = 1.0 / D;
+    const double del = C * D;
+    f *= del;
+    if (std::fabs(del - 1.0) < 1e-15) break;
+  }
+  const double T = (std::fabs(f) < 1e-290) ? 0.0 : f;
+  return p * std::log(y) - y - lgamma_fast(p) + std::log(1.0 - T) -
+         std::log(y + 1.0 - p - T);
+}
+
+struct Kernel {
+  double beta = 1.0;
+
+  // F and S below and above d at shape beta; lP, lQ are log P_beta(lam d)
+  // and log Q_beta(lam d).
+  void point_FS(double m, double d, double s, double* lF, double* lS) const {
+    const double z = s * std::sqrt(d), lam = beta / m, y = lam * d;
+    const Mix g = mix(beta, lam);
+    const double lIF = log_integral(g, 0.0, d, true, d, z, [&](double mm) {
+      const double al = (mm - d) / z, bb = (mm + d) / z;
+      return ig::mills_int(1, -al, ig::mills_seq(-al), bb, ig::mills_seq(bb), 2.0 * mm / z);
+    });
+    const double lIS = log_integral(g, d, R_PosInf, true, d, z, [&](double mm) {
+      const double al = (mm - d) / z, bb = (mm + d) / z;
+      return ig::mills_seq(al).R + ig::mills_seq(bb).R;
+    });
+    const double lP = R::pgamma(y, beta, 1.0, 1, 1), lQ = R::pgamma(y, beta, 1.0, 0, 1);
+    *lS = log_add(log_less(lP, lIF), lIS);
+    *lF = log_add(log_less(lQ, lIS), lIF);
+  }
+  double log_surv_point(double u, double v, double d, double s) const {
+    double lF, lS;
+    point_FS(v * u, d, s, &lF, &lS);
+    return lS;
+  }
+  double log_cdf_point(double u, double v, double d, double s) const {
+    double lF, lS;
+    point_FS(v * u, d, s, &lF, &lS);
+    return lF;
+  }
+  // f = v E'[(2/z) phi(alpha) (D(beta) + (m/z) R(beta))] at shape beta + 1.
+  double log_pdf_point(double u, double v, double d, double s) const {
+    const double m = v * u, z = s * std::sqrt(d);
+    const Mix g = mix(beta + 1.0, beta / m);
+    return std::log(v) + log_integral(g, 0.0, R_PosInf, true, d, z, [&](double mm) {
+      const ig::Mills mb = ig::mills_seq((mm + d) / z);
+      return (2.0 / z) * (mb.D + (mm / z) * mb.R);
+    });
+  }
+  bool prefer_Jc(double, double, double, double) const { return false; }
+  double log_end_M(double, double, double) const { return R_NaN; }
+  double fast_cdf_surv(double, double, double, double, bool) const { return R_NaN; }
+  double fast_pdf(double, double, double, double, double) const { return R_NaN; }
+
+  EndJ end_J(double m, double d, double s, int /*want*/ = 3) const {
+    if (d <= 0.0) return {0.0, R_NegInf};
+    const double p = beta + 1.0, z = s * std::sqrt(d), lam = beta / m, y = lam * d;
+    const double wd = 2.0 * d / z;
+    const Mix g = mix(p, lam);
+    auto Jc_br = [&](double mm) {
+      const double al = (mm - d) / z, bb = (mm + d) / z;
+      const ig::Mills mb = ig::mills_seq(bb);
+      return ig::mills_int(1, al, ig::mills_seq(al), bb, mb, wd) + wd * mb.D;
+    };
+    const double lIJcp = log_integral(g, d, R_PosInf, true, d, z, Jc_br);
+    const double lP = R::pgamma(y, p, 1.0, 1, 1), lQ = R::pgamma(y, p, 1.0, 0, 1);
+    const double lQm = log_less(lQ, lIJcp);  // int_d^inf g J
+    // J at m = d bounds J below d.
+    const ig::Mills m0 = ig::mills_seq(0.0), mw = ig::mills_seq(wd);
+    const double Jd = M_1_SQRT_2PI * (ig::mills_int(1, 0.0, m0, wd, mw, wd) + 2.0 * mw.E +
+                                      wd * mw.D);
+    EndJ e;
+    if (Jd <= 0.6) {
+      const double lIJm = log_integral(g, 0.0, d, true, d, z, [&](double mm) {
+        const double al = (mm - d) / z, bb = (mm + d) / z, wm = 2.0 * mm / z;
+        const ig::Mills mb = ig::mills_seq(bb);
+        return ig::mills_int(1, -al, ig::mills_seq(-al), bb, mb, wm) + 2.0 * mb.E + wm * mb.D;
+      });
+      e.lJ = log_add(lQm, lIJm);
+      e.lJc = log_add(log_less(lP, lIJm), lIJcp);
+    } else {
+      const double lIJcm = log_integral(g, 0.0, d, false, d, z, [&](double mm) {
+        const double al = (mm - d) / z;
+        return M_1_SQRT_2PI * std::exp(-0.5 * al * al) * Jc_br(mm);
+      });
+      e.lJc = log_add(lIJcm, lIJcp);
+      e.lJ = (e.lJc < -M_LN2) ? std::log1p(-std::exp(e.lJc))
+                              : log_add(lQm, log_less(lP, lIJcm));
+    }
+    return e;
+  }
+
+  // H - L = mbar - d; the smaller is the two Gaussian-tailed integrals plus
+  // the Gamma stop-loss on its own small side.
+  EndHL end_HL(double m, double d, double s) const {
+    if (d <= 0.0) return {std::log(m), R_NegInf};
+    const double z = s * std::sqrt(d), lam = beta / m, y = lam * d;
+    const Mix g = mix(beta, lam);
+    const double lIH = log_integral(g, 0.0, d, true, d, z, [&](double mm) {
+      const double al = (mm - d) / z, bb = (mm + d) / z;
+      return z * ig::mills_int(2, -al, ig::mills_seq(-al), bb, ig::mills_seq(bb), 2.0 * mm / z);
+    });
+    const double lIL = log_integral(g, d, R_PosInf, true, d, z, [&](double mm) {
+      const double al = (mm - d) / z, bb = (mm + d) / z;
+      return z * ig::mills_int(2, al, ig::mills_seq(al), bb, ig::mills_seq(bb), 2.0 * d / z);
+    });
+    const double lI = log_add(lIH, lIL);
+    EndHL e;
+    if (m < d) {
+      e.lH = log_add(lI, log_stoploss_above(beta, y) - std::log(lam));
+      e.lL = log_add(e.lH, std::log(d - m));
+    } else {
+      e.lL = log_add(lI, log_stoploss_below(beta, y) - std::log(lam));
+      e.lH = (m > d) ? log_add(e.lL, std::log(m - d)) : e.lL;
+    }
+    return e;
+  }
+  void ends_J(double m, double d1, double d2, double s, int want, EndJ* e1, EndJ* e2) const {
+    *e1 = end_J(m, d1, s, want);
+    *e2 = end_J(m, d2, s, want);
+  }
+  void ends_HL(double m, double d1, double d2, double s, EndHL* e1, EndHL* e2) const {
+    *e1 = end_HL(m, d1, s);
+    *e2 = end_HL(m, d2, s);
+  }
+};
+
+// The trial rate, then the fixed-rate running maximum at that rate.
+inline double draw(double v, double B, double A, double s, double cv) {
+  const double V = R::rgamma(1.0 / (cv * cv), v * cv * cv);
+  return ig::Kernel::draw(V, B, A, s);
+}
+
+}  // namespace igg
+
+// ===========================================================================
 // Uniform start point, shared by both evidence laws
 // ===========================================================================
 
@@ -1124,12 +1827,12 @@ constexpr double kLogAmpMax = 4.1588830833596715;  // log(64)
 // no M form.  *lamp receives the log of the factor M(B+A) / (A F) by which
 // the difference amplifies the rounding of its ends.
 template <class K>
-inline double end_M_diff(double m, double B, double A, double s, double lA,
+inline double end_M_diff(const K& k, double m, double B, double A, double s, double lA,
                          double* lamp) {
   *lamp = R_PosInf;
-  const double l2 = K::log_end_M(m, B + A, s);
+  const double l2 = k.log_end_M(m, B + A, s);
   if (ISNAN(l2)) return R_NaN;
-  const double l1 = K::log_end_M(m, B, s);
+  const double l1 = k.log_end_M(m, B, s);
   if (!(l2 > l1)) return R_NaN;
   const double n = log_diff(l2, l1);
   *lamp = l2 - n;
@@ -1140,7 +1843,7 @@ inline double end_M_diff(double m, double B, double A, double s, double lA,
 // keeps relative precision below one half and the other is its complement.
 // A null lF or lS skips the quadratures that only that output needs.
 template <class K>
-inline void log_cdf_surv(double u, double v, double B, double A, double s,
+inline void log_cdf_surv(const K& k, double u, double v, double B, double A, double s,
                          double* lF, double* lS) {
   double lF_, lS_;
   const bool want_F = lF != nullptr, want_S = lS != nullptr;
@@ -1149,21 +1852,21 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
   A = (B + A) - B;  // the width of the interval the ends actually span
   if (A <= 0.0) {
     if (!want_S) {
-      *lF = K::log_cdf_point(u, v, B, s);
+      *lF = k.log_cdf_point(u, v, B, s);
       return;
     }
-    *lS = K::log_surv_point(u, v, B, s);
+    *lS = k.log_surv_point(u, v, B, s);
     if (want_F)
-      *lF = (*lS < -M_LN2) ? std::log(-std::expm1(*lS)) : K::log_cdf_point(u, v, B, s);
+      *lF = (*lS < -M_LN2) ? std::log(-std::expm1(*lS)) : k.log_cdf_point(u, v, B, s);
     return;
   }
   const double m = v * u, lA = std::log(A);
   if (want_F != want_S) {
-    const double q = K::fast_cdf_surv(m, B, A, s, want_S);
+    const double q = k.fast_cdf_surv(m, B, A, s, want_S);
     if (!ISNAN(q)) { *(want_S ? lS : lF) = q; return; }
   }
   EndHL e1, e2;
-  K::ends_HL(m, B, B + A, s, &e1, &e2);
+  k.ends_HL(m, B, B + A, s, &e1, &e2);
   double nS = log_end_diff(e2.lL, e1.lL), nF = log_end_diff(e1.lH, e2.lH);
   if (!ISNAN(nS)) nS -= lA;
   if (!ISNAN(nF)) nF -= lA;
@@ -1183,11 +1886,11 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
       // log of 1 / (F (1 - L(B)/L(B+A))), the complement's amplification
       const double lcomp = -(*lF + std::log1p(-std::exp(e1.lL - e2.lL)));
       double lamp;
-      double lq = end_M_diff<K>(m, B, A, s, lA, &lamp);
+      double lq = end_M_diff(k, m, B, A, s, lA, &lamp);
       if (!(lamp < lcomp)) lq = R_NaN;
       if (std::fmin(lamp, lcomp) > kLogAmpMax) {
         const double lg = log_gl_checked(B, A, [&](double d) {
-          return K::log_cdf_point(u, v, d, s); });
+          return k.log_cdf_point(u, v, d, s); });
         if (!ISNAN(lg)) lq = lg;
       }
       if (!ISNAN(lq)) { *lF = lq; *lS = std::log1p(-std::exp(lq)); }
@@ -1198,33 +1901,42 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
   // The survivor ends agree too closely: average the point survivor, whose
   // integrand then varies little over the interval.
   *lS = clamp_log_prob(log_gl_average(B, A, [&](double d) {
-    return K::log_surv_point(u, v, d, s); }));
+    return k.log_surv_point(u, v, d, s); }));
   if (!ISNAN(nF)) *lF = clamp_log_prob(nF);
   else if (*lS < -M_LN2) *lF = std::log(-std::expm1(*lS));
   else if (want_F) {
     double lamp;
-    *lF = end_M_diff<K>(m, B, A, s, lA, &lamp);
+    *lF = end_M_diff(k, m, B, A, s, lA, &lamp);
     if (!(lamp <= kLogAmpMax))
-      *lF = log_gl_average(B, A, [&](double d) { return K::log_cdf_point(u, v, d, s); });
+      *lF = log_gl_average(B, A, [&](double d) { return k.log_cdf_point(u, v, d, s); });
   }
 }
 
 template <class K>
-inline double log_surv(double u, double v, double B, double A, double s) {
+inline double log_surv(const K& k, double u, double v, double B, double A, double s) {
   if (!(u > 0.0) || v == 0.0) return 0.0;
   if (!R_FINITE(u)) return R_NegInf;
   double lS;
-  log_cdf_surv<K>(u, v, B, A, s, nullptr, &lS);
+  log_cdf_surv(k, u, v, B, A, s, nullptr, &lS);
   return clamp_log_prob(lS);
 }
 
 template <class K>
-inline double log_cdf(double u, double v, double B, double A, double s) {
+inline double log_cdf(const K& k, double u, double v, double B, double A, double s) {
   if (!(u > 0.0) || v == 0.0) return R_NegInf;
   if (!R_FINITE(u)) return 0.0;
   double lF;
-  log_cdf_surv<K>(u, v, B, A, s, &lF, nullptr);
+  log_cdf_surv(k, u, v, B, A, s, &lF, nullptr);
   return clamp_log_prob(lF);
+}
+
+template <class K>
+inline double log_surv(double u, double v, double B, double A, double s) {
+  return log_surv(K{}, u, v, B, A, s);
+}
+template <class K>
+inline double log_cdf(double u, double v, double B, double A, double s) {
+  return log_cdf(K{}, u, v, B, A, s);
 }
 
 // f = v [J(B) - J(B+A)] / A = v [Jc(B+A) - Jc(B)] / A.  Where an end carries
@@ -1232,27 +1944,32 @@ inline double log_cdf(double u, double v, double B, double A, double s) {
 // the kernel's preferred form is formed first and the other only when the
 // first agrees too closely at the two ends.
 template <class K>
-inline double log_pdf(double u, double v, double B, double A, double s) {
+inline double log_pdf(const K& k, double u, double v, double B, double A, double s) {
   if (!(u > 0.0) || !R_FINITE(u) || v == 0.0) return R_NegInf;
   A = (B + A) - B;
-  if (A <= 0.0) return K::log_pdf_point(u, v, B, s);
+  if (A <= 0.0) return k.log_pdf_point(u, v, B, s);
   const double m = v * u;
-  const double fast = K::fast_pdf(m, v, B, A, s);
+  const double fast = k.fast_pdf(m, v, B, A, s);
   if (!ISNAN(fast)) return fast;
-  const int want = K::prefer_Jc(m, B, A, s) ? 2 : 1;
+  const int want = k.prefer_Jc(m, B, A, s) ? 2 : 1;
   EndJ e1, e2;
-  K::ends_J(m, B, B + A, s, want, &e1, &e2);
+  k.ends_J(m, B, B + A, s, want, &e1, &e2);
   const bool use_Jc = (ISNAN(e1.lJ) || ISNAN(e2.lJ) || ISNAN(e1.lJc) || ISNAN(e2.lJc))
     ? want == 2 : e2.lJc < e1.lJ;
   double nJ = use_Jc ? log_end_diff(e2.lJc, e1.lJc) : log_end_diff(e1.lJ, e2.lJ);
   if (ISNAN(nJ)) {
     if (ISNAN(use_Jc ? e1.lJ : e1.lJc) || ISNAN(use_Jc ? e2.lJ : e2.lJc)) {
-      K::ends_J(m, B, B + A, s, use_Jc ? 1 : 2, &e1, &e2);
+      k.ends_J(m, B, B + A, s, use_Jc ? 1 : 2, &e1, &e2);
     }
     nJ = use_Jc ? log_end_diff(e1.lJ, e2.lJ) : log_end_diff(e2.lJc, e1.lJc);
   }
   if (!ISNAN(nJ)) return std::log(v) + nJ - std::log(A);
-  return log_gl_average(B, A, [&](double d) { return K::log_pdf_point(u, v, d, s); });
+  return log_gl_average(B, A, [&](double d) { return k.log_pdf_point(u, v, d, s); });
+}
+
+template <class K>
+inline double log_pdf(double u, double v, double B, double A, double s) {
+  return log_pdf(K{}, u, v, B, A, s);
 }
 
 template <class K>

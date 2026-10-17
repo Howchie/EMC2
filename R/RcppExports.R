@@ -403,6 +403,14 @@ popr <- function(t, K, lambda_p, lambda_m, lower_tail = TRUE, log_out = FALSE) {
     .Call(`_EMC2_popr`, t, K, lambda_p, lambda_m, lower_tail, log_out)
 }
 
+dopr_gamma <- function(t, K, v, rho, cv, log_out = FALSE) {
+    .Call(`_EMC2_dopr_gamma`, t, K, v, rho, cv, log_out)
+}
+
+popr_gamma <- function(t, K, v, rho, cv, lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_popr_gamma`, t, K, v, rho, cv, lower_tail, log_out)
+}
+
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
     .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift, erlang_omega)
 }
@@ -471,12 +479,12 @@ pRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE,
     .Call(`_EMC2_pRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
-drsub <- function(t, v, B, A, s, packets = FALSE, log_out = FALSE) {
-    .Call(`_EMC2_drsub`, t, v, B, A, s, packets, log_out)
+drsub <- function(t, v, B, A, s, packets = FALSE, log_out = FALSE, cv = as.numeric( c(0.0))) {
+    .Call(`_EMC2_drsub`, t, v, B, A, s, packets, log_out, cv)
 }
 
-prsub <- function(t, v, B, A, s, packets = FALSE, lower_tail = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_prsub`, t, v, B, A, s, packets, lower_tail, log_out)
+prsub <- function(t, v, B, A, s, packets = FALSE, lower_tail = TRUE, log_out = FALSE, cv = as.numeric( c(0.0))) {
+    .Call(`_EMC2_prsub`, t, v, B, A, s, packets, lower_tail, log_out, cv)
 }
 
 ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma = 8.0, k_tau = 16.0) {

@@ -12,19 +12,35 @@
 // than `t` must be length 1 or the full length.
 // ---------------------------------------------------------------------------
 
-// The evidence law: dense (inverse-Gaussian) or packets (compound Poisson).
+// The evidence law, dense (inverse-Gaussian) or packets (compound Poisson),
+// at a fixed rate (cv = 0) or with a Gamma trial rate of CV cv.
 static inline double rsub_log_pdf(bool packets, double u, double v, double B,
-                                  double A, double s) {
+                                  double A, double s, double cv) {
+  if (cv > 0.0) {
+    const double beta = 1.0 / (cv * cv);
+    return packets ? rsub::log_pdf(rsub::cpg::Kernel{beta}, u, v, B, A, s)
+                   : rsub::log_pdf(rsub::igg::Kernel{beta}, u, v, B, A, s);
+  }
   return packets ? rsub::log_pdf<rsub::cp::Kernel>(u, v, B, A, s)
                  : rsub::log_pdf<rsub::ig::Kernel>(u, v, B, A, s);
 }
 static inline double rsub_log_cdf(bool packets, double u, double v, double B,
-                                  double A, double s) {
+                                  double A, double s, double cv) {
+  if (cv > 0.0) {
+    const double beta = 1.0 / (cv * cv);
+    return packets ? rsub::log_cdf(rsub::cpg::Kernel{beta}, u, v, B, A, s)
+                   : rsub::log_cdf(rsub::igg::Kernel{beta}, u, v, B, A, s);
+  }
   return packets ? rsub::log_cdf<rsub::cp::Kernel>(u, v, B, A, s)
                  : rsub::log_cdf<rsub::ig::Kernel>(u, v, B, A, s);
 }
 static inline double rsub_log_surv(bool packets, double u, double v, double B,
-                                   double A, double s) {
+                                   double A, double s, double cv) {
+  if (cv > 0.0) {
+    const double beta = 1.0 / (cv * cv);
+    return packets ? rsub::log_surv(rsub::cpg::Kernel{beta}, u, v, B, A, s)
+                   : rsub::log_surv(rsub::igg::Kernel{beta}, u, v, B, A, s);
+  }
   return packets ? rsub::log_surv<rsub::cp::Kernel>(u, v, B, A, s)
                  : rsub::log_surv<rsub::ig::Kernel>(u, v, B, A, s);
 }
@@ -48,21 +64,22 @@ static inline int rsub_len(std::initializer_list<int> sizes) {
 // [[Rcpp::export]]
 NumericVector drsub(NumericVector t, NumericVector v, NumericVector B,
                     NumericVector A, NumericVector s, bool packets = false,
-                    bool log_out = false) {
-  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size())});
+                    bool log_out = false, NumericVector cv = NumericVector::create(0.0)) {
+  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size()), static_cast<int>(cv.size())});
   rsub_check_len(t, n, "t");
   rsub_check_len(v, n, "v");
   rsub_check_len(B, n, "B");
   rsub_check_len(A, n, "A");
   rsub_check_len(s, n, "s");
+  rsub_check_len(cv, n, "cv");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
     const double ti = rsub_pick(t, i);
     const double vi = rsub_pick(v, i), Bi = rsub_pick(B, i),
-                 Ai = rsub_pick(A, i), si = rsub_pick(s, i);
+                 Ai = rsub_pick(A, i), si = rsub_pick(s, i), ci = rsub_pick(cv, i);
     double lp;
-    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
-    else lp = rsub_log_pdf(packets, ti, vi, Bi, Ai, si);
+    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si, ci)) lp = R_NaN;
+    else lp = rsub_log_pdf(packets, ti, vi, Bi, Ai, si, ci);
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;
@@ -73,30 +90,32 @@ NumericVector drsub(NumericVector t, NumericVector v, NumericVector B,
 // [[Rcpp::export]]
 NumericVector prsub(NumericVector t, NumericVector v, NumericVector B,
                     NumericVector A, NumericVector s, bool packets = false,
-                    bool lower_tail = true, bool log_out = false) {
-  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size())});
+                    bool lower_tail = true, bool log_out = false,
+                    NumericVector cv = NumericVector::create(0.0)) {
+  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size()), static_cast<int>(cv.size())});
   rsub_check_len(t, n, "t");
   rsub_check_len(v, n, "v");
   rsub_check_len(B, n, "B");
   rsub_check_len(A, n, "A");
   rsub_check_len(s, n, "s");
+  rsub_check_len(cv, n, "cv");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
     const double ti = rsub_pick(t, i);
     const double vi = rsub_pick(v, i), Bi = rsub_pick(B, i),
-                 Ai = rsub_pick(A, i), si = rsub_pick(s, i);
+                 Ai = rsub_pick(A, i), si = rsub_pick(s, i), ci = rsub_pick(cv, i);
     double lp;
-    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
-    else lp = lower_tail ? rsub_log_cdf(packets, ti, vi, Bi, Ai, si)
-                         : rsub_log_surv(packets, ti, vi, Bi, Ai, si);
+    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si, ci)) lp = R_NaN;
+    else lp = lower_tail ? rsub_log_cdf(packets, ti, vi, Bi, Ai, si, ci)
+                         : rsub_log_surv(packets, ti, vi, Bi, Ai, si, ci);
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;
 }
 
 // ---------------------------------------------------------------------------
-// Race adapters.  Column layout (col_registry.h, emc2col::rsub): v, B, A, t0, s;
-// ctx->rsub_packets selects the evidence law.
+// Race adapters.  Column layout (col_registry.h, emc2col::rsub): v, B, A, t0,
+// s, cv; ctx->rsub_packets selects the evidence law.
 // ---------------------------------------------------------------------------
 
 static inline bool rsub_packets(void* ctx_) {
@@ -107,7 +126,8 @@ static inline bool rsub_packets(void* ctx_) {
 static inline bool rsub_row_ok(const double* par) {
   return !R_IsNA(par[emc2col::rsub::v]) && R_FINITE(par[emc2col::rsub::t0]) &&
          rsub::pars_ok(par[emc2col::rsub::v], par[emc2col::rsub::B],
-                       par[emc2col::rsub::A], par[emc2col::rsub::s]);
+                       par[emc2col::rsub::A], par[emc2col::rsub::s],
+                       par[emc2col::rsub::cv]);
 }
 
 double drsub_scalar(double t, const double* par, void* ctx_) {
@@ -115,7 +135,8 @@ double drsub_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::rsub::t0];
   if (!(tt > 0.0) || !R_FINITE(tt)) return 0.0;
   const double lp = rsub_log_pdf(rsub_packets(ctx_), tt, par[emc2col::rsub::v], par[emc2col::rsub::B],
-                                  par[emc2col::rsub::A], par[emc2col::rsub::s]);
+                                  par[emc2col::rsub::A], par[emc2col::rsub::s],
+                                  par[emc2col::rsub::cv]);
   return (lp > R_NegInf) ? std::exp(lp) : 0.0;
 }
 
@@ -124,7 +145,8 @@ double prsub_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::rsub::t0];
   if (!(tt > 0.0)) return 0.0;
   const double lp = rsub_log_cdf(rsub_packets(ctx_), tt, par[emc2col::rsub::v], par[emc2col::rsub::B],
-                                  par[emc2col::rsub::A], par[emc2col::rsub::s]);
+                                  par[emc2col::rsub::A], par[emc2col::rsub::s],
+                                  par[emc2col::rsub::cv]);
   if (!(lp > R_NegInf)) return 0.0;
   const double out = std::exp(lp);
   return (out > 1.0) ? 1.0 : out;
@@ -139,16 +161,17 @@ void drsub_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[emc2col::rsub::A];
   const double* t0_ = cols[emc2col::rsub::t0];
   const double* s_  = cols[emc2col::rsub::s];
+  const double* cv_ = cols[emc2col::rsub::cv];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     const double tt = rt[i] - t0_[i];
     if (!isok[i] || R_IsNA(v_[i]) || !R_FINITE(t0_[i]) ||
-        !rsub::pars_ok(v_[i], B_[i], A_[i], s_[i]) ||
+        !rsub::pars_ok(v_[i], B_[i], A_[i], s_[i], cv_[i]) ||
         !(tt > 0.0) || !R_FINITE(tt)) {
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    out[i] = raw_log_value(rsub_log_pdf(rsub_packets(ctx_), tt, v_[i], B_[i], A_[i], s_[i]),
+    out[i] = raw_log_value(rsub_log_pdf(rsub_packets(ctx_), tt, v_[i], B_[i], A_[i], s_[i], cv_[i]),
                            min_ll, floor_raw);
   }
 }
@@ -162,18 +185,19 @@ void prsub_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[emc2col::rsub::A];
   const double* t0_ = cols[emc2col::rsub::t0];
   const double* s_  = cols[emc2col::rsub::s];
+  const double* cv_ = cols[emc2col::rsub::cv];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     // A loser that cannot be evaluated contributes a survivor of one; the
     // trial is failed by its winner's density.
     if (!isok[i] || R_IsNA(v_[i]) || !R_FINITE(t0_[i]) ||
-        !rsub::pars_ok(v_[i], B_[i], A_[i], s_[i])) {
+        !rsub::pars_ok(v_[i], B_[i], A_[i], s_[i], cv_[i])) {
       out[i] = 0.0;
       continue;
     }
     const double tt = rt[i] - t0_[i];
     if (!(tt > 0.0)) { out[i] = 0.0; continue; }
-    const double log_surv = rsub_log_surv(rsub_packets(ctx_), tt, v_[i], B_[i], A_[i], s_[i]);
+    const double log_surv = rsub_log_surv(rsub_packets(ctx_), tt, v_[i], B_[i], A_[i], s_[i], cv_[i]);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? std::fmin(log_surv, 0.0)
                                    : raw_log_zero(min_ll, floor_raw);
@@ -189,6 +213,7 @@ void rsub_logS_at_t(double t, const double* const* cols,
   const double* A_  = cols[emc2col::rsub::A];
   const double* t0_ = cols[emc2col::rsub::t0];
   const double* s_  = cols[emc2col::rsub::s];
+  const double* cv_ = cols[emc2col::rsub::cv];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -197,12 +222,12 @@ void rsub_logS_at_t(double t, const double* const* cols,
     for (int k = 0; k < n_lR; ++k) {
       const int r = start + k;
       if (!isok_all[r] || R_IsNA(v_[r]) || !R_FINITE(t0_[r]) ||
-          !rsub::pars_ok(v_[r], B_[r], A_[r], s_[r])) {
+          !rsub::pars_ok(v_[r], B_[r], A_[r], s_[r], cv_[r])) {
         bad = true; break;
       }
       const double tt = t - t0_[r];
       if (!(tt > 0.0)) continue;  // not started: survivor one
-      const double log_surv = rsub_log_surv(rsub_packets(ctx_), tt, v_[r], B_[r], A_[r], s_[r]);
+      const double log_surv = rsub_log_surv(rsub_packets(ctx_), tt, v_[r], B_[r], A_[r], s_[r], cv_[r]);
       if (ISNAN(log_surv)) { bad = true; break; }
       logS += log_surv;
     }
