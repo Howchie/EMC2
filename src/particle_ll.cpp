@@ -28,6 +28,7 @@
 #include "lr_capacity_counters.h"
 #include "logicalrules_likelihood.h"
 #include "correlated_likelihood.h"
+#include "frq_shared_likelihood.h"
 #include "likelihood_shared.h"
 #include "rt_bins.h"
 #include "likelihood_ddm.h"
@@ -1118,6 +1119,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
     }
+    if (is_logicalrules && adapter.ctx.frq_shared != 0) {
+      Rcpp::stop("calc_ll_oo: shared-rate FRQ logical-rule races are not supported.");
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -1202,6 +1206,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above
       !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated &&
+      adapter.ctx.frq_shared == 0 &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -1328,6 +1333,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     RDMSWTNCorrSharedState rdmswtn_corr_shared;
     if (adapter.ctx.rdmswtn_correlated) {
       rdmswtn_corr_shared = build_rdmswtn_corr_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
+    FrqSharedState frq_shared_state;
+    if (adapter.ctx.frq_shared != 0) {
+      frq_shared_state = build_frq_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
@@ -1569,6 +1580,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, nullptr,
             corr_materialize);
+      } else if (adapter.ctx.frq_shared != 0) {
+        lls[i] = c_log_likelihood_frq_shared(
+            frq_shared_state, data, min_ll, is_ok, expand, &adapter.ctx, nullptr);
       } else if (adapter.ctx.rdmswtn_correlated) {
         lls[i] = c_log_likelihood_rdmswtn_correlated(
             rdmswtn_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
@@ -1753,6 +1767,9 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
     }
+    if (is_logicalrules && adapter.ctx.frq_shared != 0) {
+      Rcpp::stop("calc_ll_oo_pw: shared-rate FRQ logical-rule races are not supported.");
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -1844,6 +1861,12 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
+    FrqSharedState frq_shared_state;
+    if (adapter.ctx.frq_shared != 0) {
+      frq_shared_state = build_frq_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
     const std::function<Rcpp::NumericMatrix()> corr_materialize =
         [&pt]() { return pt.materialize_reusable(); };
 
@@ -1862,6 +1885,9 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, &row_vec,
             corr_materialize);
+      } else if (adapter.ctx.frq_shared != 0) {
+        c_log_likelihood_frq_shared(
+            frq_shared_state, data, min_ll, is_ok, expand, &adapter.ctx, &row_vec);
       } else if (adapter.ctx.rdmswtn_correlated) {
         c_log_likelihood_rdmswtn_correlated(
             rdmswtn_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,

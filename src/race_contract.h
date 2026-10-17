@@ -275,6 +275,10 @@ struct ContextForRaceModels {
     // FRQ's excess-criterion column, resolved by name; -1 = absent (omega = 0).
     bool frq_omega_by_name = false;
     int frq_omega_index = -1;
+    // FRQ(rate_sharing = "shared"): 0 = independent rates, 1 = shared rate on
+    // the cv chart, 2 = shared rate on the accel chart.  Routed to
+    // c_log_likelihood_frq_shared() (frq_shared_likelihood.h).
+    int frq_shared = 0;
 
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.

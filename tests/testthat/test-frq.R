@@ -352,7 +352,7 @@ test_that("the constructor exposes the documented contract", {
   expect_equal(exp(m$p_types[["omega"]]), 0)
   expect_equal(unname(m$bound$minmax[, "omega"]), c(1e-4, Inf))
   expect_false("K" %in% names(m$bound$exception))
-  expect_identical(names(formals(FRQ)), "parameterization")
+  expect_identical(names(formals(FRQ)), c("parameterization", "rate_sharing"))
 })
 
 test_that("the counter coordinates are representable on the whole bounded box", {

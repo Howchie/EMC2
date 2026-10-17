@@ -135,6 +135,18 @@ fpe_bou_fht_pdf_cdf_vec <- function(t, v, beta, a, Z, sigma, SZ = 0.0, anchor = 
     .Call(`_EMC2_fpe_bou_fht_pdf_cdf_vec`, t, v, beta, a, Z, sigma, SZ, anchor, bkind, aInf, tau, pw, nx, nt, grade, tgrade)
 }
 
+frq_shared_cause_cpp <- function(t, pars, winner, accel_chart = FALSE) {
+    .Call(`_EMC2_frq_shared_cause_cpp`, t, pars, winner, accel_chart)
+}
+
+frq_shared_surv_cpp <- function(t, pars, accel_chart = FALSE) {
+    .Call(`_EMC2_frq_shared_surv_cpp`, t, pars, accel_chart)
+}
+
+frq_shared_expect_cpp <- function(b, K, log_psi, plo, route = 0L) {
+    .Call(`_EMC2_frq_shared_expect_cpp`, b, K, log_psi, plo, route)
+}
+
 pbvn_tsay <- function(h, k, rho) {
     .Call(`_EMC2_pbvn_tsay`, h, k, rho)
 }

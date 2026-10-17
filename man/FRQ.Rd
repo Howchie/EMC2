@@ -4,13 +4,20 @@
 \alias{FRQ}
 \title{The Finite Reservoir Quorum Process (FRQ)}
 \usage{
-FRQ(parameterization = c("sv", "cv", "accel"))
+FRQ(
+  parameterization = c("sv", "cv", "accel"),
+  rate_sharing = c("independent", "shared")
+)
 }
 \arguments{
 \item{parameterization}{Rate-variability and clock coordinates: \code{"sv"}
 (the default) samples the rate SD \emph{sv}; \code{"cv"} samples the rate CV
 \emph{cv} = \emph{sv}/\emph{v}; \code{"accel"} samples \emph{cv} and the clock acceleration
 \emph{accel} in place of \emph{clock}.}
+
+\item{rate_sharing}{\code{"independent"} (the default) draws the trial input-rate
+multiplier separately for each accumulator; \code{"shared"} draws one per trial
+for all accumulators.}
 }
 \value{
 A model list defining the FRQ race model.
@@ -108,6 +115,21 @@ available in every parameterization.
 at \code{h = 1}) and \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
 \code{parameterization = "cv"} or \code{"accel"}).
 
+\code{rate_sharing = "shared"} draws one rate multiplier \code{W ~ Gamma(beta, 1)}
+per trial for all accumulators, in place of one per accumulator. Each
+accumulator's marginal distribution is unchanged, so \code{cv} must be equal
+across the accumulators of a trial, and the parameterization must be \code{"cv"}
+or \code{"accel"}. Given \code{W} the accumulators race independently. The winner
+density is the independent density times
+\code{E[prod_l Q(K_l, G * psi_l)]}, with \code{G ~ Gamma(beta + K_w, 1)},
+\code{psi_l = phi_l(u) * (1 - q_w(u))}, \code{phi = q / (1 - q)} and \code{Q} the
+regularized upper incomplete gamma function. With two accumulators this is
+the beta tail \code{I_(1/(1 + psi))(beta + K_w, K_l)}. With three accumulators,
+and for the joint survivor of two, it is an exact series; four or more
+accumulators use a quadrature over \code{G}. The low state enters each factor as
+its mixture. \code{omega} is not available with a shared rate. \code{cv < 1e-4} uses
+the independent race, the exact \code{cv = 0} limit.
+
 Optional nuisance parameters are \code{pContaminant}, an omission probability
 outside the accumulators, and \code{pGuess}, a uniform-outlier probability.
 }
@@ -139,4 +161,13 @@ design_FRQ_accel <- design(data = forstmann,
                                           accel ~ 1, h ~ 1, t0 ~ 1),
                            contrasts = list(v = list(lM = ADmat)),
                            constants = c(h = qnorm(1)))
+# One shared trial rate.
+design_FRQ_shared <- design(data = forstmann,
+                            model = function() FRQ(parameterization = "cv",
+                                                   rate_sharing = "shared"),
+                            matchfun = matchfun,
+                            formula = list(K ~ 1, v ~ lM + E, cv ~ 1, h ~ 1,
+                                           t0 ~ 1),
+                            contrasts = list(v = list(lM = ADmat)),
+                            constants = c(h = qnorm(1)))
 }

@@ -532,6 +532,48 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// frq_shared_cause_cpp
+NumericVector frq_shared_cause_cpp(NumericVector t, NumericMatrix pars, int winner, bool accel_chart);
+RcppExport SEXP _EMC2_frq_shared_cause_cpp(SEXP tSEXP, SEXP parsSEXP, SEXP winnerSEXP, SEXP accel_chartSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< int >::type winner(winnerSEXP);
+    Rcpp::traits::input_parameter< bool >::type accel_chart(accel_chartSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_shared_cause_cpp(t, pars, winner, accel_chart));
+    return rcpp_result_gen;
+END_RCPP
+}
+// frq_shared_surv_cpp
+NumericVector frq_shared_surv_cpp(NumericVector t, NumericMatrix pars, bool accel_chart);
+RcppExport SEXP _EMC2_frq_shared_surv_cpp(SEXP tSEXP, SEXP parsSEXP, SEXP accel_chartSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< bool >::type accel_chart(accel_chartSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_shared_surv_cpp(t, pars, accel_chart));
+    return rcpp_result_gen;
+END_RCPP
+}
+// frq_shared_expect_cpp
+double frq_shared_expect_cpp(double b, NumericVector K, NumericVector log_psi, NumericVector plo, int route);
+RcppExport SEXP _EMC2_frq_shared_expect_cpp(SEXP bSEXP, SEXP KSEXP, SEXP log_psiSEXP, SEXP ploSEXP, SEXP routeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type log_psi(log_psiSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type plo(ploSEXP);
+    Rcpp::traits::input_parameter< int >::type route(routeSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_shared_expect_cpp(b, K, log_psi, plo, route));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pbvn_tsay
 double pbvn_tsay(double h, double k, double rho);
 RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
@@ -3739,6 +3781,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_fpe_gbm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gbm_fht_pdf_cdf_vec, 13},
     {"_EMC2_fpe_gompertz_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gompertz_fht_pdf_cdf_vec, 13},
     {"_EMC2_fpe_bou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bou_fht_pdf_cdf_vec, 16},
+    {"_EMC2_frq_shared_cause_cpp", (DL_FUNC) &_EMC2_frq_shared_cause_cpp, 4},
+    {"_EMC2_frq_shared_surv_cpp", (DL_FUNC) &_EMC2_frq_shared_surv_cpp, 3},
+    {"_EMC2_frq_shared_expect_cpp", (DL_FUNC) &_EMC2_frq_shared_expect_cpp, 5},
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},

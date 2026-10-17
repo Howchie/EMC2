@@ -250,6 +250,73 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   hit
 }
 
+# Shared-rate FRQ decision times: one W ~ Gamma(beta, 1) per trial column
+# (rows nr at a time), shared by its accumulators.  Accumulator i finishes
+# when its threshold epoch Y_i reaches W phi_i(x), i.e. at the quorum
+# percentile U_i = Y_i / (Y_i + W) ~ Beta(K_i, beta), so the construction of
+# .frq_draw_dt() applies with log(1 - U_i) = log W - log(Y_i + W).  Rows on
+# the Poisson branch (cv < 1e-4) have a degenerate W and are drawn as in the
+# independent model.
+.frq_draw_dt_shared <- function(p, trial) {
+  pl <- if ("plo" %in% colnames(p)) p[, "plo"] else rep(0, nrow(p))
+  cu <- if ("clock" %in% colnames(p)) p[, "clock"] else rep(1, nrow(p))
+  g <- frq_rate(p[, "K"], p[, "v"], p[, "sv"], p[, "h"], pl, cu, rep(0, nrow(p)))
+  valid <- !is.na(g[, "p"])
+  beta_r <- valid & is.finite(g[, "beta"])
+  hit <- rep(Inf, nrow(p))
+  if (any(valid & !beta_r))
+    hit[valid & !beta_r] <- .frq_draw_dt(p[valid & !beta_r, , drop = FALSE])
+  if (any(beta_r)) {
+    i <- which(beta_r)
+    kk <- p[i, "K"]
+    mix <- is.finite(pl[i]) & pl[i] > 0
+    if (any(mix)) kk[mix][runif(sum(mix)) < pl[i][mix]] <- 1
+    tr <- trial[i]
+    ut <- unique(tr)
+    # One draw per trial; beta is constant within a trial.
+    lW <- log(rgamma(length(ut), g[i, "beta"][match(ut, tr)]))[match(tr, ut)]
+    lY <- log(rgamma(length(i), kk))
+    lw <- lW - (pmax(lY, lW) + log1p(exp(-abs(lY - lW))))
+    log_om_p <- g[i, "log1mp"]
+    live <- p[i, "h"] == 1 | lw > log_om_p
+    floor <- log(.Machine$double.xmin)
+    log_sr <- lw
+    above <- lw > log_om_p & p[i, "h"] < 1
+    log_sr[above] <- lw[above] + .frq_log1mexp(log_om_p[above] - lw[above]) -
+      log(g[i, "p"][above])
+    log_sr[!is.finite(log_sr)] <- floor
+    log_sr <- pmin(log_sr, 0)
+    hit[i[live]] <- .frq_clock_inv(log_sr[live], g[i, "lambda"][live],
+                                   cu[i][live])
+    if ("accel" %in% colnames(p)) {
+      a <- p[i, "accel"]
+      w <- live & is.finite(hit[i]) & is.finite(a) & a > 0
+      hit[i[w]] <- log1p(a[w] * hit[i[w]]) / a[w]
+      hit[i[!(is.finite(a) & a >= 0)]] <- Inf
+    }
+  }
+  hit[!is.finite(hit) | hit < 0] <- Inf
+  hit
+}
+
+# Shared-rate simulator: rows are accumulators fastest within trials.
+rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
+  .frq_check_cols(pars)
+  ok <- .frq_check_race(lR, pars, ok, "FRQ")
+  nr <- length(levels(lR))
+  trial <- rep(seq_len(nrow(pars) / nr), each = nr)
+  dt <- rep(Inf, nrow(pars))
+  idx <- which(ok & is.finite(pars[, "t0"]))
+  if (length(idx)) {
+    p <- .frq_with_sv(pars[idx, , drop = FALSE])
+    cv <- p[, "sv"] / p[, "v"]
+    if (any(tapply(cv, trial[idx], function(x) diff(range(x))) > 0))
+      stop("FRQ shared rate: cv must be equal across the accumulators of a trial.")
+    dt[idx] <- .frq_draw_dt_shared(p, trial[idx])
+  }
+  .frq_race(lR, dt, pars[, "t0"], ok)
+}
+
 # Resolve a race from per-row decision times dt (accumulators fastest within
 # each trial column); an all-Inf trial column is the package's omission
 # convention.
@@ -375,6 +442,21 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' at `h = 1`) and `cv` = `sv / v` (`sv` = `cv * v` under
 #' `parameterization = "cv"` or `"accel"`).
 #'
+#' `rate_sharing = "shared"` draws one rate multiplier `W ~ Gamma(beta, 1)`
+#' per trial for all accumulators, in place of one per accumulator. Each
+#' accumulator's marginal distribution is unchanged, so `cv` must be equal
+#' across the accumulators of a trial, and the parameterization must be `"cv"`
+#' or `"accel"`. Given `W` the accumulators race independently. The winner
+#' density is the independent density times
+#' `E[prod_l Q(K_l, G * psi_l)]`, with `G ~ Gamma(beta + K_w, 1)`,
+#' `psi_l = phi_l(u) * (1 - q_w(u))`, `phi = q / (1 - q)` and `Q` the
+#' regularized upper incomplete gamma function. With two accumulators this is
+#' the beta tail `I_(1/(1 + psi))(beta + K_w, K_l)`. With three accumulators,
+#' and for the joint survivor of two, it is an exact series; four or more
+#' accumulators use a quadrature over `G`. The low state enters each factor as
+#' its mixture. `omega` is not available with a shared rate. `cv < 1e-4` uses
+#' the independent race, the exact `cv = 0` limit.
+#'
 #' Optional nuisance parameters are `pContaminant`, an omission probability
 #' outside the accumulators, and `pGuess`, a uniform-outlier probability.
 #'
@@ -382,6 +464,9 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'   (the default) samples the rate SD *sv*; `"cv"` samples the rate CV
 #'   *cv* = *sv*/*v*; `"accel"` samples *cv* and the clock acceleration
 #'   *accel* in place of *clock*.
+#' @param rate_sharing `"independent"` (the default) draws the trial input-rate
+#'   multiplier separately for each accumulator; `"shared"` draws one per trial
+#'   for all accumulators.
 #' @return A model list defining the FRQ race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -411,9 +496,24 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                                           accel ~ 1, h ~ 1, t0 ~ 1),
 #'                            contrasts = list(v = list(lM = ADmat)),
 #'                            constants = c(h = qnorm(1)))
+#' # One shared trial rate.
+#' design_FRQ_shared <- design(data = forstmann,
+#'                             model = function() FRQ(parameterization = "cv",
+#'                                                    rate_sharing = "shared"),
+#'                             matchfun = matchfun,
+#'                             formula = list(K ~ 1, v ~ lM + E, cv ~ 1, h ~ 1,
+#'                                            t0 ~ 1),
+#'                             contrasts = list(v = list(lM = ADmat)),
+#'                             constants = c(h = qnorm(1)))
 #' @export
-FRQ <- function(parameterization = c("sv", "cv", "accel")) {
+FRQ <- function(parameterization = c("sv", "cv", "accel"),
+                rate_sharing = c("independent", "shared")) {
   parameterization <- match.arg(parameterization)
+  rate_sharing <- match.arg(rate_sharing)
+  shared <- rate_sharing == "shared"
+  if (shared && parameterization == "sv")
+    stop("FRQ(rate_sharing = \"shared\") needs parameterization = \"cv\" or ",
+         "\"accel\": one shared rate has one CV per trial.")
   accel <- parameterization == "accel"
   # The rate-variability coordinate in kernel column 3: the rate SD sv, or the
   # rate CV cv = sv / v (the cv and accel charts).
@@ -456,13 +556,23 @@ FRQ <- function(parameterization = c("sv", "cv", "accel")) {
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   # pContaminant is redundant with 1 - h unless an omission mechanism outside
   # the decision process is wanted.
+  if (shared) {
+    # The excess criterion has no closed form under a shared rate
+    # (src/frq_shared.h).
+    keep <- names(p_types) != "omega"
+    p_types <- p_types[keep]
+    transform <- transform[names(transform) != "omega"]
+    minmax <- minmax[, colnames(minmax) != "omega", drop = FALSE]
+    exception <- exception[names(exception) != "omega"]
+  }
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
 
   list(
     type = "RACE",
-    c_name = if (accel) "FRQ_ACCEL" else if (rv == "cv") "FRQ_CV" else "FRQ",
+    c_name = paste0(if (accel) "FRQ_ACCEL" else if (rv == "cv") "FRQ_CV" else "FRQ",
+                    if (shared) "_SHARED" else ""),
     p_types = p_types,
     p_types_canonical = c("K", "v", rv, "h", "t0"),
     transform = list(func = transform),
@@ -487,7 +597,9 @@ FRQ <- function(parameterization = c("sv", "cv", "accel")) {
       rownames(add) <- NULL
       cbind(pars, add)
     },
-    rfun = function(data, pars) {
+    rfun = if (shared) function(data, pars) {
+      rFRQ_shared(data$lR, pars, ok = attr(pars, "ok"))
+    } else function(data, pars) {
       .rfun_FRQ(data$lR, pars, ok = attr(pars, "ok"))
     },
     dfun = function(rt, pars) dFRQ(rt, pars),

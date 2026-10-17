@@ -258,6 +258,11 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.supports_batched_defective_truncation = true;
     out.ctx.frq_cache = std::make_shared<FrqCache>();
     out.ctx.frq_omega_by_name = true;
+    if (type_std.find("_SHARED") != std::string::npos) {
+      if (type_std.find("FRQ_ACCEL") != std::string::npos) out.ctx.frq_shared = 2;
+      else if (type_std.find("FRQ_CV") != std::string::npos) out.ctx.frq_shared = 1;
+      else Rcpp::stop("%s: a shared FRQ rate needs the cv or accel chart.", caller.c_str());
+    }
   } else if (type_std.find("BTAwL_SEPARATE") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_local_race_scalar;
     out.cdf1_ptr       = &pbtawl_local_race_scalar;
