@@ -55,10 +55,15 @@
 
 namespace rsub {
 
-// Two ends whose ratio exceeds this are differenced by quadrature instead.
-constexpr double kCancel = 0.75;
+// Two ends whose ratio exceeds this are differenced by quadrature instead;
+// below it a subtraction loses at most two digits.
+constexpr double kCancel = 0.99;
+// The same for Mills-ratio differences inside an end, whose operands already
+// carry the cancellation of D = 1 - xR and E = R - xD.
+constexpr double kMillsCancel = 0.9;
 constexpr int kGLNodes = 8;
-// log of the smallest probability taken as the complement of its partner.
+// log of the smallest probability taken as the complement of its partner,
+// scaled by the share of the partner that survived its end difference.
 constexpr double kComplementFloor = -9.210340371976184;  // log(1e-4)
 
 inline bool pars_ok(double v, double B, double A, double s) {
@@ -109,10 +114,12 @@ inline double lin_J_diff(double J1, double Jc1, double J2, double Jc2, bool pref
 namespace ig {
 
 // The Mills ratio R(x) = Phi(-x)/phi(x) and its successive negative
-// derivatives D = 1 - xR and E = R - xD.  Below x = 4 they are formed
-// directly, which costs at most a few hundred ulps in E; above it the
-// subtractions are exact in the tails of the Laplace continued fraction
-// R = 1/(x + c1), c_k = k/(x + c_{k+1}), as D = c1 R and E = c1 c2 R.
+// derivatives D = 1 - xR and E = R - xD.  Below x = 1.5 they are formed
+// directly, which costs a few ulps in E.  Above it the subtractions are
+// exact in the tails of the Laplace continued fraction R = 1/(x + c1),
+// c_k = k/(x + c_{k+1}), as D = c1 R and E = c1 c2 R; more generally
+// R^(n) = (-1)^n R c_1 ... c_n.  On [1.5, 8) those derivatives are tabulated
+// at a grid of nodes and R, D and E are Taylor series from the nearest node.
 struct Mills { double R, D, E; };
 
 // R(z) = sqrt(2 pi) n(z)/d(z) for 0 <= z < FAST_NORM_SPLIT, the rational of
@@ -132,18 +139,68 @@ inline double mills_small(double x) {
   return FAST_NORM_RT2PI * std::exp(0.5 * z * z) - Rz;
 }
 
-// The fraction is entered at depth K with the tail seeded at the fixed point
-// of c = (K + 1)/(x + c); each depth keeps R, D and E within an ulp or two
-// over its range of x.
+// Taylor table: nodes x_j = kTabLo + j h, and for each node the coefficients
+// (-1)^n P_{n+i}/n!, i = 0, 1, 2 (R, D, E), with P_n = R c_1 ... c_n from a
+// fraction deep enough to be exact at x = kTabLo.  With |x - x_j| <= h/2 the
+// series terms fall by a factor of at least ten per order, so the alternating
+// sums lose nothing.
+constexpr double kTabLo = 1.5, kTabHi = 8.0, kTabH = 0.125;
+constexpr int kTabN = 52, kTabDeg = 15;  // (kTabHi - kTabLo)/kTabH nodes
+
+struct MillsTable { double c[kTabN + 1][3][kTabDeg + 1]; };
+
+inline const MillsTable& mills_table() {
+  static const MillsTable* tab = [] {
+    auto* t = new MillsTable;
+    constexpr int K = 4000;
+    for (int j = 0; j <= kTabN; ++j) {
+      const double x = kTabLo + j * kTabH;
+      double ck[kTabDeg + 3 + 1];
+      double c = 0.0;
+      for (int k = K; k >= 1; --k) {
+        c = k / (x + c);
+        if (k <= kTabDeg + 3) ck[k] = c;
+      }
+      double P[kTabDeg + 3];
+      P[0] = 1.0 / (x + ck[1]);
+      for (int n = 1; n < kTabDeg + 3; ++n) P[n] = P[n - 1] * ck[n];
+      double fact = 1.0;
+      for (int n = 0; n <= kTabDeg; ++n) {
+        if (n > 0) fact *= n;
+        const double sg = (n & 1) ? -1.0 : 1.0;
+        for (int i = 0; i < 3; ++i) t->c[j][i][n] = sg * P[n + i] / fact;
+      }
+    }
+    return t;
+  }();
+  return *tab;
+}
+
+inline Mills mills_tab(double x) {
+  const int j = static_cast<int>((x - kTabLo) / kTabH + 0.5);
+  const double dx = x - (kTabLo + j * kTabH);
+  const double (*c)[kTabDeg + 1] = mills_table().c[j];
+  double R = c[0][kTabDeg], D = c[1][kTabDeg], E = c[2][kTabDeg];
+  for (int n = kTabDeg - 1; n >= 0; --n) {
+    R = R * dx + c[0][n];
+    D = D * dx + c[1][n];
+    E = E * dx + c[2][n];
+  }
+  return {R, D, E};
+}
+
+// Above the table the fraction is entered at depth K with the tail seeded at
+// the fixed point of c = (K + 1)/(x + c); each depth keeps R, D and E within
+// an ulp or two over its range of x.
 inline Mills mills_seq(double x) {
-  if (x < 4.0) {
+  if (x < kTabLo) {
     const double R = mills_small(x);
     const double D = 1.0 - x * R;
     return {R, D, R - x * D};
   }
+  if (x < kTabHi - 0.5 * kTabH) return mills_tab(x);
   if (!R_FINITE(x)) return {0.0, 0.0, 0.0};
-  const int K = x < 4.5 ? 31 : x < 5.0 ? 27 : x < 6.0 ? 24 : x < 7.0 ? 20 :
-                x < 8.0 ? 17 : x < 10.0 ? 15 : x < 14.0 ? 13 : x < 20.0 ? 11 :
+  const int K = x < 8.0 ? 17 : x < 10.0 ? 15 : x < 14.0 ? 13 : x < 20.0 ? 11 :
                 x < 30.0 ? 9 : 7;
   const double tail = 2.0 * (K + 1) / (x + std::sqrt(x * x + 4.0 * (K + 1)));
   double c2;
@@ -170,14 +227,17 @@ inline Mills mills_seq(double x) {
 
 // int_a^b D (order 1, = R(a) - R(b)) or int_a^b E (order 2, = D(a) - D(b)),
 // a < b, from the Mills values already formed at both ends; by 8-point
-// Gauss-Legendre where the ends agree too closely to subtract.
-inline double mills_int(int order, double a, const Mills& ma, double b, const Mills& mb) {
-  if (!(b > a)) return 0.0;
+// Gauss-Legendre where the ends agree too closely to subtract.  The width
+// w = b - a is passed in its own closed form, since b - a formed from the
+// rounded ends loses digits exactly when they are close.
+inline double mills_int(int order, double a, const Mills& ma, double b, const Mills& mb,
+                        double w) {
+  if (!(w > 0.0)) return 0.0;
   const double xa = order == 1 ? ma.R : ma.D;
   const double xb = order == 1 ? mb.R : mb.D;
-  if (xb < kCancel * xa) return xa - xb;
+  if (xb < kMillsCancel * xa) return xa - xb;
   const GLRule& g = gl_get_rule(kGLNodes);
-  const double h = 0.5 * (b - a), c = 0.5 * (b + a);
+  const double h = 0.5 * w, c = a + h;
   double sum = 0.0;
   for (int i = 0; i < kGLNodes; ++i) {
     const Mills mi = mills_seq(c + h * g.x[i]);
@@ -186,14 +246,15 @@ inline double mills_int(int order, double a, const Mills& ma, double b, const Mi
   return h * sum;
 }
 
-inline double log_mills_int(int order, double a, double b) {
-  if (!(b > a)) return R_NegInf;
-  return std::log(mills_int(order, a, mills_seq(a), b, mills_seq(b)));
+inline double log_mills_int(int order, double a, double b, double w) {
+  if (!(w > 0.0)) return R_NegInf;
+  return std::log(mills_int(order, a, mills_seq(a), b, mills_seq(b), w));
 }
 
 // Coordinates of the distance-d first passage at mean evidence m = v u.
+// wd = beta - alpha = 2d/z and wm = beta + alpha = 2m/z.
 struct Pt {
-  double z, alpha, beta, lphi;
+  double z, alpha, beta, lphi, wd, wm;
 };
 
 inline Pt point(double m, double d, double s) {
@@ -201,6 +262,8 @@ inline Pt point(double m, double d, double s) {
   p.z = s * std::sqrt(d);
   p.alpha = (m - d) / p.z;
   p.beta = (m + d) / p.z;
+  p.wd = 2.0 * d / p.z;
+  p.wm = 2.0 * m / p.z;
   p.lphi = -0.5 * p.alpha * p.alpha - LOG_SQRT_2PI;
   return p;
 }
@@ -229,7 +292,7 @@ struct Kernel {
       const double ls = log_surv_point(u, v, d, s);
       if (ls < -M_LN2) return std::log(-std::expm1(ls));
     }
-    return p.lphi + log_mills_int(1, -p.alpha, p.beta);
+    return p.lphi + log_mills_int(1, -p.alpha, p.beta, p.wm);
   }
 
   // The J form that log_pdf differences first: Jc when the start range is
@@ -254,19 +317,19 @@ struct Kernel {
     const Mills mb = mills_seq(p.beta);
     EndJ e = {R_NaN, R_NaN};
     if (p.alpha >= 0.0) {
-      e.lJc = p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
-                                (p.beta - p.alpha) * mb.D);
+      e.lJc = p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd) +
+                                p.wd * mb.D);
       e.lJ = std::log1p(-std::exp(e.lJc));
       return e;
     }
     if ((want & 1) || p.alpha <= -kAlphaMax) {
-      e.lJ = p.lphi + std::log(mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb) +
-                               2.0 * mb.E + (p.alpha + p.beta) * mb.D);
+      e.lJ = p.lphi + std::log(mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb, p.wm) +
+                               2.0 * mb.E + p.wm * mb.D);
     }
     if (want & 2) {
       e.lJc = p.alpha > -kAlphaMax
-        ? p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
-                            (p.beta - p.alpha) * mb.D)
+        ? p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd) +
+                            p.wd * mb.D)
         : std::log(-std::expm1(std::fmin(e.lJ, 0.0)));
     }
     return e;
@@ -282,10 +345,10 @@ struct Kernel {
     const double lzphi = std::log(p.z) + p.lphi;
     EndHL e;
     if (p.alpha >= 0.0) {
-      e.lL = lzphi + std::log(mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb));
+      e.lL = lzphi + std::log(mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd));
       e.lH = log_add(std::log(m - d), e.lL);
     } else {
-      e.lH = lzphi + std::log(mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb));
+      e.lH = lzphi + std::log(mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb, p.wm));
       e.lL = log_add(std::log(d - m), e.lH);
     }
     return e;
@@ -309,10 +372,10 @@ struct Kernel {
     const Mills mb = mills_seq(p.beta);
     const double zphi = p.z * std::exp(p.lphi);
     if (p.alpha >= 0.0) {
-      *L = zphi * mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb);
+      *L = zphi * mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd);
       *H = *L + (m - d);
     } else {
-      *H = zphi * mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb);
+      *H = zphi * mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb, p.wm);
       *L = *H + (d - m);
     }
     return true;
@@ -326,14 +389,14 @@ struct Kernel {
     const double phi = std::exp(p.lphi);
     *J = *Jc = R_NaN;
     if (p.alpha >= 0.0 || (want & 2)) {
-      *Jc = phi * (mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
-                   (p.beta - p.alpha) * mb.D);
+      *Jc = phi * (mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd) +
+                   p.wd * mb.D);
     }
     if (p.alpha >= 0.0) {
       *J = 1.0 - *Jc;
     } else if (want & 1) {
-      *J = phi * (mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb) +
-                  2.0 * mb.E + (p.alpha + p.beta) * mb.D);
+      *J = phi * (mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb, p.wm) +
+                  2.0 * mb.E + p.wm * mb.D);
     }
     return true;
   }
@@ -495,9 +558,10 @@ inline Side side_sums(double z, double t, double kmode, double kstop) {
 //   t0 = sum_k Pois(k; p) C_q(k),  t1 = sum_k Pois(k; p) C_q(k - 1),
 //   tE = sum_k Pois(k; p) g_q(k),
 // which are P(Delta <= 0), P(Delta <= -1) and E[Delta-] for Delta = N_q - N_p.
-// Every recurrence is forward and positive.  The summands grow by at most
-// r_k = p (2 + q/k)/(k + 1) per step, so once r_k < 1/2 the tail is below
-// the current summand; that is tested every fourth step.
+// Every recurrence is forward and positive.  Pois(k; p), C_q and g_q are
+// log-concave in k, so their step ratios only fall, and the tail beyond k is
+// at most the current summand times r/(1 - r), with r the product of the
+// next step ratios; that is tested every fourth step.
 // Used while the outer (smaller) mean is at most kDirectMaxOuter, where it
 // takes fewer steps than the Bessel recurrence, and e^-q stays far above the
 // underflow threshold; a sum that lands near it hands over to the recurrence.
@@ -524,6 +588,16 @@ inline const double* inv_int_table() {
   return inv.data();
 }
 
+// Whether the sums at index k have converged (see above).
+inline bool direct_done(int k, double p, double q, const double* inv, double pp,
+                        double pq, double C, double g, double t1, double tE) {
+  const double r = p * inv[k + 1] *
+                   std::fmax(1.0 + q * inv[k + 1] * pq / C, 1.0 + C / g);
+  if (!(r < 1.0)) return false;
+  const double tail = r / (1.0 - r);
+  return pp * C * tail < 0.5 * kTermEps * t1 && pp * g * tail < 0.5 * kTermEps * tE;
+}
+
 inline Near near_direct(double p, double q) {
   const double* inv = inv_int_table();
   double pp = std::exp(-p), pq = std::exp(-q);
@@ -537,8 +611,7 @@ inline Near near_direct(double p, double q) {
     C += pq;
     t0 += pp * C;
     tE += pp * g;
-    if ((k & 3) == 0 && k > p && p * (2.0 + q * inv[k]) * inv[k + 1] < 0.5 &&
-        pp * C < 0.5 * kTermEps * t1 && pp * g < 0.5 * kTermEps * tE) {
+    if ((k & 3) == 0 && direct_done(k, p, q, inv, pp, pq, C, g, t1, tE)) {
       return {t0, t1, tE};
     }
   }
@@ -552,17 +625,13 @@ inline void near_direct2(double p1, double q1, double p2, double q2, Near* o1, N
   double pp1 = std::exp(-p1), pq1 = std::exp(-q1), pp2 = std::exp(-p2), pq2 = std::exp(-q2);
   double C1 = pq1, g1 = 0.0, C2 = pq2, g2 = 0.0;
   double t01 = pp1 * C1, t11 = 0.0, tE1 = 0.0, t02 = pp2 * C2, t12 = 0.0, tE2 = 0.0;
-  auto done = [&](int k, double p, double q, double pp, double C, double g, double t1, double tE) {
-    return k > p && p * (2.0 + q * inv[k]) * inv[k + 1] < 0.5 &&
-           pp * C < 0.5 * kTermEps * t1 && pp * g < 0.5 * kTermEps * tE;
-  };
   for (int k = 1; k < kDirectMaxK; ++k) {
     pp1 *= p1 * inv[k]; pq1 *= q1 * inv[k];
     pp2 *= p2 * inv[k]; pq2 *= q2 * inv[k];
     g1 += C1; t11 += pp1 * C1; C1 += pq1; t01 += pp1 * C1; tE1 += pp1 * g1;
     g2 += C2; t12 += pp2 * C2; C2 += pq2; t02 += pp2 * C2; tE2 += pp2 * g2;
-    if ((k & 3) == 0 && done(k, p1, q1, pp1, C1, g1, t11, tE1) &&
-        done(k, p2, q2, pp2, C2, g2, t12, tE2)) {
+    if ((k & 3) == 0 && direct_done(k, p1, q1, inv, pp1, pq1, C1, g1, t11, tE1) &&
+        direct_done(k, p2, q2, inv, pp2, pq2, C2, g2, t12, tE2)) {
       *o1 = {t01, t11, tE1};
       *o2 = {t02, t12, tE2};
       return;
@@ -842,11 +911,14 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
     *lS = std::fmin(nS, 0.0);
     *lF = ISNAN(nF) ? std::log(-std::expm1(*lS)) : nF;
     // The H ends agree closely, so the point CDF varies little over the
-    // interval; average it where the complement has lost too many digits.
-    if (want_F && ISNAN(nF) && *lF < kComplementFloor) {
+    // interval; average it where the complement, together with the
+    // difference of the L ends, has lost too many digits.  S >= 1/2 is then
+    // retaken as its complement, which is the more accurate of the two and
+    // keeps F + S = 1 whichever output was asked for.
+    if (ISNAN(nF) && *lF + std::log1p(-std::exp(e1.lL - e2.lL)) < kComplementFloor) {
       const double lq = log_gl_checked(B, A, [&](double d) {
         return K::log_cdf_point(u, v, d, s); });
-      if (!ISNAN(lq)) *lF = lq;
+      if (!ISNAN(lq)) { *lF = lq; *lS = std::log1p(-std::exp(lq)); }
     }
     return;
   }
