@@ -118,7 +118,7 @@ namespace ig {
 // directly, which costs a few ulps in E.  Above it the subtractions are
 // exact in the tails of the Laplace continued fraction R = 1/(x + c1),
 // c_k = k/(x + c_{k+1}), as D = c1 R and E = c1 c2 R; more generally
-// R^(n) = (-1)^n R c_1 ... c_n.  On [1.5, 8) those derivatives are tabulated
+// R^(n) = (-1)^n R c_1 ... c_n.  On [1.5, 32) those derivatives are tabulated
 // at a grid of nodes and R, D and E are Taylor series from the nearest node.
 struct Mills { double R, D, E; };
 
@@ -139,22 +139,29 @@ inline double mills_small(double x) {
   return FAST_NORM_RT2PI * std::exp(0.5 * z * z) - Rz;
 }
 
-// Taylor table: nodes x_j = kTabLo + j h, and for each node the coefficients
-// (-1)^n P_{n+i}/n!, i = 0, 1, 2 (R, D, E), with P_n = R c_1 ... c_n from a
-// fraction deep enough to be exact at x = kTabLo.  With |x - x_j| <= h/2 the
-// series terms fall by a factor of at least ten per order, so the alternating
-// sums lose nothing.
-constexpr double kTabLo = 1.5, kTabHi = 8.0, kTabH = 0.125;
-constexpr int kTabN = 52, kTabDeg = 15;  // (kTabHi - kTabLo)/kTabH nodes
+// Taylor table: nodes x_j on [1.5, 8) at spacing 1/8 and on [8, 32) at
+// spacing 1/2, and for each node the coefficients (-1)^n P_{n+i}/n!,
+// i = 0, 1, 2 (R, D, E), with P_n = R c_1 ... c_n from a fraction deep enough
+// to be exact at the lowest node.  Within half a spacing of a node the series
+// terms fall by a factor of at least ten per order (c_n is at most about
+// n/x), so the alternating sums lose nothing.
+constexpr double kTabLo = 1.5, kTabMid = 8.0, kTabHi = 32.0;
+constexpr double kTabH0 = 0.125, kTabH1 = 0.5;
+constexpr int kTabN0 = 52, kTabN1 = 48;  // nodes below / above kTabMid
+constexpr int kTabDeg = 15;
 
-struct MillsTable { double c[kTabN + 1][3][kTabDeg + 1]; };
+struct MillsTable { double c[kTabN0 + kTabN1 + 1][3][kTabDeg + 1]; };
+
+inline double mills_tab_node(int j) {
+  return j <= kTabN0 ? kTabLo + j * kTabH0 : kTabMid + (j - kTabN0) * kTabH1;
+}
 
 inline const MillsTable& mills_table() {
   static const MillsTable* tab = [] {
     auto* t = new MillsTable;
     constexpr int K = 4000;
-    for (int j = 0; j <= kTabN; ++j) {
-      const double x = kTabLo + j * kTabH;
+    for (int j = 0; j <= kTabN0 + kTabN1; ++j) {
+      const double x = mills_tab_node(j);
       double ck[kTabDeg + 3 + 1];
       double c = 0.0;
       for (int k = K; k >= 1; --k) {
@@ -176,9 +183,12 @@ inline const MillsTable& mills_table() {
   return *tab;
 }
 
+// For kTabLo <= x < kTabHi - kTabH1/2.
 inline Mills mills_tab(double x) {
-  const int j = static_cast<int>((x - kTabLo) / kTabH + 0.5);
-  const double dx = x - (kTabLo + j * kTabH);
+  const int j = x < kTabMid - 0.5 * kTabH0
+    ? static_cast<int>((x - kTabLo) / kTabH0 + 0.5)
+    : kTabN0 + static_cast<int>((x - kTabMid) / kTabH1 + 0.5);
+  const double dx = x - mills_tab_node(j);
   const double (*c)[kTabDeg + 1] = mills_table().c[j];
   double R = c[0][kTabDeg], D = c[1][kTabDeg], E = c[2][kTabDeg];
   for (int n = kTabDeg - 1; n >= 0; --n) {
@@ -198,10 +208,9 @@ inline Mills mills_seq(double x) {
     const double D = 1.0 - x * R;
     return {R, D, R - x * D};
   }
-  if (x < kTabHi - 0.5 * kTabH) return mills_tab(x);
+  if (x < kTabHi - 0.5 * kTabH1) return mills_tab(x);
   if (!R_FINITE(x)) return {0.0, 0.0, 0.0};
-  const int K = x < 8.0 ? 17 : x < 10.0 ? 15 : x < 14.0 ? 13 : x < 20.0 ? 11 :
-                x < 30.0 ? 9 : 7;
+  const int K = x < 40.0 ? 9 : 7;
   const double tail = 2.0 * (K + 1) / (x + std::sqrt(x * x + 4.0 * (K + 1)));
   double c2;
   if (x < 20.0) {
