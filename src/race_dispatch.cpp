@@ -9,6 +9,7 @@
 #include "fpe_models.h"
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
+#include "model_OPR.h"
 #include "time_clock.h"
 #include <cmath>
 #include <memory>
@@ -654,6 +655,25 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr = &rdm_logS_at_t;
     out.col_spec     = emc2col::rdm::spec();
     out.ctx.t0_index = emc2col::rdm::t0;
+  } else if (type_std.find("OPR") != std::string::npos) {
+    // Opponent Poisson race.  OPR_RATES samples (lambda_p, lambda_m) and
+    // OPR_BG (v, lambda0) in the positions that OPR uses for (v, rho).
+    const bool rates = (type_std.find("OPR_RATES") != std::string::npos);
+    const bool bg = (type_std.find("OPR_BG") != std::string::npos);
+    out.pdf1_ptr       = &dopr_scalar;
+    out.cdf1_ptr       = &popr_scalar;
+    out.model_dfun_raw = &dopr_raw;
+    out.model_pfun_raw = &popr_raw;
+    out.logS_at_t_ptr  = &opr_logS_at_t;
+    out.col_spec       = rates ? emc2col::opr::spec_rates()
+                       : (bg ? emc2col::opr::spec_background() : emc2col::opr::spec());
+    out.ctx.t0_index   = emc2col::opr::t0;
+    out.ctx.opr_chart  = rates ? 1 : (bg ? 2 : 0);
+    // lambda_m > lambda_p leaves the atom 1 - (lambda_p/lambda_m)^K at +Inf,
+    // which opr_logS_at_t returns when queried there.  The (v, rho) and
+    // (v, lambda0) charts are proper.
+    out.ctx.defective_upper_tail = rates;
+    out.ctx.supports_batched_defective_truncation = rates;
   } else if (type_std.find("REXG") != std::string::npos) {
     out.pdf1_ptr = &dexg_scalar;
     out.cdf1_ptr = &pexg_scalar;

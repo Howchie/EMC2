@@ -1,439 +1,785 @@
 \documentclass[12pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{amsmath, amssymb, amsthm, bm}
-\usepackage{geometry}
-\usepackage{booktabs}
-\usepackage{array}
+\usepackage{amsmath,amssymb,amsthm,bm}
+\usepackage{geometry,booktabs,array}
 \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
 \usepackage{hyperref}
-
 \geometry{margin=1.05in}
-\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
-
-\title{Counter and Quorum Models:\\
-       the Finite Reservoir Quorum Kernel in Counter Coordinates}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\title{Poisson Count and Quorum Models:\\Mathematical Structure and Psychological Interpretation}
 \author{}
 \date{\today}
-
 \newcommand{\dd}{\,\mathrm{d}}
 \newcommand{\e}{\mathrm{e}}
-\newcommand{\logit}{\operatorname{logit}}
 \newcommand{\BetaDist}{\operatorname{Beta}}
-\newcommand{\Binomial}{\operatorname{Binomial}}
 \newcommand{\GammaDist}{\operatorname{Gamma}}
 \newcommand{\Poisson}{\operatorname{Poisson}}
-\newcommand{\cvu}{c}
-
+\newcommand{\Binomial}{\operatorname{Binomial}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
 \theoremstyle{remark}
 \newtheorem{remark}{Remark}
-\newtheorem{proposition}{Proposition}
-\newtheorem{definition}{Definition}
-\newtheorem{corollary}{Corollary}
-
 \begin{document}
 \maketitle
-
 \begin{abstract}
-This note is the mathematical specification of the Finite Reservoir Quorum race model (\textsc{FRQ}) as implemented in EMC2. In \textsc{FRQ}, evidence is a set of discrete registration events, and an accumulator responds once a quorum of them has arrived. Its first-passage law is a regularized incomplete beta function, so the likelihood is closed form. The note's central result is an exact counter reading of that law. Every \textsc{FRQ} accumulator is a Poisson counter that runs on an operational clock, has a Gamma-distributed trial intensity, and has a threshold of $K$ events. This reading gives the fitted coordinates $(K, v, sv, h)$: event threshold, mean initial input rate, between-trial SD of that rate, and eventual completion probability. A shape parameter $\cvu$ (\texttt{clock}) fixes the clock. At $sv=0$ the model reduces to an exact Poisson counter with no rate variability. The classic Poisson counter race, its gamma-mixed-rate extension and its linear self-exciting extension are all exact submodels with real-valued $K$. These were the independent-counter submodels of the former \textsc{PCOUNTER} model, which was removed; Section~\ref{sec:notcovered} lists the parts of it that \textsc{FRQ} does not reproduce. We also give the low-threshold state $\pi_{\mathrm{lo}}$ (\texttt{plo}), a per-accumulator mixture over two thresholds that keeps the likelihood closed form and can produce fast errors, the error-RT signature of each mechanism, measured identification results, and what the kernel does not cover.
+Poisson count models describe decisions as the accumulation of discrete evidence events to a response criterion. This document develops the quorum counter family (FRQ) from that starting point: a Poisson process on a deterministic operational clock, a Gamma-distributed trial intensity, and a criterion expressed as an event count or its continuous Gamma-threshold extension. Integrating over trial intensity gives a regularized incomplete beta first-passage law. Coordinates for mean initial rate, rate variability, criterion, clock curvature, and eventual completion probability connect the mathematical structure to psychological hypotheses. The family contains the homogeneous Poisson counter, a Gamma-mixed homogeneous counter, a linear pure-birth counter, and counters with bounded cumulative intensity. A two-state criterion mixture and a fading operational clock provide further structured variants. An opponent counter, in which a second Poisson stream removes evidence, gives a Bessel first-passage law with a continuous criterion, a defective form under negative net evidence, and a Wald diffusion limit. Finite reservoirs supply an alternative representation for particular integer shapes, rather than the defining mechanism. Exact distributional identities, differences between event processes, race dependence, and restrictions across experimental conditions determine what these models can explain and what response-time observations can identify.
 \end{abstract}
-
 \tableofcontents
 \newpage
 
-%======================================================================
-\section{Scope and Notation}
-%======================================================================
+\section{The Poisson Count Model Family}\label{sec:poisson}
 
-Counting models represent decision evidence as discrete, all-or-none events in continuous time. The classic counter models come from Pike \cite{Pike1966}, LaBerge \cite{LaBerge1962} and Townsend and Ashby \cite{TownsendAshby1983}. This note treats one kernel, \textsc{FRQ}, and shows that the counter models used in the response-time literature are special cases of it.
+Counting theories represent evidence as all-or-none registration events in continuous time. A response occurs when a counter has registered enough events. This connects the quorum stopping rule to recruitment theory \cite{LaBerge1962}, classical choice counters \cite{Pike1966,Pike1973}, and the treatment of elementary processing by Townsend and Ashby \cite{TownsendAshby1983}. The central object here is the distribution of the time to criterion, together with the assumptions that turn separate counters into a choice model.
 
-EAMs are applied to separate latent mechanisms that can produce the same mean response time while shaping the RT distribution differently. The fitted coordinates are therefore chosen so that each one is a mechanism: threshold, rate, rate variability, evidence ceiling and threshold variability. None of them is a response-time summary.
-
-\subsection{Response Time Decomposition}
-Let $T$ be the observed response time and $t_0 \ge 0$ the non-decision time. The decision time is $u = T - t_0$. Densities $f(u)$, distribution functions $F(u)$ and survivors $S(u)=1-F(u)$ are written in decision time, and $f_T(t) = f(t - t_0) \mathbf{1}_{\{t > t_0\}}$.
-
-\subsection{Race Architecture and Defective Distributions}
-Each response alternative $i \in \{1, \dots, R\}$ has an independent accumulator with decision latency $U_i \in (0, \infty]$. The first accumulator to finish determines the response:
+\subsection{Homogeneous counters}
+Let $N(u)$ be a homogeneous Poisson process with rate $v>0$, starting at $N(0)=0$, and let $K\geq1$ be an integer. Decision time is
 \begin{equation}
-  \text{Response} = \arg\min_{i} (t_{0i} + U_i), \qquad T = \min_{i} (t_{0i} + U_i).
+ U=\inf\{u\geq0:N(u)\geq K\}.
 \end{equation}
-The density for alternative $i$ winning at time $t$ is
+Define the regularized lower incomplete gamma function by
 \begin{equation}
-  g_i(t) = f_i(t - t_{0i}) \prod_{j \neq i} S_j(t - t_{0j}), \label{eq:race-likelihood}
+ P_K(m)=\frac{1}{\Gamma(K)}\int_0^m x^{K-1}\e^{-x}\dd x.
 \end{equation}
-with $S_j(u)=1$ for $u\le 0$. An accumulator may be defective, $F_i(\infty) < 1$, in which case it never finishes with probability $1 - F_i(\infty)$. An omission (no response at all) has probability
+The event-count identity then gives
 \begin{equation}
-  P(\text{Omission}) = \prod_{j=1}^R \big(1 - F_j(\infty)\big).
+ F(u)=P\{N(u)\geq K\}=P_K(vu),\qquad
+ f(u)=\frac{v^K u^{K-1}\e^{-vu}}{\Gamma(K)}.\label{eq:erlang}
 \end{equation}
+Thus $U$ is Erlang with mean $K/v$ and variance $K/v^2$. At $K=1$ it is exponential. Criterion and rate have different distributional effects even when they give the same mean: $\operatorname{CV}^2(U)=1/K$.
 
-%======================================================================
-\section{The Finite Reservoir Quorum Process}
-%======================================================================
-
-\subsection{Generative Mechanism}
-An accumulator has a reservoir of $N$ potential evidence units. On each trial:
-\begin{enumerate}
-  \item each unit is independently \textbf{available} with probability $p \in (0, 1]$;
-  \item an available unit registers after an independent delay with CDF $G(u)$, and an unavailable unit never registers;
-  \item the accumulator responds once a \textbf{quorum} of $K$ units has registered.
-\end{enumerate}
-If fewer than $K$ units are available, the accumulator never responds. By time $u$, each unit has registered with probability $q(u) = pG(u)$. The registered count is therefore $\Binomial(N, q(u))$, and the binomial-tail identity gives
+\subsection{Operational time and time-dependent rates}\label{sec:operational}
+A nonhomogeneous Poisson counter replaces $vu$ with a deterministic, nondecreasing cumulative intensity
 \begin{equation}
-  F(u) = P\{\Binomial(N,q(u)) \ge K\} = I_{q(u)}(\alpha, \beta), \qquad \alpha = K,\quad \beta = N - K + 1, \label{eq:frq-cdf}
+ M(u)=\int_0^u r(s)\dd s,\qquad M(0)=0.
 \end{equation}
-where $I_q(a,b)$ is the regularized incomplete beta function. The density and survivor are
+For an absolutely continuous clock,
 \begin{equation}
-  f(u) = p\, g(u)\, \frac{q(u)^{\alpha - 1} (1 - q(u))^{\beta - 1}}{B(\alpha, \beta)}, \qquad
-  S(u) = I_{1 - q(u)}(\beta, \alpha), \label{eq:frq-pdf}
+ F(u)=P_K(M(u)),\qquad
+ f(u)=\frac{M(u)^{K-1}\e^{-M(u)}}{\Gamma(K)}M'(u).\label{eq:nhpp}
 \end{equation}
-with $g = G'$. The kernel evaluates $1 - q(u) = (1-p) + p\,(1 - G(u))$ directly, which avoids cancellation when $q(u)\approx 1$.
+Smith and Van Zandt \cite{SmithVanZandt2000} developed time-dependent Poisson decision counters for two and multiple alternatives, including proportional rate functions and applications to sustained and transient visual channels. Their framework motivates treating operational time as a psychological assumption about the temporal availability of evidence.
 
-\subsection{Registration Law}
-The registration law has rate $\lambda$ and a shape $\cvu \ge 0$, the parameter \texttt{clock}. At $\cvu = 0$ it is exponential, $G(u) = 1 - \e^{-\lambda u}$. At $\cvu > 0$ each unit's rate is Gamma distributed with mean $\lambda$ and CV $\cvu$, which gives the Lomax law
+An unbounded clock gives eventual completion with probability one. A bounded clock, $M(\infty)=E<\infty$, gives
 \begin{equation}
-  G_{\cvu}(u) = 1 - \left(1 + \cvu^2 \lambda u\right)^{-1/\cvu^2}, \qquad
-  g_{\cvu}(u) = \lambda \left(1 + \cvu^2 \lambda u\right)^{-1/\cvu^2 - 1}.
+ h=F(\infty)=P_K(E),\qquad P(U=\infty)=1-h.\label{eq:poisson-defect}
 \end{equation}
-In every case $g(0) = \lambda$. Section~\ref{sec:counter} shows that $\cvu$ is best read as the shape of the counter's clock.
+The count eventually available is $\Poisson(E)$, which is finite almost surely but has no fixed upper bound. A finite expected evidence budget therefore does not imply a reservoir containing a fixed number of units. Intrinsic omissions are already possible within the time-dependent Poisson framework.
 
-\subsection{Continuous Shapes and the Intrinsic Defect}
-Equations~\eqref{eq:frq-cdf}--\eqref{eq:frq-pdf} never use integrality, so they are valid for all real $\alpha, \beta > 0$. As $u \to \infty$, $q \to p$ and
+\subsection{Continuous criteria}
+For any real $K>0$, let $Y_K\sim\GammaDist(K,\text{rate }1)$ and define
 \begin{equation}
-  h = F(\infty) = I_p(\alpha, \beta). \label{eq:frq-h}
+ U=\inf\{u\geq0:M(u)\geq Y_K\}.\label{eq:gamma-threshold}
 \end{equation}
-When $p < 1$ the accumulator is defective, with a genuine point mass $1-h$ at $+\infty$. No separate omission mixture is needed. This defect is not an additive contaminant, because $p$ also reshapes the finite-RT distribution.
+Equation~\eqref{eq:nhpp} remains valid. For integer $K$, $Y_K$ is the operational time of the $K$th arrival of a unit-rate Poisson process. For noninteger $K$, it is a continuous relaxation of that arrival level; it is not literally passage to a fractional count of an integer-valued process. The Gamma level already represents Poisson arrival-time randomness at integer $K$, so it is not an additional source of criterion variability in that case.
 
-%======================================================================
-\section{The Counter Reading}\label{sec:counter}
-%======================================================================
+The family below takes $K\geq1$. Smaller positive shapes still define distributions, but with a locally linear clock the density behaves as $u^{K-1}$ near zero. For $K<1$, this produces a singular leading edge and can make likelihood estimation with a free onset time unbounded.
 
-\begin{proposition}[Gamma-mixed Poisson counter]\label{prop:counter}
-Let $G_\alpha \sim \GammaDist(\alpha, 1)$ and $W \sim \GammaDist(\beta, 1)$ be independent, and define the operational clock
+\section{Gamma-Mixed Quorum Counters}\label{sec:quorum}
+
+\subsection{Generative definition}
+\begin{definition}[Quorum counter]
+Take independent variables
 \begin{equation}
-  \phi(u) = \frac{q(u)}{1 - q(u)}, \qquad \phi(0) = 0,\quad \phi'(0) = p\lambda.
+ W\sim\GammaDist(\beta,\text{rate }1),\qquad
+ Y_K\sim\GammaDist(K,\text{rate }1),\qquad \beta>0.
 \end{equation}
-Then $F(u) = P\{G_\alpha \le W \phi(u)\}$. For integer $\alpha = K$, this is the time of the $K$th event of a Poisson process whose cumulative intensity on the trial is $W\phi(u)$.
-\end{proposition}
-
-\begin{proof}
-$I_q(\alpha,\beta) = P\{B \le q\}$ for $B \sim \BetaDist(\alpha,\beta)$, and $B = G_\alpha/(G_\alpha + W)$. Hence $B \le q \iff G_\alpha \le W q/(1-q)$. For integer $K$, $P\{G_K \le m\} = P\{\Poisson(m) \ge K\}$, so given $W$ the count by time $u$ is Poisson with mean $W\phi(u)$.
-\end{proof}
-
-The three FRQ ingredients then read as counter mechanisms.
-\begin{itemize}
-  \item \textbf{Threshold.} $\alpha = K$ is the number of events required.
-  \item \textbf{Between-trial rate variability.} The trial intensity $W$ has mean $\beta$ and CV $1/\sqrt{\beta}$. The mean initial input rate is $E[W]\,\phi'(0) = \beta p \lambda$.
-  \item \textbf{Evidence ceiling.} For $p<1$ the clock saturates at $\phi(\infty) = p/(1-p)$. The trial then has a finite expected total of evidence, $\beta p/(1-p)$ events, and the defect $1-h$ is the probability that this total falls short of $K$.
-\end{itemize}
-Proposition~\ref{prop:counter} is an equality of first-passage laws, not of counting processes. At $p = 1$, $\cvu = 0$ and $N = K = 3$ ($\beta = 1$), the reservoir registers its three units at total rates $3\lambda, 2\lambda, \lambda$ (depletion), while the counter's successive event rates are $\lambda, 2\lambda, 3\lambda$ (reinforcement, Proposition~\ref{prop:intensity}). Both give $F(u) = (1 - \e^{-\lambda u})^3$. The two mechanisms are observationally equivalent when only completion times are observed.
-
-For the same reason, $\beta p\lambda = (N - K + 1)p\lambda$ is the counter-equivalent initial rate. The reservoir's own initial aggregate registration rate is $Np\lambda$, which is larger whenever $K > 1$ (in the example above, $3\lambda$ against $\lambda$).
-
-\subsection{Clock Shape and Contagion}
-At $p = 1$, the clock is $\phi(u) = (1 + \cvu^2\lambda u)^{1/\cvu^2} - 1$. It is accelerating for $\cvu < 1$ (exponential, $\e^{\lambda u} - 1$, at $\cvu = 0$), exactly linear ($\lambda u$) at $\cvu = 1$, and decelerating for $\cvu > 1$. For $p<1$ every clock saturates at $p/(1-p)$, so "constant rate" is exact only at $h = 1$.
-
-\begin{proposition}[Conditional intensity]\label{prop:intensity}
-Given that $n$ events have occurred by time $u$, the counter's intensity is
+Let $\phi$ be a deterministic nondecreasing operational clock with $\phi(0)=0$. Set
 \begin{equation}
-  \lambda_n(u) = (\beta + n)\, \frac{\phi'(u)}{1 + \phi(u)} = (\beta + n)\,\frac{q'(u)}{1 - q(u)}.
+ U=\inf\{u\geq0:W\phi(u)\geq Y_K\},\label{eq:quorum-definition}
 \end{equation}
-\end{proposition}
-
-\begin{proof}
-Gamma--Poisson conjugacy: $W \mid \{n \text{ events by } u\} \sim \GammaDist(\beta + n,\, 1 + \phi(u))$, and the intensity is $W\phi'(u)$.
-\end{proof}
-
-Proposition~\ref{prop:intensity} shows that between-trial rate variability and self-excitation are one mechanism, contagion, seen on different clocks:
-\begin{itemize}
-  \item at $\cvu = 0$, $p = 1$: $\lambda_n = \beta\lambda + \lambda n$, a linear pure-birth process with base rate $\nu = \beta\lambda$ and self-excitation $\gamma = \lambda$, with no time dependence;
-  \item at $\cvu = 1$, $p = 1$: $\lambda_n(u) = (\nu + \lambda n)/(1 + \lambda u)$, the Pólya process of a gamma-mixed Poisson counter, where the contagion decays in time.
-\end{itemize}
-At $p = 1$ and any $\cvu$, the intensity is $\lambda_n(u) = v(1 + n/\beta)/(1 + \cvu^2 v u/\beta)$. At $K = 1$ this gives $F(u) = 1 - (1 + \cvu^2 v u/\beta)^{-\beta/\cvu^2}$, which depends on $\cvu$ and $\beta$ only through $\beta/\cvu^2$, so at $K = 1$ the two are exactly confounded (and at $\cvu = 0$ the law is exponential with rate $v$, free of $\beta$). For $K > 1$ the factor $1 + n/\beta$ separates them in principle, but in practice they are severely confounded (Section~\ref{sec:ident}).
-
-\subsection{Real-Valued Thresholds}
-For real $K$, Proposition~\ref{prop:counter} still defines the model: the accumulator responds when the operational time $W\phi(u)$ passes a $\GammaDist(K,1)$ level, which has mean $K$ and variance $K$. For integer $K$ this level is exactly the $K$th arrival of a unit-rate Poisson process. For non-integer $K$ it interpolates between counts and is not the first passage of an integer-valued count process. The fitted model keeps $K \ge 1$: the density near onset is proportional to $u^{K-1}$, so for $K < 1$ it is singular at $t_0$ and the likelihood is unbounded as $t_0 \to \min(\mathrm{rt})$.
-
-%======================================================================
-\section{Fitted Coordinates \texorpdfstring{$(K, v, sv, h)$}{(K, v, sv, h)}}
-%======================================================================
-
-\begin{definition}[Counter chart]
-The fitted coordinates are
-\begin{equation}
-  K = \alpha, \qquad v = \beta p \lambda, \qquad sv = \frac{v}{\sqrt{\beta}}, \qquad h = F(\infty),
-\end{equation}
-together with $t_0$, the low-state probability $\pi_{\mathrm{lo}}$ (Section~\ref{sec:plo}) and the clock shape $\cvu$. The rate CV $\mathit{cv} = sv/v = 1/\sqrt{\beta}$ is derived.
+with $U=\infty$ when the clock never reaches the level. For integer $K$, conditional on $W$, this is the $K$th arrival time of a Poisson process with cumulative intensity $W\phi(u)$.
 \end{definition}
+The random variable $W$ is constant throughout a trial. Conditional counts have independent increments, but marginal counts generally do not: all intervals share the same trial intensity. In the real-valued extension, Eq.~\eqref{eq:quorum-definition} defines the finishing time directly.
 
-In words, $K$ is the event threshold, $v$ is the mean initial input rate (events per second), $sv$ is the between-trial SD of the input rate, as in the LBA, and $h$ is the probability that the accumulator ever responds. The kernel inverts the chart in closed form, apart from one beta quantile:
+\begin{proposition}[Integrated first-passage law]\label{prop:beta}
+For $q(u)=\phi(u)/(1+\phi(u))$,
 \begin{equation}
-  \beta = (v/sv)^{2}, \qquad p = Q_{\alpha,\beta}(h), \qquad \lambda = \frac{v}{\beta p}, \label{eq:chart-inverse}
+ F(u)=\E_W[P_K(W\phi(u))]=I_{q(u)}(K,\beta),\label{eq:beta-cdf}
 \end{equation}
-where $Q_{\alpha,\beta}$ is the beta quantile function; with $\pi_{\mathrm{lo}} > 0$ it is replaced by the root of Eq.~\eqref{eq:plo-h}. The solution depends only on $(K, sv/v, h, \pi_{\mathrm{lo}})$, and the kernel caches it on those four arguments. A rate $v$ that varies per trial therefore costs a quantile per distinct value only when $sv > 0$ and $h < 1$: at $h = 1$ there is no quantile, and at $sv = 0$ the key does not involve $v$. At $h = 1$, $p = 1$ exactly and the accumulator is proper.
-
-In this chart, $v$ and $h$ separate ``how fast evidence arrives'' from ``how much evidence exists'', and the onset behaviour is controlled by $v$ alone: at $K = 1$, $f(0^+) = v$ for every $sv$, $h$ and $\cvu$. With $\pi_{\mathrm{lo}} > 0$ and $K > 1$, $f(0^+) = \pi_{\mathrm{lo}} v$ (Section~\ref{sec:plo}).
-
-\subsection{The CV Chart}\label{sec:cvchart}
-\texttt{FRQ(parameterization = "cv")} samples the rate CV in place of $sv$:
+where
 \begin{equation}
-  \mathit{cv} = \frac{sv}{v} = \beta^{-1/2}, \qquad sv = \mathit{cv}\, v .
+ I_q(a,b)=\frac{1}{B(a,b)}\int_0^q z^{a-1}(1-z)^{b-1}\dd z.
 \end{equation}
-The map $(v, sv) \leftrightarrow (v, \mathit{cv})$ is a bijection on $v > 0$, so the two charts are the same model and give the same likelihood at $sv = \mathit{cv}\,v$; $\mathit{cv} = 0$ is the same exact branch as $sv = 0$. What differs is what a design holds fixed when $v$ varies.
-
-\begin{proposition}[Rate as a time scale]\label{prop:timescale}
-With $(K, \mathit{cv}, h, \pi_{\mathrm{lo}}, \cvu)$ fixed, the decision time scales as $T_v \overset{d}{=} T_1/v$:
-\begin{equation}
-  F(u; v) = F(v u; 1).
-\end{equation}
+For a differentiable clock, the density and survivor are
+\begin{align}
+ f(u)&=\frac{q'(u)q(u)^{K-1}(1-q(u))^{\beta-1}}{B(K,\beta)},\label{eq:beta-density}\\
+ S(u)&=1-F(u)=I_{1-q(u)}(\beta,K).\label{eq:beta-survivor}
+\end{align}
 \end{proposition}
-
 \begin{proof}
-$\beta = \mathit{cv}^{-2}$ is free of $v$, and so is $p$, which depends only on $(K, \beta, h, \pi_{\mathrm{lo}})$. Then $\lambda = v/(\beta p)$ is proportional to $v$, and $G(u)$, hence $q(u) = pG(u)$ and every term of $F(u)$, depends on $u$ only through $\lambda u$. In the $\mathit{cv} = 0$ branch $E$ is free of $v$ and the argument is $vu$ (at $h = 1$) or $E\,G(u)$ with $\lambda = v/E$.
+The ratio $B_*=Y_K/(Y_K+W)$ is $\BetaDist(K,\beta)$. The event $Y_K\leq W\phi(u)$ is equivalent to $B_*\leq\phi(u)/(1+\phi(u))$. Differentiation gives the density, and beta symmetry gives the survivor.
 \end{proof}
-
-In the $sv$ chart the same holds only along $sv \propto v$; at fixed $sv$, a change of $v$ changes $\beta$ and therefore the shape. In a race whose accumulators share $t_0$, a common factor on every accumulator's $v$ rescales the race's decision time and leaves the choice probabilities unchanged (with unequal $t_0$ it can change which accumulator finishes first); changes in the ratio of the rates change both. The quantile key $(K, \mathit{cv}, h, \pi_{\mathrm{lo}})$ is free of $v$, so in this chart a per-trial $v$ never costs a beta quantile.
-
-At $h = 1$ and $\cvu = 1$, $T = Y/\Lambda$ with $Y \sim \GammaDist(K, 1)$ and $\Lambda \sim \GammaDist(\beta, \text{rate } \beta/v)$, so
+For integer counts, Gamma mixing also gives the negative-binomial state law
 \begin{equation}
-  \operatorname{CV}^2(T) = \Big(1 + \frac{1}{K}\Big)\frac{\beta - 1}{\beta - 2} - 1 \approx \frac{1}{K} + \mathit{cv}^2 + \frac{\mathit{cv}^2}{K} \qquad (\beta > 2),
+ P\{N(u)=n\}=\frac{\Gamma(\beta+n)}{\Gamma(\beta)n!}
+ (1-q(u))^\beta q(u)^n,\qquad n=0,1,\ldots.\label{eq:nb-count}
 \end{equation}
-the Poisson counter's $1/K$ plus the rate variability, and $P(T > t) \sim c\,t^{-\beta}$ as $t \to \infty$. In the CV chart, a shared CV (\texttt{cv \textasciitilde{} 1}) is the equal-CV model of Table~\ref{tab:share}.
+Its mean and variance are $\beta\phi(u)$ and $\beta\phi(u)(1+\phi(u))$, respectively. The count process is defined before stopping; the decision uses its first passage to criterion.
 
-\subsection{The \texorpdfstring{$sv = 0$}{sv = 0} Limit}
-\begin{proposition}[Exact Poisson counter]\label{prop:poisson}
-Let $P_K(m) = P\{\GammaDist(K,1) \le m\}$ be the regularized lower incomplete gamma function. As $sv \to 0$ (so $\mathit{cv} \to 0$) with $(K, v, h)$ fixed:
-\begin{enumerate}
-  \item if $h = 1$, then $F(u) \to P_K(v u)$, the homogeneous Poisson (Erlang for integer $K$) counter, whatever the clock shape;
-  \item if $h < 1$, then $F(u) \to P_K\big(E\, G(u)\big)$ with $E = P_K^{-1}(h)$ and registration rate $\lambda = v/E$.
-\end{enumerate}
-\end{proposition}
+\subsection{A structured family of clocks}\label{sec:clocks}
+Introduce $\lambda>0$, $c\geq0$, and $0<p\leq1$, and define
+\begin{align}
+ G_c(u)&=1-(1+c^2\lambda u)^{-1/c^2}, && c>0,\\
+ G_0(u)&=1-\e^{-\lambda u},\\
+ q(u)&=pG_c(u),\qquad
+ \phi(u)=\frac{pG_c(u)}{1-pG_c(u)}.\label{eq:clock}
+\end{align}
+Here $G_c$ is a convenient bounded clock coordinate, with $G_c(0)=0$, $G_c(\infty)=1$, and $G_c'(0)=\lambda$. It need not describe the delay of an individual evidence unit. In particular, $c$ controls operational-clock curvature; it is distinct from the trial-rate coefficient of variation defined below.
 
-\begin{proof}
-$W/\beta \to 1$ in probability as $\beta \to \infty$. When $h = 1$, $\lambda = v/\beta \to 0$ and $\beta\phi(u) \to v u$. When $h < 1$, $p \to 0$ with $\beta p \to E$, so $\beta \phi(u) = \beta p G/(1 - pG) \to E\,G(u)$, and $h = P_K(E)$ fixes $E$.
-\end{proof}
-
-Case 2 is the Poisson limit of the reservoir ($N \to \infty$, $p \to 0$, $Np \to E$): the trial holds a $\Poisson(E)$ number of available units, each registering with law $G$. Because $sv = 0$ is reachable, the kernel implements it as an exact branch rather than a limit. The constructor's default is $sv = 0$, the classic counter with no between-trial rate variability. The kernel also takes this branch whenever $\mathit{cv} < 10^{-4}$ ($\beta > 10^8$), where the general branch differs from the limit by about $5\times10^{-9}$ in the CDF and the beta functions start losing digits to the huge shape.
-
-\subsection{Choice of Clock}
-$\cvu$ is a model-variant choice, not a free parameter to estimate alongside $sv$. The default is $\cvu = 1$, the constant-rate counter, in which $\mathit{cv}$ is exactly between-trial rate variability (Section~\ref{sec:submodels}). $\cvu = 0$ is the accelerating, self-exciting variant.
-
-%======================================================================
-\section{The Low-Threshold State \texorpdfstring{$\pi_{\mathrm{lo}}$}{plo}}\label{sec:plo}
-%======================================================================
-On each trial, each accumulator independently commits at a low threshold $K_{\mathrm{lo}}$ with probability $\pi_{\mathrm{lo}}$ (parameter \texttt{plo}), and at $K$ otherwise. Both thresholds run on the same counter: the same trial intensity $W$, clock and availability $p$. Write $F_k$, $f_k$ and $S_k$ for the laws of Section~\ref{sec:counter} at threshold $k$ and the shared $(\beta, p, \lambda, \cvu)$. Then
+At $p=1$,
 \begin{equation}
-  F(u) = (1 - \pi_{\mathrm{lo}})\,F_K(u) + \pi_{\mathrm{lo}}\,F_{K_{\mathrm{lo}}}(u), \label{eq:plo-mix}
+ \phi(u)=
+ \begin{cases}
+ (1+c^2\lambda u)^{1/c^2}-1,&c>0,\\
+ \e^{\lambda u}-1,&c=0.
+ \end{cases}\label{eq:proper-clock}
 \end{equation}
-and likewise for $f$ and $S$, and for the $sv = 0$ branch with $P_k$ in place of $I_q(k, \beta)$. The kernel fixes $K_{\mathrm{lo}} = 1$, so the low component is elementary:
+The clock accelerates for $0\leq c<1$, is linear for $c=1$, and decelerates for $c>1$. A linear clock means a constant within-trial rate conditional on $W$; after marginalizing over $W$, the predictive event intensity still depends on count history. At $p<1$, every clock in Eq.~\eqref{eq:clock} saturates at $p/(1-p)$, including the $c=1$ member.
+
+\subsection{Completion probability and evidence budget}\label{sec:defect}
+The eventual completion probability and the mean total number of events are
 \begin{equation}
-  F_1(u) = 1 - (1 - q(u))^\beta, \qquad f_1(u) = \beta\, p\, g(u)\,(1 - q(u))^{\beta - 1}, \qquad P_1(X) = 1 - \e^{-X}.
+ h=I_p(K,\beta),\qquad
+ \E[N(\infty)]=\frac{\beta p}{1-p}\quad(p<1).\label{eq:budget}
 \end{equation}
-$K_{\mathrm{lo}}$ is a kernel constant, not a fitted column. Every evaluator takes it from one place, so freeing it later changes only where the value comes from. At $\pi_{\mathrm{lo}} = 0$ the kernel takes the base code path.
+Conditional on $W$, the total count is $\Poisson(Wp/(1-p))$; marginally it has the negative-binomial law in Eq.~\eqref{eq:nb-count} with $q=p$. Thus the evidence budget is random and unbounded across trials, even though the total count is finite on each trial almost surely. At $p=1$, the operational clock and eventual count are unbounded, and $h=1$.
 
-\paragraph{Generative reading.} In the counter of Proposition~\ref{prop:counter}, write the $\GammaDist(K, 1)$ level as $E_1 + E_r$ with $E_1 \sim \GammaDist(1, 1)$ and $E_r \sim \GammaDist(K - 1, 1)$ independent. The accumulator normally finishes when $W\phi(u)$ passes $E_1 + E_r$. With probability $\pi_{\mathrm{lo}}$ it finishes when $W\phi(u)$ passes $E_1$, that is, at its first event. For integer $K$ this is a decision on the first Poisson arrival instead of the $K$th. The draw is per accumulator, so the race likelihood still factors over accumulators (Eq.~\eqref{eq:race-likelihood}).
-
-\paragraph{Completion probability.} Both components share $p$, so
+The defective distribution has a point mass $1-h$ at infinity. Its finite-time density integrates to $h$, not one. Conditional on eventual completion,
 \begin{equation}
-  h = (1 - \pi_{\mathrm{lo}})\, I_p(K, \beta) + \pi_{\mathrm{lo}}\, I_p(K_{\mathrm{lo}}, \beta). \label{eq:plo-h}
+ F(u\mid U<\infty)=\frac{F(u)}h,\qquad
+ f(u\mid U<\infty)=\frac{f(u)}h.\label{eq:conditional-completion}
 \end{equation}
-At $h = 1$, $p = 1$ exactly and nothing is solved. For $h < 1$ and $\pi_{\mathrm{lo}} > 0$, $p$ is the root of Eq.~\eqref{eq:plo-h}. The right side increases in $p$ and lies between the two pure completion probabilities, so the root is bracketed by the pure quantiles $Q_{K,\beta}(h)$ and $Q_{K_{\mathrm{lo}},\beta}(h) = 1 - (1-h)^{1/\beta}$. The kernel solves it in $t = \logit p$, holding $(\log p, \log(1-p))$, by Newton steps that fall back to bisection when they leave the bracket. The residual is $\log m - \log h$ for $h \le 1/2$ and $\log(1-h) - \log(1 - m)$ above, so a defect within rounding of zero keeps its digits. At $sv = 0$ the same solve gives $E$ from $h = (1 - \pi_{\mathrm{lo}})P_K(E) + \pi_{\mathrm{lo}}P_{K_{\mathrm{lo}}}(E)$, in $\log E$.
+Changing $p$ changes the whole finite-time law as well as $h$. Consequently the model is not obtained by multiplying a fixed proper response-time distribution by an independently chosen response probability.
 
-\paragraph{Onset.} For $K > 1$ only the low component has mass at onset, and $f(0^+) = \pi_{\mathrm{lo}}\, v$ for every $sv$, $h$ and $\cvu$. The leading edge becomes first order in time, $F(u) \approx \pi_{\mathrm{lo}} v u$, whatever $K$ is. The density therefore jumps to $\pi_{\mathrm{lo}} v$ at $t_0$, so the likelihood is not regular in $t_0$, as it already is at $K = 1$.
+\section{Psychological Coordinates and Boundary Models}\label{sec:coordinates}
 
-\paragraph{Error signature.} The low component makes the hazard elasticity of Section~\ref{sec:ident} rise early, which is the condition for fast errors under a rate difference alone. Near onset, the error and correct densities conditional on the response tend to the ratio $(v_e/v_c)(P_c/P_e)$, so very early responses are over-represented among errors whenever $v_e/v_c > P_e/P_c$. In two-accumulator races at 80\% accuracy with $K = 6$, $K_{\mathrm{lo}} = 1$ and only $v$ differing, errors are $15\%$ and $60\%$ faster than correct responses at the median for $\pi_{\mathrm{lo}} = 0.1$ and $0.3$ ($sv = 0$), and $5\%$ and $53\%$ faster at $\mathit{cv} = 0.3$. The fixed-threshold race gives $12\%$ slower errors.
-
-\paragraph{Identification.} At $K = K_{\mathrm{lo}}$ the two components coincide and $\pi_{\mathrm{lo}}$ drops out of the law; just above it, $\pi_{\mathrm{lo}}$ is weakly identified.
-
-\paragraph{Cost.} Each evaluation now computes both components. The low one is elementary, so the main incomplete beta remains the dominant term. On one 810-trial two-accumulator subject, a likelihood evaluation costs $1.29$ times the $\pi_{\mathrm{lo}} = 0$ cost at $h = 1$, and $1.19$ times with $h$ free per accumulator. The root solve adds about $0.6$--$1\,\mu$s per fresh availability key, which is under 1\% of a particle there.
-
-%======================================================================
-\section{Classic Poisson Counters as Exact Submodels}\label{sec:submodels}
-%======================================================================
-
-Write $\nu$ for a counter's base input rate, $sv$ for the between-trial SD of that rate, and $\gamma$ for linear self-excitation, so the counter's transition rate is $\nu + \gamma n$. Every combination except $sv$ and $\gamma$ together is an exact \textsc{FRQ} submodel at $h = 1$ and $\pi_{\mathrm{lo}} = 0$, and in each one $v = \nu$. With $\pi_{\mathrm{lo}} > 0$ each CDF in Table~\ref{tab:submodels} becomes its mixture with the $K = 1$ member, Eq.~\eqref{eq:plo-mix}.
+\subsection{Criterion, initial rate, variability, and completion}
+Define
+\begin{equation}
+ v=\beta p\lambda,\qquad s_v=\frac{v}{\sqrt\beta},\qquad
+ \mathrm{cv}=\frac{s_v}{v}=\beta^{-1/2}.\label{eq:coordinates}
+\end{equation}
+The initial trial rate is $L_0=W\phi'(0)=Wp\lambda$, so $\E[L_0]=v$ and $\operatorname{SD}(L_0)=s_v$. With $s_v>0$, the coordinates $(K,v,s_v,h,c)$ determine
+\begin{equation}
+ \beta=(v/s_v)^2,\qquad p=I^{-1}_{h}(K,\beta),\qquad
+ \lambda=\frac{v}{\beta p},\label{eq:inverse-chart}
+\end{equation}
+where $I^{-1}_{h}$ means inversion with respect to the beta probability argument. Uniqueness follows from strict monotonicity of $I_p(K,\beta)$ in $p$. At $h=1$, $p=1$.
 
 \begin{table}[htbp]
-\centering
-\small
-\caption{Classic counter submodels, all at $\pi_{\mathrm{lo}} = 0$. All identities hold to machine precision in the implemented kernel. Real $K \ge 1$ is allowed in every row.}
+\centering\small
+\caption{Mathematical coordinates of the quorum family. Rate SD and rate CV are alternative coordinates.}
+\label{tab:parameters}
+\begin{tabular}{L{2.0cm}L{2.2cm}L{9.1cm}}
+\toprule
+Coordinate & Domain & Interpretation\\
+\midrule
+$K$ & $[1,\infty)$ & Main criterion; literal count when integer, Gamma arrival level otherwise.\\
+$v$ & $(0,\infty)$ & Mean initial event rate, in events per unit time.\\
+$s_v$ & $[0,\infty)$ & Between-trial SD of initial event rate.\\
+$\mathrm{cv}$ & $[0,\infty)$ & Relative initial-rate variability, $s_v/v$.\\
+$h$ & $(0,1]$ & Eventual completion probability of one accumulator.\\
+$c$ & $[0,\infty)$ & Operational-clock shape.\\
+$\pi_{\rm lo}$ & $[0,1]$ & Probability of the single-event criterion state.\\
+$\omega$ & $[0,\infty)$ & Geometric excess of the last criterion unit.\\
+$t_0$ & $[0,\infty)$ & Additive nondecision latency.\\
+$\kappa$ & $[0,\infty)$ & Fading rate in the time-warp variant.\\
+$\alpha$ & $[0,\infty)$ & Clock acceleration in the accelerating time-warp variant.\\
+\bottomrule
+\end{tabular}
+\end{table}
+The $h$ and $\kappa$ coordinates describe two different specifications, developed in Sections~\ref{sec:defect} and~\ref{sec:fade}. The $\alpha$ coordinate replaces $c$ in a third, Section~\ref{sec:accel}. A completion probability of zero is a degenerate always-omitting limit, rather than an interior coordinate with positive initial rate.
+
+These parameters describe a model of evidence, not measurements of neural event counts. Fixing the unit increment establishes an evidence scale: there is no additional free jump size that can be rescaled against both criterion and rate. Nevertheless, rate and criterion can be difficult to separate empirically. Their distinct mathematical roles do not by themselves guarantee precise estimates.
+
+\subsection{The exact zero-variability boundary}\label{sec:zero}
+\begin{proposition}[Poisson boundary]
+As $s_v\to0$ with $(K,v,h,c)$ fixed, the quorum law has the following limits. At $h=1$,
+\begin{equation}
+ F(u)=P_K(vu),\label{eq:zero-proper}
+\end{equation}
+independently of $c$. At $0<h<1$, let $E=P_K^{-1}(h)$ and set $\lambda=v/E$. Then
+\begin{equation}
+ F(u)=P_K(M(u)),\qquad M(u)=E G_c(u).\label{eq:zero-defective}
+\end{equation}
+These equations define the $s_v=0$ members exactly.
+\end{proposition}
+\begin{proof}
+As $\beta\to\infty$, $W/\beta\to1$ in probability. If $h=1$, $p=1$, $\lambda=v/\beta$, and $\beta\phi(u)\to vu$. If $h<1$, beta--Gamma convergence gives $\beta p\to E$, while $\lambda=v/(\beta p)\to v/E$. Therefore $\beta\phi(u)\to E G_c(u)$. Substitution into Eq.~\eqref{eq:quorum-definition} gives the asserted limits.
+\end{proof}
+At this boundary, the deterministic event rate for $h<1$ is
+\begin{equation}
+ M'(u)=
+ \begin{cases}
+ v(1+c^2vu/E)^{-1/c^2-1},&c>0,\\
+ v\e^{-vu/E},&c=0.
+ \end{cases}\label{eq:zero-rate}
+\end{equation}
+The bounded-clock member is thus a nonhomogeneous Poisson counter, with $N(\infty)\sim\Poisson(E)$. Neither this member nor the ordinary unbounded Poisson counter requires a fixed finite reservoir.
+
+\subsection{Rate SD, rate CV, and time scaling}\label{sec:scale}
+The maps $(v,s_v)\leftrightarrow(v,\mathrm{cv})$ describe the same single-accumulator family. Their psychological restrictions differ when rates change across stimuli or alternatives. Holding CV fixed makes $s_v$ proportional to $v$; holding SD fixed makes the weaker accumulator more variable relative to its mean.
+
+\begin{proposition}[Rate scaling]\label{prop:scale}
+With $(K,\mathrm{cv},h,c,\pi_{\rm lo})$ fixed,
+\begin{equation}
+ F(u;v)=F(vu;1),\qquad U_v\overset d=U_1/v.\label{eq:scale}
+\end{equation}
+\end{proposition}
+\begin{proof}
+For positive CV, $\beta$ and the completion-calibrated $p$ are independent of $v$, and $\lambda=v/(\beta p)$ is proportional to $v$. The clock and its threshold mixture therefore depend on $u$ only through $vu$. At zero CV, the same argument uses the fixed $E$ in Eq.~\eqref{eq:zero-defective}, or Eq.~\eqref{eq:zero-proper}.
+\end{proof}
+In a race with common nondecision time, multiplying all rates by the same factor, with the remaining coordinates in the proposition fixed, rescales decision times and leaves choice probabilities unchanged. Fixed SD does not give this invariance, and unequal nondecision offsets can also change the winning alternative under rate rescaling.
+
+\section{Criterion Variability: A Single-Event State}\label{sec:mixture}
+
+Let the criterion $J$ be independent of trial intensity and satisfy
+\begin{equation}
+ J=\begin{cases}1,&\text{with probability }\pi_{\rm lo},\\
+ K,&\text{with probability }1-\pi_{\rm lo}.
+ \end{cases}\label{eq:criterion-mixture}
+\end{equation}
+Both states use the same evidence-generating process: the same $(\beta,p,\lambda,c)$, with $W$ drawn from the same law. Writing $F_k,f_k,S_k$ for passage to criterion $k$ on that process,
+\begin{equation}
+ F_{\rm mix}(u)=(1-\pi_{\rm lo})F_K(u)+\pi_{\rm lo}F_1(u),\label{eq:mixture}
+\end{equation}
+with the same weighted sums for density and survivor. For positive rate variability,
+\begin{equation}
+ F_1(u)=1-(1-q(u))^\beta,\qquad
+ f_1(u)=\beta q'(u)(1-q(u))^{\beta-1}.
+\end{equation}
+For zero variability use $P_k(M(u))$, with $P_1(m)=1-\e^{-m}$.
+
+The mixture's completion probability, rather than either component's probability separately, is $h$. Thus its common clock parameter satisfies
+\begin{equation}
+ h=(1-\pi_{\rm lo})I_p(K,\beta)+\pi_{\rm lo}I_p(1,\beta).\label{eq:mixture-h}
+\end{equation}
+The right side is strictly increasing from zero to one. Its unique root lies between $I_h^{-1}(1,\beta)$ and $I_h^{-1}(K,\beta)$. For $s_v=0$, $E$ is instead defined by
+\begin{equation}
+ h=(1-\pi_{\rm lo})P_K(E)+\pi_{\rm lo}P_1(E),\label{eq:mixture-E}
+\end{equation}
+and the bounded cumulative intensity is $E G_c(u)$ with $\lambda=v/E$. At $h=1$, the zero-variability mixture uses $M(u)=vu$. Calibrating each component separately to the same $h$ would give different clocks and a different model from Eq.~\eqref{eq:mixture}.
+
+For $K>1$, a coupled representation takes independent $Y_1\sim\GammaDist(1,1)$ and $Y_{K-1}\sim\GammaDist(K-1,1)$. The ordinary state waits for $Y_1+Y_{K-1}$ in operational time, while the low state stops at $Y_1$. This makes occasional commitment on minimal evidence a specific psychological hypothesis. It does not imply a stimulus-independent guess: the low-state latency and winning probability still depend on evidence rates.
+
+At $\pi_{\rm lo}=0$ the fixed-criterion law is recovered; at $\pi_{\rm lo}=1$ the main criterion $K$ disappears. At $K=1$, the two states coincide and $\pi_{\rm lo}$ disappears. For $K>1$,
+\begin{equation}
+ F_{\rm mix}(u)=\pi_{\rm lo}vu+o(u),\qquad
+ f_{\rm mix}(0^+)=\pi_{\rm lo}v.\label{eq:mixture-onset}
+\end{equation}
+Consequently the mixture changes the onset order even for a large main criterion. A positive onset density makes inference about an unknown onset time nonregular.
+
+Discrete criterion variation connects this construction to the rectangular and offset-geometric criteria considered by Ratcliff and Smith \cite{RatcliffSmith2004}. A two-point distribution concentrates variation on a single-event state and a main criterion. It imposes different predictions from a broad distribution of integer criteria or a continuously varying diffusion starting point. In particular, increasing $K$ can increase the temporal separation of the two states, so their speed--accuracy effects cannot be assumed interchangeable.
+
+\subsection{Geometric criterion excess}\label{sec:omega}
+With the coupled representation above, stretch the last criterion unit by $1+\omega$, $\omega\geq0$:
+\begin{equation}
+ J=Y_{K-1}+(1+\omega)Y_1,\qquad K\geq1.\label{eq:omega-criterion}
+\end{equation}
+For integer $K$, $(1+\omega)Y_1$ equals in distribution the sum of a $\operatorname{Geometric}$ number $G\geq1$ of unit exponentials with $P(G=g)=(1-r)r^{g-1}$, $r=\omega/(1+\omega)$, so the event-count criterion is $K-1+G$, the offset-geometric criterion. Equation~\eqref{eq:omega-criterion} extends it to real $K$.
+
+Write $s=1-r=1/(1+\omega)$. Conditional on cumulative intensity $m$,
+\begin{align}
+ P(J\leq m)&=P_K(m)-r^{1-K}\e^{-sm}P_K(rm),\label{eq:omega-conditional}\\
+ \frac{\dd}{\dd m}P(J\leq m)&=s\,r^{1-K}\e^{-sm}P_{K-1}(rm),
+\end{align}
+with $P_0\equiv1$. The two forms of the first line, with $P_{K-1}$ or $P_K$, agree because $P_{K-1}(m)-P_K(m)=m^{K-1}\e^{-m}/\Gamma(K)$. Averaging over $W\sim\GammaDist(\beta,1)$ tilts $W$ to rate $1+s\phi$ and gives
+\begin{align}
+ F_\omega(u)&=I_{q}(K,\beta)-T(u),\qquad S_\omega(u)=I_{1-q}(\beta,K)+T(u),\\
+ T(u)&=r^{1-K}\left(\frac{1-q}{1-rq}\right)^\beta I_{rq}(K,\beta),\\
+ f_\omega(u)&=q'\,s\,r^{1-K}\beta\,(1-q)^{\beta-1}(1-rq)^{-\beta-1}I_{rq}(K-1,\beta+1),\label{eq:omega-law}
+\end{align}
+for any clock, with $q=q(u)$. As $r\to0$, $r^{1-K}I_{rq}(K-1,\beta+1)\to q^{K-1}/(\beta B(K,\beta))$, recovering Eq.~\eqref{eq:beta-density}. At zero rate variability, Eq.~\eqref{eq:omega-conditional} applies with $m=M(u)$.
+
+Completion is calibrated as before, now through
+\begin{equation}
+ h=I_p(K,\beta)-r^{1-K}\left(\frac{1-p}{1-rp}\right)^\beta I_{rp}(K,\beta),\label{eq:omega-h}
+\end{equation}
+or Eq.~\eqref{eq:omega-conditional} at $m=E$. Because $Y_K\leq J\leq(1+\omega)Y_K$ in the usual stochastic order, the root lies between the $\omega=0$ root $p_0$ and $p_0(1+\omega)/(1+p_0\omega)$, that is, within $\log(1+\omega)$ of $\operatorname{logit}p_0$; for zero variability, $E\in[E_0,(1+\omega)E_0]$.
+
+The low state of Section~\ref{sec:mixture} removes $Y_{K-1}$ and keeps the stretched unit, so its criterion is $(1+\omega)Y_1$ and
+\begin{equation}
+ F_{1,\omega}(u)=1-\left(\frac{1-q}{1-rq}\right)^\beta.
+\end{equation}
+Equation~\eqref{eq:mixture} then mixes the two $\omega$ laws, and Eq.~\eqref{eq:omega-h} becomes the corresponding mixture. At $K=1$ and $h=1$, the criterion $(1+\omega)Y_1$ is equivalent to multiplying the cumulative intensity by $1/(1+\omega)$, $F_{1,\omega}(u)=1-(1+\phi(u)/(1+\omega))^{-\beta}$. When $\phi$ is proportional to $v$, as for the linear clock $c=1$, the accelerating warp of Section~\ref{sec:accel}, and zero rate variability, this is $v\mapsto v/(1+\omega)$, and $\omega$ and $v$ are not separately defined there.
+
+\section{Choice, Response Time, and Omissions}\label{sec:race}
+
+\subsection{Independent races}
+For $R$ alternatives, let $U_i\in(0,\infty]$ be independent decision times, including any independent rate and criterion draws within each accumulator. Let $t_{0i}\geq0$ be nondecision offsets. Response and observed time are
+\begin{equation}
+ C=\arg\min_i(t_{0i}+U_i),\qquad T=\min_i(t_{0i}+U_i).
+\end{equation}
+Extend $F_i(u)=0$, $S_i(u)=1$, and $f_i(u)=0$ to $u\leq0$. Then the joint response-time subdensity and choice probability are
+\begin{equation}
+ g_i(t)=f_i(t-t_{0i})\prod_{j\ne i}S_j(t-t_{0j}),\qquad
+ P_i=\int_0^\infty g_i(t)\dd t.\label{eq:race}
+\end{equation}
+The conditional density given response $i$ is $g_i(t)/P_i$. With $h_i=F_i(\infty)$,
+\begin{equation}
+ P(T=\infty)=\prod_i(1-h_i),\qquad
+ \sum_i P_i=1-\prod_i(1-h_i).\label{eq:race-omissions}
+\end{equation}
+An accumulator's completion probability $h_i$ is neither its winning probability nor the probability that the race produces any response. If one accumulator is proper, the race has no intrinsic omissions even when its competitors are defective.
+
+At a finite deadline $d$, the probability of no response yet is
+\begin{equation}
+ P(T>d)=\prod_i S_i(d-t_{0i}).\label{eq:deadline}
+\end{equation}
+This includes both responses that would arrive later and intrinsic omissions. Their distinction requires an observation model that reflects the response window. If data are conditioned on a response by $d$, the retained joint subdensities must be divided by $1-P(T>d)$.
+
+A random nondecision time is an additional assumption. For a common independent nondecision latency $D$ with distribution $H_D$, and decision-race subdensity $a_i$, the observed subdensity is
+\begin{equation}
+ g_i(t)=\int_{[0,t]}a_i(t-d)\dd H_D(d).\label{eq:nondecision}
+\end{equation}
+It must be distinguished from rate or criterion variability when interpreting the leading edge.
+
+\subsection{Shared trial states and dependent races}\label{sec:dependence}
+Independence is part of the race definition, rather than a consequence of beta marginal finishing-time laws. If a shared latent state $Z$ makes racers conditionally independent, the correct subdensity is
+\begin{equation}
+ g_i(t)=\E_Z\left[f_i(t-t_{0i}\mid Z)
+                 \prod_{j\ne i}S_j(t-t_{0j}\mid Z)\right].\label{eq:dependent-race}
+\end{equation}
+In general this is not the product of marginal density and marginal survivors. Similarly, intrinsic omission probability is $\E_Z[\prod_i(1-h_i(Z))]$.
+
+For example, a single caution state can set every accumulator's criterion to one on liberal trials and to its main criterion on cautious trials. Its race law is a mixture of two conditional race laws. Independent low-state draws instead permit trials with one liberal and one cautious accumulator. These specifications can share single-accumulator marginals and still predict different choices and error times.
+
+\section{Heterogeneity, Excitation, and Reservoir Representations}\label{sec:representations}
+
+\subsection{Predictive event intensity}
+\begin{proposition}[Marginal counting-process intensity]\label{prop:intensity}
+For the Gamma-mixed Poisson process, conditional on its event history $\mathcal H_u$ with $N(u)=n$,
+\begin{equation}
+ W\mid\mathcal H_u\sim\GammaDist(\beta+n,\text{rate }1+\phi(u)),
+\end{equation}
+and its predictive event intensity is
+\begin{equation}
+ \ell_n(u)=(\beta+n)\frac{\phi'(u)}{1+\phi(u)}
+          =(\beta+n)\frac{q'(u)}{1-q(u)}.\label{eq:intensity}
+\end{equation}
+\end{proposition}
+\begin{proof}
+For event times $u_1,\ldots,u_n\leq u$, the likelihood for $W$ is proportional to
+\begin{equation}
+ W^n\e^{-W\phi(u)}\prod_j\phi'(u_j).
+\end{equation}
+Gamma conjugacy gives the posterior. Multiplying its mean by $\phi'(u)$ gives the predictable intensity.
+\end{proof}
+At $h=1$, so $p=1$ and $\lambda=v/\beta$,
+\begin{equation}
+ \ell_n(u)=\frac{v(1+n/\beta)}{1+c^2vu/\beta}.\label{eq:proper-intensity}
+\end{equation}
+For $c=1$, this is the history-dependent intensity of a Gamma-mixed homogeneous Poisson process. For $c=0$ it becomes
+\begin{equation}
+ \ell_n=v+\gamma n,\qquad \gamma=v/\beta=s_v^2/v.\label{eq:pure-birth}
+\end{equation}
+This is a time-homogeneous linear pure-birth process with immigration, whose passage law is $I_{1-\e^{-\gamma u}}(K,v/\gamma)$.
+
+The Gamma-mixed counter on the exponential operational clock and the linear pure-birth counter have the same counting-process law after marginalizing $W$. This identity is stronger than equality of one finishing-time distribution. It also shows why an apparent increase in event intensity after an arrival is not, by itself, evidence of causal reinforcement: learning that the trial has a large latent intensity can produce the same predictive law. Wasserman \cite{Wasserman1983} treats the distinction between Gamma heterogeneity and linear contagion and the ambiguity of negative-binomial event counts. His count-distribution comparison should be distinguished from the clock-specific process identity proved here.
+
+The parameter $s_v$ is always the SD of initial trial intensity in the mixed-clock representation. At $c=0$ it can equivalently index excitation through Eq.~\eqref{eq:pure-birth}. These readings do not establish two separately identified mechanisms. A process with a separately Gamma-distributed base rate and an independently chosen excitation coefficient would require its own generative specification; it is not obtained merely by giving $c$ an intermediate value.
+
+\subsection{A finite reservoir as an alternative completion-time law}\label{sec:reservoir}
+Suppose $K$ and $N$ are integers with $1\leq K\leq N$. Each of $N$ potential units is independently available with probability $p$ and, if available, registers with delay distribution $G_c$. By time $u$ the registered count is $\Binomial(N,pG_c(u))$. Its quorum latency has
+\begin{equation}
+ P\{\Binomial(N,q(u))\geq K\}=I_{q(u)}(K,N-K+1).\label{eq:reservoir}
+\end{equation}
+It agrees with the quorum counter law when $\beta=N-K+1$. This supplies an exact finite-population representation for that subset of shapes. General positive $\beta$ and real $K$ need not yield an integer $N=K+\beta-1$, and the zero-variability Poisson boundary does not require any fixed $N$.
+
+For exponential registration, $p=1$, the reservoir's successive aggregate rates before completion are
+\begin{equation}
+ N\lambda,(N-1)\lambda,\ldots,(N-K+1)\lambda.
+\end{equation}
+The counter in Eq.~\eqref{eq:pure-birth} has rates
+\begin{equation}
+ \beta\lambda,(\beta+1)\lambda,\ldots,(\beta+K-1)\lambda,
+ \qquad \beta=N-K+1.
+\end{equation}
+These sequences are reversals. In both constructions the total completion time is a sum of independent exponential waiting times. Commutativity of convolution therefore proves
+\begin{equation}
+ U_{\rm depletion}\overset d=U_{\rm excitation}.\label{eq:reversal}
+\end{equation}
+For example, $N=K=3$ gives rates $3\lambda,2\lambda,\lambda$ versus $\lambda,2\lambda,3\lambda$, and both have CDF $(1-\e^{-\lambda u})^3$.
+
+The reservoir and counter are different event processes: one has a bounded count and depleting rate; the other can keep generating events and has increasing state-dependent rate. Their completion times, and hence independent race likelihoods built from those times, coincide under the stated mapping. Even their initial aggregate rates differ: $Np\lambda$ for the reservoir versus $\beta p\lambda=v$ for the counter. A finishing-time fit cannot select between these internal mechanisms.
+
+\section{Exact Submodels and Their Relationships}\label{sec:submodels}
+
+\begin{table}[htbp]
+\centering\small
+\caption{Exact fixed-criterion members. Integer $K$ gives literal count passage; real $K\geq1$ gives its Gamma-level extension.}
 \label{tab:submodels}
-\begin{tabular}{L{4.4cm} L{4.6cm} L{5.4cm}}
+\begin{tabular}{L{3.2cm}L{4.2cm}L{5.9cm}}
 \toprule
-\textbf{Counter} & \textbf{FRQ setting} & \textbf{First-passage CDF} \\
+Model & Coordinates & First-passage CDF\\
 \midrule
-Homogeneous Poisson (Erlang) race \cite{Pike1966, RatcliffSmith2004} & $sv = 0$, $h = 1$, any $\cvu$ & $P_K(\nu u)$ \\
+Homogeneous Poisson & $s_v=0$, $h=1$, any $c$ & $P_K(vu)$\\
 \addlinespace
-Gamma-mixed rate, $\Lambda \sim \GammaDist$ with mean $\nu$, SD $sv$ & $\cvu = 1$, $sv$, $h = 1$ & $I_{\nu u/(\beta + \nu u)}(K, \beta)$, $\beta = \nu^2/sv^2$ \\
+Gamma-mixed homogeneous Poisson & $s_v>0$, $h=1$, $c=1$ & $I_{vu/(\beta+vu)}(K,\beta)$\\
 \addlinespace
-Linear pure birth, rate $\nu + \gamma n$ & $\cvu = 0$, $sv = \sqrt{\gamma\nu}$, $h = 1$ & $I_{1 - \e^{-\gamma u}}(K, \nu/\gamma)$ \\
+Linear pure birth & $h=1$, $c=0$, $\beta=v/\gamma$ & $I_{1-\e^{-\gamma u}}(K,v/\gamma)$\\
 \addlinespace
-Poisson counter with finite expected evidence $E$ & $sv = 0$, $h = P_K(E)$ & $P_K\big(E\,G(u)\big)$ \\
+Poisson with bounded intensity & $s_v=0$, $h<1$, $E=P_K^{-1}(h)$ & $P_K(EG_c(u))$\\
+\addlinespace
+Accelerating Poisson & $s_v=0$, $h=1$, $\alpha>0$ & $P_K(v(\e^{\alpha u}-1)/\alpha)$\\
+\addlinespace
+Finite-reservoir quorum latency & Integer $K,N$, $\beta=N-K+1$ & $I_{pG_c(u)}(K,N-K+1)$\\
 \bottomrule
 \end{tabular}
 \end{table}
+Table~\ref{tab:submodels} assumes $\pi_{\rm lo}=0$; applying Eq.~\eqref{eq:mixture} gives the corresponding criterion mixtures, with completion calibrated by Eq.~\eqref{eq:mixture-h} or~\eqref{eq:mixture-E}. The reservoir row asserts a finishing-time identity, whereas the first three integer-criterion rows have the event-process interpretations established above.
 
-\paragraph{Gamma-mixed rate.} Given $\Lambda$, the count by time $u$ is $\Poisson(\Lambda u)$. Mixing over $\Lambda \sim \GammaDist(\beta, \beta/\nu)$ gives a negative binomial count with $P\{N(u) \ge K\} = I_{\nu u/(\beta + \nu u)}(K,\beta)$. At $p = 1$, $\cvu = 1$ and $\lambda = \nu/\beta$, \textsc{FRQ} has $q(u) = \lambda u/(1 + \lambda u) = \nu u/(\beta + \nu u)$, which is the same expression.
-
-\paragraph{Linear pure birth.} Solving the forward equations of the birth process with rates $\nu + \gamma n$ gives a negative binomial state law with stopping parameter $\nu/\gamma$ and success probability $\e^{-\gamma u}$. The flux out of state $K-1$, under the substitution $z = 1 - \e^{-\gamma u}$, is a $\BetaDist(K, \nu/\gamma)$ density in $z$, which gives the CDF in Table~\ref{tab:submodels}. This is also Proposition~\ref{prop:intensity} at $\cvu = 0$ and $p = 1$.
-
-\paragraph{Two-alternative Erlang race.} For integer thresholds and $sv = 0$, $h = 1$, the choice probability has the familiar negative binomial form \cite{RatcliffSmith2004}:
+For two independent homogeneous Poisson counters with integer criteria and common nondecision time, an exact choice probability is
 \begin{equation}
-  P_1 = \sum_{n=0}^{K_2 - 1} \binom{K_1 + n - 1}{n} \left(\frac{\nu_1}{\nu_1 + \nu_2}\right)^{K_1} \left(\frac{\nu_2}{\nu_1 + \nu_2}\right)^n.
+ P_1=\sum_{n=0}^{K_2-1}\binom{K_1+n-1}{n}
+ \left(\frac{v_1}{v_1+v_2}\right)^{K_1}
+ \left(\frac{v_2}{v_1+v_2}\right)^n.\label{eq:erlang-choice}
+\end{equation}
+To obtain it, superpose the two event streams. Each arrival belongs to counter 1 with probability $v_1/(v_1+v_2)$, and counter 1 wins if fewer than $K_2$ arrivals from counter 2 precede its $K_1$th arrival. For $K_1=K_2=1$, choice probability is $v_1/(v_1+v_2)$ and the conditional decision-time distribution is exponential with rate $v_1+v_2$ for either response.
+
+\section{Fading Evidence as a Time Warp}\label{sec:fade}
+
+An alternative specification starts with a proper quorum counter, including an optional criterion mixture, and runs it on the time warp
+\begin{equation}
+ A_\kappa(u)=\frac{1-\e^{-\kappa u}}{\kappa},\qquad
+ A_0(u)=u,\qquad \kappa\geq0.\label{eq:fading-clock}
+\end{equation}
+Let $F_{\rm base},f_{\rm base},S_{\rm base}$ denote the proper law at the same $(K,v,s_v,c,\pi_{\rm lo})$. Then
+\begin{align}
+ F_{\rm fade}(u)&=F_{\rm base}(A_\kappa(u)),\\
+ f_{\rm fade}(u)&=f_{\rm base}(A_\kappa(u))\e^{-\kappa u},\\
+ S_{\rm fade}(u)&=S_{\rm base}(A_\kappa(u)).\label{eq:fading-law}
+\end{align}
+For positive rate variability, conditional cumulative intensity is $W\phi_{\rm base}(A_\kappa(u))$. Its derivative is $W\phi_{\rm base}'(A_\kappa(u))\e^{-\kappa u}$. Thus the warp attenuates progression through the base clock; a simple exponentially decaying event rate results when the base clock is linear. With an accelerating base clock, the derivative of that base clock also matters.
+
+For $\kappa>0$, warped time ends at $1/\kappa$, giving
+\begin{equation}
+ h_{\rm fade}=F_{\rm base}(1/\kappa),\qquad
+ \E[N(\infty)]=\beta\phi_{\rm base}(1/\kappa)\quad(s_v>0).\label{eq:fading-h}
+\end{equation}
+At $s_v=0$, expected total count is $v/\kappa$. Here $h$ is derived from the fading rate and the other coordinates, rather than independently specified. At $\kappa=0$, the proper base model is recovered. A base latency $x<1/\kappa$ corresponds to $u=-\log(1-\kappa x)/\kappa$; base latencies at or above the cap give omissions.
+
+\subsection{Exact overlap with a bounded Poisson clock}
+With $s_v=0$ and a fixed criterion,
+\begin{equation}
+ F_{\rm fade}(u)=P_K\left(\frac v\kappa(1-\e^{-\kappa u})\right).\label{eq:poisson-fade}
+\end{equation}
+This is exactly Eq.~\eqref{eq:zero-defective} at $c=0$ with
+\begin{equation}
+ E=v/\kappa,\qquad \lambda=\kappa,\qquad h=P_K(v/\kappa).
+\end{equation}
+For the criterion mixture, define $H(m)=(1-\pi_{\rm lo})P_K(m)+\pi_{\rm lo}P_1(m)$. The same identity holds with $H$ in place of $P_K$ and $h=H(v/\kappa)$. At $K=1$ this is a single-event counter with exponentially fading rate.
+
+This overlap rules out distinguishing these two parameterizations from response times in that submodel. At positive rate variability the bounded $pG_c/(1-pG_c)$ clock and the warped proper clock generally differ. Any empirical claim of separating fading from a bounded evidence budget must address the exact overlap and state the clock and variability restrictions under which separation is proposed.
+
+\section{Accelerating Evidence as a Time Warp}\label{sec:accel}
+
+A third specification keeps the linear clock, $c=1$, and replaces its time argument by the accelerating warp
+\begin{equation}
+ A_\alpha(u)=\frac{\e^{\alpha u}-1}{\alpha},\qquad
+ A_0(u)=u,\qquad \alpha\geq0.\label{eq:accel-clock}
+\end{equation}
+With $\lambda=v/(\beta p)$ as in Eq.~\eqref{eq:inverse-chart} and $x(u)=\lambda A_\alpha(u)$,
+\begin{equation}
+ q(u)=\frac{p\,x(u)}{1+x(u)},\qquad
+ \phi(u)=\frac{p\,x(u)}{1+(1-p)x(u)},\label{eq:accel-q}
+\end{equation}
+and the law is Eq.~\eqref{eq:beta-cdf} on this $q$:
+\begin{align}
+ F_{\rm acc}(u)&=F_{c=1}(A_\alpha(u)),\\
+ f_{\rm acc}(u)&=f_{c=1}(A_\alpha(u))\e^{\alpha u},\\
+ S_{\rm acc}(u)&=S_{c=1}(A_\alpha(u)).\label{eq:accel-law}
+\end{align}
+Unlike the fading warp, $A_\alpha(\infty)=\infty$, so $h$, $p$ and the evidence budget in Eq.~\eqref{eq:budget} are unchanged, and the criterion mixture is calibrated by Eq.~\eqref{eq:mixture-h} or~\eqref{eq:mixture-E} exactly as before. A base latency $x$ corresponds to $u=\log(1+\alpha x)/\alpha$.
+
+\subsection{Rate interpretation}
+At $h=1$, conditional on $W$ the event intensity is
+\begin{equation}
+ r(u\mid W)=W\frac v\beta\,\e^{\alpha u},\label{eq:accel-rate}
+\end{equation}
+so $\mathrm{cv}$ governs differences between trials and $\alpha$ the growth of the rate within a trial, and either can be zero while the other is positive. The initial rate is still $L_0=W v/\beta$, with mean $v$ and CV $\beta^{-1/2}$ for every $h$, since $q'(0)=p\lambda=v/\beta$. By Proposition~\ref{prop:intensity} the predictive intensity is
+\begin{equation}
+ \ell_n(u)=\frac{v(1+n/\beta)\,\e^{\alpha u}}{1+\frac v{\beta\alpha}(\e^{\alpha u}-1)}.\label{eq:accel-intensity}
 \end{equation}
 
-%======================================================================
-\section{Error Signatures and Identification}\label{sec:ident}
-%======================================================================
-
-The results below were measured in two-accumulator races calibrated to 80\% accuracy. The error signature is the median error RT minus the median correct RT. Identification is reported as the per-trial posterior SD from the Fisher information; divide by $\sqrt{n}$ for $n$ trials. Unless stated otherwise, $K = 3$, $h = 1$, the clock is constant-rate ($\cvu = 1$), and the rate CV $\mathit{cv}$ is shared across accumulators (Section~\ref{sec:share} frees the SD per accumulator). Other values of $K$, $h < 1$ and the accelerating clock were not tested.
-
-\subsection{Error Signatures by Mechanism}
+\subsection{Exact members}
 \begin{itemize}
-  \item \textbf{Rate difference with no rate variability.} On the accelerating clock with $K = 1$, the race is a race of exponentials, and correct and error RTs are identically distributed. At $K = 3$ the race alone makes errors 11--15\% slower, and on the accelerating clock $\mathit{cv}$ barely changes this, because the acceleration cancels its slow-error effect.
-  \item \textbf{Between-trial rate variability, CV shared} ($\cvu = 1$): slow errors. Errors are 13\%, 16\%, 46\% and 139\% slower at $\mathit{cv} \approx 0.03$, $0.18$, $0.58$ and $1$.
-  \item \textbf{Evidence-ceiling difference} (unequal $h$ at a common $v$): fast errors, 25--52\% faster than correct responses, with omission rates around $5\times10^{-4}$. The weaker accumulator runs out of evidence, so it can only win early.
-  \item \textbf{Threshold below one} ($K<1$): strong fast errors, but the likelihood is unbounded at $t_0 \to \min(\mathrm{rt})$, so $K \ge 1$ is enforced.
-  \item \textbf{Low-threshold state $\pi_{\mathrm{lo}}$:} fast errors under a rate difference alone (Section~\ref{sec:plo}).
-\end{itemize}
-\paragraph{When errors can be fast.} In an independent race with any number of accumulators, the error density from accumulator $j$ divided by the correct density is proportional to the hazard ratio $\eta_j(u)/\eta_c(u)$, because the shared survivors cancel. Errors are slower than correct responses at every quantile exactly when that ratio rises in $u$. When accumulators differ only in $v$, every law is a time rescaling of one base law with hazard $\eta$, and
+\item $\alpha=0$ is the $c=1$ member of Section~\ref{sec:clocks}, at every $h$ and $\pi_{\rm lo}$.
+\item $\alpha=\lambda$ gives $q(u)=p(1-\e^{-\lambda u})$, the $c=0$ member, at every $h$. At $h=1$ this is $\alpha=v/\beta=v\,\mathrm{cv}^2$, where Eq.~\eqref{eq:accel-intensity} reduces to the linear pure-birth intensity $\ell_n=v+\alpha n$ of Eq.~\eqref{eq:pure-birth}.
+\item $s_v=0$, $h=1$ gives the accelerating nonhomogeneous Poisson counter
 \begin{equation}
-  \frac{\dd \log(\eta_j/\eta_c)}{\dd \log u} = \epsilon(v_j u) - \epsilon(v_c u), \qquad \epsilon(x) = \frac{\dd \log \eta(x)}{\dd \log x}.
+ F(u)=P_K\!\left(v\frac{\e^{\alpha u}-1}{\alpha}\right),\label{eq:accel-poisson}
 \end{equation}
-With $v_j < v_c$, errors are slow wherever $\epsilon$ falls and fast wherever it rises. On a grid of 144 \textsc{FRQ} members at $\pi_{\mathrm{lo}} = 0$ ($K \in [1, 8]$, $\mathit{cv} \in [0, 2]$, $h \in [0.5, 1]$, all three clocks), $\epsilon$ never rises. A rate difference alone therefore gives slow errors at every quantile. Fast errors need either a shape that differs between accumulators (unequal $h$, $\mathit{cv}$ or $K$), or a base law whose log-hazard is convex in log time somewhere, such as an early, near-exponential component (low $K$) mixed with a later one.
+with intensity $v\e^{\alpha u}$; unlike Eq.~\eqref{eq:zero-proper}, the clock does not drop out at zero variability. At $s_v=0$, $h<1$, $F(u)=P_K(E\,x(u)/(1+x(u)))$ with $\lambda=v/E$.
+\end{itemize}
+In a race, the $c=0$ correspondence holds accumulator by accumulator: a common $\alpha$ reproduces a race of $c=0$ accumulators only if $\alpha=\lambda_i$ for every alternative $i$.
 
-The kernel therefore separates two mechanisms cleanly: a rate difference with a shared rate CV gives slow errors, with size set by $\mathit{cv}$, and an evidence-ceiling difference gives fast errors. With a rate SD per accumulator, the sign depends on their ratio (Section~\ref{sec:share}).
+\subsection{Time scale and tails}
+Because $\alpha$ has units of inverse time, Proposition~\ref{prop:scale} becomes
+\begin{equation}
+ F(u;v,\alpha)=F(vu;1,\alpha/v),\label{eq:accel-scale}
+\end{equation}
+so a common change of rate rescales decision times only if $\alpha$ changes in proportion.
 
-\subsection{Rate CV Versus Geometric Threshold Excess}
-The removed \textsc{PCOUNTER} model offered a geometric threshold excess $\omega$, where the required count is $K$ plus a $\operatorname{Geom}(1/(1+\omega))$ variate. Each mechanism was fitted alone, never together, and each model was fitted to the other's exact likelihood to measure distinguishability.
+At $K=1$ and $h=1$, the leading edge is
+\begin{equation}
+ -\log S(u)=vu+\tfrac12 v\left(\alpha-v\,\mathrm{cv}^2\right)u^2+O(u^3),\label{eq:accel-onset}
+\end{equation}
+so acceleration and rate variability enter the onset hazard slope with opposite signs.
 
+For $h=1$, $s_v>0$ and $\alpha>0$, $1-q(u)\sim(\alpha\beta/v)\e^{-\alpha u}$, and
+\begin{equation}
+ S(u)\sim\frac{(\alpha\beta/v)^\beta}{\beta B(K,\beta)}\e^{-\alpha\beta u},\label{eq:accel-tail}
+\end{equation}
+an exponential tail with rate $\alpha/\mathrm{cv}^2$, against the power tail of Eq.~\eqref{eq:proper-tail} at $\alpha=0$. At $s_v=0$ the tail of Eq.~\eqref{eq:accel-poisson} is doubly exponential. At $0<h<1$, Eq.~\eqref{eq:defective-tail} applies with $1-G_1(A_\alpha(u))=1/(1+x(u))$, so the finite completions have an exponential tail with rate $\alpha$, where the $\alpha=0$ member has the $1/u$ tail with no conditional mean.
+
+\section{Opponent Counters: Signed Poisson Evidence}\label{sec:opponent}
+
+The counters above only add evidence. An opponent counter also removes it. Accumulator $i$ receives two independent homogeneous Poisson streams, $N_{+}(u)$ with rate $a=\lambda_+>0$ and $N_{-}(u)$ with rate $b=\lambda_-\geq0$, and its signed evidence is
+\begin{equation}
+ X(u)=N_{+}(u)-N_{-}(u),\qquad X(0)=0,\qquad
+ U=\inf\{u\geq0:X(u)\geq K\}.\label{eq:opponent}
+\end{equation}
+The negative stream acts within its own accumulator; it is not inhibition received from a competitor, and racing accumulators remain independent in the sense of Section~\ref{sec:race}. In an increment $\dd u$, $\E[\dd X]=(a-b)\dd u$ and $\Var(\dd X)=(a+b)\dd u$, so the net rate $v=a-b$ and the variance rate $D=a+b$ satisfy $D\geq|v|$. The difference of the rates sets the mean progress and their sum sets the within-trial fluctuation.
+
+\subsection{First-passage law for a continuous criterion}
+Let $I_K$ denote the modified Bessel function of the first kind of real order $K>0$. The first-passage subdensity is
+\begin{equation}
+ f(u)=\frac Ku\left(\frac ab\right)^{K/2}\e^{-(a+b)u}I_K\!\left(2u\sqrt{ab}\right),\qquad u>0.\label{eq:opponent-density}
+\end{equation}
+Expanding the Bessel series gives the equivalent Poisson mixture
+\begin{equation}
+ f(u)=\frac Ku\sum_{j=0}^\infty\pi_j(bu)\,\gamma_{K+j}(au),\qquad
+ \pi_j(m)=\frac{m^j\e^{-m}}{j!},\quad
+ \gamma_s(x)=\frac{x^s\e^{-x}}{\Gamma(s+1)}.\label{eq:opponent-mixture}
+\end{equation}
+For integer $K$ the sum is $P\{X(u)=K\}$, and Eq.~\eqref{eq:opponent-mixture} is the hitting-time theorem for a walk with unit upward jumps: $f(u)=(K/u)P\{X(u)=K\}$. For real $K$ the density is defined by Eq.~\eqref{eq:opponent-density} and has Laplace transform
+\begin{equation}
+ \E\!\left[\e^{-sU};U<\infty\right]=\e^{-K\psi(s)},\qquad
+ \psi(s)=\log\frac{a+b+s+\sqrt{(a+b+s)^2-4ab}}{2a}.\label{eq:opponent-laplace}
+\end{equation}
+Since $\psi'(s)=[(a+b+s)^2-4ab]^{-1/2}$ is completely monotone, $\psi$ is a Bernstein function, with killing $\psi(0)>0$ when $a<b$. The finishing time as a function of criterion, $K\mapsto U_K$, is therefore a (possibly killed) subordinator. This is the sense in which a noninteger criterion is defined: the integer-valued path does not take fractional steps, but the criterion-indexed finishing times form a process that agrees with whole-unit passage at integer levels.
+
+Write $P_s$ and $Q_s=1-P_s$ for the regularized incomplete gamma functions of Section~\ref{sec:poisson}. The CDF is a sum of two noncentral chi-squared probabilities, which in Poisson-mixture form gives the survivor
+\begin{equation}
+ S(u)=\sum_{j=0}^\infty\pi_j(bu)\,Q_{K+j}(au)
+ -\left(\frac ab\right)^K\sum_{j=0}^\infty\pi_j(au)\,P_{K+1+j}(bu).\label{eq:opponent-survivor}
+\end{equation}
+The second sum has order $K+1+j$, not $K+j$; with a common order the expression does not differentiate to Eq.~\eqref{eq:opponent-density}. Both orders are real for real $K$. Equation~\eqref{eq:opponent-survivor} vanishes as $u\to\infty$ when $a\geq b$ and tends to the omission mass otherwise. For integer $K$ the first sum is $P\{X(u)<K\}$, and the second removes the paths that are below $K$ at time $u$ after having reached it.
+
+\subsection{Completion, rate exchange, and limits}
+Setting $s=0$ in Eq.~\eqref{eq:opponent-laplace} gives
+\begin{equation}
+ h=P(U<\infty)=\begin{cases}1,&a\geq b,\\(a/b)^K,&a<b.\end{cases}\label{eq:opponent-h}
+\end{equation}
+For $a<b$, conditioning on completion exchanges the rates:
+\begin{equation}
+ f(u;a,b)=h\,f(u;b,a),\qquad S(u;a,b)=(1-h)+h\,S(u;b,a).\label{eq:opponent-swap}
+\end{equation}
+Rare completions under negative net evidence thus have the latency law of the positive-drift counter with the streams exchanged, and the defective law needs no separate form. At $a=b$ completion is certain but the mean is infinite.
+
+For $a>b$,
+\begin{equation}
+ \E[U]=\frac K{a-b},\qquad \Var(U)=\frac{K(a+b)}{(a-b)^3},\qquad
+ \operatorname{CV}^2(U)=\frac{a+b}{K(a-b)}.\label{eq:opponent-moments}
+\end{equation}
+These are the mean and variance of a Wald time with distance $K$, drift $v$, and variance rate $D$, but the laws differ at every finite event scale. Giving each event magnitude $\epsilon$ with $a,b=D/(2\epsilon^2)\pm v/(2\epsilon)$ and criterion $d/\epsilon$, Eq.~\eqref{eq:opponent-laplace} converges to the Wald transform $\exp[(d/D)(v-\sqrt{v^2+2Ds})]$, including its defective form for $v<0$.
+
+As $u\downarrow0$,
+\begin{equation}
+ f(u)\sim\frac{a^K}{\Gamma(K)}u^{K-1},\qquad F(u)\sim\frac{(au)^K}{\Gamma(K+1)},\label{eq:opponent-onset}
+\end{equation}
+so the onset is that of a Gamma counter with rate $a$; the negative stream first enters at relative order $u$. The leading edge is therefore power-law, against the exponentially suppressed onset of a Wald. As $u\to\infty$ with $a,b>0$,
+\begin{equation}
+ f(u)\sim\frac{K(a/b)^{K/2}}{\sqrt{4\pi\sqrt{ab}}}\,u^{-3/2}\,\e^{-(\sqrt a-\sqrt b)^2u},\label{eq:opponent-tail}
+\end{equation}
+an exponentially tempered $u^{-3/2}$ tail whose rate $(\sqrt a-\sqrt b)^2$ vanishes at $a=b$.
+
+At $b=0$ the counter is the continuous-criterion homogeneous counter of Eq.~\eqref{eq:erlang}, $F(u)=P_K(au)$. For real $K$ this coincides with the Gamma-level extension of Eq.~\eqref{eq:gamma-threshold}: both constructions give the Gamma subordinator in criterion, and they first differ when a negative stream is present.
+
+\subsection{Coordinates}
+Three coordinate systems describe the same law.
 \begin{table}[htbp]
-\centering
-\small
-\caption{Identification of rate CV and $\omega$ fitted separately. ``Trials to separate'' is the $n$ at which the best mimic falls 3 nats behind.}
-\label{tab:cv-omega}
-\begin{tabular}{lllll}
+\centering\small
+\caption{Coordinates of the opponent counter. Each maps to $(a,b)$; the criterion $K$ is common.}
+\label{tab:opponent}
+\begin{tabular}{L{2.8cm}L{3.6cm}L{3.0cm}L{4.1cm}}
 \toprule
-\textbf{Truth} & \textbf{Errors slower} & \textbf{SD(log) per trial} & \textbf{Best mimic} & \textbf{Trials to separate} \\
+Coordinates & Rates & Variance rate & Completion\\
 \midrule
-$\mathit{cv} = 0.2$ & 17\% & 12.1 & $\omega = 1.2$ & $\sim 1.4\times10^6$ \\
-$\mathit{cv} = 0.4$ & 28\% & 3.6 & $\omega = 4.1$ & $\sim 4300$ \\
-$\mathit{cv} = 0.7$ & 64\% & 1.6 & $\omega = 20.7$ & $\sim 110$ \\
+$(v,\rho)$, ratio & $a=(1+\rho)v$, $b=\rho v$ & $(1+2\rho)v$ & $h=1$\\
 \addlinespace
-$\omega = 0.5$ & 14\% & 54 & $\mathit{cv} = 0.10$ & $\sim 8.4\times10^7$ \\
-$\omega = 2$ & 20\% & 13 & $\mathit{cv} = 0.27$ & $\sim 9\times10^4$ \\
-$\omega = 5$ & 29\% & 9.6 & $\mathit{cv} = 0.41$ & $\sim 3300$ \\
+$(v,\lambda_0)$, background & $a=v+\lambda_0$, $b=\lambda_0$ & $v+2\lambda_0$ & $h=1$\\
+\addlinespace
+$(\lambda_+,\lambda_-)$ & $a=\lambda_+$, $b=\lambda_-$ & $\lambda_++\lambda_-$ & $(\lambda_+/\lambda_-)^K$ if $\lambda_+<\lambda_-$\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-$\mathit{cv}$ is identified on its own once it is moderate. $\omega$ is identified 3--10 times less precisely and is nearly collinear with the rate (correlation 0.98--0.99), because a geometric excess mainly raises the mean threshold, which looks like a slower rate. Rate CV mimics $\omega$ almost exactly, whereas $\omega$ cannot reproduce strong rate variability. For that reason the kernel has no $\omega$.
-
-\subsection{Rate SD per Accumulator}\label{sec:share}
-Designs give each accumulator its own rate SD (\texttt{sv \textasciitilde{} lM}), as for the LBA's $sv$ and the RDM's within-trial $s$. Unlike the LBA, \textsc{FRQ} has no scale invariance: $K$ counts events, so $v$ and $sv$ are in absolute events per second and no $sv$ has to be fixed. Table~\ref{tab:share} gives the identification at $h = 1$, $\nu_c = 10$, with $\theta = (\log(K-1), \log sv_c, \log sv_e, \log\nu_c, \log\nu_e)$ all free, for truths where the two accumulators share either the CV or the SD.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Identification with \texttt{sv \textasciitilde{} lM}: per-trial posterior SDs.}
-\label{tab:share}
-\begin{tabular}{lllllll}
-\toprule
-\textbf{CV (correct)} & \textbf{Truth} & \textbf{Errors slower} & \textbf{$\log sv_c$} & \textbf{$\log sv_e$} & \textbf{$\log\nu_c$ / $\log\nu_e$} & \textbf{corr$(sv, \nu)$ c / e} \\
-\midrule
-0.2 & equal CV & 17\% & 15 & 36 & 3.3 / 3.6 & 0.90 / 0.64 \\
-0.2 & equal SD & 8\% & 15 & 12 & 3.3 / 3.6 & 0.90 / 0.70 \\
-0.4 & equal CV & 28\% & 6.9 & 12 & 3.7 / 4.0 & 0.95 / 0.76 \\
-0.4 & equal SD & $-3\%$ & 6.9 & 6.4 & 3.8 / 4.2 & 0.95 / 0.85 \\
-0.7 & equal CV & 64\% & 5.7 & 7.7 & 4.5 / 4.9 & 0.98 / 0.89 \\
-0.7 & equal SD & $-18\%$ & 6.1 & 6.4 & 4.9 / 5.5 & 0.98 / 0.94 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Because the rate is Gamma rather than normal, the sign of the error effect depends on the ratio $sv_e/sv_c$. With equal CVs, errors are slow. With equal SDs, the weaker accumulator has the larger CV: most of its rates lie near zero, its wins come from the long right tail, and at large variability errors are fast. At $h = 0.97$ and small CV, $\log sv_c$ is very poorly identified (per-trial SD about 300), the usual non-regular boundary at zero variability.
-
-\subsection{Clock Shape Versus Rate CV}
-With the clock fixed at $\cvu = 1$, the full race identifies the rate variability: the per-trial SD of $\log\beta$ is 4.2, about 0.19 at 500 trials. With $\cvu$ and the rate variability both free, their posterior correlation is 1.000 and $\operatorname{SD}(\log\beta)$ is 263. Both produce the same contagion signature (Proposition~\ref{prop:intensity}). At $K = 1$ they are exactly confounded, since only $\beta/\cvu^2$ enters the law. At $K = 3$ they are distinct in principle, but this design cannot separate them in practice. The constructor fixes $\cvu = 1$.
-
-%======================================================================
-\section{What the Kernel Does Not Cover}\label{sec:notcovered}
-%======================================================================
-\begin{itemize}
-  \item \textbf{Rate variability and self-excitation together.} For integer $K$ the law is a finite sum, which \textsc{PCOUNTER} evaluated by a Stirling recurrence. That sum does not extend to real $K$, and no closed form for real $K$ is known. Intermediate clocks ($0 < \cvu < 1$) come within $10^{-3}$ nats per trial of it, but their parameters do not split into separate $sv$ and $\gamma$. Both are contagion, so the joint model would be weakly identified in any case.
-  \item \textbf{Geometric threshold excess} $\omega$. It was omitted on the evidence of Table~\ref{tab:cv-omega}.
-  \item \textbf{Rates correlated across accumulators.} The accumulators race independently. The removed \textsc{PCOUNTERcorr} model used a shared-component gamma construction, and its derivation is in \texttt{Math/PCOUNTER\_correlated\_rates.md}. An \textsc{FRQ} version would need quadrature over the shared factor. The old implementation can be recovered from git at commit \texttt{75582521}.
-  \item \textbf{Log-odds threshold frailty $\delta$.} An earlier extension multiplied each accumulator's completion odds by $\e^{\varepsilon}$, $\varepsilon \sim \operatorname{Uniform}(-\delta, \delta)$, giving the closed form $F_\delta = H_\delta(F)$ with $H_\delta(z) = [\log(1 + \e^{x+\delta}) - \log(1 + \e^{x-\delta})]/(2\delta)$, $x = \logit z$. It was replaced by $\pi_{\mathrm{lo}}$. $\delta$ scales both tails by $\sinh(\delta)/\delta$ without changing the onset order or the tail exponent, spreads the bulk only at second order, and is confounded with $K$ rather than rate CV: the best $(K, v, \mathit{cv})$ mimic of a $\delta$ truth at $K = 3$ sets $\mathit{cv} = 0$ and lowers $K$ to $2.77$, $2.28$ and $1.80$ at $\delta = 1, 2, 3$, and falls 3 nats behind only after about $5000$, $420$ and $120$ trials. Drawn per accumulator it gives slow errors (14--19\%).
-  \item \textbf{Caution shared across the race.} Every draw in the kernel, including $\pi_{\mathrm{lo}}$'s, is per accumulator. A single draw shared by the race also gives fast errors, because liberal trials are both fast and inaccurate. At 80\% accuracy and $sv = 0$, a shared real threshold $K \sim \operatorname{Uniform}(1.5, 11.5)$ makes errors $15\%$ faster, against $13\%$ slower at a fixed $K = 4$, and rate CV offsets the effect ($+2\%$ at $\mathit{cv} = 0.3$). Such a race no longer factors over accumulators and needs quadrature over the shared draw (16 Gauss--Legendre nodes give about $10^{-8}$ relative accuracy for a bounded draw).
-\end{itemize}
-
-%======================================================================
-\section{Implementation Contract}
-%======================================================================
-Table~\ref{tab:contract} lists the sampled parameters of \texttt{FRQ()}. Bounds are on the natural scale and are built into each link. The defaults are the constructor's.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{\texttt{FRQ()} parameters.}
-\label{tab:contract}
-\begin{tabular}{llllL{5.2cm}}
-\toprule
-\textbf{Par.} & \textbf{Link} & \textbf{Bound} & \textbf{Default} & \textbf{Meaning} \\
-\midrule
-$K$ & $1 + \exp$ & $[1, \infty)$ & 3 & event threshold \\
-$v$ & $\log$ & $[10^{-4}, \infty)$ & 6 & mean initial input rate (events/s) \\
-$sv$ & $\log$ & $[10^{-4}, \infty)$, or exactly 0 & 0 & between-trial rate SD; $\beta = (v/sv)^2$ \\
-$\mathit{cv}$ & $\log$ & $[10^{-4}, \infty)$, or exactly 0 & 0 & rate CV, in $sv$'s place under \texttt{parameterization = "cv"}; $\beta = \mathit{cv}^{-2}$ \\
-$h$ & probit & $[10^{-6}, 1]$ & 1 & eventual completion probability \\
-$t_0$ & $\log$ & $[0.05, \infty)$ & 0 & non-decision time \\
-$\pi_{\mathrm{lo}}$ (\texttt{plo}) & probit & $[10^{-6}, 1]$, or exactly 0 & 0 & probability of the low-threshold state ($K_{\mathrm{lo}} = 1$) \\
-\texttt{clock} ($\cvu$) & $\log$ & $[10^{-4}, \infty)$, or exactly 0 & 1 & clock shape (1 = constant rate) \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{itemize}
-  \item The exact boundary values $t_0 = 0$, $\pi_{\mathrm{lo}} = 0$, $\cvu = 0$, $h = 1$, $K = 1$ and $sv = 0$ are bound exceptions, so they can be fixed without being a limiting approximation.
-  \item $sv$ has no upper bound: $sv > v$ ($\beta < 1$) is a valid, very variable rate. Then $p$ lies within rounding of one, so the kernel solves $1 - p$ from its own quantile, $1 - p = Q_{\beta,K}(1-h)$, and returns $F(\infty) = h$ and $S(\infty) = 1-h$ directly. For $\beta < 1$ the complements $1-p$ and $1-q(u) = (1-p) + pS_G(u)$ underflow while $(1-q)^\beta$ is still of order one, so both are held as logarithms, and the incomplete beta takes $\log q$ and $\log(1-q)$ directly. Where the beta quantile underflows, its log is the leading term of $I_x(a,b) = x^a/(aB(a,b))\,(1 + O(x))$. The simulators draw the complement $1-U \sim \BetaDist(\beta, K)$ by inversion on the same log scale. The lower guard $10^{-4}$ keeps a sampled $sv$ off the exact $sv = 0$ branch, which is reachable by fixing $sv$ as a constant. The lower guard $10^{-6}$ on $\pi_{\mathrm{lo}}$ likewise keeps a sampled value off the exact base model.
-  \item The mapping layer reports derived quantities: $\beta$, $p$, $\lambda$, the expected total evidence $\beta p/(1-p)$, or $E$ at $sv=0$ (column \texttt{Etot}, infinite at $h=1$), the rate CV $\mathit{cv} = sv/v$ (the rate SD $sv = \mathit{cv}\,v$ in the CV chart). They are not fitted coordinates.
-  \item The CV chart is the compiled model \texttt{FRQ\_CV}: the same kernel with $\mathit{cv}$ in the third column, read without dividing by $v$. Its bound, default and exception are $sv$'s.
-  \item The likelihood uses Rmath's \texttt{qbeta} and \texttt{qgamma}, a continued-fraction incomplete beta of its own in the general branch, and the package's series and continued-fraction incomplete gamma (\texttt{src/inc\_gamma.h}) in the $sv = 0$ branch, which evaluates only the tail it needs. It is evaluated on the log scale throughout.
-\end{itemize}
-
-%======================================================================
-\section{FRQfade: A Fading Registration Opportunity}\label{sec:fade}
-%======================================================================
-\texttt{FRQfade()} runs the proper ($h = 1$) \textsc{FRQ} accumulator on the warped time
+In the ratio coordinates, opposing activity is proportional to net evidence, so
 \begin{equation}
-  A(u) = \frac{1 - \e^{-\kappa u}}{\kappa}, \qquad A(u) = u \text{ at } \kappa = 0,
+ U(v,\rho)\overset{d}{=}U(1,\rho)/v,\qquad
+ \E[U]=K/v,\qquad \operatorname{CV}^2(U)=(1+2\rho)/K.\label{eq:opponent-ratio}
 \end{equation}
-so that its input intensity is multiplied by $\e^{-\kappa u}$. With $F_1$, $f_1$ and $S_1$ the \textsc{FRQ} functions at $h = 1$ for the same $(K, v, sv, \pi_{\mathrm{lo}}, \cvu)$,
+At fixed $(K,\rho)$, net rate is a pure time scale, as in Proposition~\ref{prop:scale}: a common rescaling of every racer's $v$ changes decision-time units and leaves choice probabilities unchanged when nondecision times are common. Weaker alternatives then fluctuate less.
+
+In the background coordinates, both streams carry a common activity $\lambda_0$ that does not depend on the signal, and the signal adds $v$ to the positive stream only. Then
 \begin{equation}
-  F(u) = F_1\big(A(u)\big), \qquad f(u) = f_1\big(A(u)\big)\,\e^{-\kappa u}, \qquad S(u) = S_1\big(A(u)\big).
+ U(v,\lambda_0)\overset{d}{=}U(1,\lambda_0/v)/v,\qquad
+ \operatorname{CV}^2(U)=\frac{v+2\lambda_0}{Kv},\label{eq:opponent-background}
 \end{equation}
-Operational time is capped at $1/\kappa$, so the completion probability is derived rather than fitted:
+so a change of net rate at fixed background is not a pure time scale. A weaker racer has relatively more noise and a broader standardized latency law, approaching a diffusion with a fixed variance rate when $\lambda_0\gg v$. The two restricted coordinate systems coincide on a single racer through $\rho=\lambda_0/v$, and differ in what they hold constant across racers and conditions. Both keep $v>0$ and hence $h=1$. Intrinsic omissions require the unrestricted rates with $\lambda_-$ exceeding $\lambda_+$ for some racer, and then Eq.~\eqref{eq:race-omissions} applies with $h_i$ from Eq.~\eqref{eq:opponent-h}.
+
+\subsection{Races}
+The race likelihood of Eq.~\eqref{eq:race} applies with $f_i$ and $S_i$ from Eqs.~\eqref{eq:opponent-density} and~\eqref{eq:opponent-survivor}. Each racer has its own pair of streams, so the model is neither a single difference process between two absorbing boundaries nor a race in which one alternative's events decrement its competitors. Those specifications share the opponent intuition but define different joint processes. When racers differ only in $v$ under shared ratio coordinates, they differ by rate scaling and Eq.~\eqref{eq:elasticity} governs the ordering of error and correct latencies. Under shared background coordinates they differ in standardized shape as well.
+
+\section{Distributional Predictions and Identification}\label{sec:identification}
+
+\subsection{Leading edges, tails, and moments}
+For a fixed criterion, $q(u)\sim(v/\beta)u$ at onset. Hence, for positive rate variability,
 \begin{equation}
-  h = F_1(1/\kappa).
+ F(u)\sim\frac{(vu/\beta)^K}{K B(K,\beta)},\qquad
+ f(u)\sim\frac{(v/\beta)^K}{B(K,\beta)}u^{K-1}.\label{eq:onset}
 \end{equation}
-The expected total evidence a trial can deliver is $\mathbb{E}[W]\,\phi(1/\kappa)$: $v/\kappa$ at $sv = 0$, $\beta q/(1-q)$ at the cap otherwise, and infinite at $\kappa = 0$. The mapping layer reports it as \texttt{Etot}, with $h$, $\beta$, $\lambda$ and $\mathit{cv}$. The simulator draws the $h = 1$ decision time $x$ and returns $u = -\log(1 - \kappa x)/\kappa$, with $x \ge 1/\kappa$ an omission.
+At zero variability the leading CDF is $(vu)^K/\Gamma(K+1)$. At $K=1$, $f(0^+)=v$ regardless of $h,s_v,c$. At larger $K$, the onset order is $K$, but its coefficient depends on $\beta$ as well as $v$. The low-state mixture changes that order to one through Eq.~\eqref{eq:mixture-onset}.
 
-The sampled parameters are those of Table~\ref{tab:contract} with $h$ replaced by $\kappa$ (log link, $[10^{-4}, \infty)$ or exactly 0, default 0.5). At $\kappa = 0$ the model is \textsc{FRQ} with $h = 1$. Every \textsc{FRQ} submodel of Table~\ref{tab:submodels} therefore has a fading counterpart on the clock $A(u)$. In particular, $sv = 0$ gives $F(u) = P_K\big(vA(u)\big)$, and $sv = 0$, $K = 1$ gives the exponential with a fading rate.
+For $h=1$, $s_v>0$, and $c>0$, beta-tail asymptotics give
+\begin{equation}
+ S(u)\sim\frac{(c^2\lambda u)^{-\beta/c^2}}{\beta B(K,\beta)}.\label{eq:proper-tail}
+\end{equation}
+Thus positive moments of order $r$ exist precisely for $r<\beta/c^2$. At $c=0$, the tail instead decays as $\e^{-\beta\lambda u}=\e^{-vu}$, up to a positive constant. The ordinary Poisson boundary has an exponential tail for every $c$.
 
-At $sv = 0$, \textsc{FRQfade} is contained in \textsc{FRQ}. With the exponential clock ($\cvu = 0$), with $M(X) = (1 - \pi_{\mathrm{lo}})P_K(X) + \pi_{\mathrm{lo}}P_1(X)$, \textsc{FRQ}'s $sv = 0$ branch is $M\big(E(1 - \e^{-\lambda u})\big)$, and \textsc{FRQfade} is $M\big((v/\kappa)(1 - \e^{-\kappa u})\big)$. The two are identical at every $u$ when $E = v/\kappa$, $\lambda = \kappa$ and $h = M(v/\kappa)$, which gives the same $v = \lambda E$. For $sv > 0$ the operational clocks differ ($\phi = a(1 - \e^{-\kappa u})$ against $p(1 - \e^{-\lambda u})/(1 - p(1 - \e^{-\lambda u}))$), so the families separate. A claim that fading and a finite evidence ceiling have been distinguished empirically must therefore rest on $sv > 0$ or on a clock other than $\cvu = 0$.
+At $0<h<1$ with positive rate variability,
+\begin{equation}
+ h-F(u)\sim
+ \frac{p^K(1-p)^{\beta-1}}{B(K,\beta)}\big(1-G_c(u)\big).\label{eq:defective-tail}
+\end{equation}
+Consequently the finite completion-time distribution has a power tail with exponent $1/c^2$ for $c>0$, and an exponential tail for $c=0$. The same exponents hold at zero variability with a bounded clock. Unconditional moments are infinite whenever there is positive mass at infinity; moment statements for a defective law must refer to $U\mid U<\infty$. Conditional positive moments then require $r<1/c^2$ for $c>0$. These tail results also hold for the two-state mixture, whose components share the relevant exponent.
 
-%======================================================================
-\begin{thebibliography}{9}
-\bibitem{Pike1966}
-Pike, A.~R. (1966). Stochastic models of choice reaction time. \emph{British Journal of Mathematical and Statistical Psychology}, 19(2), 159--179.
+For the proper, fixed-criterion, linear-clock member, write $U=Y_K/L$, where $Y_K$ is independent of a trial rate
+\begin{equation}
+ L\sim\GammaDist(\beta,\text{rate }\beta/v).
+\end{equation}
+For $0\leq r<\beta$,
+\begin{equation}
+ \E[U^r]=\left(\frac\beta v\right)^r
+ \frac{\Gamma(K+r)\Gamma(\beta-r)}{\Gamma(K)\Gamma(\beta)}.\label{eq:moments}
+\end{equation}
+In particular,
+\begin{equation}
+ \E[U]=\frac{K\beta}{v(\beta-1)},\qquad
+ \operatorname{CV}^2(U)=\left(1+\frac1K\right)
+ \frac{\beta-1}{\beta-2}-1,\label{eq:cv-time}
+\end{equation}
+with the mean requiring $\beta>1$ and the variance requiring $\beta>2$. The initial-rate CV and the response-time CV are distinct quantities.
 
+\subsection{Fast and slow errors}\label{sec:errors}
+With common nondecision time, define the defective-time hazard $\eta_i(u)=f_i(u)/S_i(u)$. For any pair of alternatives $e$ and $a$, the survivor factors in Eq.~\eqref{eq:race} cancel to give
+\begin{equation}
+ \frac{g_e(t)}{g_a(t)}=\frac{\eta_e(u)}{\eta_a(u)},\qquad u=t-t_0.\label{eq:hazard-ratio}
+\end{equation}
+After conditioning on response identity, the ratio is multiplied by $P_a/P_e$. If the hazard ratio is nondecreasing over time, error latencies are later than correct latencies in monotone likelihood-ratio order, and therefore in stochastic order. A nonincreasing ratio gives the reverse ordering. These are sufficient conditions for quantile ordering; quantile ordering alone does not require a monotone density ratio. If the ratio changes direction, some conditional quantiles can cross.
+
+When racers differ only by the rate scaling of Eq.~\eqref{eq:scale}, let $\eta_*$ be the unit-rate hazard and
+\begin{equation}
+ \epsilon(x)=\frac{\dd\log\eta_*(x)}{\dd\log x}.
+\end{equation}
+Then
+\begin{equation}
+ \frac{\dd\log(\eta_e(u)/\eta_a(u))}{\dd\log u}
+ =\epsilon(v_eu)-\epsilon(v_au).\label{eq:elasticity}
+\end{equation}
+For $v_e<v_a$, a nonincreasing $\epsilon$ gives slow errors by the preceding ordering result. Establishing that condition requires analysis of the particular member; a finite parameter grid cannot prove it for the entire family.
+
+Gamma rate mixing can select unusually favorable error trials and alter the tails of conditional response distributions. Equal SD and equal CV impose different selection effects because the slower accumulator has higher relative variability under equal SD. A defective competitor may mainly win early, before its opportunity to accrue evidence fades. A low-criterion state can also concentrate error responses near onset. These mechanisms can produce fast or slow error patterns under suitable parameters; none is a universal sign rule independent of criterion, clock, race dependence, and observation window. An exponential race with fixed rates and unit criteria provides an exact neutral case with identical conditional response-time distributions.
+
+\subsection{Exact degeneracies and practical confounding}
+At $h=1$, $K=1$, and $s_v>0$,
+\begin{equation}
+ F(u)=
+ \begin{cases}
+ 1-(1+c^2vu/\beta)^{-\beta/c^2},&c>0,\\
+ 1-\e^{-vu},&c=0.
+ \end{cases}\label{eq:unit-confounding}
+\end{equation}
+For $c>0$, only $\beta/c^2$ is identified by the finishing-time law. At $c=0$, $\beta$ drops out entirely. At $s_v=0,h=1$, $c$ drops out for every $K$. Criterion-mixture degeneracies occur at $K=1$ and $\pi_{\rm lo}=1$ as described in Section~\ref{sec:mixture}. These are exact distributional facts, not effects that additional trials in the same design can resolve.
+
+Outside these boundaries, parameters may remain difficult to distinguish over a finite observation window. Clock curvature, trial-rate variation, criterion variability, and nondecision variability can all broaden observed latencies. Early data constrain onset behavior; long windows and omission information constrain completion and tails; joint choice and response-time distributions constrain the competition between accumulators. Which coordinates can be estimated precisely depends on the experimental design and the restrictions shared across its conditions.
+
+\section{Relationship to Psychological Theory and Literature}\label{sec:theory}
+
+\subsection{Classical counters and time-dependent evidence}
+The homogeneous Poisson race is exactly nested by $s_v=0$, $h=1$, and $\pi_{\rm lo}=0$, with $v$ equal to event rate and integer $K$ equal to the criterion count. This is an exact submodel relation, rather than a similarity of distributional shapes. Real-valued $K$ extends its finishing-time family through Eq.~\eqref{eq:gamma-threshold}.
+
+The relationship to the general time-dependent counter framework of Smith and Van Zandt \cite{SmithVanZandt2000} has two levels. At zero rate variability, the quorum clock directly specifies a deterministic cumulative intensity. With Gamma mixing, the trial-conditional process is still a time-dependent Poisson counter, but its cumulative intensity is random. The parametric clocks here impose specific restrictions; the general deterministic-clock framework permits other temporal profiles and proportional-rate constraints. The following result gives a further relation at the level of observable finishing times.
+
+\begin{proposition}[A deterministic-clock representation of a marginal law]\label{prop:mimic}
+Let $F$ be a continuous finishing-time CDF on $[0,\infty)$ with $F(0)=0$, possibly defective, and $F(u)<1$ at finite $u$. For any fixed integer $k\geq1$, define
+\begin{equation}
+ M_*(u)=P_k^{-1}(F(u)).\label{eq:mimic-clock}
+\end{equation}
+Then a deterministic-clock Poisson counter with criterion $k$ has exactly CDF $F$.
+\end{proposition}
+\begin{proof}
+$P_k$ is strictly increasing from zero to one, so $M_*$ is nondecreasing and $P_k(M_*(u))=F(u)$. This is the time-changed Poisson arrival identity. When $F$ is smooth with positive density away from onset, its clock has event rate
+\begin{equation}
+ M_*'(u)=\frac{f(u)}{M_*(u)^{k-1}\e^{-M_*(u)}/\Gamma(k)}.
+\end{equation}
+If $F(\infty)=h<1$, the clock ends at $P_k^{-1}(h)$; otherwise it is unbounded.
+\end{proof}
+This construction includes the quorum criterion mixture. Applying it separately to each independent racer preserves every marginal survivor and subdensity, hence the complete joint choice--time likelihood and omission probability. It does not preserve internal count histories or necessarily satisfy restrictions linking rates across alternatives or experimental conditions. The result is a distributional construction, not evidence that Smith and Van Zandt's specific psychological applications used these clocks. It establishes why one marginal response-time distribution cannot identify Gamma intensity mixing against an unrestricted deterministic clock.
+
+\subsection{Rate dependence and the Ratcliff--Smith comparison}
+Ratcliff and Smith \cite{RatcliffSmith2004} varied rates by allocating a fixed total between two counters:
+\begin{equation}
+ B\sim\BetaDist(a,b),\qquad L_1=rB,\qquad L_2=r(1-B).
+\end{equation}
+Thus $\operatorname{Cov}(L_1,L_2)=-r^2\Var(B)$. Their model also included nondecision variability and rectangular or offset-geometric criterion variation. Their Appendix combines a common criterion offset with both response criteria. Independent Gamma-rate racers and independent two-state criterion draws make different joint assumptions. The complete model they examined is therefore not an exact submodel of the independent quorum race.
+
+Their counter fits had difficulty with distributional shape and speed--accuracy error patterns; geometric criteria improved on rectangular criteria without resolving the comparison. These findings concern their specified mechanisms and constraints. They neither settle the performance of this broader family nor establish that its extra flexibility resolves those empirical difficulties. That requires a comparison under explicit restrictions across conditions.
+
+There is a useful mathematical bridge between the rate specifications. For independent $L_1\sim\GammaDist(a,\text{rate }b_0)$ and $L_2\sim\GammaDist(b,\text{rate }b_0)$,
+\begin{equation}
+ \frac{L_1}{L_1+L_2}\sim\BetaDist(a,b),\qquad
+ L_1+L_2\sim\GammaDist(a+b,\text{rate }b_0),
+\end{equation}
+and proportion and total are independent. Conditioning this total to be $r$ produces the fixed-total Beta allocation. Without that conditioning the total varies, allowing both racers to be fast or slow together. This bridge concerns common-rate Gamma distributions; it is not a general equivalence of arbitrary Gamma-rate races and fixed-total allocations.
+
+\subsection{Discriminating mechanisms across experimental conditions}
+Van Zandt, Colonius, and Proctor \cite{VanZandtColoniusProctor2000} compared Poisson race and diffusion models under response deadlines, response-frequency manipulations, and stimulus eccentricity. They found that constrained race models could account for their perceptual-matching data at least as well as the diffusion model. Ratcliff and Smith \cite{RatcliffSmith2004} challenged aspects of the deadline comparison, including how deadline-controlled responding was modeled. Together these studies motivate treating experimental constraints and the observation rule as part of a model comparison.
+
+A useful speed--accuracy comparison holds the stimulus-to-rate relation and its chosen SD or CV restriction constant across instruction conditions, while allowing explicitly motivated changes in criterion or criterion-state probability. Allowing $h$, rate variability, and clock shape to change freely with every instruction would weaken that comparison. Stimulus difficulty and response bias should likewise be assigned to parameters through psychological hypotheses, rather than through whichever changes improve a fit. Distributional evidence should include accuracy, correct and error quantiles, and their changes across conditions, alongside deadline survival or omission information when available.
+
+The family unifies established event-count mechanisms within a tractable first-passage structure. A larger set of possible response-time shapes does not establish a unique account of evidence generation. Exact process identities, finishing-time equivalences, and the dependence assumptions of the race determine which psychological interpretations remain distinguishable. Evidence about intermediate counts or independently constrained temporal processing can address ambiguities that choice and finishing times alone leave unresolved.
+
+\begin{thebibliography}{99}
 \bibitem{LaBerge1962}
-LaBerge, D. (1962). A recruitment model of simple behavior. \emph{Psychometrika}, 27(4), 375--396.
+LaBerge, D. (1962). A recruitment theory of simple behavior. \emph{Psychometrika}, 27(4), 375--396. \href{https://doi.org/10.1007/BF02289645}{doi:10.1007/BF02289645}.
+
+\bibitem{Pike1966}
+Pike, A.~R. (1966). Stochastic models of choice behaviour: Response probabilities and latencies of finite Markov chain systems. \emph{British Journal of Mathematical and Statistical Psychology}, 19(1), 15--32. \href{https://doi.org/10.1111/j.2044-8317.1966.tb00351.x}{doi:10.1111/j.2044-8317.1966.tb00351.x}.
+
+\bibitem{Pike1973}
+Pike, R. (1973). Response latency models for signal detection. \emph{Psychological Review}, 80(1), 53--68. \href{https://doi.org/10.1037/h0033871}{doi:10.1037/h0033871}.
 
 \bibitem{TownsendAshby1983}
 Townsend, J.~T., \& Ashby, F.~G. (1983). \emph{The Stochastic Modeling of Elementary Psychological Processes}. Cambridge University Press.
 
-\bibitem{RatcliffSmith2004}
-Ratcliff, R., \& Smith, P.~L. (2004). A comparison of sequential sampling models for two-choice reaction time. \emph{Psychological Review}, 111(2), 333--367.
-\end{thebibliography}
+\bibitem{Wasserman1983}
+Wasserman, S. (1983). Distinguishing between stochastic models of heterogeneity and contagion. \emph{Journal of Mathematical Psychology}, 27(2), 201--215. \href{https://doi.org/10.1016/0022-2496(83)90043-3}{doi:10.1016/0022-2496(83)90043-3}.
 
+\bibitem{SmithVanZandt2000}
+Smith, P.~L., \& Van Zandt, T. (2000). Time-dependent Poisson counter models of response latency in simple judgment. \emph{British Journal of Mathematical and Statistical Psychology}, 53(2), 293--315. \href{https://doi.org/10.1348/000711000159349}{doi:10.1348/000711000159349}.
+
+\bibitem{VanZandtColoniusProctor2000}
+Van Zandt, T., Colonius, H., \& Proctor, R.~W. (2000). A comparison of two response time models applied to perceptual matching. \emph{Psychonomic Bulletin \& Review}, 7(2), 208--256. \href{https://doi.org/10.3758/BF03212980}{doi:10.3758/BF03212980}.
+
+\bibitem{RatcliffSmith2004}
+Ratcliff, R., \& Smith, P.~L. (2004). A comparison of sequential sampling models for two-choice reaction time. \emph{Psychological Review}, 111(2), 333--367. \href{https://doi.org/10.1037/0033-295X.111.2.333}{doi:10.1037/0033-295X.111.2.333}.
+\end{thebibliography}
 \end{document}

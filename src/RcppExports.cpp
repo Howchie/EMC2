@@ -1722,6 +1722,37 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dopr
+NumericVector dopr(NumericVector t, NumericVector K, NumericVector lambda_p, NumericVector lambda_m, bool log_out);
+RcppExport SEXP _EMC2_dopr(SEXP tSEXP, SEXP KSEXP, SEXP lambda_pSEXP, SEXP lambda_mSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda_p(lambda_pSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda_m(lambda_mSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dopr(t, K, lambda_p, lambda_m, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// popr
+NumericVector popr(NumericVector t, NumericVector K, NumericVector lambda_p, NumericVector lambda_m, bool lower_tail, bool log_out);
+RcppExport SEXP _EMC2_popr(SEXP tSEXP, SEXP KSEXP, SEXP lambda_pSEXP, SEXP lambda_mSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda_p(lambda_pSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda_m(lambda_mSEXP);
+    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(popr(t, K, lambda_p, lambda_m, lower_tail, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pwald
 double pwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess, bool posdrift, double erlang_omega);
 RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP, SEXP posdriftSEXP, SEXP erlang_omegaSEXP) {
@@ -2649,6 +2680,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     rcpp_result_gen = Rcpp::wrap(rfrq_cpp(pars, lR_levels, ok));
+    return rcpp_result_gen;
+END_RCPP
+}
+// ropr_cpp
+Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int chart);
+RcppExport SEXP _EMC2_ropr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP chartSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< int >::type chart(chartSEXP);
+    rcpp_result_gen = Rcpp::wrap(ropr_cpp(pars, lR_levels, ok, chart));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3846,6 +3891,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pleakyba", (DL_FUNC) &_EMC2_pleakyba, 9},
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 7},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 7},
+    {"_EMC2_dopr", (DL_FUNC) &_EMC2_dopr, 5},
+    {"_EMC2_popr", (DL_FUNC) &_EMC2_popr, 6},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 13},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 13},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},
@@ -3899,6 +3946,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rbawr_cpp", (DL_FUNC) &_EMC2_rbawr_cpp, 5},
     {"_EMC2_rbawdp_cpp", (DL_FUNC) &_EMC2_rbawdp_cpp, 5},
     {"_EMC2_rfrq_cpp", (DL_FUNC) &_EMC2_rfrq_cpp, 3},
+    {"_EMC2_ropr_cpp", (DL_FUNC) &_EMC2_ropr_cpp, 4},
     {"_EMC2_rfrqfade_cpp", (DL_FUNC) &_EMC2_rfrqfade_cpp, 3},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
     {"_EMC2_rrdmswtn_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_drift_corr_cpp, 4},

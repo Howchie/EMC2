@@ -9,6 +9,7 @@
 #include "drift_factor.h"
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
+#include "model_OPR.h"
 #include "model_BTAwL.h"
 #include "ddm_functions_inline.h"
 #include "time_warp.h"
@@ -1404,6 +1405,46 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double a = pars(r, iac);
     if (!frq_accel_ok(a)) continue;
     dt[r] = frq_accel_unwarp(frq_draw_decision(s), a);
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// Opponent Poisson race simulator.  pars columns: K, the rate chart, t0;
+// chart 0 is (v, rho), chart 1 is (lambda_p, lambda_m), chart 2 is
+// (v, lambda0).  Each decision time
+// is drawn by inverting the analytic survivor (opr::draw_decision); +Inf is
+// an accumulator that never finishes.
+// [[Rcpp::export]]
+Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                    Rcpp::LogicalVector ok, int chart) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("ropr_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("ropr_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const char* c1 = chart == 1 ? "lambda_p" : "v";
+  const char* c2 = chart == 0 ? "rho" : (chart == 1 ? "lambda_m" : "lambda0");
+  for (const char* nm : {"K", c1, c2, "t0"})
+    if (!ci.count(nm)) Rcpp::stop("ropr_cpp: missing parameter column '%s'.", nm);
+  const int ik = ci.at("K"), i1 = ci.at(c1), i2 = ci.at(c2), it0 = ci.at("t0");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r] || !R_FINITE(t0col[r])) continue;
+    double a, b;
+    opr::chart_rates(chart, pars(r, i1), pars(r, i2), &a, &b);
+    const double d = opr::draw_decision(pars(r, ik), a, b);
+    dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

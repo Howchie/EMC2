@@ -197,6 +197,16 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   rFRQ(lR, pars, ok = ok)
 }
 
+.rfun_OPR <- function(lR, pars, chart, ok = rep(TRUE, length(lR))) {
+  if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+  if (.use_cpp_rfun()) {
+    res <- ropr_cpp(pars, levels(lR), ok, chart)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rOPR(lR, pars, ok = ok)
+}
+
 .rfun_FRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   if (.use_cpp_rfun()) {
     res <- rfrqfade_cpp(pars, levels(lR), ok)

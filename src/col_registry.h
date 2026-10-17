@@ -494,6 +494,27 @@ namespace frq_accel {
 // R/model_FRQfade.R — FRQfade: the FRQ counter at h = 1 on the fading time
 // (1 - exp(-kappa u)) / kappa; h is derived.  plo and clock are REQUIRED
 // columns for the same positional reason as FRQ's.
+// R/model_OPR.R — opponent Poisson race.  Columns 1-2 are the rate chart:
+// (v, rho) with lambda+ = (1 + rho) v, lambda- = rho v; (lambda_p, lambda_m)
+// directly under OPR(parameterization = "rates"); or (v, lambda0) with
+// lambda+ = v + lambda0, lambda- = lambda0 under "background".  The charts
+// share the positions; ctx->opr_chart selects the mapping.
+namespace opr {
+  enum : int { K = 0, r1, r2, t0, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"K", "v", "rho", "t0"};
+    return {n, N_REQ, "OPR"};
+  }
+  inline ColSpec spec_rates() {
+    static const char* n[] = {"K", "lambda_p", "lambda_m", "t0"};
+    return {n, N_REQ, "OPR_RATES"};
+  }
+  inline ColSpec spec_background() {
+    static const char* n[] = {"K", "v", "lambda0", "t0"};
+    return {n, N_REQ, "OPR_BG"};
+  }
+}
+
 namespace frq_fade {
   enum : int { K = 0, v, sv, kappa, t0, plo, clock, N_REQ };
   inline ColSpec spec() {

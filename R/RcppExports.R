@@ -395,6 +395,14 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift, log_out)
 }
 
+dopr <- function(t, K, lambda_p, lambda_m, log_out = FALSE) {
+    .Call(`_EMC2_dopr`, t, K, lambda_p, lambda_m, log_out)
+}
+
+popr <- function(t, K, lambda_p, lambda_m, lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_popr`, t, K, lambda_p, lambda_m, lower_tail, log_out)
+}
+
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
     .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift, erlang_omega)
 }
@@ -605,6 +613,10 @@ rbawdp_cpp <- function(pars, lR_levels, ok, launch, posdrift) {
 
 rfrq_cpp <- function(pars, lR_levels, ok) {
     .Call(`_EMC2_rfrq_cpp`, pars, lR_levels, ok)
+}
+
+ropr_cpp <- function(pars, lR_levels, ok, chart) {
+    .Call(`_EMC2_ropr_cpp`, pars, lR_levels, ok, chart)
 }
 
 rfrqfade_cpp <- function(pars, lR_levels, ok) {

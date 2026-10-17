@@ -280,6 +280,9 @@ struct ContextForRaceModels {
     // c_log_likelihood_frq_shared() (frq_shared_likelihood.h).
     int frq_shared = 0;
 
+    // OPR rate chart: 0 = (v, rho), 1 = (lambda_p, lambda_m), 2 = (v, lambda0).
+    int opr_chart = 0;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;

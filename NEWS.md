@@ -1,6 +1,15 @@
 # EMC2 3.4.0
 ## Development
 
+-   **New model `OPR()`:** the opponent Poisson race. Each accumulator
+    counts positive minus negative Poisson events to a continuous
+    criterion `K`, with the exact Bessel first-passage density and the
+    noncentral chi-squared CDF evaluated analytically in the compiled
+    likelihood. `parameterization = "ratio"` (default) samples the net
+    rate `v` and opposing-activity ratio `rho`; `"background"` samples `v`
+    and a background rate `lambda0` in both streams; `"rates"` samples
+    `lambda_p` and `lambda_m` directly and allows defective accumulators.
+
 -   **Bounds are part of the transform (model change):** a declared bound
     side that the transform can represent now sets the transform's limit,
     so the sampler maps the whole real line inside the bound instead of
