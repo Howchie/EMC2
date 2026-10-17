@@ -65,6 +65,18 @@ test_that("the log survivor keeps its digits deep in the upper tail", {
   }
 })
 
+test_that("the log CDF keeps its digits at the leading edge", {
+  for (cs in list(c(2.5, 3, 1), c(1, 15, 5), c(4, 10, 20), c(1.3, 10, 8))) {
+    K <- cs[1]; a <- cs[2]; b <- cs[3]
+    for (u in c(1e-3, 1e-6, 1e-9)) {
+      ref <- integrate(function(x) EMC2:::dopr(x, K, a, b), 0, u,
+                       rel.tol = 1e-12, abs.tol = 0)$value
+      expect_equal(EMC2:::popr(u, K, a, b, log_out = TRUE), log(ref),
+                   tolerance = 1e-9, info = paste(c(cs, u), collapse = "/"))
+    }
+  }
+})
+
 test_that("defective accumulators satisfy f(u; a, b) = h f(u; b, a)", {
   u <- c(.05, .3, 1, 3)
   K <- 2.7; a <- 6; b <- 11

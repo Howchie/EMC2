@@ -24,7 +24,12 @@
 // terms past the peak are below rounding.  Everything is carried on a running
 // log scale, so neither sum under- or overflows in the far tail.
 //
-// The survivor sums are used only for a >= b.  For a < b the completion
+// Below its median the CDF is the positive sum
+// F = sum_j Pois(j; bu) P(K+j, au) + B, formed by the same downward
+// recurrence as B, so log F keeps its relative digits at the leading edge
+// where 1 - S would round to zero.
+//
+// The survivor and CDF sums are used only for a >= b.  For a < b the completion
 // probability is h = (a/b)^K and f(u; a, b) = h f(u; b, a), so
 // S(u; a, b) = (1 - h) + h S(u; b, a) keeps the defective atom exact and
 // the subtraction A - B always in the proper regime.
@@ -282,33 +287,32 @@ inline ScaledSum sum_A(const State& s, double lam, double x, double log_lam,
   return {L, sum};
 }
 
-// sum_j Pois(j; x) P(K+1+j, lam), downward from above its peak.  The peak
-// lies below both the Poisson mode x and the peak of
-// Pois(j; x) g(K+1+j; lam).
-inline ScaledSum sum_B(const State& s, double lam, double x, double log_lam,
-                       double log_x) {
-  const double K = s.K;
-  const double K1 = K + 1.0;
-  const double jg = 0.5 * (std::sqrt(K1 * K1 + 4.0 * x * lam) - K1);
-  const double m = std::fmin(x, jg);
+// sum_j Pois(j; m_p) P(K+n0+j, z), downward from above its peak.  The peak
+// lies below both the Poisson mode m_p and the peak of
+// Pois(j; m_p) g(K+n0-1+j; z).
+inline ScaledSum sum_P(const State& s, double n0, double m_p, double log_mp,
+                       double z, double log_z) {
+  const double o = s.K + n0;
+  const double jg = 0.5 * (std::sqrt(o * o + 4.0 * m_p * z) - o);
+  const double m = std::fmin(m_p, jg);
   const double j1 = std::ceil(m + kWidth * std::sqrt(m) + 5.0);
-  // P(K+1+j1, lam) and g(K+j1; lam) share log Gamma(K+1+j1).
-  const double lg1 = lgam_K(s, j1 + 1.0);
+  // P(o+j1, z) and g(o-1+j1; z) share log Gamma(o+j1).
+  const double lg1 = lgam_K(s, j1 + n0);
   double log_p1;
-  gamma_log_pq_fast(K1 + j1, lam, log_lam, lg1, &log_p1, nullptr);
-  const double log_e1 = log_g(K + j1, lam, log_lam, lg1);
+  gamma_log_pq_fast(o + j1, z, log_z, lg1, &log_p1, nullptr);
+  const double log_e1 = log_g(o - 1.0 + j1, z, log_z, lg1);
   const double top = std::fmax(log_p1, log_e1);
-  double L = log_pois(j1, x, log_x) + top;
+  double L = log_pois(j1, m_p, log_mp) + top;
   if (!R_FINITE(L)) return {R_NegInf, 0.0};
   double tB = 1.0, tE = 1.0;
   if (log_p1 < top) tB = std::exp(log_p1 - top); else tE = std::exp(log_e1 - top);
   double sum = tB;
   double prev = tB;
-  const double inv_x = 1.0 / x;
-  const double inv_xl = 1.0 / (x * lam);
+  const double inv_m = 1.0 / m_p;
+  const double inv_mz = 1.0 / (m_p * z);
   for (double j = j1; j > 0.0; j -= 1.0) {
-    tB = j * inv_x * (tB + tE);
-    tE *= j * (K + j) * inv_xl;
+    tB = j * inv_m * (tB + tE);
+    tE *= j * (o - 1.0 + j) * inv_mz;
     sum += tB;
     if (j - 1.0 < m && tB <= prev && tB < kTermEps * sum) break;
     prev = tB;
@@ -327,13 +331,31 @@ inline double log_surv_proper(double u, const State& s) {
   const double log_x = s.log_a + log_u, log_lam = s.log_b + log_u;
   const ScaledSum A = sum_A(s, lam, x, log_lam, log_x);
   if (!(A.L > R_NegInf) || !(A.sum > 0.0)) return R_NegInf;
-  const ScaledSum B = sum_B(s, lam, x, log_lam, log_x);
+  const ScaledSum B = sum_P(s, 1.0, x, log_x, lam, log_lam);
   // S = A - B = exp(A.L) (A.sum - B.sum exp(K log(a/b) + B.L - A.L)).
   const double rB = (B.L > R_NegInf)
     ? B.sum * std::exp(s.K * (s.log_a - s.log_b) + B.L - A.L) : 0.0;
   const double d = A.sum - rB;
   if (!(d > 0.0)) return R_NegInf;
   return A.L + std::log(d);
+}
+
+// log F(u) of a proper accumulator (a >= b > 0), u finite and positive.
+// Below F = 1/2 the positive sum F = sum_j Pois(j; bu) P(K+j, au) + (a/b)^K B
+// keeps relative accuracy however small F is; above it 1 - S is the more
+// accurate.
+inline double log_cdf_proper(double u, const State& s) {
+  const double x = s.a * u, lam = s.b * u;
+  const double log_u = std::log(u);
+  const double log_x = s.log_a + log_u, log_lam = s.log_b + log_u;
+  const ScaledSum C = sum_P(s, 0.0, lam, log_lam, x, log_x);
+  const ScaledSum B = sum_P(s, 1.0, x, log_x, lam, log_lam);
+  const double lC = (C.L > R_NegInf) ? C.L + std::log(C.sum) : R_NegInf;
+  const double lB = (B.L > R_NegInf)
+    ? s.K * (s.log_a - s.log_b) + B.L + std::log(B.sum) : R_NegInf;
+  const double lF = log_sum_exp(lC, lB);
+  if (lF < -M_LN2) return lF;
+  return log1m_exp(log_surv_proper(u, s));
 }
 
 // log S(u) = log P(U > u), including the never-finish atom.
@@ -359,8 +381,13 @@ inline double log_surv(double u, const State& s) {
 inline double log_cdf(double u, const State& s) {
   if (!(u > 0.0)) return R_NegInf;
   if (u == R_PosInf) return s.log_h;
-  if (s.a < s.b) return s.log_h + log1m_exp(log_surv(u, swapped(s)));
-  return log1m_exp(log_surv(u, s));
+  if (s.b == 0.0) {
+    double lp;
+    gamma_log_pq_fast(s.K, s.a * u, s.log_a + std::log(u), s.lgK, &lp, nullptr);
+    return lp;
+  }
+  if (s.a < s.b) return s.log_h + log_cdf_proper(u, swapped(s));
+  return log_cdf_proper(u, s);
 }
 
 // Scalar forms for callers that hold no State.
