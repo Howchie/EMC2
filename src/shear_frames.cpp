@@ -13,13 +13,24 @@ Rcpp::List emc_shear_frames_cpp(const arma::cube& prec, const arma::mat& lin,
   arma::cube R(p, p, n);
   arma::vec logdet(n);
   arma::mat Q, Rs;
-  arma::vec rhs;
+  arma::vec rhs, z, centre;
+  if (!Vi.is_finite() || !Vi_mu.is_finite())
+    return Rcpp::List::create(Rcpp::Named("ok") = false);
   for (arma::uword s = 0; s < n; ++s) {
     Q = prec.slice(s) + Vi;
-    if (!arma::chol(Rs, Q)) return Rcpp::List::create(Rcpp::Named("ok") = false);
+    if (!Q.is_finite() || !arma::chol(Rs, Q))
+      return Rcpp::List::create(Rcpp::Named("ok") = false);
     R.slice(s) = Rs;
     rhs = lin.col(s) + Vi_mu;
-    m.col(s) = arma::solve(arma::trimatu(Rs), arma::solve(arma::trimatl(Rs.t()), rhs));
+    // A pseudo-inverse can discard directions in an extreme log-sd
+    // probe yet return finite centres. The transport requires the actual
+    // conditional frame: report failure instead of accepting that fallback.
+    if (!rhs.is_finite() ||
+        !arma::solve(z, arma::trimatl(Rs.t()), rhs, arma::solve_opts::no_approx) ||
+        !arma::solve(centre, arma::trimatu(Rs), z, arma::solve_opts::no_approx) ||
+        !centre.is_finite())
+      return Rcpp::List::create(Rcpp::Named("ok") = false);
+    m.col(s) = centre;
     logdet(s) = arma::sum(arma::log(Rs.diag()));
   }
   return Rcpp::List::create(Rcpp::Named("ok") = true, Rcpp::Named("m") = m,

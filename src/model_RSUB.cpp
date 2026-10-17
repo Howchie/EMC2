@@ -1,6 +1,7 @@
 // Racing subordinator adapters and R-callable kernels.  The math lives in
 // model_RSUB.h, which model_rng.cpp also includes for the simulator.
 
+#include <initializer_list>
 #include "utility_functions.h"
 #include "model_RSUB.h"
 #include "race_contract.h"
@@ -38,22 +39,30 @@ static inline double rsub_pick(const NumericVector& x, int i) {
   return x.size() == 1 ? x[0] : x[i];
 }
 
+static inline int rsub_len(std::initializer_list<int> sizes) {
+  int n = 0;
+  for (int k : sizes) if (k == 0) return 0; else if (k > n) n = k;
+  return n;
+}
+
 // [[Rcpp::export]]
 NumericVector drsub(NumericVector t, NumericVector v, NumericVector B,
                     NumericVector A, NumericVector s, bool packets = false,
                     bool log_out = false) {
-  const int n = t.size();
+  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size())});
+  rsub_check_len(t, n, "t");
   rsub_check_len(v, n, "v");
   rsub_check_len(B, n, "B");
   rsub_check_len(A, n, "A");
   rsub_check_len(s, n, "s");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
+    const double ti = rsub_pick(t, i);
     const double vi = rsub_pick(v, i), Bi = rsub_pick(B, i),
                  Ai = rsub_pick(A, i), si = rsub_pick(s, i);
     double lp;
-    if (ISNAN(t[i]) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
-    else lp = rsub_log_pdf(packets, t[i], vi, Bi, Ai, si);
+    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
+    else lp = rsub_log_pdf(packets, ti, vi, Bi, Ai, si);
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;
@@ -65,19 +74,21 @@ NumericVector drsub(NumericVector t, NumericVector v, NumericVector B,
 NumericVector prsub(NumericVector t, NumericVector v, NumericVector B,
                     NumericVector A, NumericVector s, bool packets = false,
                     bool lower_tail = true, bool log_out = false) {
-  const int n = t.size();
+  const int n = rsub_len({static_cast<int>(t.size()), static_cast<int>(v.size()), static_cast<int>(B.size()), static_cast<int>(A.size()), static_cast<int>(s.size())});
+  rsub_check_len(t, n, "t");
   rsub_check_len(v, n, "v");
   rsub_check_len(B, n, "B");
   rsub_check_len(A, n, "A");
   rsub_check_len(s, n, "s");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
+    const double ti = rsub_pick(t, i);
     const double vi = rsub_pick(v, i), Bi = rsub_pick(B, i),
                  Ai = rsub_pick(A, i), si = rsub_pick(s, i);
     double lp;
-    if (ISNAN(t[i]) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
-    else lp = lower_tail ? rsub_log_cdf(packets, t[i], vi, Bi, Ai, si)
-                         : rsub_log_surv(packets, t[i], vi, Bi, Ai, si);
+    if (ISNAN(ti) || !rsub::pars_ok(vi, Bi, Ai, si)) lp = R_NaN;
+    else lp = lower_tail ? rsub_log_cdf(packets, ti, vi, Bi, Ai, si)
+                         : rsub_log_surv(packets, ti, vi, Bi, Ai, si);
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;

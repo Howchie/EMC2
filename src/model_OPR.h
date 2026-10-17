@@ -1,7 +1,7 @@
 #ifndef EMC2_MODEL_OPR_H
 #define EMC2_MODEL_OPR_H
 
-// Opponent Poisson race (Math/Opponent_Poisson_Race.md).
+// Opponent Poisson race (Math/CounterAndQuorumModels.tex, sec:opponent).
 //
 // Accumulator evidence X(u) = N+(u) - N-(u), with independent Poisson streams
 // of rates a = lambda+ > 0 and b = lambda- >= 0, finishing at the continuous
@@ -29,6 +29,16 @@
 // recurrence as B, so log F keeps its relative digits at the leading edge
 // where 1 - S would round to zero.
 //
+// Where z = 2u sqrt(ab) is large enough for the Hankel expansion of I_K,
+// that expansion is integrated term by term from u to Inf instead,
+//
+//   S(u) = K (a/b)^(K/2) e^{-cu} (2 pi z)^{-1/2} sum_k (-1)^k a_k(K) z^-k e^{cu} E_{3/2+k}(cu),
+//
+// c = (sqrt a - sqrt b)^2 and E_p the generalised exponential integral: a
+// fixed handful of terms however large the rates, and no A - B cancellation
+// near a = b.  Where b u is too small to move S or F by a rounding unit the
+// accumulator is the Gamma(K, a) first passage.
+//
 // The survivor and CDF sums are used only for a >= b.  For a < b the completion
 // probability is h = (a/b)^K and f(u; a, b) = h f(u; b, a), so
 // S(u; a, b) = (1 - h) + h S(u; b, a) keeps the defective atom exact and
@@ -53,8 +63,8 @@
 namespace opr {
 
 constexpr double kTermEps = 1e-18;       // relative cutoff for a series term
-constexpr double kRescale = 1e250;       // running-scale renormalisation point
-constexpr double kLogRescale = 575.6462732485114;  // log(1e250)
+constexpr double kRescale = 1e200;       // running-scale renormalisation point
+constexpr double kLogRescale = 460.51701859880916;  // log(1e200)
 constexpr double kWidth = 9.0;           // sweep margin, in Poisson SDs
 constexpr int kMaxTerms = 200000;
 
@@ -159,14 +169,17 @@ inline double log_density_series(const State& s, double lam, double x,
   double sum = 1.0;
   double term = 1.0;
   int n = 0;
+  bool done = false;
   for (double j = jp; n < kMaxTerms; j += 1.0, ++n) {
     term *= lx / ((j + 1.0) * (K + j + 1.0));
     sum += term;
-    if (term < kTermEps * sum) break;
+    if (term < kTermEps * sum) { done = true; break; }
   }
+  if (!done) return R_NaN;
   term = 1.0;
   n = 0;
-  for (double j = jp; j > 0.0 && n < kMaxTerms; j -= 1.0, ++n) {
+  for (double j = jp; j > 0.0; j -= 1.0, ++n) {
+    if (n == kMaxTerms) return R_NaN;
     term *= j * (K + j) / lx;
     sum += term;
     if (term < kTermEps * sum) break;
@@ -193,6 +206,86 @@ inline double log_bessel_i_scaled_hankel(double nu, double z) {
 // Bessel argument above which the Hankel expansion replaces the series.
 inline double hankel_threshold(double K) { return std::fmax(150.0, 4.0 * K * K); }
 
+// (sqrt a - sqrt b)^2, without the cancellation of the root difference.
+inline double rate_gap(double a, double b) {
+  const double r = (a - b) / (std::sqrt(a) + std::sqrt(b));
+  return r * r;
+}
+
+// e^x E_p(x) for p = 3/2 + k, k = 0..n-1, x >= 0.  Each recurrence is run in
+// its stable direction: e^x E_{p+1} = (1 - x e^x E_p)/p upward while p > x,
+// and its inverse downward while p < x, from a seed at p ~ x by the Legendre
+// continued fraction (or, for x < 1, from E_{3/2} in closed form).
+inline void scaled_expint_half(double x, int n, double* out) {
+  if (x == 0.0) {
+    for (int k = 0; k < n; ++k) out[k] = 1.0 / (0.5 + k);
+    return;
+  }
+  int k0 = 0;
+  if (x < 1.0) {
+    // e^x E_{3/2}(x) = 2 - 2 sqrt(pi x) e^x erfc(sqrt x).
+    const double erfcx = 2.0 * std::exp(x) * R::pnorm(-std::sqrt(2.0 * x), 0.0, 1.0, 1, 0);
+    out[0] = 2.0 - 2.0 * std::sqrt(M_PI * x) * erfcx;
+  } else {
+    k0 = static_cast<int>(std::floor(x - 1.5));
+    if (k0 < 0) k0 = 0;
+    if (k0 > n - 1) k0 = n - 1;
+    const double p = 1.5 + k0;
+    double b = x + p, c = 1e300, d = 1.0 / b, h = d;
+    for (int i = 1; i < 500; ++i) {
+      const double an = -i * (p - 1.0 + i);
+      b += 2.0;
+      d = 1.0 / (an * d + b);
+      c = b + an / c;
+      const double del = c * d;
+      h *= del;
+      if (std::fabs(del - 1.0) < 3e-16) break;  // clear of one ulp of 1.0
+    }
+    out[k0] = h;
+  }
+  for (int k = k0 - 1; k >= 0; --k) out[k] = (1.0 - (1.5 + k) * out[k + 1]) / x;
+  for (int k = k0 + 1; k < n; ++k) out[k] = (1.0 - x * out[k - 1]) / (0.5 + k);
+}
+
+// log S(u) of a proper accumulator (a >= b > 0) from the Hankel expansion of
+// I_K integrated over (u, Inf), for z = 2u sqrt(ab) above hankel_threshold(K),
+// where it holds at every later time too.  The series is cut where the Hankel
+// terms themselves stop falling or drop below rounding; the exponential
+// integrals only shrink with k, so the integrated terms are smaller still.
+inline double log_surv_hankel(double u, const State& s) {
+  const double K = s.K;
+  const double z = 2.0 * u * std::sqrt(s.a * s.b);
+  const double cu = rate_gap(s.a, s.b) * u;
+  constexpr int kMax = 64;
+  double t[kMax];
+  const double mu = 4.0 * K * K;
+  t[0] = 1.0;
+  int n = 1;
+  double tsum = 1.0;
+  for (; n < kMax; ++n) {
+    const double odd = 2.0 * n - 1.0;
+    const double next = -t[n - 1] * (mu - odd * odd) / (8.0 * n * z);
+    if (std::fabs(next) >= std::fabs(t[n - 1])) break;
+    t[n] = next;
+    tsum += next;
+    if (std::fabs(next) < 1e-17 * std::fabs(tsum)) { ++n; break; }
+  }
+  double e[kMax];
+  scaled_expint_half(cu, n, e);
+  double sum = 0.0;
+  for (int k = n - 1; k >= 0; --k) sum += t[k] * e[k];
+  if (!(sum > 0.0)) return R_NaN;
+  return s.log_K + 0.5 * K * (s.log_a - s.log_b) - cu -
+         0.5 * std::log(2.0 * M_PI * z) + std::log(sum);
+}
+
+// True where b u is too small to change S or F of the Gamma(K, a) first
+// passage by a rounding unit: a negative event before u has probability
+// ~bu and moves the tail by a relative ~bu(1 + au).
+inline bool gamma_limit(double u, const State& s) {
+  return s.b * u * (1.0 + s.a * u) < 1e-18;
+}
+
 // log f(u) for the decision time u > 0.
 inline double log_pdf(double u, const State& s) {
   if (!(u > 0.0)) return R_NegInf;
@@ -205,9 +298,8 @@ inline double log_pdf(double u, const State& s) {
   const double lam = s.b * u;
   const double z = 2.0 * u * std::sqrt(s.a * s.b);
   if (z > hankel_threshold(s.K)) {
-    const double d = std::sqrt(s.a) - std::sqrt(s.b);
     return s.log_K - log_u + 0.5 * s.K * (s.log_a - s.log_b) -
-           d * d * u + log_bessel_i_scaled_hankel(s.K, z);
+           rate_gap(s.a, s.b) * u + log_bessel_i_scaled_hankel(s.K, z);
   }
   return s.log_K - log_u +
          log_density_series(s, lam, x, s.log_b + log_u, s.log_a + log_u);
@@ -272,7 +364,8 @@ inline ScaledSum sum_A(const State& s, double lam, double x, double log_lam,
   double prev = tA;
   const double lx = lam * x;
   int n = 0;
-  for (double j = j0; n < kMaxTerms; j += 1.0, ++n) {
+  for (double j = j0;; j += 1.0, ++n) {
+    if (n == kMaxTerms) return {R_NaN, R_NaN};  // never reached the bulk
     const double inv = 1.0 / (j + 1.0);
     tA = lam * inv * (tA + tD);
     tD *= lx * inv / (K + j + 1.0);
@@ -310,7 +403,9 @@ inline ScaledSum sum_P(const State& s, double n0, double m_p, double log_mp,
   double prev = tB;
   const double inv_m = 1.0 / m_p;
   const double inv_mz = 1.0 / (m_p * z);
-  for (double j = j1; j > 0.0; j -= 1.0) {
+  int n = 0;
+  for (double j = j1; j > 0.0; j -= 1.0, ++n) {
+    if (n == kMaxTerms) return {R_NaN, R_NaN};
     tB = j * inv_m * (tB + tE);
     tE *= j * (o - 1.0 + j) * inv_mz;
     sum += tB;
@@ -324,38 +419,66 @@ inline ScaledSum sum_P(const State& s, double n0, double m_p, double log_mp,
   return {L, sum};
 }
 
+// The Gamma(K, a) first passage: log Q(K, au) (upper) or log P(K, au).
+inline double log_gamma_tail(double u, const State& s, bool upper) {
+  double lp, lq;
+  gamma_log_pq_fast(s.K, s.a * u, s.log_a + std::log(u), s.lgK,
+                    upper ? nullptr : &lp, upper ? &lq : nullptr);
+  return upper ? lq : lp;
+}
+
+// log of (a/b)^K B, B = sum_j Pois(j; au) P(K+1+j, bu).
+inline double log_B_term(const State& s, double x, double log_x, double lam,
+                         double log_lam) {
+  const ScaledSum B = sum_P(s, 1.0, x, log_x, lam, log_lam);
+  if (ISNAN(B.L)) return R_NaN;
+  return (B.L > R_NegInf)
+    ? s.K * (s.log_a - s.log_b) + B.L + std::log(B.sum) : R_NegInf;
+}
+
+// log S(u) = log(A - B) from the sums, given log((a/b)^K B).
+inline double log_surv_sums(const State& s, double x, double log_x, double lam,
+                            double log_lam, double lB) {
+  const ScaledSum A = sum_A(s, lam, x, log_lam, log_x);
+  if (ISNAN(A.L) || ISNAN(lB)) return R_NaN;
+  if (!(A.L > R_NegInf) || !(A.sum > 0.0)) return R_NegInf;
+  // S = exp(A.L) (A.sum - exp(lB - A.L)).
+  const double d = A.sum - ((lB > R_NegInf) ? std::exp(lB - A.L) : 0.0);
+  if (!(d > 0.0)) return R_NegInf;
+  return A.L + std::log(d);
+}
+
 // log S(u) of a proper accumulator (a >= b > 0), u finite and positive.
 inline double log_surv_proper(double u, const State& s) {
+  if (gamma_limit(u, s)) return log_gamma_tail(u, s, true);
+  if (2.0 * u * std::sqrt(s.a * s.b) > hankel_threshold(s.K))
+    return log_surv_hankel(u, s);
   const double x = s.a * u, lam = s.b * u;
   const double log_u = std::log(u);
   const double log_x = s.log_a + log_u, log_lam = s.log_b + log_u;
-  const ScaledSum A = sum_A(s, lam, x, log_lam, log_x);
-  if (!(A.L > R_NegInf) || !(A.sum > 0.0)) return R_NegInf;
-  const ScaledSum B = sum_P(s, 1.0, x, log_x, lam, log_lam);
-  // S = A - B = exp(A.L) (A.sum - B.sum exp(K log(a/b) + B.L - A.L)).
-  const double rB = (B.L > R_NegInf)
-    ? B.sum * std::exp(s.K * (s.log_a - s.log_b) + B.L - A.L) : 0.0;
-  const double d = A.sum - rB;
-  if (!(d > 0.0)) return R_NegInf;
-  return A.L + std::log(d);
+  return log_surv_sums(s, x, log_x, lam, log_lam,
+                       log_B_term(s, x, log_x, lam, log_lam));
 }
 
 // log F(u) of a proper accumulator (a >= b > 0), u finite and positive.
 // Below F = 1/2 the positive sum F = sum_j Pois(j; bu) P(K+j, au) + (a/b)^K B
 // keeps relative accuracy however small F is; above it 1 - S is the more
-// accurate.
+// accurate.  In the Hankel range F is never small (the walk has spread
+// sqrt(z) >= 2K about a nonnegative drift), so it is 1 - S there.
 inline double log_cdf_proper(double u, const State& s) {
+  if (gamma_limit(u, s)) return log_gamma_tail(u, s, false);
+  if (2.0 * u * std::sqrt(s.a * s.b) > hankel_threshold(s.K))
+    return log1m_exp(log_surv_hankel(u, s));
   const double x = s.a * u, lam = s.b * u;
   const double log_u = std::log(u);
   const double log_x = s.log_a + log_u, log_lam = s.log_b + log_u;
   const ScaledSum C = sum_P(s, 0.0, lam, log_lam, x, log_x);
-  const ScaledSum B = sum_P(s, 1.0, x, log_x, lam, log_lam);
+  const double lB = log_B_term(s, x, log_x, lam, log_lam);
+  if (ISNAN(C.L) || ISNAN(lB)) return R_NaN;
   const double lC = (C.L > R_NegInf) ? C.L + std::log(C.sum) : R_NegInf;
-  const double lB = (B.L > R_NegInf)
-    ? s.K * (s.log_a - s.log_b) + B.L + std::log(B.sum) : R_NegInf;
   const double lF = log_sum_exp(lC, lB);
   if (lF < -M_LN2) return lF;
-  return log1m_exp(log_surv_proper(u, s));
+  return log1m_exp(log_surv_sums(s, x, log_x, lam, log_lam, lB));
 }
 
 // log S(u) = log P(U > u), including the never-finish atom.

@@ -1,6 +1,6 @@
-# Opponent Poisson race (Math/Opponent_Poisson_Race.md).  References are the
-# note's closed forms evaluated with besselI() and pchisq(), and quadrature of
-# the density.
+# Opponent Poisson race (Math/CounterAndQuorumModels.tex, sec:opponent).
+# References are the note's closed forms evaluated with besselI() and
+# pchisq(), and quadrature of the density.
 
 opr_ref_pdf <- function(t, K, a, b) {
   if (b == 0) return(dgamma(t, K, a))
@@ -203,11 +203,15 @@ opr_ref_ll <- function(dadm, pars, LT = 0, UT = Inf) {
   win <- as.logical(dadm$winner)
   ll <- vapply(split(seq_len(nrow(dadm)), trial), function(ix) {
     w <- ix[win[ix]]
-    num <- log(opr_ref_pdf(dadm$rt[w] - t0[w], K[w], r$a[w], r$b[w])) +
-      sum(log(vapply(ix[!win[ix]], function(i) S(dadm$rt[i], i), 0)))
+    # An omission (rt = Inf): every accumulator survives to Inf.
+    num <- if (is.infinite(dadm$rt[ix[1]])) sum(log(vapply(ix, function(i) S(Inf, i), 0))) else
+      log(opr_ref_pdf(dadm$rt[w] - t0[w], K[w], r$a[w], r$b[w])) +
+        sum(log(vapply(ix[!win[ix]], function(i) S(dadm$rt[i], i), 0)))
+    # P(no response before LT) - P(a response in (UT, Inf)); the atom of
+    # never-finishing races stays in the normaliser whatever UT is.
     Z <- prod(vapply(ix, function(i) S(LT, i), 0)) -
-      prod(vapply(ix, function(i) S(UT, i), 0)) +
-      if (is.finite(UT)) prod(vapply(ix, function(i) S(Inf, i), 0)) else 0
+      if (is.finite(UT)) prod(vapply(ix, function(i) S(UT, i), 0)) -
+        prod(vapply(ix, function(i) S(Inf, i), 0)) else 0
     num - log(Z)
   }, numeric(1))
   sum(pmax(ll, log(1e-10)))
@@ -240,6 +244,75 @@ test_that("truncation keeps the defective atom in the normaliser", {
   expect_true(any(r$b > r$a))
   expect_equal(opr_ll(emc, fx$p), opr_ref_ll(dadm, pars, LT, UT),
                tolerance = 1e-8)
+})
+
+test_that("all-defective races, omissions and truncation match the reference", {
+  skip_on_cran()
+  fx <- opr_fixture("rates")
+  # lambda_m > lambda_p in both accumulators: h ~ 0.02 per accumulator.
+  fx$p[c("lambda_m", "lambda_m_lMTRUE")] <- c(log(20), 0.9)
+  for (case in c("plain", "omissions", "LT", "LT+UT")) {
+    d2 <- fx$dat
+    LT <- 0; UT <- Inf
+    if (case == "omissions") {
+      i <- c(3, 7, 11); d2$rt[i] <- Inf; d2$R[i] <- NA
+    }
+    if (case %in% c("LT", "LT+UT")) LT <- 0.3
+    if (case == "LT+UT") UT <- 1.2
+    d2 <- d2[is.infinite(d2$rt) | (d2$rt >= LT & d2$rt <= UT), ]
+    if (LT > 0 || is.finite(UT)) { d2$LT <- LT; d2$UT <- UT }
+    emc <- suppressMessages(make_emc(d2, fx$des, type = "single", n_chains = 1,
+                                     compress = FALSE, rt_resolution = NULL))
+    dadm <- emc[[1]]$data[[1]]
+    pars <- EMC2:::get_pars_matrix_oo(fx$p, dadm, emc[[1]]$model())
+    r <- EMC2:::.opr_rates(pars)
+    expect_true(all(r$b > r$a), info = case)
+    expect_equal(opr_ll(emc, fx$p), opr_ref_ll(dadm, pars, LT, UT),
+                 tolerance = 1e-8, info = case)
+  }
+})
+
+test_that("extreme rates stay finite and exact", {
+  # A negligible opposing rate is the Gamma(K, a) first passage.
+  for (b in c(1e-20, 1e-80, 1e-200, 1e-300)) {
+    expect_equal(EMC2:::popr(0.5, 2.5, 10, b, lower_tail = FALSE, log_out = TRUE),
+                 pgamma(0.5, 2.5, 10, lower.tail = FALSE, log.p = TRUE),
+                 tolerance = 1e-13, info = format(b))
+    expect_equal(EMC2:::popr(0.5, 2.5, 10, b, log_out = TRUE),
+                 pgamma(0.5, 2.5, 10, log.p = TRUE), tolerance = 1e-13, info = format(b))
+  }
+  # Very high and near-critical rates: the survivor is the integrated density
+  # and its derivative is the density.
+  for (cs in list(c(2, 1e8, 1e8, 10), c(2, 1e9, 1e9 - 1e5, 1),
+                  c(1.3, 1e4, 9990, 300), c(6, 400, 380, 3))) {
+    K <- cs[1]; a <- cs[2]; b <- cs[3]; u <- cs[4]
+    f <- function(t) EMC2:::dopr(t, K, a, b)
+    I <- integrate(f, u, Inf, rel.tol = 1e-12)$value
+    expect_equal(EMC2:::popr(u, K, a, b, lower_tail = FALSE, log_out = TRUE),
+                 log(I), tolerance = 1e-10, info = paste(cs, collapse = "/"))
+    h <- u * 1e-5
+    S <- function(t) EMC2:::popr(t, K, a, b, lower_tail = FALSE)
+    expect_equal(-(S(u + h) - S(u - h)) / (2 * h), f(u), tolerance = 1e-8,
+                 info = paste(cs, collapse = "/"))
+  }
+  # Continuity across the switch to the integrated Hankel survivor.
+  for (K in c(1.3, 7)) for (ab in list(c(50, 40), c(400, 400))) {
+    u0 <- max(150, 4 * K^2) / (2 * sqrt(ab[1] * ab[2]))
+    s2 <- EMC2:::popr(u0 * (1 + c(-1e-13, 1e-13)), K, ab[1], ab[2],
+                      lower_tail = FALSE, log_out = TRUE)
+    expect_lt(abs(diff(s2)), 1e-11)
+  }
+})
+
+test_that("the simulator has no spurious omissions at a negligible opposing rate", {
+  set.seed(5)
+  lR <- factor(rep(c("a", "b"), 2000), levels = c("a", "b"))
+  pars <- cbind(K = 2, lambda_p = 10, lambda_m = 1e-100, t0 = 0.2)[rep(1, 4000), ]
+  sim <- EMC2:::ropr_cpp(pars, levels(lR), rep(TRUE, 4000), 1L)
+  expect_true(all(is.finite(sim$rt)))
+  pars_r <- cbind(K = 2, v = 10, rho = 1e-90, t0 = 0.2)[rep(1, 4000), ]
+  sim <- EMC2:::ropr_cpp(pars_r, levels(lR), rep(TRUE, 4000), 0L)
+  expect_true(all(is.finite(sim$rt)))
 })
 
 test_that("OPR exposes the race-model contract", {

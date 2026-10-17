@@ -56,16 +56,20 @@ rRSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, nrow(pars))) {
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
   v <- pars[, "v"]; s <- pars[, "s"]; t0 <- pars[, "t0"]
-  ok <- ok & is.finite(t0) & is.finite(v) & v > 0 & is.finite(s) & s > 0
+  B <- pars[, "B"]; A <- pars[, "A"]
+  ok <- ok & is.finite(t0) & is.finite(v) & v > 0 & is.finite(s) & s > 0 &
+    is.finite(B) & B >= 0 & is.finite(A) & A >= 0 & B + A > 0
   n <- sum(ok)
   dt <- rep(Inf, nrow(pars))
-  d <- pars[ok, "B"] + pars[ok, "A"] * runif(n)
+  d <- B[ok] + A[ok] * runif(n)
   if (packets) {
     c2 <- s[ok]^2
     dt[ok] <- rgamma(n, 1 + rpois(n, 2 * d / c2), rate = 2 * v[ok] / c2)
   } else {
     x <- d / s[ok] + sqrt(d) * rnorm(n)
-    mx <- 0.5 * (x + sqrt(x^2 - 2 * d * log(runif(n))))
+    e <- -2 * d * log(runif(n))
+    r <- sqrt(x^2 + e)
+    mx <- ifelse(x >= 0, 0.5 * (x + r), 0.5 * e / (r - x))
     dt[ok] <- s[ok] * mx / v[ok]
   }
   n_tri <- nrow(pars) / nr

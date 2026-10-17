@@ -115,16 +115,17 @@ test_that("OU, Levy, and RDMSWTN wrappers preserve finite monotone outputs", {
   rdmswtn <- cbind(v = 1.5, b = 1.2, A = .2, t0 = 0, s = 1, sv = .3,
                    lambda_g = 0, lambda_k = 0)
   for (x in list(
-    ROU = list(p = pROU(times, rou), d = dROU(times, rou)),
-    ROUp = list(p = pROUp(times, roup), d = dROUp(times, roup)),
-    RLF = list(p = pRLF(times, rlf), d = dRLF(times, rlf)),
-    RDMSWTN = list(p = pRDMSWTN(times, rdmswtn), d = dRDMSWTN(times, rdmswtn))
+    ROU = list(p = EMC2:::pROU(times, rou), d = EMC2:::dROU(times, rou)),
+    ROUp = list(p = EMC2:::pROUp(times, roup), d = EMC2:::dROUp(times, roup)),
+    RLF = list(p = EMC2:::pRLF(times, rlf), d = EMC2:::dRLF(times, rlf)),
+    RDMSWTN = list(p = EMC2:::pRDMSWTN(times, rdmswtn),
+                   d = EMC2:::dRDMSWTN(times, rdmswtn))
   )) {
     mvp_cdf_pdf_contract(names(x), x$p, x$d, times)
   }
-  expect_equal(pROU(Inf, rou[1, , drop = FALSE]), 1, tolerance = 1e-8)
-  expect_equal(pROUp(Inf, roup[1, , drop = FALSE]), 1, tolerance = 1e-8)
-  expect_equal(pRDMSWTN(Inf, rdmswtn[1, , drop = FALSE]), 1, tolerance = 1e-8)
+  expect_equal(EMC2:::pROU(Inf, rou[1, , drop = FALSE]), 1, tolerance = 1e-8)
+  expect_equal(EMC2:::pROUp(Inf, roup[1, , drop = FALSE]), 1, tolerance = 1e-8)
+  expect_equal(EMC2:::pRDMSWTN(Inf, rdmswtn[1, , drop = FALSE]), 1, tolerance = 1e-8)
 })
 
 test_that("ROUp batched pulse solves agree with scalar solves", {

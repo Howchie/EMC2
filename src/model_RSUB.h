@@ -62,18 +62,19 @@ constexpr double kCancel = 0.99;
 // carry the cancellation of D = 1 - xR and E = R - xD.
 constexpr double kMillsCancel = 0.9;
 constexpr int kGLNodes = 8;
-// log of the smallest probability taken as the complement of its partner,
-// scaled by the share of the partner that survived its end difference.
-constexpr double kComplementFloor = -9.210340371976184;  // log(1e-4)
 
+// v = 0 is valid: the accumulator never finishes.
 inline bool pars_ok(double v, double B, double A, double s) {
-  return R_FINITE(v) && v > 0.0 && R_FINITE(B) && B >= 0.0 &&
+  return R_FINITE(v) && v >= 0.0 && R_FINITE(B) && B >= 0.0 &&
          R_FINITE(A) && A >= 0.0 && B + A > 0.0 && R_FINITE(s) && s > 0.0;
 }
 
 inline double log_diff(double lx, double ly) {  // log(e^lx - e^ly), lx > ly
   return lx + std::log1p(-std::exp(ly - lx));
 }
+
+// min(x, 0) for a log probability, keeping NaN (std::fmin would drop it).
+inline double clamp_log_prob(double x) { return x > 0.0 ? 0.0 : x; }
 
 inline double log_add(double lx, double ly) {
   if (lx < ly) std::swap(lx, ly);
@@ -339,7 +340,7 @@ struct Kernel {
       e.lJc = p.alpha > -kAlphaMax
         ? p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd) +
                             p.wd * mb.D)
-        : std::log(-std::expm1(std::fmin(e.lJ, 0.0)));
+        : std::log(-std::expm1(clamp_log_prob(e.lJ)));
     }
     return e;
   }
@@ -410,6 +411,26 @@ struct Kernel {
     return true;
   }
 
+  // log M(d), M = E[min(G, d)] = m - H = d - L, as the positive sum
+  //   M = m phi(alpha) int_alpha^beta D + d F_d
+  // (the partial mean E[G; G < d] = m [Phi(-alpha) - phi(alpha) R(beta)] plus
+  // d P(G >= d)), so it keeps its digits where H is close to m.
+  static double log_end_M(double m, double d, double s) {
+    if (d <= 0.0) return R_NegInf;
+    const Pt p = point(m, d, s);
+    const Mills mb = mills_seq(p.beta);
+    double lI;  // log [Phi(-alpha) - phi(alpha) R(beta)]
+    if (p.alpha > -kAlphaMax) {
+      lI = p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb, p.wd));
+    } else {
+      lI = std::log(pnorm_std(-p.alpha) - std::exp(p.lphi) * mb.R);
+    }
+    const double lFd = p.alpha >= 0.0
+      ? std::log1p(-std::exp(p.lphi) * (mills_seq(p.alpha).R + mb.R))
+      : p.lphi + std::log(mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb, p.wm));
+    return log_add(std::log(m) + lI, std::log(d) + lFd);
+  }
+
   static double fast_cdf_surv(double m, double B, double A, double s, bool want_S) {
     double H1, L1, H2, L2;
     if (!lin_HL(m, B, s, &H1, &L1) || !lin_HL(m, B + A, s, &H2, &L2)) return R_NaN;
@@ -435,7 +456,10 @@ struct Kernel {
   static double draw(double v, double B, double A, double s) {
     const double d = B + A * R::unif_rand();
     const double x = d / s + std::sqrt(d) * R::norm_rand();
-    const double mx = 0.5 * (x + std::sqrt(x * x - 2.0 * d * std::log(R::unif_rand())));
+    const double e = -2.0 * d * std::log(R::unif_rand());
+    const double r = std::sqrt(x * x + e);
+    // (x + r)/2, as e/(2(r - x)) where x < 0 would cancel against r.
+    const double mx = x >= 0.0 ? 0.5 * (x + r) : 0.5 * e / (r - x);
     return s * mx / v;
   }
 };
@@ -452,6 +476,32 @@ constexpr double kSideFull = -1.0005003335835335e-03;  // log(1 - 1e-3)
 constexpr double kSideFullLin = 1.0 - 1e-3;
 constexpr double kRescale = 1e250;
 constexpr double kLogRescale = 575.6462732485114;  // log(1e250)
+
+// sqrt(a) - sqrt(b) without the cancellation of the root difference.
+inline double root_gap(double a, double b) {
+  const double r = std::sqrt(a) + std::sqrt(b);
+  return r > 0.0 ? (a - b) / r : 0.0;
+}
+
+// Upper tails T(k) = P(X >= k), k = 1..n, of X ~ Pois(lam) into out[0..n-1],
+// in positive arithmetic: as 1 - CDF(k - 1) when the bulk lies beyond n (the
+// CDF there is at most about one half), otherwise as tail sums of the pmf
+// formed relative to Pois(1; lam), whose terms beyond n are summed to
+// rounding first.
+inline void pois_tails(double lam, int n, double* out) {
+  if (!(lam > 0.0)) { for (int k = 0; k < n; ++k) out[k] = 0.0; return; }
+  if (lam >= n) {
+    double p = std::exp(-lam), cdf = 0.0;
+    for (int k = 1; k <= n; ++k) { cdf += p; out[k - 1] = 1.0 - cdf; p *= lam / k; }
+    return;
+  }
+  double w = 1.0;
+  for (int k = 1; k <= n; ++k) { out[k - 1] = w; w *= lam / (k + 1); }
+  double rest = 0.0;  // sum_{j > n} w_j, terms falling by lam/(j + 1) < 1
+  for (int j = n + 1; w > 1e-18 * (rest + out[0]); ++j) { rest += w; w *= lam / (j + 1); }
+  const double p1 = lam * std::exp(-lam);
+  for (int k = n; k >= 1; --k) { rest += out[k - 1]; out[k - 1] = p1 * rest; }
+}
 
 // log(e^-z I_0(z)): the power series sum_k (z^2/4)^k / k!^2 below z = 25,
 // the Hankel expansion above, where its smallest term is ~e^{-2z}.
@@ -803,7 +853,7 @@ struct Skel { double lS, lF, lJ, lJc, lEpos, lEneg; };
 
 inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) {
   const double z = 2.0 * std::sqrt(a * b);
-  const double sd = std::sqrt(a) - std::sqrt(b);
+  const double sd = root_gap(a, b);
   const double gap = std::fabs(a - b);
   // Terms beyond k with (k -/+ gap)^2 - gap^2 > 82 (a + b) are below e^-41
   // of the largest.
@@ -829,9 +879,9 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
     const bool use_hi = !ISNAN(hi.t0);
     if (want1) {
       near1 = lg0(lo.t1);
-      far0 = use_hi ? std::log(hi.t0) : log1m_exp(std::fmin(near1, 0.0));  // excludes 0
+      far0 = use_hi ? std::log(hi.t0) : log1m_exp(clamp_log_prob(near1));  // excludes 0
     }
-    if (want0) far1 = use_hi ? lg0(hi.t1) : log1m_exp(std::fmin(near0, 0.0));
+    if (want0) far1 = use_hi ? lg0(hi.t1) : log1m_exp(clamp_log_prob(near0));
     if (need & kSkelE) {
       nearE = lg0(lo.tE);
       farE = use_hi ? lg0(hi.tE) : log_add(std::log(gap), nearE);
@@ -843,9 +893,9 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
     near0 = lo_a.l0;
     if (want1) {
       near1 = lo_a.l1;
-      far0 = log1m_exp(std::fmin(near1, 0.0));
+      far0 = log1m_exp(clamp_log_prob(near1));
     }
-    if (want0) far1 = log1m_exp(std::fmin(near0, 0.0));
+    if (want0) far1 = log1m_exp(clamp_log_prob(near0));
     if (need & kSkelE) {
       nearE = lo_a.lE;
       farE = log_add(std::log(gap), nearE);
@@ -862,9 +912,9 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
     auto lg = [&](double x) { return x > 0.0 ? lp0 + std::log(x) : R_NegInf; };
     if (want1) {
       near1 = lg(lo.s1);
-      far0 = use_hi ? lp0 + std::log1p(hi.s1) : log1m_exp(std::fmin(near1, 0.0));  // excludes 0
+      far0 = use_hi ? lp0 + std::log1p(hi.s1) : log1m_exp(clamp_log_prob(near1));  // excludes 0
     }
-    if (want0) far1 = use_hi ? lg(hi.s1) : log1m_exp(std::fmin(near0, 0.0));
+    if (want0) far1 = use_hi ? lg(hi.s1) : log1m_exp(clamp_log_prob(near0));
     if (need & kSkelE) {
       nearE = lg(lo.sk);
       farE = use_hi ? lg(hi.sk) : log_add(std::log(gap), nearE);
@@ -899,7 +949,7 @@ inline void skel2(double a, double b1, double b2, int need, Skel* o1, Skel* o2) 
 struct Kernel {
   static double log_pdf_point(double u, double v, double d, double s) {
     const double c = s * s, a = 2.0 * v * u / c, b = 2.0 * d / c;
-    const double sd = std::sqrt(a) - std::sqrt(b);
+    const double sd = root_gap(a, b);
     return std::log(2.0 * v / c) - sd * sd + log_i0_scaled(2.0 * std::sqrt(a * b));
   }
   static double log_surv_point(double u, double v, double d, double s) {
@@ -911,6 +961,24 @@ struct Kernel {
     return skel(2.0 * v * u / c, 2.0 * d / c, kSkelSF).lF;
   }
   static bool prefer_Jc(double, double, double, double) { return false; }
+
+  // log M(d), M = E[min(G, d)] = m - H = (c/2) E[min(N, K)]
+  //   = (c/2) sum_{k>=1} P(N >= k) P(K >= k),
+  // a positive series cut where the smaller mean's tail is negligible; NaN
+  // where both means are large (the quadrature then settles the ends).
+  static double log_end_M(double m, double d, double s) {
+    if (d <= 0.0) return R_NegInf;
+    const double c = s * s, a = 2.0 * m / c, b = 2.0 * d / c;
+    const double lo = std::fmin(a, b);
+    if (!(lo <= 60.0)) return R_NaN;
+    const int n = static_cast<int>(std::ceil(lo + 12.0 * std::sqrt(lo) + 30.0));
+    double ta[200], tb[200];
+    pois_tails(a, n, ta);
+    pois_tails(b, n, tb);
+    double sum = 0.0;
+    for (int k = n - 1; k >= 0; --k) sum += ta[k] * tb[k];
+    return sum > 0.0 ? std::log(0.5 * c * sum) : R_NegInf;
+  }
   // Linear ends from the direct sums, when both ends have them and the start
   // range does not begin at zero.  With up = (a >= b) the near side is
   // P(Delta <= 0), P(Delta <= -1), E[Delta-]; otherwise P(Delta >= 0),
@@ -1048,6 +1116,26 @@ inline double log_end_diff(double lx, double ly) {
   return log_diff(lx, ly);
 }
 
+// Differences that amplify the rounding of their operands by more than this
+// (log scale) are replaced by quadrature where it is available.
+constexpr double kLogAmpMax = 4.1588830833596715;  // log(64)
+
+// log F from A F = M(B+A) - M(B), M = E[min(G, d)]; NaN where the kernel has
+// no M form.  *lamp receives the log of the factor M(B+A) / (A F) by which
+// the difference amplifies the rounding of its ends.
+template <class K>
+inline double end_M_diff(double m, double B, double A, double s, double lA,
+                         double* lamp) {
+  *lamp = R_PosInf;
+  const double l2 = K::log_end_M(m, B + A, s);
+  if (ISNAN(l2)) return R_NaN;
+  const double l1 = K::log_end_M(m, B, s);
+  if (!(l2 > l1)) return R_NaN;
+  const double n = log_diff(l2, l1);
+  *lamp = l2 - n;
+  return clamp_log_prob(n - lA);
+}
+
 // log F and log S.  A S = L(B+A) - L(B) and A F = H(B) - H(B+A); each side
 // keeps relative precision below one half and the other is its complement.
 // A null lF or lS skips the quadratures that only that output needs.
@@ -1082,46 +1170,61 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
   if (!ISNAN(nS) && nS < -M_LN2) { *lS = nS; *lF = std::log(-std::expm1(nS)); return; }
   if (!ISNAN(nF) && nF < -M_LN2) { *lF = nF; *lS = std::log(-std::expm1(nF)); return; }
   if (!ISNAN(nS)) {
-    *lS = std::fmin(nS, 0.0);
+    *lS = clamp_log_prob(nS);
     *lF = ISNAN(nF) ? std::log(-std::expm1(*lS)) : nF;
-    // The H ends agree closely, so the point CDF varies little over the
-    // interval; average it where the complement, together with the
-    // difference of the L ends, has lost too many digits.  S >= 1/2 is then
-    // retaken as its complement, which is the more accurate of the two and
-    // keeps F + S = 1 whichever output was asked for.
-    if (ISNAN(nF) && *lF + std::log1p(-std::exp(e1.lL - e2.lL)) < kComplementFloor) {
-      const double lq = log_gl_checked(B, A, [&](double d) {
-        return K::log_cdf_point(u, v, d, s); });
+    // Where the H ends cancel, F is the complement of S or A F = M(B+A) - M(B)
+    // with M = E[min(G, d)] = m - H, whose ends need not agree when the H
+    // ends do (M(0) = 0), whichever amplifies rounding less.  Where both lose
+    // more than kLogAmpMax, the point CDF, which then varies little over the
+    // interval, is averaged instead.  S >= 1/2 is retaken as the complement
+    // of F, which is the more accurate of the two and keeps F + S = 1
+    // whichever output was asked for.
+    if (ISNAN(nF)) {
+      // log of 1 / (F (1 - L(B)/L(B+A))), the complement's amplification
+      const double lcomp = -(*lF + std::log1p(-std::exp(e1.lL - e2.lL)));
+      double lamp;
+      double lq = end_M_diff<K>(m, B, A, s, lA, &lamp);
+      if (!(lamp < lcomp)) lq = R_NaN;
+      if (std::fmin(lamp, lcomp) > kLogAmpMax) {
+        const double lg = log_gl_checked(B, A, [&](double d) {
+          return K::log_cdf_point(u, v, d, s); });
+        if (!ISNAN(lg)) lq = lg;
+      }
       if (!ISNAN(lq)) { *lF = lq; *lS = std::log1p(-std::exp(lq)); }
     }
     return;
   }
-  if (!want_S && !ISNAN(nF)) { *lF = std::fmin(nF, 0.0); return; }
+  if (!want_S && !ISNAN(nF)) { *lF = clamp_log_prob(nF); return; }
   // The survivor ends agree too closely: average the point survivor, whose
   // integrand then varies little over the interval.
-  *lS = std::fmin(log_gl_average(B, A, [&](double d) {
-    return K::log_surv_point(u, v, d, s); }), 0.0);
-  if (!ISNAN(nF)) *lF = std::fmin(nF, 0.0);
+  *lS = clamp_log_prob(log_gl_average(B, A, [&](double d) {
+    return K::log_surv_point(u, v, d, s); }));
+  if (!ISNAN(nF)) *lF = clamp_log_prob(nF);
   else if (*lS < -M_LN2) *lF = std::log(-std::expm1(*lS));
-  else if (want_F) *lF = log_gl_average(B, A, [&](double d) { return K::log_cdf_point(u, v, d, s); });
+  else if (want_F) {
+    double lamp;
+    *lF = end_M_diff<K>(m, B, A, s, lA, &lamp);
+    if (!(lamp <= kLogAmpMax))
+      *lF = log_gl_average(B, A, [&](double d) { return K::log_cdf_point(u, v, d, s); });
+  }
 }
 
 template <class K>
 inline double log_surv(double u, double v, double B, double A, double s) {
-  if (!(u > 0.0)) return 0.0;
+  if (!(u > 0.0) || v == 0.0) return 0.0;
   if (!R_FINITE(u)) return R_NegInf;
   double lS;
   log_cdf_surv<K>(u, v, B, A, s, nullptr, &lS);
-  return std::fmin(lS, 0.0);
+  return clamp_log_prob(lS);
 }
 
 template <class K>
 inline double log_cdf(double u, double v, double B, double A, double s) {
-  if (!(u > 0.0)) return R_NegInf;
+  if (!(u > 0.0) || v == 0.0) return R_NegInf;
   if (!R_FINITE(u)) return 0.0;
   double lF;
   log_cdf_surv<K>(u, v, B, A, s, &lF, nullptr);
-  return std::fmin(lF, 0.0);
+  return clamp_log_prob(lF);
 }
 
 // f = v [J(B) - J(B+A)] / A = v [Jc(B+A) - Jc(B)] / A.  Where an end carries
@@ -1130,7 +1233,7 @@ inline double log_cdf(double u, double v, double B, double A, double s) {
 // first agrees too closely at the two ends.
 template <class K>
 inline double log_pdf(double u, double v, double B, double A, double s) {
-  if (!(u > 0.0) || !R_FINITE(u)) return R_NegInf;
+  if (!(u > 0.0) || !R_FINITE(u) || v == 0.0) return R_NegInf;
   A = (B + A) - B;
   if (A <= 0.0) return K::log_pdf_point(u, v, B, s);
   const double m = v * u;
@@ -1154,7 +1257,7 @@ inline double log_pdf(double u, double v, double B, double A, double s) {
 
 template <class K>
 inline double draw_decision(double v, double B, double A, double s) {
-  if (!pars_ok(v, B, A, s)) return R_PosInf;
+  if (!pars_ok(v, B, A, s) || v == 0.0) return R_PosInf;
   return K::draw(v, B, A, s);
 }
 

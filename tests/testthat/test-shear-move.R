@@ -1034,3 +1034,49 @@ test_that("an orbit's width is measured whatever scale the grid starts at", {
     expect_equal(w, sigma, tolerance = 0.05)
   }
 })
+
+test_that("shear frames reject approximate solves instead of dropping conditional directions", {
+  H <- array(0, c(2, 2, 1))
+  lin <- matrix(0, 2, 1)
+  mu <- c(2, -3)
+  Vi <- diag(c(1, exp(96)))
+  # An exact diagonal system, but below the numerical condition threshold:
+  # Armadillo's approximate fallback used to lose the first centre here.
+  out <- EMC2:::emc_shear_frames_cpp(H, lin, Vi, drop(Vi %*% mu))
+  expect_false(out$ok)
+  Vi <- matrix(c(2, 0.3, 0.3, 4), 2)
+  H[, , 1] <- diag(c(3, 1))
+  lin[, 1] <- c(0.5, -0.7)
+  out <- EMC2:::emc_shear_frames_cpp(H, lin, Vi, drop(Vi %*% mu))
+  expect_true(out$ok)
+  expect_equal(drop(out$m), drop(solve(H[, , 1] + Vi, lin[, 1] + Vi %*% mu)),
+               tolerance = 1e-12)
+  expect_equal(crossprod(out$R[, , 1]), H[, , 1] + Vi, tolerance = 1e-12)
+  lin[1, 1] <- Inf
+  expect_false(EMC2:::emc_shear_frames_cpp(H, lin, Vi, drop(Vi %*% mu))$ok)
+})
+
+test_that("orbit tuning retries numerical failures on a smaller grid", {
+  grids <- list()
+  local_mocked_bindings(
+    .emc_shear_orbit_terms = function(ch, idx, k, grid, fits_of, n_cores = 1L) {
+      grids[[length(grids) + 1L]] <<- grid
+      f <- if (max(abs(grid)) > 3) rep(NA_real_, length(grid)) else -0.5 * grid^2
+      list(per = matrix(0, length(grid), 2), lp = f)
+    }, .package = "EMC2")
+  expect_equal(EMC2:::.emc_shear_orbit_width(NULL, 1:10, 1L, NULL, 4),
+               1, tolerance = 0.05)
+  expect_equal(max(abs(grids[[2]])), max(abs(grids[[1]])) / 4)
+})
+
+test_that("unresolved orbit widths do not replace the existing tuning", {
+  grids <- list()
+  local_mocked_bindings(
+    .emc_shear_orbit_terms = function(ch, idx, k, grid, fits_of, n_cores = 1L) {
+      grids[[length(grids) + 1L]] <<- grid
+      list(per = matrix(0, length(grid), 2), lp = -1e-30 * grid^2)
+    }, .package = "EMC2")
+  expect_true(is.na(EMC2:::.emc_shear_orbit_width(NULL, 1:10, 1L, NULL, 1)))
+  extent <- vapply(grids, function(g) max(abs(g)), numeric(1))
+  expect_true(all(extent[-1] / head(extent, -1) <= 4))
+})

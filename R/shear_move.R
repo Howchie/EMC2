@@ -286,7 +286,8 @@
   if (is.null(path) || length(g0) != 1L) return(NULL)
   for (g in seq_along(grid))
     path[[g]]$chol <- tryCatch(chol(path[[g]]$V), error = function(e) NULL)
-  if (any(vapply(path, function(st) is.null(st$chol), logical(1)))) return(NULL)
+  if (any(vapply(path, function(st) is.null(st$chol), logical(1))))
+    return(list(per = matrix(NA_real_, length(grid), n), lp = rep(NA_real_, length(grid))))
   states <- lapply(path, function(st)
     .emc_shear_state(st$mu, st$V, fits_of(st), ch$prior, spec))
   if (any(vapply(states, is.null, logical(1))))
@@ -316,14 +317,20 @@
 # units), on a grid scaled to the width s0 and rescaled until the grid
 # resolves the orbit; NA when it cannot be measured.
 .emc_shear_orbit_width <- function(ch, idx, k, fits_of, s0, n_cores = 1L) {
+  if (!is.finite(s0) || s0 <= 0) return(NA_real_)
   s <- s0
-  sd <- NA_real_
-  for (it in seq_len(4L)) {
+  for (it in seq_len(8L)) {
     grid <- s * .EMC_SHEAR_WIDTH_GRID
     tm <- .emc_shear_orbit_terms(ch, idx, k, grid, fits_of, n_cores)
     if (is.null(tm)) return(NA_real_)
     f <- rowSums(tm$per) + tm$lp
-    f[!is.finite(f)] <- -Inf
+    # A failed frame/transport is missing numerical information, not zero
+    # posterior density. Retry closer in rather than measuring an artificial
+    # truncation (or discarding an otherwise useful coordinate altogether).
+    if (anyNA(f) || any(f == Inf)) {
+      s <- s / 4
+      next
+    }
     if (!is.finite(max(f))) return(NA_real_)
     w <- exp(f - max(f))
     w <- w / sum(w)
@@ -335,11 +342,14 @@
       # the width.
       ok <- is.finite(f)
       a <- if (sum(ok) >= 3L) stats::coef(stats::lm(f[ok] ~ grid[ok] + I(grid[ok]^2)))[3L] else NA
-      s <- if (is.finite(a) && a < 0) max(2 * s, 1 / sqrt(-2 * a)) else 4 * s
+      # Nearly flat fitted curvature must not launch a probe tens of log-sd
+      # units away. Expand gradually, checking the intervening density.
+      s <- if (is.finite(a) && a < 0) min(4 * s, max(2 * s, 1 / sqrt(-2 * a))) else 4 * s
     } else if (sd < 0.5 * s) s <- max(sd, s / 8)
     else return(sd)
   }
-  sd
+  # No resolved width: leave the existing step alone.
+  NA_real_
 }
 
 # Each coordinate's step scale from its orbit under the block's frames: the
@@ -605,9 +615,11 @@
 # factor of the conditional precision H_s + V^-1, stacked by subject (fm:
 # m by column, R and logdet by slice; .emc_shear_frame takes out one).
 .emc_shear_state <- function(mu, V, fits, prior, spec) {
+  if (any(!is.finite(mu)) || any(!is.finite(V))) return(NULL)
   chol_V <- tryCatch(chol(V), error = function(e) NULL)
   if (is.null(chol_V)) return(NULL)
-  Vi <- chol2inv(chol_V)
+  Vi <- tryCatch(chol2inv(chol_V), error = function(e) NULL)
+  if (is.null(Vi) || any(!is.finite(Vi))) return(NULL)
   if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, length(mu))
   out <- emc_shear_frames_cpp(fits$cube, fits$lin, Vi, drop(Vi %*% mu))
   if (!isTRUE(out$ok)) return(NULL)

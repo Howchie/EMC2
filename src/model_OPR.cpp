@@ -1,6 +1,7 @@
 // Opponent Poisson race adapters and R-callable kernels.  The math lives in
 // model_OPR.h, which model_rng.cpp also includes for the simulator.
 
+#include <initializer_list>
 #include "utility_functions.h"
 #include "model_OPR.h"
 #include "race_contract.h"
@@ -9,7 +10,7 @@
 // ---------------------------------------------------------------------------
 // R-callable entry points on the DECISION time (rt - t0) and the event rates
 // lambda+ = a, lambda- = b; R/model_OPR.R maps the sampled chart to the rates.
-// Arguments other than `t` must be length 1 or the full length.
+// Every argument is length 1 or the length of the longest.
 // ---------------------------------------------------------------------------
 
 static inline void opr_check_len(const NumericVector& x, int n, const char* nm) {
@@ -22,20 +23,28 @@ static inline double opr_pick(const NumericVector& x, int i) {
   return x.size() == 1 ? x[0] : x[i];
 }
 
+static inline int opr_len(std::initializer_list<int> sizes) {
+  int n = 0;
+  for (int k : sizes) if (k == 0) return 0; else if (k > n) n = k;
+  return n;
+}
+
 // [[Rcpp::export]]
 NumericVector dopr(NumericVector t, NumericVector K, NumericVector lambda_p,
                    NumericVector lambda_m, bool log_out = false) {
-  const int n = t.size();
+  const int n = opr_len({static_cast<int>(t.size()), static_cast<int>(K.size()), static_cast<int>(lambda_p.size()), static_cast<int>(lambda_m.size())});
+  opr_check_len(t, n, "t");
   opr_check_len(K, n, "K");
   opr_check_len(lambda_p, n, "lambda_p");
   opr_check_len(lambda_m, n, "lambda_m");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
+    const double ti = opr_pick(t, i);
     const double k = opr_pick(K, i), a = opr_pick(lambda_p, i),
                  b = opr_pick(lambda_m, i);
     double lp;
-    if (ISNAN(t[i]) || ISNAN(k) || ISNAN(a) || ISNAN(b)) lp = R_NaN;
-    else lp = opr::pars_ok(k, a, b) ? opr::log_pdf(t[i], k, a, b) : R_NaN;
+    if (ISNAN(ti) || ISNAN(k) || ISNAN(a) || ISNAN(b)) lp = R_NaN;
+    else lp = opr::pars_ok(k, a, b) ? opr::log_pdf(ti, k, a, b) : R_NaN;
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;
@@ -47,18 +56,20 @@ NumericVector dopr(NumericVector t, NumericVector K, NumericVector lambda_p,
 NumericVector popr(NumericVector t, NumericVector K, NumericVector lambda_p,
                    NumericVector lambda_m, bool lower_tail = true,
                    bool log_out = false) {
-  const int n = t.size();
+  const int n = opr_len({static_cast<int>(t.size()), static_cast<int>(K.size()), static_cast<int>(lambda_p.size()), static_cast<int>(lambda_m.size())});
+  opr_check_len(t, n, "t");
   opr_check_len(K, n, "K");
   opr_check_len(lambda_p, n, "lambda_p");
   opr_check_len(lambda_m, n, "lambda_m");
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
+    const double ti = opr_pick(t, i);
     const double k = opr_pick(K, i), a = opr_pick(lambda_p, i),
                  b = opr_pick(lambda_m, i);
     double lp;
-    if (ISNAN(t[i]) || !opr::pars_ok(k, a, b)) lp = R_NaN;
-    else lp = lower_tail ? opr::log_cdf(t[i], k, a, b)
-                         : opr::log_surv(t[i], k, a, b);
+    if (ISNAN(ti) || !opr::pars_ok(k, a, b)) lp = R_NaN;
+    else lp = lower_tail ? opr::log_cdf(ti, k, a, b)
+                         : opr::log_surv(ti, k, a, b);
     out[i] = log_out ? lp : (ISNAN(lp) ? R_NaN : std::exp(lp));
   }
   return out;

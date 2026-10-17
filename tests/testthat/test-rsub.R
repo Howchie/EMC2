@@ -308,6 +308,48 @@ test_that("truncation normalises with the race survivor", {
   }
 })
 
+test_that("narrow start ranges at B near zero keep the CDF digits", {
+  # The average of the point CDF over d, in log d, resolves the transition
+  # near d ~ m^2 / s^2 that a rule over the whole range misses.
+  ref <- function(u, v, B, A, s, pk) {
+    f <- function(y) exp(y) * EMC2:::prsub(u, v, exp(y), 0, s, packets = pk)
+    lo <- log(max(B, 1e-40)); hi <- log(B + A); m <- .11 * u
+    br <- c(lo, log(m^2 / s^2) + seq(-12, 12, 2), log(m) + seq(-4, 4, 2), hi)
+    br <- sort(unique(br[br >= lo & br <= hi]))
+    I <- sum(vapply(seq_along(br[-1]), function(k)
+      integrate(f, br[k], br[k + 1], rel.tol = 1e-14)$value, 0))
+    if (B == 0) I <- I + exp(lo)  # F_d -> 1 below exp(lo)
+    log(I / A)
+  }
+  for (pk in c(FALSE, TRUE)) for (B in c(0, 1e-9)) for (A in c(1.5e-5, 1e-4))
+    for (u in c(4.2e-7, 1e-5, 2e-4)) {
+      lF <- EMC2:::prsub(u, .11, B, A, 2.1, packets = pk, log_out = TRUE)
+      expect_equal(lF, ref(u, .11, B, A, 2.1, pk), tolerance = 1e-10,
+                   info = paste(pk, B, A, u))
+      lS <- EMC2:::prsub(u, .11, B, A, 2.1, packets = pk, lower_tail = FALSE,
+                         log_out = TRUE)
+      expect_equal(exp(lF) + exp(lS), 1, tolerance = 1e-14)
+    }
+})
+
+test_that("v = 0 never finishes and invalid rows simulate as omissions", {
+  for (pk in c(FALSE, TRUE)) {
+    expect_identical(EMC2:::drsub(c(.1, 1), 0, 1, .5, 1, packets = pk), c(0, 0))
+    expect_identical(EMC2:::prsub(c(.1, 1), 0, 1, .5, 1, packets = pk), c(0, 0))
+    expect_identical(EMC2:::prsub(c(.1, 1), 0, 1, .5, 1, packets = pk,
+                                  lower_tail = FALSE), c(1, 1))
+    lR <- factor(c("a", "b"), levels = c("a", "b"))
+    pars <- cbind(v = c(0, 1), B = c(1, 0), A = c(.5, 0), t0 = .2, s = 1)
+    sim_c <- EMC2:::rrsub_cpp(pars[c(1, 1), ], levels(lR), c(TRUE, TRUE), pk)
+    expect_true(all(!is.finite(sim_c$rt)))
+    # B = A = 0 is not a valid row in either simulator.
+    sim_r <- EMC2:::rRSUB(lR, pars[c(2, 2), ], packets = pk)
+    sim_c <- EMC2:::rrsub_cpp(pars[c(2, 2), ], levels(lR), c(TRUE, TRUE), pk)
+    expect_true(all(!is.finite(sim_r$rt)))
+    expect_true(all(!is.finite(sim_c$rt)))
+  }
+})
+
 test_that("RSUB exposes the race-model contract", {
   m <- RSUB()
   expect_identical(m$type, "RACE")

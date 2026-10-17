@@ -1,5 +1,5 @@
 # ============================================================================
-# OPR: opponent Poisson race (Math/Opponent_Poisson_Race.md)
+# OPR: opponent Poisson race (Math/CounterAndQuorumModels.tex, sec:opponent)
 #
 # Each accumulator integrates X(u) = N+(u) - N-(u), two independent Poisson
 # event streams with rates lambda_p and lambda_m, and finishes when it reaches

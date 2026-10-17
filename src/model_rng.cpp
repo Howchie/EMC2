@@ -1438,6 +1438,7 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
   std::vector<int> ok_row(n_rows);
+  int n_failed = 0;
   for (int r = 0; r < n_rows; ++r) {
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
@@ -1445,8 +1446,12 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     double a, b;
     opr::chart_rates(chart, pars(r, i1), pars(r, i2), &a, &b);
     const double d = opr::draw_decision(pars(r, ik), a, b);
+    if (ISNAN(d)) ++n_failed;
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
+  if (n_failed > 0)
+    Rcpp::warning("ropr_cpp: %d decision time(s) could not be drawn and were "
+                  "recorded as omissions.", n_failed);
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
   std::vector<int> isTime;
