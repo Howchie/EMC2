@@ -79,6 +79,30 @@ inline double log_add(double lx, double ly) {
 struct EndJ { double lJ, lJc; };
 struct EndHL { double lH, lL; };
 
+// The start-range differences in linear arithmetic, under the rules of the
+// log-scale path below; NaN where that path has to settle them.  From the
+// stop-loss ends, log S (want_S) or log F:
+inline double lin_cdf_surv(double H1, double L1, double H2, double L2, double A, bool want_S) {
+  const double S = (L2 - L1) / A, F = (H1 - H2) / A;
+  if (L1 < kCancel * L2 && S < 0.5) return want_S ? std::log(S) : std::log1p(-S);
+  if (H2 < kCancel * H1 && F < 0.5) return want_S ? std::log1p(-F) : std::log(F);
+  return R_NaN;
+}
+
+// From the J ends (NaN for a form not formed), log of J(B) - J(B+A) =
+// Jc(B+A) - Jc(B), in the form whose larger term is smaller when both are
+// at hand and in the preferred one otherwise; a form missing at either end
+// leaves the other untried.
+inline double lin_J_diff(double J1, double Jc1, double J2, double Jc2, bool prefer_Jc) {
+  const bool both = !ISNAN(J1) && !ISNAN(J2) && !ISNAN(Jc1) && !ISNAN(Jc2);
+  const bool use_Jc = both ? Jc2 < J1 : prefer_Jc;
+  if (use_Jc ? Jc1 < kCancel * Jc2 : J2 < kCancel * J1)
+    return std::log(use_Jc ? Jc2 - Jc1 : J1 - J2);
+  if (both && (use_Jc ? J2 < kCancel * J1 : Jc1 < kCancel * Jc2))
+    return std::log(use_Jc ? J1 - J2 : Jc2 - Jc1);
+  return R_NaN;
+}
+
 // ===========================================================================
 // Inverse-Gaussian subordinator
 // ===========================================================================
@@ -91,31 +115,67 @@ namespace ig {
 // R = 1/(x + c1), c_k = k/(x + c_{k+1}), as D = c1 R and E = c1 c2 R.
 struct Mills { double R, D, E; };
 
+// R(z) = sqrt(2 pi) n(z)/d(z) for 0 <= z < FAST_NORM_SPLIT, the rational of
+// fast_norm_phi with its exponential cancelled.
+inline double mills_rational(double z) {
+  const double n = (((((FAST_NORM_N6 * z + FAST_NORM_N5) * z + FAST_NORM_N4) * z + FAST_NORM_N3) * z + FAST_NORM_N2) * z + FAST_NORM_N1) * z + FAST_NORM_N0;
+  const double d = ((((((FAST_NORM_M7 * z + FAST_NORM_M6) * z + FAST_NORM_M5) * z + FAST_NORM_M4) * z + FAST_NORM_M3) * z + FAST_NORM_M2) * z + FAST_NORM_M1) * z + FAST_NORM_M0;
+  return FAST_NORM_RT2PI * n / d;
+}
+
+// R(x) for x < 4; below zero R(x) = 1/phi(x) - R(-x), which loses at most a
+// bit because R(-x) < R(0) < 1/phi(x) / 2.
+inline double mills_small(double x) {
+  if (x >= 0.0) return mills_rational(x);
+  const double z = -x;
+  const double Rz = z < FAST_NORM_SPLIT ? mills_rational(z) : mills_ratio_std(z);
+  return FAST_NORM_RT2PI * std::exp(0.5 * z * z) - Rz;
+}
+
+// The fraction is entered at depth K with the tail seeded at the fixed point
+// of c = (K + 1)/(x + c); each depth keeps R, D and E within an ulp or two
+// over its range of x.
 inline Mills mills_seq(double x) {
   if (x < 4.0) {
-    const double R = mills_ratio_std(x);
+    const double R = mills_small(x);
     const double D = 1.0 - x * R;
     return {R, D, R - x * D};
   }
   if (!R_FINITE(x)) return {0.0, 0.0, 0.0};
-  const int K = x < 6.0 ? 40 : (x < 10.0 ? 24 : (x < 20.0 ? 16 : 10));
-  double c = 0.0, c2 = 0.0;
-  for (int k = K; k >= 1; --k) {
-    if (k == 1) c2 = c;
-    c = k / (x + c);
+  const int K = x < 4.5 ? 31 : x < 5.0 ? 27 : x < 6.0 ? 24 : x < 7.0 ? 20 :
+                x < 8.0 ? 17 : x < 10.0 ? 15 : x < 14.0 ? 13 : x < 20.0 ? 11 :
+                x < 30.0 ? 9 : 7;
+  const double tail = 2.0 * (K + 1) / (x + std::sqrt(x * x + 4.0 * (K + 1)));
+  double c2;
+  if (x < 20.0) {
+    // c2 = 2/(x + 3/(x + ... K/(x + tail))) from its convergents by Wallis'
+    // forward recurrences, which only multiply and add; with every element
+    // positive they are stable, and over this range they stay below ~1e40.
+    double A0 = 1.0, A1 = 0.0, B0 = 0.0, B1 = 1.0;  // index j - 2, j - 1
+    for (int j = 1; j < K; ++j) {
+      const double b = (j == K - 1) ? x + tail : x, a = j + 1.0;
+      const double A = b * A1 + a * A0, B = b * B1 + a * B0;
+      A0 = A1; A1 = A; B0 = B1; B1 = B;
+    }
+    c2 = A1 / B1;
+  } else {
+    double c = tail;
+    for (int k = K; k >= 2; --k) c = k / (x + c);
+    c2 = c;
   }
-  const double R = 1.0 / (x + c);
-  return {R, c * R, c * c2 * R};
+  const double c1 = 1.0 / (x + c2);
+  const double R = 1.0 / (x + c1);
+  return {R, c1 * R, c1 * c2 * R};
 }
 
-// log of int_a^b D (order 1, = R(a) - R(b)) or int_a^b E (order 2,
-// = D(a) - D(b)), a < b.
-inline double log_mills_int(int order, double a, double b) {
-  if (!(b > a)) return R_NegInf;
-  const Mills ma = mills_seq(a), mb = mills_seq(b);
+// int_a^b D (order 1, = R(a) - R(b)) or int_a^b E (order 2, = D(a) - D(b)),
+// a < b, from the Mills values already formed at both ends; by 8-point
+// Gauss-Legendre where the ends agree too closely to subtract.
+inline double mills_int(int order, double a, const Mills& ma, double b, const Mills& mb) {
+  if (!(b > a)) return 0.0;
   const double xa = order == 1 ? ma.R : ma.D;
   const double xb = order == 1 ? mb.R : mb.D;
-  if (xb < kCancel * xa) return std::log(xa - xb);
+  if (xb < kCancel * xa) return xa - xb;
   const GLRule& g = gl_get_rule(kGLNodes);
   const double h = 0.5 * (b - a), c = 0.5 * (b + a);
   double sum = 0.0;
@@ -123,7 +183,12 @@ inline double log_mills_int(int order, double a, double b) {
     const Mills mi = mills_seq(c + h * g.x[i]);
     sum += g.w[i] * (order == 1 ? mi.D : mi.E);
   }
-  return std::log(h * sum);
+  return h * sum;
+}
+
+inline double log_mills_int(int order, double a, double b) {
+  if (!(b > a)) return R_NegInf;
+  return std::log(mills_int(order, a, mills_seq(a), b, mills_seq(b)));
 }
 
 // Coordinates of the distance-d first passage at mean evidence m = v u.
@@ -167,48 +232,130 @@ struct Kernel {
     return p.lphi + log_mills_int(1, -p.alpha, p.beta);
   }
 
-  // Each end is carried in both complementary forms, each written as a
-  // positive sum wherever its terms stay in range (|alpha| < kAlphaMax) and
-  // as the complement of the other form beyond.
+  // The J form that log_pdf differences first: Jc when the start range is
+  // mostly passed (alpha summed over its ends above zero, since J ~
+  // Phi(alpha)), J otherwise.
+  static bool prefer_Jc(double m, double B, double A, double s) {
+    const double d2 = B + A;
+    return (m - B) / (s * std::sqrt(B)) + (m - d2) / (s * std::sqrt(d2)) > 0.0;
+  }
+
+  // Each end in the complementary forms asked for (want: 1 J, 2 Jc), NaN for
+  // a form not formed.  Both are positive sums,
+  //   J  = phi(alpha) [int_{-alpha}^{beta} D + 2E(beta) + (alpha + beta) D(beta)],
+  //   Jc = phi(alpha) [int_alpha^beta D + (beta - alpha) D(beta)],
+  // and at alpha >= 0, where Jc <= 1/2 because J >= Phi(alpha), J is taken as
+  // 1 - Jc.  Beyond alpha = -kAlphaMax, Jc is 1 - J.
   static constexpr double kAlphaMax = 30.0;
 
-  static EndJ end_J(double m, double d, double s) {
+  static EndJ end_J(double m, double d, double s, int want = 3) {
     if (d <= 0.0) return {0.0, R_NegInf};  // J(0) = 1
     const Pt p = point(m, d, s);
     const Mills mb = mills_seq(p.beta);
-    EndJ e;
-    // J = phi(alpha) [int_{-alpha}^{beta} D + 2E(beta) + (alpha + beta) D(beta)]
-    //   = Phi(alpha) + phi(alpha) [E(beta) + alpha D(beta)]   (alpha >= 0).
-    if (p.alpha < 0.0) {
-      e.lJ = p.lphi + log_add(log_mills_int(1, -p.alpha, p.beta),
-                              std::log(2.0 * mb.E + (p.alpha + p.beta) * mb.D));
-    } else {
-      e.lJ = log_add(pnorm_std(p.alpha, true, true),
-                     p.lphi + std::log(mb.E + p.alpha * mb.D));
+    EndJ e = {R_NaN, R_NaN};
+    if (p.alpha >= 0.0) {
+      e.lJc = p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
+                                (p.beta - p.alpha) * mb.D);
+      e.lJ = std::log1p(-std::exp(e.lJc));
+      return e;
     }
-    // Jc = phi(alpha) [int_alpha^beta D + (beta - alpha) D(beta)].
-    if (p.alpha > -kAlphaMax) {
-      e.lJc = p.lphi + log_add(log_mills_int(1, p.alpha, p.beta),
-                               std::log((p.beta - p.alpha) * mb.D));
-    } else {
-      e.lJc = std::log(-std::expm1(std::fmin(e.lJ, 0.0)));
+    if ((want & 1) || p.alpha <= -kAlphaMax) {
+      e.lJ = p.lphi + std::log(mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb) +
+                               2.0 * mb.E + (p.alpha + p.beta) * mb.D);
+    }
+    if (want & 2) {
+      e.lJc = p.alpha > -kAlphaMax
+        ? p.lphi + std::log(mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
+                            (p.beta - p.alpha) * mb.D)
+        : std::log(-std::expm1(std::fmin(e.lJ, 0.0)));
     }
     return e;
   }
 
+  // H = z phi(alpha) int_{-alpha}^{beta} E and L = z phi(alpha) int_alpha^beta E
+  // differ by H - L = m - d, so the smaller is formed as an integral and the
+  // larger as a positive sum.
   static EndHL end_HL(double m, double d, double s) {
     if (d <= 0.0) return {std::log(m), R_NegInf};  // H(0) = m, L(0) = 0
     const Pt p = point(m, d, s);
-    const double lz = std::log(p.z);
+    const Mills mb = mills_seq(p.beta);
+    const double lzphi = std::log(p.z) + p.lphi;
     EndHL e;
-    // H = z phi(alpha) int_{-alpha}^{beta} E,  L = z phi(alpha) int_alpha^beta E.
-    e.lH = p.alpha < kAlphaMax ? lz + p.lphi + log_mills_int(2, -p.alpha, p.beta)
-                               : R_NaN;
-    e.lL = p.alpha > -kAlphaMax ? lz + p.lphi + log_mills_int(2, p.alpha, p.beta)
-                                : R_NaN;
-    if (ISNAN(e.lH)) e.lH = log_add(std::log(m - d), e.lL);
-    if (ISNAN(e.lL)) e.lL = log_add(std::log(d - m), e.lH);
+    if (p.alpha >= 0.0) {
+      e.lL = lzphi + std::log(mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb));
+      e.lH = log_add(std::log(m - d), e.lL);
+    } else {
+      e.lH = lzphi + std::log(mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb));
+      e.lL = log_add(std::log(d - m), e.lH);
+    }
     return e;
+  }
+
+  static void ends_J(double m, double d1, double d2, double s, int want, EndJ* e1, EndJ* e2) {
+    *e1 = end_J(m, d1, s, want);
+    *e2 = end_J(m, d2, s, want);
+  }
+  static void ends_HL(double m, double d1, double d2, double s, EndHL* e1, EndHL* e2) {
+    *e1 = end_HL(m, d1, s);
+    *e2 = end_HL(m, d2, s);
+  }
+
+  // The same ends in linear arithmetic, which saves the logarithms of every
+  // term; only for |alpha| < kAlphaMax, where phi(alpha) > 1e-196.
+  static bool lin_HL(double m, double d, double s, double* H, double* L) {
+    if (d <= 0.0) { *H = m; *L = 0.0; return true; }
+    const Pt p = point(m, d, s);
+    if (!(std::fabs(p.alpha) < kAlphaMax)) return false;
+    const Mills mb = mills_seq(p.beta);
+    const double zphi = p.z * std::exp(p.lphi);
+    if (p.alpha >= 0.0) {
+      *L = zphi * mills_int(2, p.alpha, mills_seq(p.alpha), p.beta, mb);
+      *H = *L + (m - d);
+    } else {
+      *H = zphi * mills_int(2, -p.alpha, mills_seq(-p.alpha), p.beta, mb);
+      *L = *H + (d - m);
+    }
+    return true;
+  }
+
+  static bool lin_J(double m, double d, double s, int want, double* J, double* Jc) {
+    if (d <= 0.0) { *J = 1.0; *Jc = 0.0; return true; }
+    const Pt p = point(m, d, s);
+    if (!(std::fabs(p.alpha) < kAlphaMax)) return false;
+    const Mills mb = mills_seq(p.beta);
+    const double phi = std::exp(p.lphi);
+    *J = *Jc = R_NaN;
+    if (p.alpha >= 0.0 || (want & 2)) {
+      *Jc = phi * (mills_int(1, p.alpha, mills_seq(p.alpha), p.beta, mb) +
+                   (p.beta - p.alpha) * mb.D);
+    }
+    if (p.alpha >= 0.0) {
+      *J = 1.0 - *Jc;
+    } else if (want & 1) {
+      *J = phi * (mills_int(1, -p.alpha, mills_seq(-p.alpha), p.beta, mb) +
+                  2.0 * mb.E + (p.alpha + p.beta) * mb.D);
+    }
+    return true;
+  }
+
+  static double fast_cdf_surv(double m, double B, double A, double s, bool want_S) {
+    double H1, L1, H2, L2;
+    if (!lin_HL(m, B, s, &H1, &L1) || !lin_HL(m, B + A, s, &H2, &L2)) return R_NaN;
+    return lin_cdf_surv(H1, L1, H2, L2, A, want_S);
+  }
+
+  static double fast_pdf(double m, double v, double B, double A, double s) {
+    const int want = prefer_Jc(m, B, A, s) ? 2 : 1;
+    double J1, Jc1, J2, Jc2;
+    if (!lin_J(m, B, s, want, &J1, &Jc1) || !lin_J(m, B + A, s, want, &J2, &Jc2))
+      return R_NaN;
+    double n = lin_J_diff(J1, Jc1, J2, Jc2, want == 2);
+    if (ISNAN(n)) {  // form the other one where it was skipped
+      lin_J(m, B, s, 3, &J1, &Jc1);
+      lin_J(m, B + A, s, 3, &J2, &Jc2);
+      n = lin_J_diff(J1, Jc1, J2, Jc2, want == 2);
+    }
+    return std::log(v / A) + n;
   }
 
   // Distance d = B + A U, then (s/v) times the maximum over [0, d] of
@@ -230,6 +377,7 @@ namespace cp {
 
 constexpr double kTermEps = 1e-18;
 constexpr double kSideFull = -1.0005003335835335e-03;  // log(1 - 1e-3)
+constexpr double kSideFullLin = 1.0 - 1e-3;
 constexpr double kRescale = 1e250;
 constexpr double kLogRescale = 575.6462732485114;  // log(1e250)
 
@@ -249,16 +397,19 @@ inline double log_i0_scaled(double z) {
 
 // One side of the Skellam law: q_k = P(Delta = sgn k) for k >= 0, with
 // q_{k+1}/q_k = sqrt(t) rho_k, rho_k = I_{k+1}(z)/I_k(z), and t = a/b for
-// the upper side, b/a for the lower.  Returns the logs of sum_{k>=0} q_k,
-// sum_{k>=1} q_k and sum_{k>=1} k q_k.
-struct Side { double s0, s1, sk; };
+// the upper side, b/a for the lower.  Returns sum_{k>=1} q_k and
+// sum_{k>=1} k q_k, both relative to q_0, and nrm with
+// e^-z I_0(z) = 1/(1 + nrm); NaN where the sums fail.
+struct Side { double s1, sk, nrm; };
 
 // The ratios come from the stable backward recurrence
 // rho_k = 1/(2(k+1)/z + rho_{k+1}), seeded at Amos' approximation far enough
 // above the last index used, kstop, that the seed's error has decayed by
 // prod rho_k^2 ~ exp(-(K^2 - kstop^2)/z).  kstop comes from the Gaussian
 // tail of the Skellam law and kmode is the index of the side's largest term.
-inline Side side_sums(double lp0, double z, double t, double kmode, double kstop) {
+// This form divides at every step and is kept for z too small for the
+// unnormalised recurrence below to stay in range.
+inline Side side_sums_ratio(double z, double t, double kmode, double kstop) {
   static thread_local std::vector<double> rho;
   const double hst = std::sqrt(t);
   int K = static_cast<int>(std::sqrt(kstop * kstop + 40.0 * z) + 10.0);
@@ -270,7 +421,7 @@ inline Side side_sums(double lp0, double z, double t, double kmode, double kstop
       r = 1.0 / (2.0 * (k + 1.0) / z + r);
       rho[k] = r;
     }
-    double L = lp0, term = 1.0, s0 = 1.0, s1 = 0.0, sk = 0.0, prev = 1.0;
+    double L = 0.0, term = 1.0, s0 = 1.0, s1 = 0.0, sk = 0.0, prev = 1.0;
     int k = 0;
     bool done = false;
     for (; k < K; ++k) {
@@ -285,45 +436,200 @@ inline Side side_sums(double lp0, double z, double t, double kmode, double kstop
       }
     }
     if (done || term == 0.0) {
-      return {L + std::log(s0), s1 > 0.0 ? L + std::log(s1) : R_NegInf,
-              sk > 0.0 ? L + std::log(sk) : R_NegInf};
+      const double sc = std::exp(L);
+      return {sc * s1, sc * sk, std::expm1(-log_i0_scaled(z))};
     }
   }
   return {R_NaN, R_NaN, R_NaN};
 }
 
-// The Skellam quantities of one (a, b), each on its small side.
+constexpr double kMillerMinZ = 1e-30;
+constexpr double kMillerBig = 0x1p664;     // ~1e200
+constexpr double kMillerSmall = 0x1p-664;
+
+// The same recurrence run on unnormalised y_k proportional to I_k(z),
+// y_{k-1} = (2k/z) y_k + y_{k+1}, from the same seed and depth (raised so
+// that it also covers the Bessel terms themselves, which fall like
+// e^{-k^2/2z}).  The side sums are accumulated by Horner's rule in the same
+// downward pass, so no step divides, and I_0 is normalised by
+// I_0 + 2 sum_{k>=1} I_k = e^z.  The depth is doubled while the top terms
+// are not negligible.
+inline Side side_sums(double z, double t, double kmode, double kstop) {
+  if (!(z >= kMillerMinZ)) return side_sums_ratio(z, t, kmode, kstop);
+  const double h = std::sqrt(t), tz = 2.0 / z;
+  int K = static_cast<int>(std::sqrt(std::fmax(kstop * kstop, 80.0 * z) + 40.0 * z) + 10.0);
+  if (static_cast<double>(K) <= kmode) K = static_cast<int>(kmode) + 10;
+  for (int attempt = 0; attempt < 8; ++attempt, K *= 2) {
+    const double kk = K + 1.0;
+    double yb = z / (kk + std::sqrt(kk * kk + z * z)), ya = 1.0;  // y_{k+2}, y_{k+1}
+    double P = 0.0, W = 0.0, N = 0.0, yK = 0.0;
+    int nsc = 0;
+    for (int k = K; k >= 1; --k) {
+      const double yk = (k + 1.0) * tz * ya + yb;
+      if (k == K) yK = yk;
+      P = P * h + yk;       // sum_{j>=k} y_j h^{j-k}
+      W = W * h + k * yk;   // sum_{j>=k} j y_j h^{j-k}
+      N += yk;
+      yb = ya; ya = yk;
+      if (W > kMillerBig) {  // W >= y_k, P and N / K
+        ya *= kMillerSmall; yb *= kMillerSmall; P *= kMillerSmall;
+        W *= kMillerSmall; N *= kMillerSmall; ++nsc;
+      }
+    }
+    const double y0 = tz * ya + yb;
+    const double s1 = h * P / y0, sk = h * W / y0;
+    // y_K in the final scale: the top terms of both sums must be negligible.
+    const double yKf = nsc > 0 ? std::ldexp(yK, -664 * nsc) : yK;
+    const double top = K * yKf, lim = kTermEps * h * W;
+    if (yKf < 1e-17 * (y0 + 2.0 * N) &&
+        (top < lim || top * std::pow(h, K) < lim)) {  // h <= 1 on the far side
+      return {s1, sk, 2.0 * N / y0};
+    }
+  }
+  return {R_NaN, R_NaN, R_NaN};
+}
+
+// The same side by direct Poisson sums where both pmfs stay in range: with
+// outer mean p, inner mean q and C_q, g_q(k) = E(k - N_q)+ = sum_{j<k} C_q(j)
+// the inner CDF and stop-loss,
+//   t0 = sum_k Pois(k; p) C_q(k),  t1 = sum_k Pois(k; p) C_q(k - 1),
+//   tE = sum_k Pois(k; p) g_q(k),
+// which are P(Delta <= 0), P(Delta <= -1) and E[Delta-] for Delta = N_q - N_p.
+// Every recurrence is forward and positive.  The summands grow by at most
+// r_k = p (2 + q/k)/(k + 1) per step, so once r_k < 1/2 the tail is below
+// the current summand; that is tested every fourth step.
+// Used while the outer (smaller) mean is at most kDirectMaxOuter, where it
+// takes fewer steps than the Bessel recurrence, and e^-q stays far above the
+// underflow threshold; a sum that lands near it hands over to the recurrence.
+constexpr double kDirectMaxOuter = 60.0;
+constexpr double kDirectMaxInner = 650.0;
+constexpr double kDirectTiny = 1e-290;
+constexpr int kDirectMaxK = 512;
+struct Near { double t0, t1, tE; };
+
+inline bool direct_ok(double a, double b) {
+  return std::fmin(a, b) <= kDirectMaxOuter && std::fmax(a, b) <= kDirectMaxInner;
+}
+
+inline bool near_ok(const Near& n) {
+  return n.t1 > kDirectTiny && n.tE > kDirectTiny;  // false for NaN
+}
+
+inline const double* inv_int_table() {
+  static const std::vector<double> inv = [] {
+    std::vector<double> v(kDirectMaxK + 1, 0.0);
+    for (int k = 1; k <= kDirectMaxK; ++k) v[k] = 1.0 / k;
+    return v;
+  }();
+  return inv.data();
+}
+
+inline Near near_direct(double p, double q) {
+  const double* inv = inv_int_table();
+  double pp = std::exp(-p), pq = std::exp(-q);
+  double C = pq, g = 0.0;
+  double t0 = pp * C, t1 = 0.0, tE = 0.0;
+  for (int k = 1; k < kDirectMaxK; ++k) {
+    pp *= p * inv[k];
+    pq *= q * inv[k];
+    g += C;
+    t1 += pp * C;
+    C += pq;
+    t0 += pp * C;
+    tE += pp * g;
+    if ((k & 3) == 0 && k > p && p * (2.0 + q * inv[k]) * inv[k + 1] < 0.5 &&
+        pp * C < 0.5 * kTermEps * t1 && pp * g < 0.5 * kTermEps * tE) {
+      return {t0, t1, tE};
+    }
+  }
+  return {R_NaN, R_NaN, R_NaN};
+}
+
+// Two sides summed in one pass, so that their independent recurrences
+// overlap; the pass runs until both have converged.
+inline void near_direct2(double p1, double q1, double p2, double q2, Near* o1, Near* o2) {
+  const double* inv = inv_int_table();
+  double pp1 = std::exp(-p1), pq1 = std::exp(-q1), pp2 = std::exp(-p2), pq2 = std::exp(-q2);
+  double C1 = pq1, g1 = 0.0, C2 = pq2, g2 = 0.0;
+  double t01 = pp1 * C1, t11 = 0.0, tE1 = 0.0, t02 = pp2 * C2, t12 = 0.0, tE2 = 0.0;
+  auto done = [&](int k, double p, double q, double pp, double C, double g, double t1, double tE) {
+    return k > p && p * (2.0 + q * inv[k]) * inv[k + 1] < 0.5 &&
+           pp * C < 0.5 * kTermEps * t1 && pp * g < 0.5 * kTermEps * tE;
+  };
+  for (int k = 1; k < kDirectMaxK; ++k) {
+    pp1 *= p1 * inv[k]; pq1 *= q1 * inv[k];
+    pp2 *= p2 * inv[k]; pq2 *= q2 * inv[k];
+    g1 += C1; t11 += pp1 * C1; C1 += pq1; t01 += pp1 * C1; tE1 += pp1 * g1;
+    g2 += C2; t12 += pp2 * C2; C2 += pq2; t02 += pp2 * C2; tE2 += pp2 * g2;
+    if ((k & 3) == 0 && done(k, p1, q1, pp1, C1, g1, t11, tE1) &&
+        done(k, p2, q2, pp2, C2, g2, t12, tE2)) {
+      *o1 = {t01, t11, tE1};
+      *o2 = {t02, t12, tE2};
+      return;
+    }
+  }
+  *o1 = *o2 = {R_NaN, R_NaN, R_NaN};
+}
+
+// The Skellam quantities of one (a, b), each on its small side; only the
+// pairs asked for in need are formed, NaN otherwise.  lo_direct, when given,
+// is the near side already summed directly.
+constexpr int kSkelJ = 1, kSkelE = 2, kSkelSF = 4;
 struct Skel { double lS, lF, lJ, lJc, lEpos, lEneg; };
 
-inline Skel skel(double a, double b) {
+inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) {
   const double z = 2.0 * std::sqrt(a * b);
   const double sd = std::sqrt(a) - std::sqrt(b);
-  const double lp0 = -sd * sd + log_i0_scaled(z);
   const double gap = std::fabs(a - b);
   // Terms beyond k with (k -/+ gap)^2 - gap^2 > 82 (a + b) are below e^-41
   // of the largest.
   const double tail2 = 82.0 * (a + b);
-  Skel o;
   // The side away from the mean has decreasing terms; the other is only
   // summed when the first carries nearly all the mass, so that its complement
   // would lose more than three digits.
   const bool up_mean = a >= b;
-  const Side lo = side_sums(lp0, z, up_mean ? b / a : a / b, 0.0,
-                            std::sqrt(gap * gap + tail2) - gap);
-  Side hi = {R_NaN, R_NaN, R_NaN};
-  if (lo.s0 > kSideFull)
-    hi = side_sums(lp0, z, up_mean ? a / b : b / a, gap, gap + std::sqrt(tail2));
-  // lo is P(Delta <= 0), P(Delta <= -1), E[Delta-] when a >= b, and
-  // P(Delta >= 0), P(Delta >= 1), E[Delta+] otherwise.
-  double near0, near1, nearE, far0, far1, farE;
-  near0 = lo.s0; near1 = lo.s1; nearE = lo.sk;
-  if (ISNAN(hi.s0)) {
-    far0 = log1m_exp(std::fmin(near1, 0.0));  // complement excludes 0
-    far1 = log1m_exp(std::fmin(near0, 0.0));
-    farE = log_add(std::log(gap), nearE);
+  double near0, near1 = R_NaN, far0 = R_NaN, far1 = R_NaN, nearE = R_NaN, farE = R_NaN;
+  const bool want1 = ((need & kSkelJ) && up_mean) || ((need & kSkelSF) && !up_mean);
+  const bool want0 = ((need & kSkelJ) && !up_mean) || ((need & kSkelSF) && up_mean);
+  auto lg0 = [](double x) { return x > 0.0 ? std::log(x) : R_NegInf; };
+  Near lo_d = {R_NaN, R_NaN, R_NaN};
+  if (direct_ok(a, b)) lo_d = lo_direct ? *lo_direct : near_direct(up_mean ? b : a, up_mean ? a : b);
+  if (near_ok(lo_d)) {
+    const Near& lo = lo_d;
+    near0 = std::log(lo.t0);
+    const Near hi = near0 > kSideFull ? near_direct(up_mean ? a : b, up_mean ? b : a)
+                                      : Near{R_NaN, R_NaN, R_NaN};
+    const bool use_hi = !ISNAN(hi.t0);
+    if (want1) {
+      near1 = lg0(lo.t1);
+      far0 = use_hi ? std::log(hi.t0) : log1m_exp(std::fmin(near1, 0.0));  // excludes 0
+    }
+    if (want0) far1 = use_hi ? lg0(hi.t1) : log1m_exp(std::fmin(near0, 0.0));
+    if (need & kSkelE) {
+      nearE = lg0(lo.tE);
+      farE = use_hi ? lg0(hi.tE) : log_add(std::log(gap), nearE);
+    }
   } else {
-    far0 = hi.s0; far1 = hi.s1; farE = hi.sk;
+    const Side lo = side_sums(z, up_mean ? b / a : a / b, 0.0, std::sqrt(gap * gap + tail2) - gap);
+    const double lp0 = -sd * sd - std::log1p(lo.nrm);
+    // lo is P(Delta <= 0), P(Delta <= -1), E[Delta-] when a >= b, and
+    // P(Delta >= 0), P(Delta >= 1), E[Delta+] otherwise; far is the other side.
+    near0 = lp0 + std::log1p(lo.s1);
+    const bool use_hi = near0 > kSideFull;
+    const Side hi = use_hi ? side_sums(z, up_mean ? a / b : b / a, gap, gap + std::sqrt(tail2))
+                           : Side{R_NaN, R_NaN, R_NaN};
+    auto lg = [&](double x) { return x > 0.0 ? lp0 + std::log(x) : R_NegInf; };
+    if (want1) {
+      near1 = lg(lo.s1);
+      far0 = use_hi ? lp0 + std::log1p(hi.s1) : log1m_exp(std::fmin(near1, 0.0));  // excludes 0
+    }
+    if (want0) far1 = use_hi ? lg(hi.s1) : log1m_exp(std::fmin(near0, 0.0));
+    if (need & kSkelE) {
+      nearE = lg(lo.sk);
+      farE = use_hi ? lg(hi.sk) : log_add(std::log(gap), nearE);
+    }
   }
+  Skel o;
   if (up_mean) {
     o.lS = near0; o.lJc = near1; o.lEneg = nearE;
     o.lJ = far0; o.lF = far1; o.lEpos = farE;
@@ -334,6 +640,20 @@ inline Skel skel(double a, double b) {
   return o;
 }
 
+// The Skellam quantities at two distances sharing one a, with the direct
+// near sides summed together.
+inline void skel2(double a, double b1, double b2, int need, Skel* o1, Skel* o2) {
+  if (direct_ok(a, b1) && direct_ok(a, b2)) {
+    Near n1, n2;
+    near_direct2(a >= b1 ? b1 : a, a >= b1 ? a : b1, a >= b2 ? b2 : a, a >= b2 ? a : b2, &n1, &n2);
+    *o1 = skel(a, b1, need, &n1);
+    *o2 = skel(a, b2, need, &n2);
+  } else {
+    *o1 = skel(a, b1, need);
+    *o2 = skel(a, b2, need);
+  }
+}
+
 struct Kernel {
   static double log_pdf_point(double u, double v, double d, double s) {
     const double c = s * s, a = 2.0 * v * u / c, b = 2.0 * d / c;
@@ -342,23 +662,88 @@ struct Kernel {
   }
   static double log_surv_point(double u, double v, double d, double s) {
     const double c = s * s;
-    return skel(2.0 * v * u / c, 2.0 * d / c).lS;
+    return skel(2.0 * v * u / c, 2.0 * d / c, kSkelSF).lS;
   }
   static double log_cdf_point(double u, double v, double d, double s) {
     const double c = s * s;
-    return skel(2.0 * v * u / c, 2.0 * d / c).lF;
+    return skel(2.0 * v * u / c, 2.0 * d / c, kSkelSF).lF;
   }
-  static EndJ end_J(double m, double d, double s) {
+  static bool prefer_Jc(double, double, double, double) { return false; }
+  // Linear ends from the direct sums, when both ends have them and the start
+  // range does not begin at zero.  With up = (a >= b) the near side is
+  // P(Delta <= 0), P(Delta <= -1), E[Delta-]; otherwise P(Delta >= 0),
+  // P(Delta >= 1), E[Delta+].  The far probabilities are complements, kept
+  // only while the near side leaves them three digits (as in skel); the far
+  // stop-loss is the near one plus |a - b|.
+  static bool lin_near(double m, double B, double A, double s, double* a,
+                       double* b1, double* b2, Near* n1, Near* n2) {
+    if (!(B > 0.0)) return false;
+    const double c = s * s;
+    *a = 2.0 * m / c; *b1 = 2.0 * B / c; *b2 = 2.0 * (B + A) / c;
+    if (!direct_ok(*a, *b1) || !direct_ok(*a, *b2)) return false;
+    near_direct2(*a >= *b1 ? *b1 : *a, *a >= *b1 ? *a : *b1,
+                 *a >= *b2 ? *b2 : *a, *a >= *b2 ? *a : *b2, n1, n2);
+    return near_ok(*n1) && near_ok(*n2);
+  }
+
+  static double fast_cdf_surv(double m, double B, double A, double s, bool want_S) {
+    double a, b1, b2;
+    Near n1, n2;
+    if (!lin_near(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
+    const double hc = 0.5 * s * s;
+    auto HL = [&](double b, const Near& n, double* H, double* L) {
+      if (a >= b) { *L = hc * n.tE; *H = *L + hc * (a - b); }
+      else        { *H = hc * n.tE; *L = *H + hc * (b - a); }
+    };
+    double H1, L1, H2, L2;
+    HL(b1, n1, &H1, &L1);
+    HL(b2, n2, &H2, &L2);
+    return lin_cdf_surv(H1, L1, H2, L2, A, want_S);
+  }
+
+  static double fast_pdf(double m, double v, double B, double A, double s) {
+    double a, b1, b2;
+    Near n1, n2;
+    if (!lin_near(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
+    if (n1.t0 > kSideFullLin || n2.t0 > kSideFullLin) return R_NaN;
+    auto J = [&](double b, const Near& n, double* Jv, double* Jc) {
+      if (a >= b) { *Jc = n.t1; *Jv = 1.0 - n.t1; }
+      else        { *Jv = n.t0; *Jc = 1.0 - n.t0; }
+    };
+    double J1, Jc1, J2, Jc2;
+    J(b1, n1, &J1, &Jc1);
+    J(b2, n2, &J2, &Jc2);
+    return std::log(v / A) + lin_J_diff(J1, Jc1, J2, Jc2, false);
+  }
+  // Both forms come from one side sum; want is ignored.
+  static EndJ end_J(double m, double d, double s, int /*want*/ = 3) {
     if (d <= 0.0) return {0.0, R_NegInf};
     const double c = s * s;
-    const Skel k = skel(2.0 * m / c, 2.0 * d / c);
+    const Skel k = skel(2.0 * m / c, 2.0 * d / c, kSkelJ);
     return {k.lJ, k.lJc};
   }
   static EndHL end_HL(double m, double d, double s) {
     if (d <= 0.0) return {std::log(m), R_NegInf};
     const double c = s * s, lth = std::log(0.5 * c);
-    const Skel k = skel(2.0 * m / c, 2.0 * d / c);
+    const Skel k = skel(2.0 * m / c, 2.0 * d / c, kSkelE);
     return {lth + k.lEpos, lth + k.lEneg};
+  }
+  // Both ends of the start range, summed together.
+  static void ends_J(double m, double d1, double d2, double s, int want, EndJ* e1, EndJ* e2) {
+    if (d1 <= 0.0) { *e1 = end_J(m, d1, s, want); *e2 = end_J(m, d2, s, want); return; }
+    const double c = s * s;
+    Skel k1, k2;
+    skel2(2.0 * m / c, 2.0 * d1 / c, 2.0 * d2 / c, kSkelJ, &k1, &k2);
+    *e1 = {k1.lJ, k1.lJc};
+    *e2 = {k2.lJ, k2.lJc};
+  }
+  static void ends_HL(double m, double d1, double d2, double s, EndHL* e1, EndHL* e2) {
+    if (d1 <= 0.0) { *e1 = end_HL(m, d1, s); *e2 = end_HL(m, d2, s); return; }
+    const double c = s * s, lth = std::log(0.5 * c);
+    Skel k1, k2;
+    skel2(2.0 * m / c, 2.0 * d1 / c, 2.0 * d2 / c, kSkelE, &k1, &k2);
+    *e1 = {lth + k1.lEpos, lth + k1.lEneg};
+    *e2 = {lth + k2.lEpos, lth + k2.lEneg};
   }
   // The packets needed to cross d are 1 + Pois(2d/c); the finish time is the
   // arrival of that many events at rate 2v/c.
@@ -422,17 +807,32 @@ inline double log_end_diff(double lx, double ly) {
 
 // log F and log S.  A S = L(B+A) - L(B) and A F = H(B) - H(B+A); each side
 // keeps relative precision below one half and the other is its complement.
+// A null lF or lS skips the quadratures that only that output needs.
 template <class K>
 inline void log_cdf_surv(double u, double v, double B, double A, double s,
                          double* lF, double* lS) {
+  double lF_, lS_;
+  const bool want_F = lF != nullptr, want_S = lS != nullptr;
+  if (!want_F) lF = &lF_;
+  if (!want_S) lS = &lS_;
   A = (B + A) - B;  // the width of the interval the ends actually span
   if (A <= 0.0) {
+    if (!want_S) {
+      *lF = K::log_cdf_point(u, v, B, s);
+      return;
+    }
     *lS = K::log_surv_point(u, v, B, s);
-    *lF = (*lS < -M_LN2) ? std::log(-std::expm1(*lS)) : K::log_cdf_point(u, v, B, s);
+    if (want_F)
+      *lF = (*lS < -M_LN2) ? std::log(-std::expm1(*lS)) : K::log_cdf_point(u, v, B, s);
     return;
   }
   const double m = v * u, lA = std::log(A);
-  const EndHL e1 = K::end_HL(m, B, s), e2 = K::end_HL(m, B + A, s);
+  if (want_F != want_S) {
+    const double q = K::fast_cdf_surv(m, B, A, s, want_S);
+    if (!ISNAN(q)) { *(want_S ? lS : lF) = q; return; }
+  }
+  EndHL e1, e2;
+  K::ends_HL(m, B, B + A, s, &e1, &e2);
   double nS = log_end_diff(e2.lL, e1.lL), nF = log_end_diff(e1.lH, e2.lH);
   if (!ISNAN(nS)) nS -= lA;
   if (!ISNAN(nF)) nF -= lA;
@@ -443,28 +843,29 @@ inline void log_cdf_surv(double u, double v, double B, double A, double s,
     *lF = ISNAN(nF) ? std::log(-std::expm1(*lS)) : nF;
     // The H ends agree closely, so the point CDF varies little over the
     // interval; average it where the complement has lost too many digits.
-    if (ISNAN(nF) && *lF < kComplementFloor) {
+    if (want_F && ISNAN(nF) && *lF < kComplementFloor) {
       const double lq = log_gl_checked(B, A, [&](double d) {
         return K::log_cdf_point(u, v, d, s); });
       if (!ISNAN(lq)) *lF = lq;
     }
     return;
   }
+  if (!want_S && !ISNAN(nF)) { *lF = std::fmin(nF, 0.0); return; }
   // The survivor ends agree too closely: average the point survivor, whose
   // integrand then varies little over the interval.
   *lS = std::fmin(log_gl_average(B, A, [&](double d) {
     return K::log_surv_point(u, v, d, s); }), 0.0);
   if (!ISNAN(nF)) *lF = std::fmin(nF, 0.0);
   else if (*lS < -M_LN2) *lF = std::log(-std::expm1(*lS));
-  else *lF = log_gl_average(B, A, [&](double d) { return K::log_cdf_point(u, v, d, s); });
+  else if (want_F) *lF = log_gl_average(B, A, [&](double d) { return K::log_cdf_point(u, v, d, s); });
 }
 
 template <class K>
 inline double log_surv(double u, double v, double B, double A, double s) {
   if (!(u > 0.0)) return 0.0;
   if (!R_FINITE(u)) return R_NegInf;
-  double lF, lS;
-  log_cdf_surv<K>(u, v, B, A, s, &lF, &lS);
+  double lS;
+  log_cdf_surv<K>(u, v, B, A, s, nullptr, &lS);
   return std::fmin(lS, 0.0);
 }
 
@@ -472,21 +873,35 @@ template <class K>
 inline double log_cdf(double u, double v, double B, double A, double s) {
   if (!(u > 0.0)) return R_NegInf;
   if (!R_FINITE(u)) return 0.0;
-  double lF, lS;
-  log_cdf_surv<K>(u, v, B, A, s, &lF, &lS);
+  double lF;
+  log_cdf_surv<K>(u, v, B, A, s, &lF, nullptr);
   return std::fmin(lF, 0.0);
 }
 
-// f = v [J(B) - J(B+A)] / A = v [Jc(B+A) - Jc(B)] / A.
+// f = v [J(B) - J(B+A)] / A = v [Jc(B+A) - Jc(B)] / A.  Where an end carries
+// both forms the one whose larger term is smaller is differenced; otherwise
+// the kernel's preferred form is formed first and the other only when the
+// first agrees too closely at the two ends.
 template <class K>
 inline double log_pdf(double u, double v, double B, double A, double s) {
   if (!(u > 0.0) || !R_FINITE(u)) return R_NegInf;
   A = (B + A) - B;
   if (A <= 0.0) return K::log_pdf_point(u, v, B, s);
   const double m = v * u;
-  const EndJ e1 = K::end_J(m, B, s), e2 = K::end_J(m, B + A, s);
-  const double nJ = (e2.lJc < e1.lJ) ? log_end_diff(e2.lJc, e1.lJc)
-                                     : log_end_diff(e1.lJ, e2.lJ);
+  const double fast = K::fast_pdf(m, v, B, A, s);
+  if (!ISNAN(fast)) return fast;
+  const int want = K::prefer_Jc(m, B, A, s) ? 2 : 1;
+  EndJ e1, e2;
+  K::ends_J(m, B, B + A, s, want, &e1, &e2);
+  const bool use_Jc = (ISNAN(e1.lJ) || ISNAN(e2.lJ) || ISNAN(e1.lJc) || ISNAN(e2.lJc))
+    ? want == 2 : e2.lJc < e1.lJ;
+  double nJ = use_Jc ? log_end_diff(e2.lJc, e1.lJc) : log_end_diff(e1.lJ, e2.lJ);
+  if (ISNAN(nJ)) {
+    if (ISNAN(use_Jc ? e1.lJ : e1.lJc) || ISNAN(use_Jc ? e2.lJ : e2.lJc)) {
+      K::ends_J(m, B, B + A, s, use_Jc ? 1 : 2, &e1, &e2);
+    }
+    nJ = use_Jc ? log_end_diff(e1.lJ, e2.lJ) : log_end_diff(e2.lJc, e1.lJc);
+  }
   if (!ISNAN(nJ)) return std::log(v) + nJ - std::log(A);
   return log_gl_average(B, A, [&](double d) { return K::log_pdf_point(u, v, d, s); });
 }
