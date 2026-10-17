@@ -574,18 +574,24 @@ inline Side side_sums(double z, double t, double kmode, double kstop) {
 // Used while the outer (smaller) mean is at most kDirectMaxOuter, where it
 // takes fewer steps than the Bessel recurrence, and e^-q stays far above the
 // underflow threshold; a sum that lands near it hands over to the recurrence.
+// Only the sums named in the mask W (kNT0, kNT1, kNTE) are formed and tested,
+// the others are NaN.
 constexpr double kDirectMaxOuter = 60.0;
 constexpr double kDirectMaxInner = 650.0;
 constexpr double kDirectTiny = 1e-290;
 constexpr int kDirectMaxK = 512;
 struct Near { double t0, t1, tE; };
+constexpr int kNT0 = 1, kNT1 = 2, kNTE = 4, kNAll = 7;
 
 inline bool direct_ok(double a, double b) {
-  return std::fmin(a, b) <= kDirectMaxOuter && std::fmax(a, b) <= kDirectMaxInner;
+  return a < b ? a <= kDirectMaxOuter && b <= kDirectMaxInner
+               : b <= kDirectMaxOuter && a <= kDirectMaxInner;
 }
 
-inline bool near_ok(const Near& n) {
-  return n.t1 > kDirectTiny && n.tE > kDirectTiny;  // false for NaN
+template <int W>
+inline bool near_ok(const Near& n) {  // false for NaN
+  return (!(W & kNT0) || n.t0 > kDirectTiny) && (!(W & kNT1) || n.t1 > kDirectTiny) &&
+         (!(W & kNTE) || n.tE > kDirectTiny);
 }
 
 inline const double* inv_int_table() {
@@ -597,16 +603,31 @@ inline const double* inv_int_table() {
   return inv.data();
 }
 
-// Whether the sums at index k have converged (see above).
+// Whether the wanted sums have converged at index k (see above).  The step
+// ratio of the t0 and t1 summands is at most r = p/(k+1) C_q(k+1)/C_q(k), and
+// that of the tE summands p/(k+1) (1 + C/g); each tail test
+// term r/(1 - r) < eps sum is taken multiplied through by 1 - r.
+template <int W>
 inline bool direct_done(int k, double p, double q, const double* inv, double pp,
-                        double pq, double C, double g, double t1, double tE) {
-  const double r = p * inv[k + 1] *
-                   std::fmax(1.0 + q * inv[k + 1] * pq / C, 1.0 + C / g);
-  if (!(r < 1.0)) return false;
-  const double tail = r / (1.0 - r);
-  return pp * C * tail < 0.5 * kTermEps * t1 && pp * g * tail < 0.5 * kTermEps * tE;
+                        double pq, double C, double g, double t0, double t1, double tE) {
+  const double pk = p * inv[k + 1];
+  if (W & (kNT0 | kNT1)) {
+    const double r = pk * (1.0 + q * inv[k + 1] * pq / C);
+    const double t = (W & kNT1) ? t1 : t0;
+    if (!(r < 1.0) || !(pp * C * r < 0.5 * kTermEps * t * (1.0 - r))) return false;
+  }
+  if (W & kNTE) {
+    const double r = pk * (1.0 + C / g);
+    if (!(r < 1.0) || !(pp * g * r < 0.5 * kTermEps * tE * (1.0 - r))) return false;
+  }
+  return true;
 }
 
+inline Near near_out(int W, double t0, double t1, double tE) {
+  return {(W & kNT0) ? t0 : R_NaN, (W & kNT1) ? t1 : R_NaN, (W & kNTE) ? tE : R_NaN};
+}
+
+template <int W>
 inline Near near_direct(double p, double q) {
   const double* inv = inv_int_table();
   double pp = std::exp(-p), pq = std::exp(-q);
@@ -615,13 +636,13 @@ inline Near near_direct(double p, double q) {
   for (int k = 1; k < kDirectMaxK; ++k) {
     pp *= p * inv[k];
     pq *= q * inv[k];
-    g += C;
-    t1 += pp * C;
+    if (W & kNTE) g += C;
+    if (W & kNT1) t1 += pp * C;
     C += pq;
-    t0 += pp * C;
-    tE += pp * g;
-    if ((k & 3) == 0 && direct_done(k, p, q, inv, pp, pq, C, g, t1, tE)) {
-      return {t0, t1, tE};
+    if (W & kNT0) t0 += pp * C;
+    if (W & kNTE) tE += pp * g;
+    if ((k & 3) == 0 && direct_done<W>(k, p, q, inv, pp, pq, C, g, t0, t1, tE)) {
+      return near_out(W, t0, t1, tE);
     }
   }
   return {R_NaN, R_NaN, R_NaN};
@@ -629,6 +650,7 @@ inline Near near_direct(double p, double q) {
 
 // Two sides summed in one pass, so that their independent recurrences
 // overlap; the pass runs until both have converged.
+template <int W>
 inline void near_direct2(double p1, double q1, double p2, double q2, Near* o1, Near* o2) {
   const double* inv = inv_int_table();
   double pp1 = std::exp(-p1), pq1 = std::exp(-q1), pp2 = std::exp(-p2), pq2 = std::exp(-q2);
@@ -637,22 +659,146 @@ inline void near_direct2(double p1, double q1, double p2, double q2, Near* o1, N
   for (int k = 1; k < kDirectMaxK; ++k) {
     pp1 *= p1 * inv[k]; pq1 *= q1 * inv[k];
     pp2 *= p2 * inv[k]; pq2 *= q2 * inv[k];
-    g1 += C1; t11 += pp1 * C1; C1 += pq1; t01 += pp1 * C1; tE1 += pp1 * g1;
-    g2 += C2; t12 += pp2 * C2; C2 += pq2; t02 += pp2 * C2; tE2 += pp2 * g2;
-    if ((k & 3) == 0 && direct_done(k, p1, q1, inv, pp1, pq1, C1, g1, t11, tE1) &&
-        direct_done(k, p2, q2, inv, pp2, pq2, C2, g2, t12, tE2)) {
-      *o1 = {t01, t11, tE1};
-      *o2 = {t02, t12, tE2};
+    if (W & kNTE) { g1 += C1; g2 += C2; }
+    if (W & kNT1) { t11 += pp1 * C1; t12 += pp2 * C2; }
+    C1 += pq1; C2 += pq2;
+    if (W & kNT0) { t01 += pp1 * C1; t02 += pp2 * C2; }
+    if (W & kNTE) { tE1 += pp1 * g1; tE2 += pp2 * g2; }
+    if ((k & 3) == 0 && direct_done<W>(k, p1, q1, inv, pp1, pq1, C1, g1, t01, t11, tE1) &&
+        direct_done<W>(k, p2, q2, inv, pp2, pq2, C2, g2, t02, t12, tE2)) {
+      *o1 = near_out(W, t01, t11, tE1);
+      *o2 = near_out(W, t02, t12, tE2);
       return;
     }
   }
   *o1 = *o2 = {R_NaN, R_NaN, R_NaN};
 }
 
+// The sums skel needs for need: t0 always (it decides whether the far side is
+// summed too), t1 for the probabilities and tE for the stop-losses.
+constexpr int kSkelJ = 1, kSkelE = 2, kSkelSF = 4;
+
+inline Near near_direct_need(double p, double q, int need) {
+  if (!(need & kSkelE)) return near_direct<kNT0 | kNT1>(p, q);
+  if (!(need & (kSkelJ | kSkelSF))) return near_direct<kNT0 | kNTE>(p, q);
+  return near_direct<kNAll>(p, q);
+}
+
+inline void near_direct2_need(double p1, double q1, double p2, double q2, int need,
+                              Near* o1, Near* o2) {
+  if (!(need & kSkelE)) near_direct2<kNT0 | kNT1>(p1, q1, p2, q2, o1, o2);
+  else if (!(need & (kSkelJ | kSkelSF))) near_direct2<kNT0 | kNTE>(p1, q1, p2, q2, o1, o2);
+  else near_direct2<kNAll>(p1, q1, p2, q2, o1, o2);
+}
+
+inline bool near_ok_need(const Near& n, int need) {
+  if (!(need & kSkelE)) return near_ok<kNT0 | kNT1>(n);
+  if (!(need & (kSkelJ | kSkelSF))) return near_ok<kNT0 | kNTE>(n);
+  return near_ok<kNAll>(n);
+}
+
+// The near side for large z by an expansion in 1/z.  With big >= small the
+// near quantities P(N_big <= K_small), P(N_big <= K_small - 1) and
+// E(K_small - N_big)+ are tails beyond big of the mixed gamma laws
+// Gamma(1 + K) and Gamma(K), whose densities are e^{-x-small} I_0(w) and
+// e^{-x-small} sqrt(small/x) I_1(w), w = 2 sqrt(small x).  With
+// x = (sqrt(big) + t)^2, delta = sqrt(big) - sqrt(small), tau = t/sqrt(big)
+// and I~_nu(w) = e^{-w} I_nu(w),
+//
+//   P0 = 2 sqrt(big)       int_0^inf e^{-(delta+t)^2} (1 + tau) I~_0(z(1 + tau)) dt,
+//   P1 = 2 sqrt(small)     int_0^inf e^{-(delta+t)^2} I~_1(z(1 + tau)) dt,
+//   E  = 2 sqrt(small) big int_0^inf e^{-(delta+t)^2} (2 tau + tau^2) I~_1(z(1 + tau)) dt.
+//
+// Hankel's expansion I~_nu(w) = (2 pi w)^{-1/2} sum_k C_k(nu) w^{-k} and the
+// binomial series of (1 + tau)^{1/2-k} or (1 + tau)^{-1/2-k} reduce each to
+// the moments int_0^inf e^{-(delta+t)^2} tau^j dt = e^{-delta^2} R(x) nu_j/sqrt(2),
+// x = sqrt(2) delta, with nu_j = (U_j/U_0) (2 big)^{-j/2} and
+// U_j(x) = int_0^inf s^j e^{-xs-s^2/2} ds: U_0, U_1, U_2 are the Mills R, D, E
+// and U_{j+1} = j U_{j-1} - x U_j.  That recurrence is unstable upward for
+// large x, but the error it carries into nu_j shrinks like (delta/sqrt(big))^j
+// relative to nu_0, so the sums keep their digits.  The Hankel remainder is
+// of order e^{-2z} and the binomial series' of order e^{-big}.  nu_j is
+// truncated by its bounds Gamma((j+1)/2)/(sqrt(pi) big^{j/2}) (its value at
+// x = 0) and j! (1 + 1/x^2) (2 big)^{-j/2}/x^j.  The products
+// C_k(nu) binom(p_k, j) are tabulated, so each k is a dot product over j.
+// Used where the sums above would need the Bessel recurrence; there
+// big >= kDirectMaxOuter.
+constexpr double kAsymMinZ = 40.0;
+constexpr int kAsymK = 24, kAsymJ = 48;
+constexpr double kAsymTol = 1e-17;
+
+struct AsymTable { double c0[kAsymK][kAsymJ + 1], c1[kAsymK][kAsymJ + 1]; };
+
+inline const AsymTable& asym_table() {
+  static const AsymTable* tab = [] {
+    auto* t = new AsymTable;
+    double C0 = 1.0, C1 = 1.0;  // C_k(0), C_k(1)
+    for (int k = 0; k < kAsymK; ++k) {
+      const double p0 = 0.5 - k, p1 = -0.5 - k;
+      double b0 = 1.0, b1 = 1.0;
+      for (int j = 0; j <= kAsymJ; ++j) {
+        if (j > 0) { b0 *= (p0 - j + 1) / j; b1 *= (p1 - j + 1) / j; }
+        t->c0[k][j] = C0 * b0;
+        t->c1[k][j] = C1 * b1;
+      }
+      const double q = (2.0 * k + 1) * (2.0 * k + 1);
+      C0 *= q / (8.0 * (k + 1));
+      C1 *= (q - 4.0) / (8.0 * (k + 1));
+    }
+    return t;
+  }();
+  return *tab;
+}
+
+struct NearLog { double l0, l1, lE; };
+
+// big >= small, z = 2 sqrt(big small) >= kAsymMinZ, big >= kDirectMaxOuter.
+// l1 and lE are formed only when asked for (NaN otherwise).
+inline NearLog near_asym(double big, double small, bool want1, bool wantE) {
+  const double z = 2.0 * std::sqrt(big * small);
+  const double sb = std::sqrt(big), ss = std::sqrt(small);
+  const double delta = (big - small) / (sb + ss);
+  const double x = M_SQRT2 * delta, r = 1.0 / std::sqrt(2.0 * big), ib = 1.0 / big;
+  const ig::Mills ml = ig::mills_seq(x);
+  double nu[kAsymJ + 3];
+  nu[0] = 1.0; nu[1] = r * ml.D / ml.R; nu[2] = r * r * ml.E / ml.R;
+  double G0 = 1.0, G1 = 1.0 / std::sqrt(M_PI * big), L = 1.0 + 1.0 / (x * x);
+  int J = 0;
+  for (;; ++J) {
+    if (J >= 3) nu[J] = r * ((J - 1) * r * nu[J - 2] - x * nu[J - 1]);
+    if (G0 < kAsymTol || L < kAsymTol || J >= kAsymJ) break;
+    const double G2 = G0 * 0.5 * (J + 1) * ib;
+    G0 = G1; G1 = G2;
+    L *= (J + 1) * r / x;
+  }
+  if (J < 2) J = 2;
+  double eps[kAsymJ + 1];
+  if (wantE) {
+    for (int j = J + 1; j <= J + 2; ++j) nu[j] = r * ((j - 1) * r * nu[j - 2] - x * nu[j - 1]);
+    for (int j = 0; j <= J; ++j) eps[j] = 2.0 * nu[j + 1] + nu[j + 2];
+  }
+  const AsymTable& tab = asym_table();
+  const double iz = 1.0 / z;
+  double s0 = 0.0, s1 = 0.0, sE = 0.0, zk = 1.0;
+  for (int k = 0; k < kAsymK; ++k, zk *= iz) {
+    const double* c0 = tab.c0[k];
+    const double* c1 = tab.c1[k];
+    double a0 = 0.0, a1 = 0.0, aE = 0.0;
+    for (int j = 0; j <= J; ++j) a0 += c0[j] * nu[j];
+    if (want1) for (int j = 0; j <= J; ++j) a1 += c1[j] * nu[j];
+    if (wantE) for (int j = 0; j <= J; ++j) aE += c1[j] * eps[j];
+    s0 += zk * a0; s1 += zk * a1; sE += zk * aE;
+    if (zk * std::fabs(c0[0]) < kAsymTol && zk * std::fabs(c1[0]) < kAsymTol) break;
+  }
+  const double lC = -0.5 * std::log(4.0 * M_PI * z) - delta * delta + std::log(ml.R);
+  return {lC + std::log(2.0 * sb * s0),
+          want1 ? lC + std::log(2.0 * ss * s1) : R_NaN,
+          wantE ? lC + std::log(2.0 * ss * big * sE) : R_NaN};
+}
+
 // The Skellam quantities of one (a, b), each on its small side; only the
 // pairs asked for in need are formed, NaN otherwise.  lo_direct, when given,
-// is the near side already summed directly.
-constexpr int kSkelJ = 1, kSkelE = 2, kSkelSF = 4;
+// is the near side already summed directly for the same need.
 struct Skel { double lS, lF, lJ, lJc, lEpos, lEneg; };
 
 inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) {
@@ -671,11 +817,14 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
   const bool want0 = ((need & kSkelJ) && !up_mean) || ((need & kSkelSF) && up_mean);
   auto lg0 = [](double x) { return x > 0.0 ? std::log(x) : R_NegInf; };
   Near lo_d = {R_NaN, R_NaN, R_NaN};
-  if (direct_ok(a, b)) lo_d = lo_direct ? *lo_direct : near_direct(up_mean ? b : a, up_mean ? a : b);
-  if (near_ok(lo_d)) {
+  NearLog lo_a;
+  if (direct_ok(a, b)) {
+    lo_d = lo_direct ? *lo_direct : near_direct_need(up_mean ? b : a, up_mean ? a : b, need);
+  }
+  if (near_ok_need(lo_d, need)) {
     const Near& lo = lo_d;
     near0 = std::log(lo.t0);
-    const Near hi = near0 > kSideFull ? near_direct(up_mean ? a : b, up_mean ? b : a)
+    const Near hi = near0 > kSideFull ? near_direct<kNAll>(up_mean ? a : b, up_mean ? b : a)
                                       : Near{R_NaN, R_NaN, R_NaN};
     const bool use_hi = !ISNAN(hi.t0);
     if (want1) {
@@ -686,6 +835,20 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
     if (need & kSkelE) {
       nearE = lg0(lo.tE);
       farE = use_hi ? lg0(hi.tE) : log_add(std::log(gap), nearE);
+    }
+  } else if (z >= kAsymMinZ && std::fmax(a, b) >= kDirectMaxOuter &&
+             (lo_a = near_asym(up_mean ? a : b, up_mean ? b : a, want1, need & kSkelE),
+              lo_a.l0 <= kSideFull)) {
+    // The far side as complements, as when the near side is summed directly.
+    near0 = lo_a.l0;
+    if (want1) {
+      near1 = lo_a.l1;
+      far0 = log1m_exp(std::fmin(near1, 0.0));
+    }
+    if (want0) far1 = log1m_exp(std::fmin(near0, 0.0));
+    if (need & kSkelE) {
+      nearE = lo_a.lE;
+      farE = log_add(std::log(gap), nearE);
     }
   } else {
     const Side lo = side_sums(z, up_mean ? b / a : a / b, 0.0, std::sqrt(gap * gap + tail2) - gap);
@@ -723,7 +886,8 @@ inline Skel skel(double a, double b, int need, const Near* lo_direct = nullptr) 
 inline void skel2(double a, double b1, double b2, int need, Skel* o1, Skel* o2) {
   if (direct_ok(a, b1) && direct_ok(a, b2)) {
     Near n1, n2;
-    near_direct2(a >= b1 ? b1 : a, a >= b1 ? a : b1, a >= b2 ? b2 : a, a >= b2 ? a : b2, &n1, &n2);
+    near_direct2_need(a >= b1 ? b1 : a, a >= b1 ? a : b1, a >= b2 ? b2 : a, a >= b2 ? a : b2,
+                      need, &n1, &n2);
     *o1 = skel(a, b1, need, &n1);
     *o2 = skel(a, b2, need, &n2);
   } else {
@@ -753,21 +917,22 @@ struct Kernel {
   // P(Delta >= 1), E[Delta+].  The far probabilities are complements, kept
   // only while the near side leaves them three digits (as in skel); the far
   // stop-loss is the near one plus |a - b|.
+  template <int W>
   static bool lin_near(double m, double B, double A, double s, double* a,
                        double* b1, double* b2, Near* n1, Near* n2) {
     if (!(B > 0.0)) return false;
     const double c = s * s;
     *a = 2.0 * m / c; *b1 = 2.0 * B / c; *b2 = 2.0 * (B + A) / c;
     if (!direct_ok(*a, *b1) || !direct_ok(*a, *b2)) return false;
-    near_direct2(*a >= *b1 ? *b1 : *a, *a >= *b1 ? *a : *b1,
-                 *a >= *b2 ? *b2 : *a, *a >= *b2 ? *a : *b2, n1, n2);
-    return near_ok(*n1) && near_ok(*n2);
+    near_direct2<W>(*a >= *b1 ? *b1 : *a, *a >= *b1 ? *a : *b1,
+                    *a >= *b2 ? *b2 : *a, *a >= *b2 ? *a : *b2, n1, n2);
+    return near_ok<W>(*n1) && near_ok<W>(*n2);
   }
 
   static double fast_cdf_surv(double m, double B, double A, double s, bool want_S) {
     double a, b1, b2;
     Near n1, n2;
-    if (!lin_near(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
+    if (!lin_near<kNTE>(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
     const double hc = 0.5 * s * s;
     auto HL = [&](double b, const Near& n, double* H, double* L) {
       if (a >= b) { *L = hc * n.tE; *H = *L + hc * (a - b); }
@@ -782,7 +947,7 @@ struct Kernel {
   static double fast_pdf(double m, double v, double B, double A, double s) {
     double a, b1, b2;
     Near n1, n2;
-    if (!lin_near(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
+    if (!lin_near<kNT0 | kNT1>(m, B, A, s, &a, &b1, &b2, &n1, &n2)) return R_NaN;
     if (n1.t0 > kSideFullLin || n2.t0 > kSideFullLin) return R_NaN;
     auto J = [&](double b, const Near& n, double* Jv, double* Jc) {
       if (a >= b) { *Jc = n.t1; *Jv = 1.0 - n.t1; }
