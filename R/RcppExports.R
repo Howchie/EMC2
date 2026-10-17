@@ -471,6 +471,14 @@ pRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE,
     .Call(`_EMC2_pRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
+drsub <- function(t, v, B, A, s, packets = FALSE, log_out = FALSE) {
+    .Call(`_EMC2_drsub`, t, v, B, A, s, packets, log_out)
+}
+
+prsub <- function(t, v, B, A, s, packets = FALSE, lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_prsub`, t, v, B, A, s, packets, lower_tail, log_out)
+}
+
 ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma = 8.0, k_tau = 16.0) {
     .Call(`_EMC2_ss_exg_stop_success_value`, SSD, pars, upper, max_subdiv, abs_tol, rel_tol, k_sigma, k_tau)
 }
@@ -617,6 +625,10 @@ rfrq_cpp <- function(pars, lR_levels, ok) {
 
 ropr_cpp <- function(pars, lR_levels, ok, chart) {
     .Call(`_EMC2_ropr_cpp`, pars, lR_levels, ok, chart)
+}
+
+rrsub_cpp <- function(pars, lR_levels, ok, packets) {
+    .Call(`_EMC2_rrsub_cpp`, pars, lR_levels, ok, packets)
 }
 
 rfrqfade_cpp <- function(pars, lR_levels, ok) {

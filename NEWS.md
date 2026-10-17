@@ -1,6 +1,17 @@
 # EMC2 3.4.0
 ## Development
 
+-   **New model `RSUB()`:** racing subordinators. Each accumulator's
+    evidence is a nondecreasing pure-jump Levy process with mean `v u` and
+    variance `s^2 v u`, finishing at a uniform-start criterion
+    `b = B + A`. `evidence = "dense"` (the default) is the inverse-Gaussian
+    subordinator, with first-passage density and CDF closed form in normal
+    functions; `evidence = "packets"` is compound Poisson evidence with
+    exponential packets, with Skellam-series density and CDF. Both include
+    start-point variability analytically, are evaluated in the compiled
+    likelihood, and have compiled simulators that draw the exact decision
+    time.
+
 -   **New model `OPR()`:** the opponent Poisson race. Each accumulator
     counts positive minus negative Poisson events to a continuous
     criterion `K`, with the exact Bessel first-passage density and the

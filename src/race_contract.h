@@ -283,6 +283,10 @@ struct ContextForRaceModels {
     // OPR rate chart: 0 = (v, rho), 1 = (lambda_p, lambda_m), 2 = (v, lambda0).
     int opr_chart = 0;
 
+    // RSUB evidence law: 0 = inverse-Gaussian subordinator, 1 = exponential
+    // packets (compound Poisson).
+    int rsub_packets = 0;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;

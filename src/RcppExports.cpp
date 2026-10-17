@@ -2117,6 +2117,41 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// drsub
+NumericVector drsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool log_out);
+RcppExport SEXP _EMC2_drsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< bool >::type packets(packetsSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(drsub(t, v, B, A, s, packets, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// prsub
+NumericVector prsub(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector s, bool packets, bool lower_tail, bool log_out);
+RcppExport SEXP _EMC2_prsub(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP packetsSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< bool >::type packets(packetsSEXP);
+    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(prsub(t, v, B, A, s, packets, lower_tail, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ss_exg_stop_success_value
 double ss_exg_stop_success_value(double SSD, NumericMatrix pars, double upper, int max_subdiv, double abs_tol, double rel_tol, double k_sigma, double k_tau);
 RcppExport SEXP _EMC2_ss_exg_stop_success_value(SEXP SSDSEXP, SEXP parsSEXP, SEXP upperSEXP, SEXP max_subdivSEXP, SEXP abs_tolSEXP, SEXP rel_tolSEXP, SEXP k_sigmaSEXP, SEXP k_tauSEXP) {
@@ -2694,6 +2729,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     Rcpp::traits::input_parameter< int >::type chart(chartSEXP);
     rcpp_result_gen = Rcpp::wrap(ropr_cpp(pars, lR_levels, ok, chart));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rrsub_cpp
+Rcpp::List rrsub_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool packets);
+RcppExport SEXP _EMC2_rrsub_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP packetsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< bool >::type packets(packetsSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrsub_cpp(pars, lR_levels, ok, packets));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3910,6 +3959,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 15},
     {"_EMC2_dRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_clock_cpp, 11},
     {"_EMC2_pRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_clock_cpp, 11},
+    {"_EMC2_drsub", (DL_FUNC) &_EMC2_drsub, 7},
+    {"_EMC2_prsub", (DL_FUNC) &_EMC2_prsub, 8},
     {"_EMC2_ss_exg_stop_success_value", (DL_FUNC) &_EMC2_ss_exg_stop_success_value, 8},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 5},
     {"_EMC2_stopfn_exg", (DL_FUNC) &_EMC2_stopfn_exg, 6},
@@ -3947,6 +3998,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rbawdp_cpp", (DL_FUNC) &_EMC2_rbawdp_cpp, 5},
     {"_EMC2_rfrq_cpp", (DL_FUNC) &_EMC2_rfrq_cpp, 3},
     {"_EMC2_ropr_cpp", (DL_FUNC) &_EMC2_ropr_cpp, 4},
+    {"_EMC2_rrsub_cpp", (DL_FUNC) &_EMC2_rrsub_cpp, 4},
     {"_EMC2_rfrqfade_cpp", (DL_FUNC) &_EMC2_rfrqfade_cpp, 3},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
     {"_EMC2_rrdmswtn_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_drift_corr_cpp, 4},

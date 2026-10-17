@@ -10,6 +10,7 @@
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
 #include "model_OPR.h"
+#include "model_RSUB.h"
 #include "time_clock.h"
 #include <cmath>
 #include <memory>
@@ -674,6 +675,16 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     // (v, lambda0) charts are proper.
     out.ctx.defective_upper_tail = rates;
     out.ctx.supports_batched_defective_truncation = rates;
+  } else if (type_std.find("RSUB") != std::string::npos) {
+    // RSUB_PK swaps the inverse-Gaussian evidence for exponential packets.
+    out.pdf1_ptr          = &drsub_scalar;
+    out.cdf1_ptr          = &prsub_scalar;
+    out.model_dfun_raw    = &drsub_raw;
+    out.model_pfun_raw    = &prsub_raw;
+    out.logS_at_t_ptr     = &rsub_logS_at_t;
+    out.col_spec          = emc2col::rsub::spec();
+    out.ctx.t0_index      = emc2col::rsub::t0;
+    out.ctx.rsub_packets  = (type_std.find("RSUB_PK") != std::string::npos) ? 1 : 0;
   } else if (type_std.find("REXG") != std::string::npos) {
     out.pdf1_ptr = &dexg_scalar;
     out.cdf1_ptr = &pexg_scalar;

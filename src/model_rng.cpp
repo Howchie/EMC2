@@ -10,6 +10,7 @@
 #include "model_FRQ.h"
 #include "model_FRQfade.h"
 #include "model_OPR.h"
+#include "model_RSUB.h"
 #include "model_BTAwL.h"
 #include "ddm_functions_inline.h"
 #include "time_warp.h"
@@ -1444,6 +1445,44 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     double a, b;
     opr::chart_rates(chart, pars(r, i1), pars(r, i2), &a, &b);
     const double d = opr::draw_decision(pars(r, ik), a, b);
+    dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// Racing subordinator simulator.  pars columns: v, B, A, t0, s.  Each
+// decision time is drawn exactly by rsub::draw_decision: the scaled
+// Brownian-bridge maximum for the inverse-Gaussian evidence, the gamma
+// arrival of 1 + Pois(2d/s^2) events for packets.
+// [[Rcpp::export]]
+Rcpp::List rrsub_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                     Rcpp::LogicalVector ok, bool packets) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rrsub_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rrsub_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  for (const char* nm : {"v", "B", "A", "t0", "s"})
+    if (!ci.count(nm)) Rcpp::stop("rrsub_cpp: missing parameter column '%s'.", nm);
+  const int iv = ci.at("v"), iB = ci.at("B"), iA = ci.at("A"),
+            it0 = ci.at("t0"), is = ci.at("s");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r] || !R_FINITE(t0col[r])) continue;
+    const double d = packets
+      ? rsub::draw_decision<rsub::cp::Kernel>(pars(r, iv), pars(r, iB), pars(r, iA), pars(r, is))
+      : rsub::draw_decision<rsub::ig::Kernel>(pars(r, iv), pars(r, iB), pars(r, iA), pars(r, is));
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 

@@ -207,6 +207,16 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   rOPR(lR, pars, ok = ok)
 }
 
+.rfun_RSUB <- function(lR, pars, packets = FALSE, ok = rep(TRUE, length(lR))) {
+  if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+  if (.use_cpp_rfun()) {
+    res <- rrsub_cpp(pars, levels(lR), ok, packets)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rRSUB(lR, pars, packets = packets, ok = ok)
+}
+
 .rfun_FRQfade <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   if (.use_cpp_rfun()) {
     res <- rfrqfade_cpp(pars, levels(lR), ok)

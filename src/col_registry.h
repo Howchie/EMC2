@@ -515,6 +515,17 @@ namespace opr {
   }
 }
 
+// R/model_RSUB.R — racing subordinators.  b = B + A as in RDM; s^2 is the
+// evidence variance per unit of mean evidence.  RSUB_PK (packets) shares the
+// columns.
+namespace rsub {
+  enum : int { v = 0, B, A, t0, s, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "A", "t0", "s"};
+    return {n, N_REQ, "RSUB"};
+  }
+}
+
 namespace frq_fade {
   enum : int { K = 0, v, sv, kappa, t0, plo, clock, N_REQ };
   inline ColSpec spec() {
