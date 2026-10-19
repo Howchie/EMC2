@@ -1,0 +1,2425 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\geometry{margin=1.05in}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{A Mathematical Primer for Wald and Ornstein--Uhlenbeck Race Models}
+\author{}
+\date{\today}
+
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\PhiN}{\Phi}
+\newcommand{\phiN}{\phi}
+\newcommand{\PhiTwo}{\Phi_2}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note gives a mathematical description of one-boundary Wald and Ornstein--Uhlenbeck (OU) accumulators, their racing constructions (including the Race of OUs, or ROU, and the pooled/coactivation ROUp model), bounded two-boundary OU diffusion (BOU), the pulse-drift extension, and a finite time transformation of the Wald process (RDMSWTN\_TT). It also collects identities for non-decision time, uniform start-point variability, Gaussian drift variability, Gaussian copulas for correlated finishing times, and Erlang guess and kill clocks, including a hybrid clock that mixes shape 1 and shape 2 timing. Special attention is given to defective negative-drift Wald processes, the distinction between full-Gaussian and positive-truncated drift laws (and how they contrast with rectified models), copula rank coupling of finite and defective finishing times, and the boundary between closed-form expressions and one-dimensional quadrature. A gamma drift law, parameterised by its mean and standard deviation, is treated without quadrature through positive series of incomplete-gamma and parabolic-cylinder terms. The two-noise diffusion of Smith and Lilburn (2020), with stimulus-dependent and stimulus-independent noise, is restated, together with its Wald form when the stimulus input is constant within a trial. A final pair of models replaces Brownian evidence by a nondecreasing pure-jump process with the same rate-proportional mean and variance, either the inverse-Gaussian subordinator or compound Poisson evidence with exponential packets; their first-passage laws and uniform start-point averages are closed form in normal functions and in Skellam probabilities respectively. Ballistic race models are not covered here; they are derived in a companion note, since they are not first-passage laws and share none of the machinery below.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Theory Map and Reading Guide}
+The model combines a few standard mathematical objects. The terminology follows
+the supplied chapters from Smith and Ratcliff's \emph{Diffusion Process Models
+of Decision Making}: the sequential-sampling overview (Chapter 3, especially
+Sections 3.6--3.8) and the treatment of time-varying diffusion models for
+detection and simple RT (Chapter 8, especially Sections 8.2--8.5). The
+corresponding chapter records are linked here:
+\href{https://doi.org/10.1017/9781009652667.004}{sequential-sampling chapter}
+and
+\href{https://doi.org/10.1017/9781009652667.009}{time-varying-diffusion chapter}.
+\begin{itemize}
+  \item Brownian motion and stopping times: the general language is \href{https://en.wikipedia.org/wiki/Brownian_motion}{Brownian motion} and \href{https://en.wikipedia.org/wiki/Hitting_time}{hitting time}. In the sequential-sampling terminology, the Wiener process is a continuous-time, continuous-state diffusion whose infinitesimal drift and diffusion rates are the counterparts of the mean and variance of random-walk increments (Smith \& Ratcliff, Chapter 3, Sections 3.6--3.8). The first-passage time to an absorbing criterion is a stopping time, which is why Laplace-transform and optional-stopping arguments are natural. The Wald process below is the one-boundary Wiener special case used throughout that chapter.
+  \item The Wald or inverse-Gaussian law: see the \href{https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution}{inverse Gaussian distribution}. In first-passage parameterization, the density below is the hitting-time density of a drifted Brownian motion crossing a fixed boundary.
+  \item The Ornstein--Uhlenbeck process: the OU diffusion is a Brownian motion with linear mean reversion (leak), the state-dependent drift example highlighted in Chapter 3. Its first-passage law is defined by the killed transition density and boundary flux; the constant-drift Wald process is recovered when the leak is zero. Chapter 8 uses single-boundary OUs driven by filtered sustained and transient channels. In that terminology, ROU is the race between those independent OU detectors, whereas ROUp is the pooled (coactivation) alternative in Smith (1995), with one accumulator receiving the sum of the channel drives. The BOU model generalizes this to a two-boundary OU diffusion process.
+  \item Time-varying evidence: Chapter 8 emphasizes that stimulus encoding generally produces smooth drift functions $\mu(t)$ and, potentially, time-varying diffusion rates rather than a step change. Its sustained channel rises toward an asymptote and its transient channel rises to a peak before decaying. Our pulse-drift extension is a deliberately simpler parametric forcing; the ROU and ROUp labels identify the corresponding race and pooled architectures, not a claim that every implementation reproduces Smith's filter cascade.
+  \item The reflection-principle idea: the two terms in the Wald CDF come from the \href{https://en.wikipedia.org/wiki/Reflection_principle_(Wiener_process)}{reflection principle}. The second term is often called the image term.
+  \item Gaussian integration identities: univariate normal functions are summarized in the \href{https://itl.nist.gov/div898/handbook/eda/section3/eda3661.htm}{NIST normal distribution reference}. Bivariate-normal probabilities are summarized by \href{https://mathworld.wolfram.com/BivariateNormalDistribution.html}{MathWorld's bivariate normal page} and the broader \href{https://en.wikipedia.org/wiki/Multivariate_normal_distribution}{multivariate normal distribution} theory.
+  \item Gaussian copula and rank dependence: Sklar's theorem decomposes joint hitting-time distributions into marginal CDFs and a copula function; see \href{https://en.wikipedia.org/wiki/Copula_(probability_theory)}{copula theory} and \href{https://en.wikipedia.org/wiki/Sklar%27s_theorem}{Sklar's theorem}. The Gaussian (probit) copula maps marginal uniform ranks to standard normal variates via $\PhiN^{-1}$. For defective marginal distributions ($F(\infty)<1$), copula ranks above the marginal upper bound represent the point mass at infinity, coupling intrinsic omissions as well as finite finishing times.
+  \item Erlang timing: Erlang clocks are integer-shape gamma clocks; see \href{https://mathworld.wolfram.com/ErlangDistribution.html}{MathWorld's Erlang distribution page}. Shape 1 is exponential timing. Shape 2 adds one polynomial factor to the exponential survival. The hybrid shape 3 process used below is not an ordinary Erlang-3 clock; it is a two-component mixture of shape 1 and shape 2 clocks.
+\end{itemize}
+
+The most important conceptual split in this note is between \emph{retaining negative drifts} and \emph{truncating the drift distribution at zero}. Retaining negative drifts gives a defective first-passage distribution. Truncating at zero gives a proper positive-drift distribution, but it changes the drift law itself.
+
+For the historical model anchors, Smith's one-choice visual model is
+\href{https://doi.org/10.1037/0033-295X.102.3.567}{Smith (1995)},
+\emph{Psychophysically Principled Models of Visual Simple Reaction Time}; the
+one-choice diffusion model and its zero-or-positive drift comparison are
+\href{https://doi.org/10.1073/pnas.1100483108}{Ratcliff and Van Dongen (2011)}.
+These references are used below for model correspondence, not as substitutes
+for the derivations given here.
+
+\section{Time Domains and Basic Wald Law}
+Let $T$ denote raw response time and let
+\[
+  x=T-t_0
+\]
+be evidence-accumulation time. The evidence process starts at $t_0$, so evidence-response density is zero for $x\le 0$. Timing clocks such as guess and kill processes start at raw trial time zero unless stated otherwise. This separation follows the sequential-sampling convention: the first-passage calculation is carried out in decision time, and non-decision time is added afterward.
+
+We use $d$ for the remaining distance to a one-sided criterion. To translate to
+the notation used in the canonical sequential-sampling treatments, read $d$ as
+the criterion distance (often $a$), $\mu$ or $m$ as the mean drift rate, and
+$\sigma^2$ as the diffusion rate; $s_v$ is the across-trial standard deviation
+of the drift rate (often written $\eta$). A random start point is equivalent to
+a random distance, $D=a-Z_0$ (up to the choice of origin), so our range $A$ is
+the start-point range expressed in distance units.
+
+For a fixed distance $d>0$, drift $\mu$, and diffusion coefficient $\sigma>0$, define
+\[
+  X_t=\mu t+\sigma W_t,
+  \qquad
+  \tau_d=\inf\{t>0:X_t=d\}.
+\]
+This is the one-boundary Wiener/Brownian diffusion: its infinitesimal drift is
+$\mu$ and its diffusion rate is $\sigma^2$. The first-passage density is
+\begin{equation}
+  f_W(x;d,\mu,\sigma)=
+  \frac{d}{\sqrt{2\pi\sigma^2x^3}}
+  \exp\!\left[-\frac{(d-\mu x)^2}{2\sigma^2x}\right],
+  \qquad x>0.
+\end{equation}
+Its sub-CDF is
+\begin{equation}
+  F_W(x;d,\mu,\sigma)=
+  \PhiN\!\left(\frac{\mu x-d}{\sigma\sqrt{x}}\right)
+  +\exp\!\left(\frac{2\mu d}{\sigma^2}\right)
+  \PhiN\!\left(-\frac{d+\mu x}{\sigma\sqrt{x}}\right).
+  \label{eq:wald-cdf}
+\end{equation}
+For $\mu<0$ this is defective:
+\begin{equation}
+  F_W(\infty;d,\mu,\sigma)=\exp\!\left(\frac{2\mu d}{\sigma^2}\right)<1.
+\end{equation}
+For $\mu\ge 0$, $F_W(\infty;d,\mu,\sigma)=1$. Thus negative drift is not impossible; it simply induces a positive non-hitting probability.
+
+Uniform start-point variability is represented as a random distance
+\begin{equation}
+  D\sim U[b-A,b], \qquad 0\le A<b.
+\end{equation}
+The start-point averaged CDF is
+\begin{equation}
+  F_A(x)=\frac{1}{A}\int_{b-A}^{b}F_W(x;d,\mu,\sigma)\dd d,
+\end{equation}
+with the obvious point-mass limit when $A=0$.
+
+\section{Gaussian Drift Variability}
+Let the across-trial drift be
+\begin{equation}
+  V\sim\Normal(m,s_v^2).
+\end{equation}
+We use ``between-trial'' and ``across-trial'' interchangeably for this
+trialwise draw; both distinguish it from the within-trial Brownian noise.
+Two drift laws are useful and should not be conflated.
+
+The reason drift variability can sometimes be integrated analytically is that, conditional on $V=v$, the accumulator value at a fixed time is Gaussian with mean $vx$ and variance $\sigma^2x$. Mixing $v$ over a Gaussian distribution preserves Gaussianity at fixed time. The complication is that a first-passage CDF is not merely the fixed-time crossing probability; it also contains the image term from the reflection principle.
+
+\subsection{Full-Gaussian Drift Law}
+Under the full-Gaussian law, negative drifts are retained. They contribute finite hit density through the defective Wald law and non-hit mass through $1-F_W(\infty;d,V,\sigma)$. Note that the derivation for between-trial variability without truncation is mathematically the same (though using different symbology) as the derivation given by Smith (1995) for the coactivation model, but here we extend it to consider start point variability ($A > 0$, derived in a subsequent section) and we derive the exact CDFs as well.
+
+More explicitly, the shared step is the Gaussian mixing of a one-boundary
+first-passage law over a trialwise drift: conditional on $V=v$, use the Wald
+density or CDF, then take expectation under a Gaussian drift distribution. In
+Smith's notation this is the same operation as mixing over the across-trial
+drift parameter (with the criterion, mean drift, diffusion rate, and drift SD
+corresponding here to $d$, $m$, $\sigma^2$, and $s_v$). The change of symbols and
+our explicit evidence-time variable $x$ do not change that identity. The
+extensions in this note are (i) averaging over a uniform random distance
+$D\sim U[b-A,b]$, which is the start-point variability written in distance
+coordinates, (ii) retaining the image term when deriving the CDF rather than
+only the density, and (iii) recording the resulting finite hit mass and atom at
+infinity. Thus the no-start-variability density in
+\eqref{eq:full-gaussian-density} is the shared Smith-style calculation, while
+the CDFs and the $A>0$ results below are the present extension.
+
+For fixed $d$ and $s_v>0$, integrating the Wald density over the full normal drift distribution gives
+\begin{equation}
+  f_{\mathrm{FG}}(x;d)=
+  \frac{d}{\sqrt{2\pi x^3(\sigma^2+s_v^2x)}}
+  \exp\!\left[-\frac{(d-mx)^2}{2x(\sigma^2+s_v^2x)}\right],
+  \qquad x>0.
+  \label{eq:full-gaussian-density}
+\end{equation}
+The corresponding fixed-criterion CDF has a simple univariate-normal form. Define
+\begin{equation}
+  Q(x)=\sigma^2+s_v^2x,
+  \qquad
+  h_1(x)=\frac{mx-d}{\sqrt{xQ(x)}},
+\end{equation}
+\begin{equation}
+  \alpha=\frac{2d}{\sigma^2},
+  \qquad
+  m_+=m+\alpha s_v^2,
+  \qquad
+  h_2(x)=\frac{-m_+x-d}{\sqrt{xQ(x)}}.
+\end{equation}
+Then
+\begin{equation}
+  F_{\mathrm{FG}}(x;d)=
+  \PhiN\!\left(h_1(x)\right)
+  +\exp\!\left(\alpha m+\frac{1}{2}\alpha^2s_v^2\right)
+  \PhiN\!\left(h_2(x)\right).
+  \label{eq:full-gaussian-cdf}
+\end{equation}
+For a nondegenerate Gaussian drift law, the negative tail makes this mixture
+generally defective (the defect may be numerically negligible when $m/s_v$ is
+large). Its eventual hit probability is
+\begin{equation}
+  H_{\mathrm{FG}}(d)=
+  \PhiN\!\left(\frac{m}{s_v}\right)
+  +\exp\!\left(\alpha m+\frac{1}{2}\alpha^2s_v^2\right)
+  \PhiN\!\left(-\frac{m+\alpha s_v^2}{s_v}\right).
+  \label{eq:full-gaussian-hit-mass}
+\end{equation}
+Equation \eqref{eq:full-gaussian-cdf} is the simplification enabled by retaining negative drift and treating non-hits as genuine defective mass rather than conditioning them away.
+
+One way to see \eqref{eq:full-gaussian-cdf} is to use two elementary Gaussian identities. If $Z\sim\Normal(0,1)$, then
+\begin{equation}
+  E\left[\PhiN(a+bZ)\right]
+  =\PhiN\!\left(\frac{a}{\sqrt{1+b^2}}\right).
+  \label{eq:probit-mixture}
+\end{equation}
+The first term in \eqref{eq:wald-cdf} follows directly from \eqref{eq:probit-mixture}. The image term also has the exponential tilt $\exp(\alpha V)$ with $\alpha=2d/\sigma^2$. Exponential tilting of a Gaussian shifts its mean:
+\begin{equation}
+  e^{\alpha v}\varphi(v;m,s_v^2)
+  =\exp\!\left(\alpha m+\frac{1}{2}\alpha^2s_v^2\right)
+  \varphi(v;m+\alpha s_v^2,s_v^2).
+  \label{eq:gaussian-tilt}
+\end{equation}
+Applying \eqref{eq:probit-mixture} again under the tilted Gaussian gives the second term in \eqref{eq:full-gaussian-cdf}.
+
+\subsection{Positive-Truncated Drift Law}
+Under the positive-truncated law,
+\begin{equation}
+  V_+\equiv V\mid V>0,
+  \qquad
+  Z_+=P(V>0)=\PhiN\!\left(\frac{m}{s_v}\right).
+\end{equation}
+The density of $V_+$ is therefore
+\begin{equation}
+  g_+(v)=\frac{\varphi(v;m,s_v^2)\,\mathbf{1}\{v>0\}}{Z_+}.
+\end{equation}
+The location parameter $m$ remains the location of the original Gaussian; it
+is not replaced by the conditional mean $E[V\mid V>0]$. Positive truncation is
+a distribution-side operation, not a reparameterization of $m$.
+
+This positive-drift-truncated RDMSWTN is different from the zero-or-positive
+comparison fitted by Ratcliff and Van Dongen (2011). Their rectified version
+starts with $V\sim\Normal(m,s_v^2)$ and clips each draw,
+\begin{equation}
+  V_{\mathrm{clip}}=\max(V,0),
+  \qquad
+  P(V_{\mathrm{clip}}=0)=\PhiN\!\left(-\frac{m}{s_v}\right).
+\end{equation}
+Consequently, their law retains the original (unrenormalized) positive
+Gaussian density and adds a point mass at zero; its mean is
+$E[\max(V,0)]$, not the conditional mean under $V>0$. Our law discards the
+nonpositive draws, rescales the positive density by $1/Z_+$, and has no atom at
+zero. The distinction is behavioral as well as notational: the clipped model
+preserves a zero-drift subpopulation that can produce very long responses,
+whereas every draw in the present model has strictly positive drift and hence a
+proper eventual first-passage distribution. A zero-drift Brownian process hits a
+positive boundary almost surely on an infinite horizon (although its mean
+hitting time is infinite), so the point mass in the rectified law is not itself
+an infinite-time omission; under a finite observation or exhaustion window it
+appears as a long-tail or unresolved component.
+
+For completeness, the original Ratcliff--Van Dongen one-choice fit also
+considered the unmodified Gaussian drift law. Negative draws then generate
+non-terminating paths, and their RT distributions were evaluated by a finite
+random-walk simulation. Our full-Gaussian section keeps those negative drifts
+but treats their non-hitting probability analytically as defective mass; it is
+not the clipped comparison model.
+
+This drift-law distinction is separate from the finite clock in
+RDMSWTN\_TT. The latter assigns an explicit operational capacity and therefore
+an explicit exhaustion mass; a simulation cutoff used to collect RT quantiles
+is a numerical observation limit, not a zero-drift component of the generative
+model.
+
+For fixed $d$ the positive-truncated density is
+\begin{equation}
+  f_+(x;d)=
+  \frac{d}{\sqrt{2\pi x^3(\sigma^2+s_v^2x)}}
+  \exp\!\left[-\frac{(d-mx)^2}{2x(\sigma^2+s_v^2x)}\right]
+  \frac{\PhiN\!\left(\mu_*(x)/s_*(x)\right)}{Z_+},
+  \label{eq:positive-density}
+\end{equation}
+where
+\begin{equation}
+  \mu_*(x)=\frac{d s_v^2+m\sigma^2}{s_v^2x+\sigma^2},
+  \qquad
+  s_*(x)=\sqrt{\frac{\sigma^2s_v^2}{s_v^2x+\sigma^2}}.
+\end{equation}
+The no-clock positive-truncated CDF is still closed form, but it uses bivariate-normal rectangle probabilities because the integration domain imposes $V>0$. Let
+\begin{equation}
+  z_0=-\frac{m}{s_v},
+  \qquad
+  \rho(x)=\frac{s_v\sqrt{x}}{\sqrt{\sigma^2+s_v^2x}}.
+\end{equation}
+With $h_1,h_2,\alpha,m_+$ as above and $z_0^+=-m_+/s_v$,
+\begin{equation}
+  F_+(x;d)=\frac{1}{Z_+}\left\{
+  \PhiN(h_1)-\PhiTwo(z_0,h_1;-\rho)
+  +\exp\!\left(\alpha m+\frac{1}{2}\alpha^2s_v^2\right)
+  \left[\PhiN(h_2)-\PhiTwo(z_0^+,h_2;\rho)\right]
+  \right\}.
+  \label{eq:positive-cdf}
+\end{equation}
+Because all sampled drifts are positive, $F_+(\infty;d)=1$. This is not the same as normalizing the full-Gaussian defective CDF by $H_{\mathrm{FG}}(d)$; the latter conditions on eventual hitting, whereas positive truncation changes the drift distribution before the Wald process is sampled.
+
+The bivariate-normal terms in \eqref{eq:positive-cdf} arise because the event $V>0$ and the latent probit event inside the Wald CDF are jointly Gaussian inequalities. The denominator $Z_+$ only normalizes the drift distribution. It is not an eventual-hit normalizer, and it should not be replaced by $H_{\mathrm{FG}}(d)$.
+
+\section{Gamma Drift Variability}
+\label{sec:gamma-drift}
+\texttt{RDMSWTN(drift\_dist = "gamma")} replaces the Gaussian drift law of
+Section~3 by a gamma law, which is positive by construction, so neither the
+defective mass of the full-Gaussian law nor the normaliser of the truncated
+law arises. The scope is the point start or a uniform start
+(Section~\ref{sec:gamma-drift-A}) without guess or kill clocks, without
+copula correlation and without time warps; these options stop with an
+error.
+
+\subsection{Parameterisation}
+The sampled parameters are the mean drift $m$ (\texttt{v}) and the drift
+standard deviation $s_v$ (\texttt{sv}), both on the natural scale with
+log links. The gamma law is
+\begin{equation}
+  V\sim\operatorname{Gamma}(k,\ \text{rate }\beta),\qquad
+  k=\left(\frac{m}{s_v}\right)^2,\qquad \beta=\frac{m}{s_v^2},
+  \label{eq:gamma-param}
+\end{equation}
+so $\mathrm E V=m$, $\operatorname{Var}V=s_v^2$, and the coefficient of
+variation is $s_v/m=k^{-1/2}$. This mean--variance chart is the one
+used for the gamma-drift Wald by Steingroever, Wabersich and Wagenmakers
+(2021, \emph{Behavior Research Methods} 53, 1060--1076;
+\href{https://pmc.ncbi.nlm.nih.gov/articles/PMC8219596/}{open-access version}).
+Both coordinates keep their Gaussian-model meaning (mean and SD of the
+trialwise drift), so values are comparable across the two drift laws. As
+$s_v\to0$ the law concentrates at $m$ and the model reduces to the Wald;
+the correction is $O(s_v^2/m^2)$, and the implementation uses the Wald law
+itself once $s_v\le10^{-6}m$.
+
+\subsection{Dimensionless Variables}
+Fix the decision time $x>0$, distance $d$ and diffusion coefficient
+$\sigma$. Measure drift in units of $\sigma/\sqrt x$: $Y=V\sqrt x/\sigma$
+is $\operatorname{Gamma}(k,\text{rate }p)$ and the conditional Wald law is
+a function of $Y$ alone. With
+\begin{gather*}
+  p=\frac{\beta\sigma}{\sqrt x},\quad
+  \delta=\frac{d}{\sigma\sqrt x},\quad
+  z=p-\delta,\quad
+  q=\frac p\delta=\frac{\beta\sigma^2}{d},\\
+  a=\frac{\delta^2}{2}=\frac{d^2}{2\sigma^2x},\quad
+  y_0=\mathrm EY=\frac kp,\quad \operatorname{sd}Y=\frac{\sqrt k}{p},
+\end{gather*}
+the conditional density and CDF are
+\begin{equation}
+  f_W=\frac\delta x\,\phiN(Y-\delta),\qquad
+  F_W(Y)=\PhiN(Y-\delta)+e^{2\delta Y}\PhiN(-Y-\delta),\qquad S_W=1-F_W.
+\end{equation}
+Two families of cylinder integrals carry everything below:
+\begin{equation}
+  J_\nu(w)=\int_0^\infty y^{\nu-1}e^{-y^2/2-wy}\dd y,\qquad
+  G_\nu(w)=\frac{J_\nu(w)}{\Gamma(\nu)}=e^{w^2/4}D_{-\nu}(w),
+\end{equation}
+with $D_{-\nu}$ the parabolic-cylinder function. $G_1=R$ is the Mills ratio
+$R(w)=\PhiN(-w)/\phiN(w)$. Integration by parts of
+$\partial_y[y^\nu e^{-y^2/2-wy}]$ gives $J_{\nu+2}=\nu J_\nu-wJ_{\nu+1}$, that is
+\begin{equation}
+  G_\nu(w)=(\nu+1)G_{\nu+2}(w)+w\,G_{\nu+1}(w).
+  \label{eq:G-recurrence}
+\end{equation}
+For $w\ge0$ every term is positive and $G$ is the minimal solution, so
+\eqref{eq:G-recurrence} is run downward in order without divisions or
+cancellation. It is started at two orders where
+$\kappa=\nu+y_\ast^2\ge64$, with $y_\ast(y_\ast+w)=\nu$ the Laplace saddle
+of the integrand, from the uniform Laplace expansion
+\begin{equation}
+  \log G_\nu(w)=\nu\log\frac{y_\ast}{\nu}+\frac{y_\ast^2}{2}
+  +\frac12\log\frac\nu\kappa+\log\Bigl(1+\sum_{j=1}^{9}c_j(1-\nu/\kappa)\,\kappa^{-j}\Bigr)
+  -\varsigma(\nu),
+\end{equation}
+where $\varsigma(\nu)=\log\Gamma(\nu)-[(\nu-\tfrac12)\log\nu-\nu+\tfrac12\log2\pi]$
+is the Stirling remainder and the $c_j$ are polynomials of degree $2j$ in
+$1-\nu/\kappa\in[0,\tfrac12]$. Orders below the seed are reached by the
+recurrence (``lifting'').
+
+\subsection{Density}
+Averaging $f_W$ over $Y$ completes a square in the exponent:
+\begin{equation}
+  f(x)=\frac\delta x\,\mathcal D_k,\qquad
+  \mathcal D_\nu=\mathrm E_{\operatorname{Gamma}(\nu,p)}\phiN(Y-\delta)
+  =\frac{p^\nu e^{-\delta^2/2}}{\sqrt{2\pi}}\,G_\nu(z).
+  \label{eq:gamma-density}
+\end{equation}
+When $z\ge0$ and $k\le2000$ this is evaluated directly. For larger $k$
+(the small-$s_v$ end), $k\log p$ and $\log G_k(z)$ cancel to an absolute
+error of order $k\epsilon$, and the density comes from the branch used for
+the tails below.
+
+\subsection{Negative-Binomial Branch (\texorpdfstring{$q\le1$}{q <= 1})}
+At $\beta=d/\sigma^2$ ($q=1$, $z=0$) the duplication formula reduces
+\eqref{eq:gamma-density} to an inverse-gamma law in decision time:
+\begin{equation}
+  x\sim\operatorname{InvGamma}\!\left(\tfrac{k+1}{2},\ \tfrac{d^2}{2\sigma^2}\right),
+  \qquad F=Q\!\left(\tfrac{k+1}2,a\right),\quad S=P\!\left(\tfrac{k+1}2,a\right),
+\end{equation}
+with $P,Q$ the regularized lower and upper incomplete gamma functions. For
+$q<1$ the gamma law at rate $\beta$ is a negative-binomial mixture of gamma
+laws at the larger rate $d/\sigma^2$,
+\begin{equation}
+  \operatorname{Gamma}(k,\beta)=\sum_{n\ge0}w_n\operatorname{Gamma}(k+n,d/\sigma^2),
+  \qquad w_n=\frac{(k)_n}{n!}q^k(1-q)^n,
+\end{equation}
+and every component is an inverse-gamma law in time. Writing
+$\alpha_n=(k+n+1)/2$, $\iota(\alpha)=e^{-a}a^\alpha/\Gamma(\alpha+1)$ (the
+$\operatorname{Gamma}(\alpha+1,1)$ density at $a$) and $u_n=w_n\iota(\alpha_n)$,
+\begin{equation}
+  f=\frac1x\sum_n\alpha_nu_n,\qquad
+  F=\sum_nw_nQ(\alpha_n,a),\qquad
+  S=\sum_nw_nP(\alpha_n,a).
+\end{equation}
+All terms are positive. Within one parity of $n$ the order $\alpha$ steps by
+one, and
+\begin{equation}
+  P(\alpha,a)=\iota(\alpha)+P(\alpha+1,a),\qquad Q(\alpha+1,a)=Q(\alpha,a)+\iota(\alpha).
+\end{equation}
+$Q$ is therefore carried upward on the scale of $\iota$ (used for $F$ when
+the bulk of the $\alpha_n$ lies below $a$, where $F$ is the small tail).
+For $S$, expanding $P(\alpha_n)=\sum_{m\ge n}\iota(\alpha_m)$ over the same
+parity and exchanging the sums gives, with the cumulative same-parity
+weights $W_m=\sum_{n_0\le n\le m}w_n$ and the last index $N_e$ of each parity,
+\begin{equation}
+  \sum_{n_0\le n\le N}w_nP(\alpha_n,a)=\sum_{m\le N}\iota(\alpha_m)W_m
+  +\sum_{e\in\{0,1\}}\bigl(\rho(\alpha_{N_e})-1\bigr)\iota(\alpha_{N_e})W_{N_e},
+\end{equation}
+where $\rho(\alpha)=P(\alpha,a)/\iota(\alpha)=\sum_{j\ge0}a^j/(\alpha+1)_j$.
+This needs one pass and no stored terms. All sums are kept on a moving log
+scale, so neither the weights nor $\iota$ overflow.
+
+\emph{Stopping.} By Wendel's inequality the term ratio over one step
+in $n$ is at most
+$g=(1-q)\max\{1,(k+n)/(n+1)\}\sqrt{a(\alpha+\tfrac32)}/(\alpha+1)$, so once
+$g<1$ the remainder is bounded geometrically, and $\rho$ is bounded by
+$1/(1-a/(\alpha+1))$ for $\alpha+1>a$. In the $F$ sum, once $Q\approx1$
+the rest of $F$ is the negative-binomial mass above $n$, which is the
+regularized incomplete beta $I_{1-q}(n+1,k)$, or a direct sum of the
+weights when that is below the double range.
+
+\emph{Skipping the head.} For large $a$ the terms peak near
+$\alpha_n\approx(1-q)^2a$, far from $n=0$. The sum starts at
+$n_0=\hat n-9/\sqrt{c}$, with $\hat n$ the fixed point of
+$\hat n=2(1-q)^2a[(k+\hat n)/(\hat n+1)]^2-k-1$ and $c$ the curvature of
+$\log u_n$ there. The skipped head is bounded in two ways. (i) For
+$\alpha_n<a$, $\iota$ and $Q/\iota$ increase in $\alpha$, so the head is at
+most its negative-binomial mass $I_q(k,n_0)$ times
+$\iota(\alpha_{n_0})[\alpha_{n_0}+1+Q/\iota]$. (ii) $\log u_n$ is concave in
+$n$ for $n\ge2$: the curvature of $\log\iota$, $-\psi'(\alpha+1)/4$,
+outweighs the curvature $(1-k)/((n+2)(n+k))$ of the weights when $k<1$. So
+with $r_0=u_{n_0}/u_{n_0-1}>1$,
+$\sum_{n<n_0}u_n\le u_{n_0}/(r_0-1)+u_0+u_1$. The smaller bound must be
+$e^{-40}$ below the peak. After summation it must also be negligible
+against each accumulated sum; if not, the branch is repeated from $n=0$.
+The head's share of $S$ is its negative-binomial mass, on which $P=1-Q$
+differs from one by less than the bound. That mass is the incomplete beta
+$I_q(k,n_0)$. When the weights are log-concave ($k\ge1$) it is replaced by
+an explicit bound wherever that bound shows it to be negligible (below the
+incomplete beta's range, or within $e^{-40}$ of one).
+
+\subsection{Moment Branch (\texorpdfstring{$q>1$}{q > 1})}
+For $q>1$, $z>0$ and the cylinder moments $\mathcal D_\nu$ decay in $\nu$.
+Integration by parts in the gamma law,
+$\mathrm E_{\nu+1}h-\mathrm E_\nu h=\beta^{-1}\mathrm E_{\nu+1}h'$, applied
+to $F_W$, uses $\partial_YF_W=2\delta e^{2\delta Y}\PhiN(-Y-\delta)$ (the
+Gaussian parts cancel). Applied once more to the reflection term it gives a
+first-order recurrence in shape. With $r=1-2/q\in(-1,1)$ the recurrence is
+solved backward and telescoped:
+\begin{equation}
+  S=\frac1p\sum_{m\ge2}\bigl(1-r^{m-1}\bigr)\mathcal D_{k+m}.
+  \label{eq:moment-S}
+\end{equation}
+Every coefficient is nonnegative for $q\ge1$, including $1<q<2$ where
+$r<0$. At $q=1$ the series agrees with the inverse-gamma identity. The
+moments obey $\mathcal D_\nu=(\nu+1)\mathcal D_{\nu+2}/p^2+z\mathcal D_{\nu+1}/p$
+and are run downward. They are log-concave in $m$ with peak near
+$k+m=p\delta$ and width $\sqrt{p^2+p\delta}$, so only a window
+$[m_{\rm lo},m_{\rm hi}]$ is summed (doubled until the geometric end bounds
+from the boundary ratios are below $\epsilon$). With
+$T_j=\sum_{m\ge j}\mathcal D_{k+m}$ and $H=\sum_{j\ge m_{\rm lo}}r^{j-m_{\rm lo}}T_j$,
+\begin{equation}
+  pS=T_{m_{\rm lo}}\bigl(1-r^{m_{\rm lo}-2}\bigr)+(1-r)\,r^{m_{\rm lo}-2}H,
+\end{equation}
+and $T$ and $H$ accumulate in the same downward pass ($H\leftarrow T+rH$).
+The same pass continues down to $\mathcal D_k$ for the density when that is
+close.
+
+\emph{Direct CDF.} When $F$ is small, its complement is useless, and $F$
+comes from a separate positive series. For every real $y$,
+$e^{-\delta y}F_W(y)=\sqrt{2\pi}\,\phiN(y)\phiN(\delta)[R(\delta-y)+R(\delta+y)]$,
+and $R(\delta\mp y)=\int_0^\infty e^{-\delta u-u^2/2\pm yu}\dd u$, so the
+odd powers of $y$ cancel:
+\begin{equation}
+  R(\delta-y)+R(\delta+y)=2\sum_{n\ \mathrm{even}}y^nI_n(\delta),\qquad I_n=G_{n+1}.
+\end{equation}
+Integrating against the gamma law,
+\begin{equation}
+  F=\frac{2p^ke^{-\delta^2/2}}{\sqrt{2\pi}}\sum_{n\ \mathrm{even}}W_nI_n(\delta),
+  \qquad W_n=\frac{J_{k+n}(z)}{\Gamma(k)},
+  \label{eq:moment-F}
+\end{equation}
+with $W_n=(W_{n+2}+zW_{n+1})/(k+n)$ and
+$I_n=(n+2)I_{n+2}+\delta I_{n+1}$, both downward. The term ratio rises
+towards one like $1-p/(2\sqrt n)$ (terms decay like $e^{-p\sqrt n}$), so
+the remainder after a last ratio $g$ is bounded by $2/(1-g)^2$ times the
+last term rather than geometrically. The length is set in advance from the
+saddle-point ratios $y_\ast(k+n,z)/(y_\ast(n+1,\delta)+\delta)$. $W$ grows
+and $I$ falls with order, so each is rescaled in both directions. The
+direct series is used when the gamma bulk sits below $\delta$
+($y_0+2\operatorname{sd}Y<\delta-1$), $\delta>2.6$ (otherwise
+$F\ge2\PhiN(-\delta)$ at $y\approx0$ is not small) and
+$P(Y>\delta)<0.01$. Otherwise $S$ comes from \eqref{eq:moment-S} first,
+and \eqref{eq:moment-F} is called only if $1-S<0.01$.
+
+\subsection{Narrow Branch}
+When the drift law is narrow on the scale of the conditional law
+($p\ge16$, $\operatorname{sd}Y\le0.3$, $|y_0-\delta|\le p/3$; the
+near-Wald end where $k$ is large), the moment window above holds
+$O(p)$ terms. Instead, expand about $y_0$ against the exact central
+moments of the gamma law,
+\begin{equation}
+  \mathrm E\,g(Y)=\sum_{n\ge0}\frac{g^{(n)}(y_0)}{n!}\mu_n,\qquad
+  \mu_{n+1}=n\left(\frac{\mu_n}{p}+\frac{k\,\mu_{n-1}}{p^2}\right),\quad \mu_0=1,\ \mu_1=0.
+\end{equation}
+With $x_0=y_0-\delta$ and $w_0=y_0+\delta$, the density uses
+$\phiN(x_0+h)/\phiN(x_0)=\sum_na_nh^n$ with
+$a_n=-(x_0a_{n-1}+a_{n-2})/n$ (the Hermite recurrence). For the CDF, $\partial_yS_W=-2\delta\,\phiN(y-\delta)R(y+\delta)$, and the
+Taylor coefficients of $R(w_0+h)$ are $(-1)^nI_n(w_0)$, so those of the
+product are the Cauchy products
+$g_n=\sum_{i\le n}a_i(-1)^{n-i}I_{n-i}(w_0)$. Then
+\begin{equation}
+  S=\phiN(x_0)\Bigl[R(x_0)-I_0(w_0)-\sum_{n\ge2}\frac{2\delta\,g_{n-1}\mu_n}{n}\Bigr],
+\end{equation}
+where $S_W(y_0)/\phiN(x_0)=R(x_0)-R(w_0)$ is replaced by
+$\sum_{n\ge1}(2\delta)^nI_n(w_0)$ when $4\delta<x_0$ (avoiding the
+difference). $F$ is the mirror image for $x_0<0$. Everything is carried in
+units of $\phiN(x_0)$, which is restored on the log scale, so large
+$|x_0|$ does not underflow. The series behaves like a Poisson sum over pairs
+of orders with mean $\lambda=x_0^2\operatorname{sd}(Y)^2/2$. Its length is
+$2(\lambda+10\sqrt\lambda+20)$ (at most 320), and the branch is declined
+(falling back to the moment branch) if three successive terms are not below
+$\epsilon$ relative to the density and the $S$ correction.
+
+\subsection{Wide Branch: an Exponentially Modified Gaussian Kernel}
+The negative-binomial window grows like $\delta$, and the moment branch
+needs $q>1$. A broad drift law at a large distance (small $p$, large
+$\delta$, which burn-in proposals with small $m$ and large $s_v$ reach)
+falls between them. Completing the square in
+$R(y+\delta)=\int_0^\infty e^{-(y+\delta)u-u^2/2}\dd u$ gives
+\begin{equation}
+  -\partial_yS_W(y)=2\delta\,\phiN(y-\delta)R(y+\delta)
+  =\int_0^\infty2\delta e^{-2\delta u}\,\phiN(y-\delta+u)\dd u,
+\end{equation}
+the density of $\delta-U+Z$ with $U\sim\mathrm{Exp}(2\delta)$ and
+$Z\sim\Normal(0,1)$ independent. So $S_W(y)=P(\delta-U+Z>y)$ for $y\ge0$, and
+with $X=U-Z$ independent of $Y$,
+\begin{equation}
+  S=P(Y+X<\delta)=\mathrm E\,G_Y(\delta-X),\qquad
+  F=\mathrm E\,Q_Y(\delta-X),\qquad
+  f=\frac\delta x\,\mathrm E\,g_Y(\delta+Z),
+\end{equation}
+with $G_Y$, $Q_Y$ and $g_Y$ the CDF, survivor and density of $Y$. When $g_Y$
+varies slowly on the unit scale around $\delta$, expand about $\delta$:
+\begin{gather*}
+  S=G_Y(\delta)+g_Y(\delta)\sum_{n\ge1}(-1)^nd_{n-1}m_n,\qquad
+  F=Q_Y(\delta)-g_Y(\delta)\sum_{n\ge1}(-1)^nd_{n-1}m_n,\\
+  f=\frac\delta x\,g_Y(\delta)\sum_{n\ \mathrm{even}}\frac{d_n}{2^{n/2}(n/2)!}.
+\end{gather*}
+Here $d_n=g_Y^{(n)}(\delta)/g_Y(\delta)$ follows from
+$y\,g_Y'=(k-1-py)\,g_Y$:
+\begin{equation}
+  d_0=1,\qquad
+  d_{n+1}=\frac{(k-1-n-p\delta)\,d_n-p\,n\,d_{n-1}}{\delta}.
+\end{equation}
+The $m_n=\mathrm EX^n/n!$ follow from the cumulants of $X$
+($\kappa_1=1/\ell$, $\kappa_2=1/\ell^2+1$, $\kappa_j=(j-1)!/\ell^j$,
+$\ell=2\delta$):
+$m_n=n^{-1}\sum_{j\le n}e_jm_{n-j}$ with $e_j=\ell^{-j}+[j=2]$. The
+expansions are asymptotic only through the branch point of $g_Y$ at $y=0$,
+at distance $\delta$. Its share is of order $e^{-\delta^2/2}$. The branch
+is used for $\delta\ge15$, $|(k-1)/\delta-p|\le1.5$ (the log-slope of $g_Y$
+at $\delta$) and $|k-1|\le0.05\,\delta^2$. It takes 10--40 terms, and
+$G_Y(\delta)$, $Q_Y(\delta)$ and $g_Y(\delta)$ come from the gamma CDF and
+density. Only the smaller of $S$ and $F$ is formed from its series; the
+other is its complement. Against quadrature of the EMG-kernel forms
+$S=\int G_YK$ and $F=F_W(0)+\int Q_YK$ the largest relative errors are
+$2\times10^{-15}$ for $f$ and $2\times10^{-12}$ for the smaller tail. In this
+region the negative-binomial branch would need $10^4$--$10^6$ terms.
+
+\emph{Tilted form.} When $|\psi_1|>1$, with $\psi_1=(k-1)/\delta-p$ the
+log-slope of $g_Y$ at $\delta$, the series above loses digits like
+$e^{\psi_1^2/2}$. The slope is removed exactly instead. Write
+$g_Y(\delta+h)=g_Y(\delta)e^{\psi_1h}\varphi(h)$, with
+$\varphi(h)=(1+h/\delta)^{k-1}e^{-(k-1)h/\delta}=\sum_jc_jh^j$. Here $c_1=0$, and
+the $c_j$ come from exponentiating the $\log(1+h/\delta)$ series. Then tilt
+$A=-X=Z-U$ by $e^{\psi_1A}$, which turns $Z$ into $\Normal(\psi_1,1)$ and $U$
+into $\mathrm{Exp}(2\delta+\psi_1)$, with mass
+$M=e^{\psi_1^2/2}\,2\delta/(2\delta+\psi_1)$. The tail away from which the
+slope points is then
+\begin{gather*}
+  S=g_Y(\delta)\,M\sum_jc_j\,j!\,b_j\ (\psi_1>0),\qquad
+  F=-g_Y(\delta)\,M\sum_jc_j\,j!\,b_j\ (\psi_1<0),\\
+  b_j=\frac{a_j-b_{j-1}}{\psi_1},\qquad a_j=\frac{\mathrm E_{\rm tilt}A^j}{j!},
+\end{gather*}
+since $\int_{-\infty}^0u^ie^{\psi_1u}\dd u=(-1)^ii!/\psi_1^{i+1}$. The
+$a_j$ follow from the tilted cumulants exactly as the $m_n$ above. The
+density is
+$f=(\delta/x)\,g_Y(\delta)e^{\psi_1^2/2}\sum_jc_j\,\mathrm E(Z+\psi_1)^j$.
+With $\varepsilon=|k-1|/(2\delta^2)$ and
+$\rho=|\psi_1|+1/|\psi_1|+1$, the $c_j$ are of order $\varepsilon^{j/2}$
+and the moments of order $\rho^j$. The form is used when
+$\varepsilon\rho^2\le2$, $4(\rho+2)\le\delta$ and $|\psi_1|\delta\ge80$.
+The last condition is needed because the tail series is asymptotic
+through the branch point at $y=0$: its terms bottom out near
+$j\approx|\psi_1|\delta$ at about $e^{-|\psi_1|\delta}$. Against
+quadrature the largest relative errors are $2\times10^{-15}$ for $f$ and
+$3\times10^{-13}$ for the tail. This form covers small $\sigma$, where
+$\delta=d/(\sigma\sqrt x)$ is large while the drift law is broad on the unit
+scale.
+
+\subsection{Far Tails}
+Since $F_W(y)\le2\PhiN(y-\delta)$, $S_W(y)\le\PhiN(\delta-y)$ and
+$\phiN\le\phiN(0)$, splitting the drift law at any $c$ between $\delta$
+and $y_0$, with $h=|c-\delta|$, gives
+\begin{gather*}
+  F\le2\bigl[P(Y>c)+\PhiN(-h)\bigr]\ (y_0<\delta),\qquad
+  S\le P(Y<c)+\PhiN(-h)\ (y_0>\delta),\\
+  f\le\frac\delta x\bigl[P(\text{tail})\phiN(0)+\phiN(h)\bigr].
+\end{gather*}
+Two splits are tried: the midpoint and
+$c=\delta+(y_0-\delta)/(1+\operatorname{sd}Y)$, where a normal drift law's
+tail would meet the Wald one. The second lies on the $\delta$ side of the
+midpoint when $\operatorname{sd}Y>1$. These bounds are returned in place of the
+values in three cases:
+\begin{itemize}
+  \item the smaller tail is below $e^{-1000}$ (the other tail is then one to
+    double precision);
+  \item only the larger tail is requested and the smaller one is below
+    $e^{-40}$ (one minus it rounds to one);
+  \item only the density is requested and its bound is below the caller's
+    floor.
+\end{itemize}
+The race likelihood floors each accumulator's log density at $\log$
+\texttt{min\_ll} when the raw kernels floor, so a density bounded below
+the floor needs no further digits.
+
+\subsection{Accuracy and Cost}
+Against 384 reference values computed at 50 digits (mpmath quadrature over
+the drift law), the largest absolute errors in $\log f$, $\log F$ and
+$\log S$ are about $4\times10^{-12}$ (negative-binomial branch),
+$3\times10^{-12}$ (moment branch) and $6\times10^{-14}$ (narrow branch).
+On rows with very large $a$, where the unskipped sum runs over $10^5$
+terms, skipped and unskipped sums agree to about $10^{-10}$ relative. The package tests compare
+$f$ and $F$ with quadrature over the drift law and, for broad laws at
+large distances, with the EMG-kernel forms. They also compare the race
+likelihood with the R reference, check the $s_v\to0$ limit (an $O(s_v^2)$
+approach to the Wald), and compare simulated quantiles with the CDF.
+
+The density alone costs about 0.28\,$\mu$s per accumulator and
+density plus survivor about 0.85\,$\mu$s, against 0.11\,$\mu$s and
+0.88\,$\mu$s for the Gaussian-drift kernels. Cost is not uniform. The
+negative-binomial window still has width of order $\sqrt a\propto\delta$
+where the wide branch does not apply ($p>1.5$ or so). The moment window
+has width of order $p$ for large $k$ outside the narrow branch's gate.
+Across $2\times10^4$ draws from broad sampler-like priors (decision times
+from 1\,ms to 5\,s) the worst survivor call takes about 50\,$\mu$s and the
+worst unfloored density call about 0.1\,ms. With $\sigma$ between $10^{-3}$
+and $0.1$ the worst call takes about 0.2\,ms (mean 2\,$\mu$s). The
+costliest values there are below $e^{-300}$.
+
+\subsection{Start-Point Variability}
+\label{sec:gamma-drift-A}
+With the start point uniform on $[0,A]$ below $b=B+A$, the distance is
+$D\sim U[B,B+A]$, independent of $V$. In the units above $\delta$ runs over
+$[\delta_L,\delta_H]=[B,B+A]/(\sigma\sqrt x)$, with
+$\Delta=\delta_H-\delta_L=A/(\sigma\sqrt x)$. The start-point average is
+evaluated without quadrature (\texttt{src/rdmswtn\_gamma\_A.h}).
+
+\emph{Atoms.} Let $W=Y+\varepsilon$ with $\varepsilon\sim\Normal(0,1)$
+independent of $Y$. At each $\delta$ define
+\begin{gather*}
+  \mathcal D=\mathrm E\,\phiN(Y-\delta)\ (\text{the density of }W),\qquad
+  C=P(W\le\delta),\qquad T=1-C,\\
+  S_f=\mathrm E(\delta-W)_+,\qquad P_f=\mathrm E(W-\delta)_+=S_f+y_0-\delta,
+\end{gather*}
+and let $F$, $S$ be the point-start CDF and survivor at $\delta$.
+
+\emph{Density.} Since $f(x;\delta)=(\delta/x)\,g_W(\delta)$,
+\begin{equation}
+  x\Delta f_A=\int_{\delta_L}^{\delta_H}\delta\,g_W(\delta)\dd\delta
+  =\mathrm E\bigl[W\,\mathbf 1\{\delta_L<W\le\delta_H\}\bigr],
+\end{equation}
+with $\mathrm E[W\mathbf 1\{W\le\delta\}]=\delta C-S_f$ and
+$\mathrm E[W\mathbf 1\{W>\delta\}]=\delta T+P_f$.
+
+\emph{CDF and survivor.} $F_W(Y;\delta)=P(M\ge\delta)$, with $M$ the
+running maximum over unit time of a Brownian motion with drift $Y$, so
+$\Delta F_A=\Pi(\delta_L)-\Pi(\delta_H)$ with $\Pi(\delta)=\mathrm E(M-\delta)_+$.
+Integrating $F_W$ over $[\delta,\infty)$ term by term, the Gaussian part
+gives $P_f$ and, by parts, the reflection part gives
+\begin{equation}
+  \int_\delta^\infty e^{2dY}\PhiN(-Y-d)\dd d=\frac{K(Y)}{2Y},\qquad
+  K=\PhiN(Y-\delta)-e^{2\delta Y}\PhiN(-Y-\delta).
+\end{equation}
+For $Y\sim\operatorname{Gamma}(k,p)$ and $g$ with $g(0)=0$, integration by
+parts in $y$ gives $\mathrm E[g(Y)/Y]=\mathrm E[g'(Y)-p\,g(Y)]/(1-k)$. With
+$g=K/2$, $g'=\phiN(Y-\delta)-\delta e^{2\delta Y}\PhiN(-Y-\delta)$, and
+$\mathrm E\,\PhiN(Y-\delta)=T$, $\mathrm E\,e^{2\delta Y}\PhiN(-Y-\delta)=F-T$:
+\begin{gather}
+  \Pi=P_f+\frac{\mathcal D+(p/2-\delta)F-zT}{1-k},\\
+  \Delta S_A=S_g(\delta_H)-S_g(\delta_L),\qquad
+  S_g=S_f+\frac{zC+(\delta-p/2)S+\mathcal D}{1-k},
+\end{gather}
+the second from $\int(1-F_W)$ in the same way. The singularity at $k=1$
+is removable. Near it the image term $\Pi_{\rm img}=\mathrm E[K/(2Y)]$
+also has the positive series
+$\Pi_{\rm img}=\mathcal D\sum_{n\ \mathrm{even}}w_nI_{n+1}(\delta)$
+($w_n$ below), and $S_g=S_f+\Pi_{\rm img}$ up to a constant that cancels in
+the difference. The form whose difference loses fewer digits is used; for
+$|1-k|<2\times10^{-3}$, when only the $1/(1-k)$ form is available or it loses
+more than five digits, $\log$ of the smaller tail is interpolated by a
+cubic in $k$ through $k=1\pm2\times10^{-3}$ and $1\pm4\times10^{-3}$.
+
+\emph{Atoms as positive series.} $C$, $S_f$ (lower side) or $T$, $P_f$
+(upper side) are computed directly on the side where they are small tails,
+the other pair by complement. On the lower side, from the density
+recurrence of the moment branch,
+\begin{equation}
+  C=\frac1p\sum_{m\ge1}\mathcal D_{k+m},\qquad
+  S_f=\frac1{p^2}\sum_{m\ge2}(m-1)\,\mathcal D_{k+m}.
+\end{equation}
+On the upper side, expanding $\PhiN(Y-\delta)$ about the reflection as in
+\eqref{eq:moment-F},
+\begin{equation}
+  T=\mathcal D\sum_{n\ge0}w_nI_n(\delta),\qquad
+  P_f=\mathcal D\sum_{n\ge0}(n+1)\,w_nI_{n+1}(\delta),\qquad
+  w_n=\frac{J_{k+n}(z)}{J_k(z)},\quad I_n=G_{n+1}.
+\end{equation}
+For $z\ge0$ the $\mathcal D_{k+m}$ and $w_n$ run downward from Laplace seeds.
+For $z<0$ they run upward from the point-kernel densities at shapes $k$ and
+$k+1$: $\mathcal D_{\nu+2}=p^2(\mathcal D_\nu-z\mathcal D_{\nu+1}/p)/(\nu+1)$
+and $\rho_n=w_n/w_{n-1}=(k+n-2)/\rho_{n-1}-z$ add positive terms when $z<0$,
+so neither direction cancels. The upper series is used only where $T$ can be
+small ($\delta>3.09$ and $0.977\,Q_Y(\delta+2)<10^{-3}$), since it is long
+for broad laws. In the narrow gate of the point kernel the atoms come from
+the Taylor series about $y_0$ against the gamma central moments, and in the
+wide gate ($\delta\ge15$, slope of $\log g_Y$ at most one) $T$ and $P_f$ come
+from the Taylor series of $Q_Y$ and $\mathrm E(Y-\delta)_+$ about $\delta$
+against the moments of $\varepsilon$, with the $d_n$ of the wide branch.
+
+\emph{Short spans and fallbacks.} When the start range is short on the
+scale over which $f$, $F$, $S$ vary,
+$\Delta(1+\delta_H+|y_0-\delta_H|+p)<0.05$ (or $<0.5$), the differences
+above cancel and a 4-node (8-node) Gauss--Legendre rule over the point
+kernel is used instead. A conditioning estimate (the summed magnitudes of
+the terms over the result) gates the closed form at $10^5$; beyond it a
+composite 8-node rule with up to 128 panels is used.
+
+\emph{Accuracy and cost.} Across $3\times10^3$ broad random draws, against
+an adaptive composite quadrature of the point kernel, the largest absolute
+errors in $\log f$, $\log F$ and $\log S$ are $1\times10^{-9}$,
+$2\times10^{-7}$ (a $k\approx1$ row with $\Delta\approx40$) and
+$2\times10^{-9}$. About $26\%$ of draws take the short rule
+(median 5\,$\mu$s), $68\%$ the closed form (median 5\,$\mu$s, 90\% below
+60\,$\mu$s), $3\%$ the $k\approx1$ interpolation (about 2.6\,ms) and $2.5\%$
+the composite rule (about 2\,ms, mostly $k$ within $10^{-3}$ of one). The
+slowest closed-form calls are far upper tails ($\delta\gtrsim250$) and broad
+laws at small $p$.
+
+\subsection{Gaussian Drift: Why the Positive Series Does Not Help}
+The identity behind \eqref{eq:moment-F} holds for any drift law. For
+$V\sim\Normal(m,s_v^2)$, $e^{\delta y}\phiN(y)$ times the normal density of
+$Y$ is again a normal kernel, with variance
+$\rho^2=s_v^2x/(\sigma^2+s_v^2x)$ in $Y$ units. The CDF becomes
+$F\propto\sum_{n\ \mathrm{even}}I_n(\delta)M_n$, with $M_n$ the
+(truncated, for the positive law) moments of that normal, obtained upward
+from $\PhiN$ by the three-term moment recurrence. The terms decay like
+$\rho^{n}$, so the series is short only when $\rho$ is small. Near $F\approx1$ with
+appreciable $s_v$ it needs several hundred terms, and a compiled version was no
+faster than the bivariate-normal route (about 0.82 versus 0.81\,$\mu$s). In
+the Gaussian kernels, time goes to the Mills-ratio logarithms and
+exponentials, the posterior Mills quadrature (used when the correlation
+exceeds $0.925$ or the closed form cancels) and the per-call setup of its
+Gauss--Legendre law, not to the gamma-specific machinery above.
+
+\section{Uniform Start-Point and Drift Variability}
+When $D\sim U[b-A,b]$ and $V\sim\Normal(m,s_v^2)$ are independent, the full-Gaussian no-clock density has a simple closed form. Using
+\begin{equation}
+  f_W(x;d,V,\sigma)=\frac{d}{x}\varphi(d;Vx,\sigma^2x),
+\end{equation}
+define the latent Gaussian variable
+\begin{equation}
+  Y_x=Vx+\sigma\sqrt{x}\,\varepsilon,
+  \qquad \varepsilon\sim\Normal(0,1).
+\end{equation}
+Then
+\begin{equation}
+  Y_x\sim\Normal(mx,s_D^2),
+  \qquad
+  s_D^2=s_v^2x^2+\sigma^2x.
+\end{equation}
+Averaging over $D\in[b-A,b]$ gives
+\begin{equation}
+  f_{A,s_v}^{\mathrm{FG}}(x)=
+  \frac{1}{Ax}E\left[Y_x\mathbf{1}\{b-A\le Y_x\le b\}\right].
+\end{equation}
+Equivalently, with
+\begin{equation}
+  a_L=\frac{b-A-mx}{s_D},
+  \qquad
+  a_H=\frac{b-mx}{s_D},
+\end{equation}
+\begin{equation}
+  f_{A,s_v}^{\mathrm{FG}}(x)=
+  \frac{mx\left[\PhiN(a_H)-\PhiN(a_L)\right]
+  +s_D\left[\phiN(a_L)-\phiN(a_H)\right]}{Ax}.
+  \label{eq:joint-full-density}
+\end{equation}
+This is the start-point averaged version of \eqref{eq:full-gaussian-density}; no bivariate normal is needed because there is no lower truncation on $V$.
+
+For the positive-truncated drift law, the same density is a first moment over a truncated bivariate-normal rectangle. Let
+\begin{equation}
+  X=\frac{V-m}{s_v},
+  \qquad
+  Y=\frac{Y_x-mx}{s_D},
+  \qquad
+  \rho=\frac{s_v\sqrt{x}}{\sqrt{\sigma^2+s_v^2x}},
+  \qquad
+  \gamma=-\frac{m}{s_v}.
+\end{equation}
+Then $(Y,X)$ is standard bivariate normal with correlation $\rho$, and
+\begin{equation}
+  f_{A,s_v}^{+}(x)=\frac{mxP_R+s_DM_R}{AZ_+x},
+  \label{eq:joint-positive-density}
+\end{equation}
+where
+\begin{equation}
+  P_R=\left[\PhiN(a_H)-\PhiN(a_L)\right]
+  -\left[\PhiTwo(a_H,\gamma;\rho)-\PhiTwo(a_L,\gamma;\rho)\right]
+\end{equation}
+and
+\begin{equation}
+  M_R=\left[
+  -\phiN(y)\PhiN\!\left(\frac{\rho y-\gamma}{\sqrt{1-\rho^2}}\right)
+  +\rho\phiN(\gamma)
+  \PhiN\!\left(\frac{y-\rho\gamma}{\sqrt{1-\rho^2}}\right)
+  \right]_{a_L}^{a_H}.
+\end{equation}
+
+Equations \eqref{eq:joint-full-density} and \eqref{eq:joint-positive-density}
+are exact but become differences of nearly equal terms in both time tails,
+where the rectangle probability is far smaller than the probabilities it is
+built from; bivariate-normal algorithms carry absolute rather than relative
+error, so the positive-truncated form is kept only while its numerator
+exceeds $10^{-4}$ of $|mx|+s_D$, and the full-Gaussian form only while it
+exceeds $10^{-4}$ of the sum of its term magnitudes. Beyond that the density is
+evaluated as the distance integral it came from. With $G$ and $w$ as in
+Section~\ref{sec:joint-cdf-recurrence} below, the fixed-distance density is
+$(d/x)\,G(d)\PhiN(w(d))/Z_+$, so
+\begin{equation}
+ f_{A,s_v}^{+}(x)=\frac{1}{AxZ_+}\int_{b-A}^{b}d\,\mathcal J(d)\dd d,
+ \qquad \mathcal J=G\PhiN(w),
+ \label{eq:joint-density-integral}
+\end{equation}
+with $\mathcal J=G$ and $Z_+=1$ under full-Gaussian drift. Since
+$\mathcal J$ and $\mathcal K=G\phiN(w)$ satisfy the linear recurrence of
+Section~\ref{sec:joint-cdf-recurrence}, the integral is its series weighted by
+$d_0/(n+1)+h/(n+2)$ on each interval. The integrand is log-concave in $d>0$, so
+the range is split at its mode and each part is integrated towards the mode,
+along which the integrand grows; $\mathcal J$ and $\mathcal K$ are evaluated
+afresh at the start of every interval.
+
+For CDFs with both $A>0$ and $s_v>0$ the distance average of
+\eqref{eq:full-gaussian-cdf} or \eqref{eq:positive-cdf} has no elementary
+antiderivative: after start-point averaging the image term contains products of
+drift and distance, which fall outside the elementary Gaussian identities.
+
+This distinction is useful for intuition. The density is local in time and can be written as a fixed-time Gaussian moment over the interval $[b-A,b]$. The CDF is pathwise: it asks whether the process has ever crossed by time $x$. The pathwise correction is exactly the image term. The differential identity below performs the distance average exactly, as a convergent series.
+
+\subsection{Analytic CDF Integration by a Distance Recurrence}
+\label{sec:joint-cdf-recurrence}
+Fix finite evidence time $x>0$, with $\sigma,s_v,A>0$ and $b-A\ge0$.
+Write $p(v)=\varphi(v;m,s_v^2)$ for the \emph{untruncated} normal density,
+$c=\sigma\sqrt{x}$, $Q=\sigma^2+s_v^2x$, and $S=\sqrt{xQ}=s_D$.
+For positive-truncated drift, separate the unnormalised pieces of the Wald CDF
+and survivor:
+\begin{align}
+ \mathcal T(d)&=\int_0^\infty p(v)
+       \PhiN\!\left(\frac{vx-d}{c}\right)\dd v,\qquad
+ \mathcal U(d)=\int_0^\infty p(v)
+       \PhiN\!\left(\frac{d-vx}{c}\right)\dd v,\\
+ \mathcal H(d)&=\int_0^\infty p(v)e^{2dv/\sigma^2}
+       \PhiN\!\left(-\frac{d+vx}{c}\right)\dd v.
+\end{align}
+Since $\mathcal T+\mathcal U=Z_+$,
+\begin{equation}
+ F_{A,s_v}^{+}(x)=\frac{1}{AZ_+}\int_{b-A}^b
+       [\mathcal T(d)+\mathcal H(d)]\dd d,
+ \qquad
+ S_{A,s_v}^{+}(x)=\frac{1}{AZ_+}\int_{b-A}^b
+       [\mathcal U(d)-\mathcal H(d)]\dd d.
+ \label{eq:joint-cdf-target}
+\end{equation}
+With $A=0$ the averages reduce to the values at $d=b$, which is
+\eqref{eq:positive-cdf}. The image term $\mathcal H$ satisfies a first-order
+linear differential equation in distance.
+
+To derive that equation, let
+\[
+ g(v,d)=e^{2dv/\sigma^2}\PhiN\!\left(-\frac{d+vx}{c}\right),
+ \qquad j(v,d)=\frac{1}{c}\phiN\!\left(\frac{d-vx}{c}\right).
+\]
+Differentiating and using the reflection identity for the normal density gives
+\begin{equation}
+ g_d=\frac{2v}{\sigma^2}g-j,
+ \qquad g_v=\frac{2d}{\sigma^2}g-xj.
+ \label{eq:joint-reflection-derivatives}
+\end{equation}
+Integration by parts with $p'(v)=-(v-m)p(v)/s_v^2$ gives
+\begin{equation}
+ \int_0^\infty vp(v)g(v,d)\dd v
+ =m\mathcal H(d)+s_v^2\int_0^\infty p(v)g_v(v,d)\dd v
+       +s_v^2p(0)\PhiN(-d/c).
+\end{equation}
+The positive boundary contribution at $v=0$ is essential. It distinguishes
+truncating the drift law from retaining all Gaussian drifts.
+
+Define
+\begin{gather}
+ G(d)=\frac{1}{S}\phiN\!\left(\frac{d-mx}{S}\right),\qquad
+ w(d)=\frac{s_v^2d+m\sigma^2}{\sigma s_v\sqrt Q},\qquad
+ u=w'(d)=\frac{s_v}{\sigma\sqrt Q},\\
+ \mathcal J=G\PhiN(w),\qquad \mathcal K=G\phiN(w),\qquad
+ \mathcal L=\PhiN(-d/c),\qquad \mathcal E=\phiN(d/c),\\
+ a=\frac{2m}{\sigma^2},\qquad \beta=\frac{4s_v^2}{\sigma^4},\qquad
+ k=1+\frac{2s_v^2x}{\sigma^2},\qquad
+ \delta=\frac{2s_v}{\sigma^2}\phiN(m/s_v).
+\end{gather}
+These functions close under differentiation:
+\begin{align}
+ \mathcal T'&=-\mathcal J,\qquad \mathcal U'=\mathcal J,\\
+ \mathcal H'&=(a+\beta d)\mathcal H-k\mathcal J+\delta\mathcal L,
+       \label{eq:joint-image-ode}\\
+ \mathcal J'&=-\frac{d-mx}{S^2}\mathcal J+u\mathcal K,\\
+ \mathcal K'&=\left[-\frac{d-mx}{S^2}-uw(d)\right]\mathcal K,\\
+ \mathcal L'&=-\mathcal E/c,\qquad
+ \mathcal E'=-d\mathcal E/c^2.
+ \label{eq:joint-ode-closure}
+\end{align}
+Every coefficient is affine in $d$. In vector form,
+\[
+ \bm y'=(M_0+dM_1)\bm y,\qquad
+ \bm y=(\mathcal T,\mathcal H,\mathcal J,\mathcal K,\mathcal L,\mathcal E)^\top,
+\]
+or with $\mathcal U$ in place of $\mathcal T$.
+
+On a directed interval $d=d_0+h z$, $0\le z\le1$, write
+$\bm y(d_0+hz)=\sum_{n\ge0}\bm y_nz^n$ and set
+$C_0=h(M_0+d_0M_1)$, $C_1=h^2M_1$. Matching coefficients gives
+\begin{equation}
+ \boxed{\quad
+ \bm y_{n+1}=\frac{C_0\bm y_n+C_1\bm y_{n-1}}{n+1},
+ \qquad \bm y_{-1}=0.\quad}
+ \label{eq:joint-series-recurrence}
+\end{equation}
+The average over the interval is therefore
+\begin{equation}
+ \boxed{\quad \frac{1}{Z_+}\sum_{n=0}^{\infty}
+       \frac{\mathcal T_n+\mathcal H_n}{n+1}\quad}
+ \label{eq:joint-series-integral}
+\end{equation}
+for the CDF, and the same sum over $\mathcal U_n-\mathcal H_n$ for the
+survivor. The range $[b-A,b]$ is covered by consecutive intervals whose
+averages are combined by length; the endpoint values for the next interval are
+the sums of the coefficient series. Each new coefficient needs only a fixed
+number of arithmetic operations.
+
+The linear system has polynomial coefficients, so its solutions are entire and
+their Taylor series converge uniformly on compact intervals, which justifies
+termwise integration. Equations
+\eqref{eq:joint-series-recurrence}--\eqref{eq:joint-series-integral} thus give
+an \emph{exact analytic series}, not a finite elementary closed form.
+
+For full-Gaussian drift, replace the drift integration range by the real
+line, set $Z_+=1$, $\delta=0$, $\mathcal J=G$, and $\mathcal K=0$.
+The same recurrence then applies. The resulting CDF keeps its defective mass;
+it must not be divided by an eventual-hit probability.
+
+\subsection{Direction of Travel and the Survivor}
+The homogeneous solution of \eqref{eq:joint-image-ode} is $e^{\ell(d)}$ with
+\begin{equation}
+ \ell(d)=ad+\frac{\beta}{2}d^2=\frac{2dm}{\sigma^2}+\frac{2d^2s_v^2}{\sigma^4},
+\end{equation}
+so a perturbation of $\mathcal H$ at $d_0$ reaches $d$ multiplied by
+$e^{\ell(d)-\ell(d_0)}$. Where $a+\beta d\ge0$, which covers all $d>0$ when
+$m\ge0$, this factor is at most one for $d<d_0$: running the series
+\emph{downwards} from the top of the range never amplifies an error in
+$\mathcal H$. Where $a+\beta d<0$ (possible only for $m<0$), $\mathcal H$ is
+re-initialised at each interval rather than carried. $\mathcal T$ and
+$\mathcal U$ have no homogeneous mode; they are integrals of $\mathcal J$.
+
+The CDF integrates $\mathcal T+\mathcal H$ downwards from $b$ to $b-A$. When
+$F$ is close to one, $1-F$ keeps no relative accuracy, so the survivor is
+formed from its own pieces: $\mathcal U$ is integrated \emph{upwards} from
+$b-A$, $\mathcal H$ downwards from $b$, and $S$ is the difference of the two
+integrals. Each integral keeps its relative accuracy, and the difference loses
+digits only to the ratio $\int\mathcal U/\int(\mathcal U-\mathcal H)$, not to
+$1/S$. Whichever of $F$ and $S$ is the smaller is evaluated directly and the
+other by complement; the full-Gaussian CDF \eqref{eq:full-gaussian-cdf} at
+$d=b$ is a cheap proxy that decides which. For $A=0$ the same choice is made
+between $(\mathcal T+\mathcal H)/Z_+$ and $(\mathcal U-\mathcal H)/Z_+$ at
+$d=b$; if $S>1/2$ then $\mathcal U>Z_+/2$, so a misjudged proxy costs at most
+a factor of two in the difference.
+
+Both integrands are monotone in $d$: $F(x;d)$ decreases and $S(x;d)$ increases
+with distance. When a Gaussian proxy for the fixed-time position,
+$\PhiN((mx-d)/S)$ for the CDF and $\PhiN((d-mx)/S)$ for the survivor, falls by
+more than $e^{-55}$ across the range, integration starts at the point where it
+has fallen by that much. Monotonicity bounds the skipped part by its length
+times the integrand at the cut; this bound is checked against $10^{-16}$ of the
+computed integral afterwards, and the whole range is used if it fails.
+
+\subsection{Initial Values}
+Under full-Gaussian drift the pieces are univariate:
+\begin{equation}
+ \mathcal T=\PhiN(h_1),\qquad \mathcal U=\PhiN(-h_1),\qquad
+ \mathcal H=\exp\{\ell+\log\PhiN(h_2)\},
+\end{equation}
+with $h_1=(mx-d)/S$, $m_p=m+2ds_v^2/\sigma^2$ and $h_2=(-m_px-d)/S$. They are
+evaluated afresh at the start of every interval, so nothing is propagated.
+
+Under positive truncation, with $\rho=s_v\sqrt{x/Q}$,
+\begin{align}
+ \mathcal T(d)&=\PhiTwo(m/s_v,h_1;\rho),\qquad
+ \mathcal U(d)=\PhiTwo(m/s_v,-h_1;-\rho),\\
+ \mathcal H(d)&=e^\ell\PhiTwo(m_p/s_v,h_2;-\rho)
+ =e^{\ell}\left[\PhiN(h_2)-\PhiTwo(-m_p/s_v,h_2;\rho)\right].
+\end{align}
+Fixed-order bivariate-normal algorithms are accurate in absolute rather than
+relative terms, and the factor $e^{\ell}$ amplifies any absolute error in the
+bracket; $\ell$ exceeds 100 once $bs_v/\sigma^2$ exceeds about 7. The
+bivariate forms are therefore used only where they keep relative accuracy:
+$m\ge0$, $\rho<0.925$ (the low-correlation Gauss--Legendre representation of
+$\PhiTwo$ in $\arcsin\rho$), the univariate argument $h$ above $-4$, and the
+subtracted probability below $0.95$ of the leading one. Everywhere else the
+following posterior forms are used.
+
+Completing the square in the drift,
+\[
+ p(v)\,\frac{1}{c}\phiN\!\left(\frac{d-vx}{c}\right)=G(d)\,\varphi(v;m_*,\tau_*^2),
+ \qquad
+ m_*=\frac{s_v^2d+m\sigma^2}{Q},\qquad
+ \tau_*=\frac{\sigma s_v}{\sqrt Q}.
+\]
+Write $V_*=m_*+\tau_*Z$ with $Z\sim\Normal(0,1)$, so that $V_*>0$ exactly when
+$Z>-w(d)$, and note $\tau_*x/c=\rho$. With the Mills ratio
+$R(y)=\PhiN(-y)/\phiN(y)$, the identities
+$\PhiN(y)=\phiN(y)R(-y)$ and
+$e^{2dv/\sigma^2}\phiN((d+vx)/c)=\phiN((d-vx)/c)$ give
+\begin{align}
+ \mathcal T(d)&=cG(d)\,E\left[\mathbf1\{Z>-w\}R(x_T-\rho Z)\right],\qquad
+ \mathcal U(d)=cG(d)\,E\left[\mathbf1\{Z>-w\}R(-x_T+\rho Z)\right],\\
+ \mathcal H(d)&=cG(d)\,E\left[\mathbf1\{Z>-w\}R(x_H+\rho Z)\right],
+ \label{eq:joint-image-seed}
+\end{align}
+where $x_T=(d-m_*x)/c$ and $x_H=(d+m_*x)/c$. Of $\mathcal T$ and $\mathcal U$
+the form whose Mills argument is nonnegative at the posterior mean is
+evaluated, and its complement in $Z_+$ is taken by subtraction only when the
+evaluated part is below $Z_+/2$.
+
+Each posterior form is
+\[
+ I(x_0,s,z_0)=\int_{z_0}^\infty\phiN(z)R(x_0+sz)\dd z,\qquad |s|<1.
+\]
+Its log integrand $f(z)=\log\phiN(z)+\log R(x_0+sz)$ is strictly concave:
+$(\log R)''=1-\lambda(\lambda-y)\in(0,1)$ for the hazard
+$\lambda=\phiN/\PhiN(-\cdot)$, so $f''\in(-1,-(1-s^2))$. Two further facts make
+$I$ cheap to evaluate.
+\begin{enumerate}
+ \item Without truncation it is closed form. Since
+ $R(y)=\int_0^\infty e^{-yt-t^2/2}\dd t$,
+ \begin{equation}
+  E\left[R(x_0+sZ)\right]=\int_0^\infty e^{-x_0t-(1-s^2)t^2/2}\dd t
+  =\frac{1}{\kappa}R\!\left(\frac{x_0}{\kappa}\right),\qquad
+  \kappa=\sqrt{1-s^2}.
+  \label{eq:posterior-mills-closed}
+ \end{equation}
+ (Under full-Gaussian drift, $z_0=-\infty$ and \eqref{eq:posterior-mills-closed}
+ returns $\PhiN(h_1)$ and $e^\ell\PhiN(h_2)$.)
+ \item Concavity bounds the truncated mass. If $f'(z_0)>0$ then
+ $f(z)\le f(z_0)+f'(z_0)(z-z_0)$ for $z<z_0$, so
+ \[
+  \int_{-\infty}^{z_0}e^{f(z)}\dd z\le\frac{e^{f(z_0)}}{f'(z_0)}.
+ \]
+ When this is below $e^{-40}$ of \eqref{eq:posterior-mills-closed}, the closed
+ form is used.
+ \item When the bound is below half of \eqref{eq:posterior-mills-closed},
+ \[
+  I(x_0,s,z_0)=\frac{1}{\kappa}R\!\left(\frac{x_0}{\kappa}\right)-I(x_0,-s,-z_0),
+ \]
+ since the truncated mass $\int_{-\infty}^{z_0}e^{f(z)}\dd z$ is the same kind of
+ integral with $z\to-z$. Its integrand is largest at its lower limit, so only
+ one side needs quadrature, and the subtraction loses at most a factor of two.
+\end{enumerate}
+Otherwise the mode of $f$ is found by safeguarded Newton iteration, and the
+integration window runs from the mode to where $f$ has fallen by 40, or to
+$z_0$. Each side of the mode is integrated by Gauss--Legendre quadrature with
+a number of nodes that grows with its length (every feature of $e^f$ is at
+least of order one wide because $|f''|\le1$). A side longer than 12 units,
+possible only as $s^2\to1$, is split into panels that double in width away
+from the mode, since the curvature then concentrates next to the mode.
+Throughout, $\log R$ is evaluated from a piecewise Chebyshev expansion on
+$[-3,26)$ (degree 12 on intervals of width $1/2$, accurate to about
+$4\times10^{-16}$), from the Laplace continued fraction
+$R(y)=1/(y+1/(y+2/(y+\cdots)))$ above 26, and from
+$R(y)=\sqrt{2\pi}\,e^{y^2/2}-R(-y)$ below $-3$.
+
+\subsection{Evaluating the Series}
+Each interval is carried on its own logarithmic scale: its coefficients are
+divided by the magnitude of the state at the start of the interval, and the log
+of that scale is carried separately. A CDF far below the smallest double at
+small $x$ (below $e^{-37000}$), or a survivor far below it at long $x$, keeps
+its digits.
+
+The interval length is set by the Gaussian factors $\mathcal J$, $\mathcal K$,
+$\mathcal L$, $\mathcal E$ and the homogeneous mode of $\mathcal H$. Over one
+interval a factor may change its log by at most 7 if it shrinks along the
+direction of travel and 30 if it grows, and its log-curvature may contribute
+at most 6. The homogeneous rate satisfies $|a+\beta d|\,|h|\le30$. A factor
+whose weight relative to the carried state is below $e^{-45}$, and which
+shrinks along the interval, is dropped from this choice.
+
+The series of an interval runs for at least $\lceil r\rceil+3$ terms, where $r$
+is the largest of the one-interval log changes $|h(a+\beta d_0)|$,
+$|h(d_0-mx)/S^2|$, $|h\{(d_0-mx)/S^2+uw(d_0)\}|$ and $|hd_0/c^2|$. It stops
+once two successive new coefficients of the carried quantities, together with
+a bound on what the auxiliary factors can still feed into them, are below
+$10^{-17}$ of the running average. If that does not happen within 160 terms,
+the interval is halved.
+
+\subsection{Eventual Hit Mass under Full-Gaussian Drift}
+Under positive truncation $F(\infty)=1$. Under full-Gaussian drift the
+distance-averaged eventual hit mass is
+\begin{equation}
+ \bar H_{\mathrm{FG}}=\PhiN\!\left(\frac{m}{s_v}\right)
+ +\frac{1}{A}\int_{b-A}^b\mathcal H_\infty(d)\dd d,
+ \qquad
+ \mathcal H_\infty(d)=E\left[e^{2dV/\sigma^2};V<0\right]
+ =e^{\ell(d)}\PhiN\!\left(-\frac{m_p}{s_v}\right),
+\end{equation}
+the distance average of \eqref{eq:full-gaussian-hit-mass}. The same
+integration by parts as above gives
+\begin{equation}
+ \mathcal H_\infty'=(a+\beta d)\mathcal H_\infty-\delta,
+\end{equation}
+and the never-finish mass $\mathcal D(d)=P_--\mathcal H_\infty(d)$, with
+$P_-=\PhiN(-m/s_v)$ and $\mathcal D(0)=0$, satisfies
+\begin{equation}
+ \mathcal D'=(a+\beta d)(\mathcal D-P_-)+\delta.
+\end{equation}
+Both are integrated by the recurrence with their values re-initialised in
+closed form at every interval. Carrying $\mathcal D$ directly keeps the miss
+mass accurate when the hit mass is close to one. For $z=m/s_v\ge0$ the forcing
+$\delta-aP_-=(2s_v/\sigma^2)\phiN(z)\{1-zR(z)\}$ is formed without
+cancellation. The miss mass is $\bar{\mathcal D}=A^{-1}\int\mathcal D\dd d$,
+and $\bar H_{\mathrm{FG}}+\bar{\mathcal D}=1$.
+
+\subsection{Clocks and Scope}
+The recurrence gives the no-clock decision CDF and survivor. An independent
+guess clock composes with them algebraically: $S_R(T)=S_D(x)S_G(T)$ and
+$f_R(T)=f_D(x)S_G(T)+f_G(T)S_D(x)$, with $x=T-t_0$, so the directly evaluated
+survivor carries its relative accuracy into the response survivor. A kill clock
+multiplies the decision density by its raw-time survivor,
+$f_R(T)=f_D(x)S_K(T)$, for any independent Erlang shape, but the killed CDF
+$\int f_DS_K$ is a time integral that the distance result does not remove.
+Nor does it remove the outer integration over correlated drift draws. The
+operational-time RDMSWTN\_TT model uses it after its clock map.
+
+\section{Stimulus-Dependent and Stimulus-Independent Diffusion Noise}
+\label{sec:two-noise}
+The Wald accumulator above has a single diffusion coefficient $\sigma$ that does
+not depend on the evidence it carries. Smith and Lilburn
+(\href{https://doi.org/10.3758/s13423-020-01742-7}{2020}),
+\emph{Vision for the Blind: Visual Psychophysics and Blinded Inference for
+Decision Models} (Psychonomic Bulletin \& Review, 27, 882--910), proposed a
+diffusion with two independent noise sources: one that scales with the
+stimulus and one that does not. This section restates their construction and
+records what it implies for the one-boundary Wald law. The model and its
+interpretation are theirs; the only step added here is the special case of a
+constant within-trial stimulus input.
+
+\paragraph{The Smith--Lilburn process.}
+In their formulation, a stimulus-driven input $\theta(t)\ge0$ is passed to the
+accumulator with gain $\mu$. The accumulator receives two independent Brownian
+inputs $W^{(1)}$ and $W^{(2)}$:
+\begin{equation}
+  \dd X_t=\mu\,\theta(t)\dd t+\sigma_1\sqrt{\theta(t)}\dd W^{(1)}_t
+  +\sigma_2\dd W^{(2)}_t
+  \label{eq:sl-two-noise}
+\end{equation}
+(their Eq.~3). The first noise term depends on the stimulus, with variance
+proportional to the input. The second is independent of the stimulus. By the
+additive property of Brownian motion, they note that \eqref{eq:sl-two-noise}
+is equivalent in law to a process with a single noise source,
+\begin{equation}
+  \dd X_t=\mu\,\theta(t)\dd t+\sqrt{\sigma_1^2\theta(t)+\sigma_2^2}\,\dd W_t
+  \label{eq:sl-one-noise}
+\end{equation}
+(their Eq.~4). They interpret $\sigma_2$ as \emph{premature sampling} noise:
+the decision-maker samples noise from the display before stimulus information
+has arrived. They attribute the idea to Laming (1968). In their application,
+$\theta(t)$ is a smoothly rising growth function, $\sigma_1$ is fixed
+($\sigma_1=0.1$) as the scaling convention, and $\sigma_2$ is estimated. The
+stimulus-independent term lets the process make fast errors early in the
+trial, when $\theta(t)$ is still small.
+
+\paragraph{Constant input: a Wald law with drift-dependent diffusion.}
+Suppose the input is constant within a trial, $\theta(t)\equiv\theta$, and write
+the drift as $v=\mu\theta$. Then \eqref{eq:sl-one-noise} is a Brownian motion
+with constant drift $v$ and constant diffusion rate
+\begin{equation}
+  \sigma^2(v)=\sigma_2^2+\sigma_1^2\theta
+  =\sigma_2^2+\kappa\,v,
+  \qquad
+  \kappa=\frac{\sigma_1^2}{\mu}.
+  \label{eq:sl-affine}
+\end{equation}
+The diffusion rate is therefore affine in the drift. The intercept is the
+stimulus-independent floor $\sigma_2^2$, and the slope $\kappa$ is the
+stimulus-linked variance per unit of drift. Conditional on $v$, the
+first-passage time is exactly the Wald law of Section~2 with
+$\sigma=\sigma(v)$:
+\begin{equation}
+  f(x\mid v)=f_W\!\big(x;d,v,\sqrt{\sigma_2^2+\kappa v}\big),
+  \qquad
+  F(x\mid v)=F_W\!\big(x;d,v,\sqrt{\sigma_2^2+\kappa v}\big).
+\end{equation}
+For a fixed drift, $\sigma$ is again a constant. The uniform start-point
+average of Section~2 therefore applies unchanged at $\sigma(v)$, and the
+start-point-averaged density and CDF remain closed form.
+
+Equation~\eqref{eq:sl-affine} is equivalent to $\sigma^2(v)=\sigma_2^2(1+\rho v)$
+with $\rho=\kappa/\sigma_2^2$. The form in $\kappa$ keeps the two noise sources
+separate: changing the floor $\sigma_2$ does not change the stimulus-linked
+slope. Two limits are informative:
+\begin{itemize}
+  \item $\sigma_1=0$ gives the ordinary Wald accumulator with
+  drift-independent noise $\sigma_2$.
+  \item $\sigma_2=0$ gives purely rate-proportional diffusion, $\sigma^2=\kappa v$.
+  This is the Brownian matched comparator of Section~\ref{sec:igs}, with
+  $c=\kappa$.
+\end{itemize}
+The $\sigma_2$ floor is what separates the Smith--Lilburn process from that
+comparator. Without it, a weakly driven accumulator ($v\to0$) is also nearly
+noiseless and almost never finishes early. With it, noise is present at every
+drift, so weak or incorrect accumulators can still reach the boundary early.
+For the constant-input case, this is the premature-sampling mechanism.
+
+\paragraph{Scale.}
+Multiplying the process by $c>0$ maps $(d,v,\sigma_2,\kappa)$ to
+$(cd,cv,c\sigma_2,c\kappa)$ and leaves the first-passage law unchanged, because
+$c^2\sigma^2(v)=(c\sigma_2)^2+(c\kappa)(cv)$. One scale constraint is therefore
+needed. Smith and Lilburn fix $\sigma_1$, which is equivalent to fixing
+$\kappa$ when the gain $\mu$ is absorbed into $v$. Fixing the floor $\sigma_2$ or
+a distance $d$ works equally well; none of these choices loses generality.
+
+\paragraph{Across-trial drift variability.}
+The Gaussian mixing identities of Sections~3 and~4 rely on the conditional
+evidence state $Vx+\sigma\sqrt x\,\varepsilon$ being Gaussian in $V$ with a
+fixed $\sigma$. When $\sigma=\sigma(V)$, that state is no longer jointly
+Gaussian in $(V,\varepsilon)$, so the closed-form $s_v>0$ expressions do not
+carry over. The drift mixture then needs one-dimensional quadrature over $V$.
+A full-Gaussian drift law also needs care, because $\sigma^2(v)$ in
+\eqref{eq:sl-affine} must stay positive. The input $\theta$ is nonnegative in
+their construction, so a positive-truncated drift law is the natural pairing.
+
+\section{Ornstein--Uhlenbeck and Related Models}
+The Ornstein--Uhlenbeck (OU) diffusion generalizes the standard Brownian
+accumulation by introducing a linear mean-reversion or leak term. This is the
+state-dependent-drift example used to situate OU processes in the sequential-
+sampling taxonomy. For a fixed distance $d$, starting point $X_0 = 0$, drift
+profile $\mu(t)$, diffusion coefficient $\sigma$, and leak rate $\lambda$ (or
+$k$), the accumulator satisfies
+\begin{equation}
+  \dd X_t = \left[\mu(t) - \lambda X_t\right] \dd t + \sigma \dd W_t.
+\end{equation}
+The constant-drift Wald process corresponds to the special case where
+$\lambda=0$ and $\mu(t)\equiv\mu$. The time-varying chapter emphasizes that
+stimulus encoding is generally represented by a smooth drift profile (and can
+also be allowed to change the diffusion rate), rather than by a step change at
+stimulus onset. The first-passage law for a time-inhomogeneous OU is therefore
+defined through its killed transition density and boundary flux, and is
+normally evaluated numerically. The integral-equation strategy used in the
+time-varying chapter is the relevant general method when no stationary OU
+first-passage simplification is available.
+
+Three model architectures build on the OU process, matching the sustained--
+transient construction in Smith (1995) and the sequential-sampling and
+time-varying chapters:
+\begin{enumerate}
+  \item \textbf{ROU (Race of OUs)}: Represents a race between independent
+  single-boundary OU accumulators. For sustained and transient channels, write
+  \begin{equation}
+    \dd X_j(t)=\left[\mu_j(t)-\lambda_jX_j(t)\right]\dd t+\sigma_j\dd W_j(t),
+    \qquad j\in\{S,T\},
+  \end{equation}
+  with independent channel noises $W_S$ and $W_T$,
+  and let $T_j$ be the first time $X_j$ reaches its criterion. The ROU
+  decision time is $T_{\mathrm{ROU}}=\min(T_S,T_T)$, exactly the parallel
+  sustained--transient race described in Chapter 8.
+  \item \textbf{ROUp (Pooled / Coactivation)}: The Smith (1995) coactivation
+  model uses a single OU accumulator rather than a race. Its channel drives
+  are pooled before accumulation,
+  \begin{equation}
+    \dd X_p(t)=\left[\mu_S(t)+\mu_T(t)-\lambda X_p(t)\right]\dd t+\sigma\dd W(t),
+  \end{equation}
+  so its decision time is one first-passage time. ROUp is therefore not the
+  minimum of two hitting times, and it should not be interpreted as adding the
+  two ROU response densities after the fact.
+  \item \textbf{BOU (Bounded OU)}: Generalizes the OU process to a two-boundary diffusion (e.g., an absorbing upper boundary for detection and a reflecting lower boundary, or two absorbing boundaries for two-choice tasks), ensuring the evidence accumulation remains bounded.
+\end{enumerate}
+
+The notation $\mu_S(t)$ and $\mu_T(t)$ is intentional. In the canonical
+time-varying account, the sustained profile rises toward an asymptote and the
+transient profile rises to a peak and then decays, after stimulus encoding has
+been passed through the corresponding low-pass filters. A simple pulse or
+piecewise profile used in a particular RDMSWTN implementation is a reduced
+forcing choice; the architectural distinction between ROU and ROUp is the
+race-versus-pooling distinction above.
+
+\section{Time-Transformed Wald (RDMSWTN\_TT)}
+The Time-Transformed Wald (RDMSWTN\_TT) model applies a finite linear exhaustion clock to each ordinary accumulator. Let $x = T - t_0$ be the raw decision time. Rather than accumulating in real time $x$, the process operates in a transformed operational time $q(x)$.
+
+For a finite exhaustion parameter $\tau > 0$, the operational time is defined as:
+\begin{equation}
+  q(x) = x - \frac{x^2}{2\tau}, \qquad 0 < x < \tau.
+\end{equation}
+The maximum accumulated operational time is the capacity (or budget) $Q = \tau/2$, which is reached exactly at $x = \tau$. For $x \ge \tau$, the clock is exhausted and operational time plateaus at $Q$.
+
+This construction is distinct from the time-varying diffusion models in
+Chapter 8. Those models change the within-trial drift (and, in general, the
+diffusion rate) as a function of physical time. Here the parent Wiener process
+remains stationary in operational time and $q$ is an outer deterministic clock:
+the finite-window law is a pushforward of the ordinary first-passage law. A
+nonlinear $q$ can of course be rewritten as a time-dependent effective drift
+and diffusion in raw time, but the RDMSWTN\_TT parameterization is chosen to
+make the finite capacity and its resulting omission mass explicit.
+
+Consequently, the process probability density is zero at and beyond $T \ge t_0 + \tau$. The cumulative distribution function remains fixed at the ordinary CDF evaluated at $Q$:
+\begin{equation}
+  F_{\mathrm{TT}}(x) = \begin{cases}
+    F_W(q(x)), & 0 < x < \tau \\
+    F_W(Q), & x \ge \tau
+  \end{cases}
+\end{equation}
+The remaining probability mass, $1 - F_W(Q)$, represents genuine omission mass resulting from the exhaustion of the clock before the criterion could be reached. In the limit as $\tau \to \infty$, the operational time reduces to the exact identity clock $q(x) = x$, recovering the ordinary RDMSWTN process without an exhaustion plateau.
+
+\section{Gaussian Copula for Correlated Race Finishing Times}
+In a race model with $K$ accumulators, finishing times $T_1, \dots, T_K$ are latent random variables representing the hitting times of individual evidence accumulators. Let $F_i(t) = P(T_i \le t)$ denote the marginal cumulative distribution function (CDF) of accumulator $i$, $f_i(t) = F_i'(t)$ its marginal probability density function (PDF), and $S_i(t) = 1 - F_i(t)$ its marginal survival function.
+
+When accumulators finish independently, the winning subdensity for accumulator $i$ at time $t$ is $f_i(t) \prod_{j \ne i} S_j(t)$. When finishing times are dependent, their joint distribution can be constructed via a copula.
+
+\subsection{Sklar's Theorem and Probit Rank Transformation}
+By Sklar's theorem, any multivariate joint CDF $F(t_1, \dots, t_K) = P(T_1 \le t_1, \dots, T_K \le t_K)$ can be written in terms of its marginal CDFs $F_i(t_i)$ and a copula function $C : [0, 1]^K \to [0, 1]$:
+\begin{equation}
+  F(t_1, \dots, t_K) = C\Big(F_1(t_1), \dots, F_K(t_K)\Big).
+\end{equation}
+Under the \emph{Gaussian copula}, each marginal uniform rank variable $U_i = F_i(T_i) \sim U[0, 1]$ is mapped to a standard Gaussian random variable using the probit function (inverse standard normal CDF $\PhiN^{-1}$):
+\begin{equation}
+  Z_i = \PhiN^{-1}(U_i) = \PhiN^{-1}\big(F_i(T_i)\big), \qquad i = 1, \dots, K.
+\end{equation}
+The vector $\mathbf{Z} = (Z_1, \dots, Z_K)^\top$ follows a multivariate normal distribution $\Normal_K(\mathbf{0}, \mathbf{R})$, where $\mathbf{R}$ is a correlation matrix with unit diagonal and off-diagonal elements $\rho_{ij} = \mathrm{Corr}(Z_i, Z_j)$.
+
+\subsection{Bivariate Copula Pair and Winning Subdensities}
+Consider a race of $K$ accumulators where a single pair (without loss of generality, accumulators 1 and 2) is correlated with copula parameter $\rho \in (-1, 1)$, while all remaining accumulators $j \in \{3, \dots, K\}$ are mutually independent of each other and of the pair ($\rho_{1j} = \rho_{2j} = 0$).
+
+The latent normal pair $(Z_1, Z_2)$ is standard bivariate normal with correlation $\rho$:
+\begin{equation}
+  \begin{pmatrix} Z_1 \\ Z_2 \end{pmatrix} \sim \Normal_2\!\left(\begin{pmatrix} 0 \\ 0 \end{pmatrix}, \begin{pmatrix} 1 & \rho \\ \rho & 1 \end{pmatrix}\right).
+\end{equation}
+At time $t$, define the latent normal quantiles:
+\begin{equation}
+  z_1(t) = \PhiN^{-1}\big(F_1(t)\big), \qquad z_2(t) = \PhiN^{-1}\big(F_2(t)\big).
+\end{equation}
+
+\subsubsection{Subdensity when a Correlated Accumulator Wins}
+Suppose accumulator 1 wins the race at time $t$, so $T_1 = t$ and $T_j > t$ for all $j \ge 2$. By independence of accumulators $3, \dots, K$, the joint winning subdensity is:
+\begin{equation}
+  p_1(t) = f_{T_1, T_2}(t, T_2 > t) \prod_{j=3}^K S_j(t).
+\end{equation}
+In probit space, the event $T_1 = t$ corresponds to $Z_1 = z_1(t)$ with change-of-variable Jacobian $\dd Z_1 / \dd t = f_1(t) / \phiN(z_1(t))$, while $T_2 > t$ corresponds to $Z_2 > z_2(t)$. Conditional on $Z_1 = z_1(t)$, the random variable $Z_2$ is normal with mean $\rho z_1(t)$ and variance $1 - \rho^2$:
+\begin{equation}
+  Z_2 \mid Z_1 = z_1(t) \sim \Normal\left(\rho z_1(t),\, 1 - \rho^2\right).
+\end{equation}
+The conditional survival probability of accumulator 2 given $T_1 = t$ is therefore:
+\begin{equation}
+  P(T_2 > t \mid T_1 = t) = P(Z_2 > z_2(t) \mid Z_1 = z_1(t)) = \PhiN\!\left(\frac{\rho z_1(t) - z_2(t)}{\sqrt{1 - \rho^2}}\right).
+\end{equation}
+Multiplying by the marginal density $f_1(t)$, the standard normal PDF factor $\phiN(z_1(t))$ from the joint bivariate normal density cancels the denominator of the Jacobian $\dd Z_1 / \dd t$ exactly. The joint density-survival factor is thus:
+\begin{equation}
+  f_{T_1, T_2}(t, T_2 > t) = f_1(t) \, \PhiN\!\left(\frac{\rho z_1(t) - z_2(t)}{\sqrt{1 - \rho^2}}\right).
+\end{equation}
+Consequently, the winning subdensity for accumulator 1 has the exact closed-form expression:
+\begin{equation}
+  p_1(t) = f_1(t) \, \PhiN\!\left(\frac{\rho \PhiN^{-1}(F_1(t)) - \PhiN^{-1}(F_2(t))}{\sqrt{1 - \rho^2}}\right) \prod_{j=3}^K S_j(t).
+  \label{eq:copula-winner-density}
+\end{equation}
+Equation \eqref{eq:copula-winner-density} requires no multivariate integration; it evaluates the winner's marginal density multiplied by a single univariate standard normal CDF applied to the probit-transformed marginal CDFs.
+
+\subsubsection{Subdensity when an Independent Accumulator Wins}
+Suppose an independent accumulator $k \in \{3, \dots, K\}$ wins the race at time $t$ ($T_k = t$ and $T_j > t$ for all $j \ne k$). The winning subdensity is:
+\begin{equation}
+  p_k(t) = f_k(t) \, P(T_1 > t, T_2 > t) \prod_{j \ne 1, 2, k} S_j(t).
+\end{equation}
+The joint survival probability of the correlated pair $(T_1, T_2)$ at time $t$ is the upper tail of the standard bivariate normal distribution:
+\begin{equation}
+  P(T_1 > t, T_2 > t) = P(Z_1 > z_1(t), Z_2 > z_2(t)) = \PhiTwo\!\left(-z_1(t), -z_2(t);\, \rho\right),
+  \label{eq:copula-pair-survival}
+\end{equation}
+where $\PhiTwo(x, y; \rho)$ is the standard bivariate normal CDF with correlation $\rho$. Thus:
+\begin{equation}
+  p_k(t) = f_k(t) \, \PhiTwo\!\left(-\PhiN^{-1}(F_1(t)), -\PhiN^{-1}(F_2(t));\, \rho\right) \prod_{j \ne 1, 2, k} S_j(t).
+  \label{eq:copula-indep-winner-density}
+\end{equation}
+
+\subsubsection{Joint Race Survival}
+The overall survival function of the race (the probability that no accumulator has finished by time $t$) is:
+\begin{equation}
+  S_{\mathrm{race}}(t) = P(T_1 > t, \dots, T_K > t) = \PhiTwo\!\left(-\PhiN^{-1}(F_1(t)), -\PhiN^{-1}(F_2(t));\, \rho\right) \prod_{j=3}^K S_j(t).
+  \label{eq:copula-race-survival}
+\end{equation}
+
+\subsection{Defective Marginals and Intrinsic Non-Finishing}
+When the drift law retains negative drifts (such as $s_v = 0$ with $m < 0$), the marginal Wald CDF is defective:
+\begin{equation}
+  \lim_{t \to \infty} F_i(t) = p_i = \exp\!\left(\frac{2 m_i d_i}{\sigma_i^2}\right) < 1.
+\end{equation}
+The marginal timing distribution has a finite plateau at $p_i$, leaving a point mass $1 - p_i > 0$ at $T_i = \infty$ (intrinsic non-hitting).
+
+The Gaussian copula construction extends cleanly to defective distributions:
+\begin{itemize}
+  \item Finite finishing times $T_i < \infty$ map to uniform ranks $U_i \in [0, p_i)$, which correspond to normal quantiles $Z_i \in (-\infty, z_{i, \infty})$, where $z_{i, \infty} = \PhiN^{-1}(p_i)$.
+  \item The intrinsic non-finishing event $T_i = \infty$ maps to uniform ranks $U_i \in [p_i, 1]$, which correspond to normal quantiles $Z_i \in [z_{i, \infty}, \infty)$.
+\end{itemize}
+Copula uniforms at or above the marginal plateau $p_i$ represent the atom at infinity. Consequently, $\rho$ couples the non-finishing events as well as the finite hitting times:
+\begin{enumerate}
+  \item \textbf{Joint Omission Probability}: The probability that \emph{neither} accumulator 1 nor 2 ever finishes is given by the bivariate normal upper tail evaluated at the marginal plateaus:
+  \begin{equation}
+    P(T_1 = \infty, T_2 = \infty) = P(Z_1 \ge z_{1, \infty}, Z_2 \ge z_{2, \infty}) = \PhiTwo\!\left(-\PhiN^{-1}(p_1), -\PhiN^{-1}(p_2);\, \rho\right).
+    \label{eq:copula-joint-omission}
+  \end{equation}
+  For independent defective accumulators ($\rho = 0$), equation \eqref{eq:copula-joint-omission} reduces to $(1 - p_1)(1 - p_2)$. Positive correlation ($\rho > 0$) increases the probability of mutual omission.
+  \item \textbf{Partial Omission Probability}: The probability that accumulator 1 finishes by time $t < \infty$ while accumulator 2 never finishes is:
+  \begin{equation}
+    P(T_1 \le t, T_2 = \infty) = P(Z_1 \le z_1(t), Z_2 \ge z_{2, \infty}) = \PhiN(z_1(t)) - \PhiTwo\!\left(z_1(t), z_{2, \infty};\, \rho\right).
+    \label{eq:copula-partial-omission}
+  \end{equation}
+\end{enumerate}
+
+\subsection{Non-Parametric Rank Correlation Metrics}
+The copula correlation parameter $\rho = \mathrm{Corr}(Z_1, Z_2)$ is the
+latent Gaussian correlation. It maps directly to standard non-parametric rank
+dependence measures for the pair of finishing times $(T_1, T_2)$:
+\begin{itemize}
+  \item \textbf{Kendall's $\tau$}:
+  \begin{equation}
+    \tau = \frac{2}{\pi} \arcsin(\rho).
+  \end{equation}
+  \item \textbf{Spearman's $\rho_s$}:
+  \begin{equation}
+    \rho_s = \frac{6}{\pi} \arcsin\!\left(\frac{\rho}{2}\right).
+  \end{equation}
+\end{itemize}
+
+\subsection{Finishing-Time Copula vs. Between-Trial Drift Correlation}
+\label{sec:copula-vs-drift}
+It is essential to distinguish rank coupling of finishing times from correlation between trial-level drift draws:
+\begin{enumerate}
+  \item \textbf{Finishing-Time Copula} (Rank Coupling):
+  Couples the operational hitting times $T_1, T_2$ via Sklar's probit transformation $Z_i = \PhiN^{-1}(F_i(T_i))$.
+  It applies directly to the marginal CDFs $F_i(t)$, including when $s_v = 0$ (fixed drift).
+  As shown in equations \eqref{eq:copula-winner-density} and \eqref{eq:copula-indep-winner-density}, the winning subdensity is exact and closed form, requiring only univariate standard normal CDFs and standard bivariate normal CDFs.
+  \item \textbf{Between-Trial Drift Correlation} (Parameter Coupling):
+  Couples the across-trial mean drift rates $(V_1, V_2)$ prior to sampling independent Wald hitting times conditional on $(V_1, V_2)$:
+  \begin{equation}
+    \begin{pmatrix} V_1 \\ V_2 \end{pmatrix} \sim \Normal_2\!\left(\begin{pmatrix} m_1 \\ m_2 \end{pmatrix}, \begin{pmatrix} s_{v1}^2 & \rho s_{v1} s_{v2} \\ \rho s_{v1} s_{v2} & s_{v2}^2 \end{pmatrix}\right).
+  \end{equation}
+  This model requires $s_v > 0$ on the correlated accumulators (when $s_v = 0$, there are no drift draws to correlate). Evaluating the observed race likelihood requires numerical integration (such as Gauss-Hermite quadrature or factor-analytic integration) over the bivariate drift distribution to compute the expected independent race density.
+\end{enumerate}
+
+\section{Timing Clocks and Outcome Conventions}
+Let
+\[
+  D=t_0+\tau_d
+\]
+denote the raw decision time and let $f_D$ and $S_D$ denote its subdensity and survival. The survival includes possible non-hit mass when the drift law permits defective Wald processes. Thus $S_D(t)=1$ for $t<t_0$ and
+\[
+  S_D(t)=1-F_W(t-t_0;d,\mu,\sigma), \qquad t\ge t_0,
+\]
+in the fixed-drift, fixed-criterion case.
+
+For an Erlang clock with integer shape $n$ and rate $\lambda$,
+\begin{equation}
+  f_n(t;\lambda)=\frac{\lambda^n t^{n-1}e^{-\lambda t}}{(n-1)!},
+  \qquad
+  S_n(t;\lambda)=e^{-\lambda t}\sum_{j=0}^{n-1}\frac{(\lambda t)^j}{j!}.
+  \label{eq:erlang-density-survival}
+\end{equation}
+Shape 1 is exponential timing:
+\[
+  f_1(t;\lambda)=\lambda e^{-\lambda t}, \qquad S_1(t;\lambda)=e^{-\lambda t}.
+\]
+Shape 2 has density and survival
+\[
+  f_2(t;\lambda)=\lambda^2 t e^{-\lambda t}, \qquad
+  S_2(t;\lambda)=e^{-\lambda t}(1+\lambda t).
+\]
+The extra polynomial term in $S_2$ records the event that a two-phase clock has completed zero or one phase by time $t$, but not both.
+
+A kill clock and a guess clock enter the race differently. If a kill clock fires before the decision, the trial leaves the observed-response channel. If a guess clock fires before the decision, it generates an observed response from the guessing channel. Consequently the local factors are different:
+\[
+  \text{decision observed at }t:\quad f_D(t)\,S_{\text{clock}}(t),
+\]
+\[
+  \text{clock-generated response at }t:\quad f_{\text{clock}}(t)\,S_D(t).
+\]
+The first form is the local-kill form. The second form is the local-guess form.
+
+\subsection{Hybrid Erlang Mixture}
+The hybrid process called shape 3 in this note is a two-component mixture, not an Erlang clock with gamma shape 3. Let $\pi\in[0,1]$ be the probability of the shape 1 component. If $m$ is the user-facing mean, set $\lambda=1/m$. The mixture density and survival are
+\begin{equation}
+  f_3(t;\lambda,\pi)=
+  \pi f_1(t;\lambda)+(1-\pi)f_2(t;2\lambda),
+  \label{eq:hybrid-erlang-density}
+\end{equation}
+\begin{equation}
+  S_3(t;\lambda,\pi)=
+  \pi S_1(t;\lambda)+(1-\pi)S_2(t;2\lambda).
+  \label{eq:hybrid-erlang-survival}
+\end{equation}
+The doubled rate in the shape 2 component puts the two components on the same mean scale:
+\[
+  E[T\mid\text{shape }1]=1/\lambda=m,
+  \qquad
+  E[T\mid\text{shape }2]=2/(2\lambda)=m.
+\]
+For any expression $Q$ that is linear in the clock density or survival,
+\begin{equation}
+  Q_3(\lambda,\pi)=\pi Q_1(\lambda)+(1-\pi)Q_2(2\lambda).
+  \label{eq:hybrid-erlang-mixture-rule}
+\end{equation}
+This mixture rule is the canonical way the hybrid clock enters the local kill and local guess derivations below.
+
+\section{Laplace Transforms and Wald Tilting}
+\label{sec:laplace}
+For a nonnegative subdensity $f_T$, define its Laplace transform by
+\begin{equation}
+  L_T(r)=\int_0^\infty e^{-rt}f_T(t)\dd t
+  =E[e^{-rT};\,T<\infty].
+\end{equation}
+The transform is an exponentially weighted total mass. If a competing clock contributes survival $e^{-rt}$, then the integral of the observed decision subdensity is exactly $L_T(r)$. Polynomial factors from Erlang clocks are obtained by differentiation:
+\begin{equation}
+  L_T'(r)=-\int_0^\infty t e^{-rt}f_T(t)\dd t,
+  \qquad
+  L_T''(r)=\int_0^\infty t^2 e^{-rt}f_T(t)\dd t.
+  \label{eq:laplace-derivatives}
+\end{equation}
+
+For fixed distance and drift, the raw-time transform of $D=t_0+\tau_d$ is
+\begin{equation}
+  L_D(r)=
+  \exp\!\left[-rt_0+\frac{d}{\sigma^2}
+  \left(\mu-\sqrt{\mu^2+2\sigma^2r}\right)\right].
+  \label{eq:raw-wald-laplace}
+\end{equation}
+At $r=0$, this equals the eventual hit probability and therefore remains valid for negative drift.
+
+The same transform appears from an exponential-tilting identity for the Wald density. Define
+\begin{equation}
+  q_r=\sqrt{\mu^2+2\sigma^2r},
+  \qquad
+  L_\tau(r)=\exp\!\left[\frac{d}{\sigma^2}(\mu-q_r)\right].
+\end{equation}
+Expanding the Wald exponent gives
+\[
+  -\frac{(d-\mu x)^2}{2\sigma^2x}
+  =
+  -\frac{d^2}{2\sigma^2x}
+  +\frac{d\mu}{\sigma^2}
+  -\frac{\mu^2x}{2\sigma^2}.
+\]
+Multiplication by $e^{-rx}$ replaces the coefficient $\mu^2/(2\sigma^2)$ by
+\[
+  \frac{\mu^2}{2\sigma^2}+r
+  =
+  \frac{q_r^2}{2\sigma^2}.
+\]
+Therefore
+\begin{equation}
+  f_W(x;d,\mu,\sigma)e^{-rx}
+  =
+  L_\tau(r)f_W(x;d,q_r,\sigma).
+  \label{eq:wald-tilt}
+\end{equation}
+The drift $q_r$ is an algebraic tilted-drift parameter, not a replacement for the cognitive drift $\mu$.
+
+For survival-weighted clock integrals, define
+\begin{equation}
+  I_0(r)=\int_0^\infty e^{-rt}S_D(t)\dd t=\frac{1-L_D(r)}{r},
+\end{equation}
+\begin{equation}
+  I_1(r)=\int_0^\infty t e^{-rt}S_D(t)\dd t
+  =\frac{1-L_D(r)}{r^2}+\frac{L_D'(r)}{r},
+\end{equation}
+\begin{equation}
+  I_2(r)=\int_0^\infty t^2 e^{-rt}S_D(t)\dd t
+  =\frac{2(1-L_D(r))}{r^3}+\frac{2L_D'(r)}{r^2}-\frac{L_D''(r)}{r}.
+  \label{eq:survival-moments}
+\end{equation}
+Writing $q_r=\sqrt{\mu^2+2\sigma^2r}$, the derivatives of \eqref{eq:raw-wald-laplace} are
+\begin{equation}
+  L_D'(r)=L_D(r)\left(-t_0-\frac{d}{q_r}\right),
+\end{equation}
+\begin{equation}
+  L_D''(r)=L_D(r)\left[\left(-t_0-\frac{d}{q_r}\right)^2
+  +\frac{d\sigma^2}{q_r^3}\right].
+\end{equation}
+
+\subsection{Finite-Window Tilted Moments}
+Finite censoring replaces whole-line transforms by tilted moments over the evidence-time window $[0,U]$, where $U=T-t_0$. For a fixed-distance Wald law define
+\begin{equation}
+  M_j(U;r)=\int_0^U x^j f_W(x;d,\mu,\sigma)e^{-rx}\dd x.
+\end{equation}
+Equation \eqref{eq:wald-tilt} gives
+\begin{equation}
+  M_0(U;r)=L_\tau(r)F_W(U;d,q_r,\sigma),
+\end{equation}
+\begin{equation}
+  M_1(U;r)=-\frac{\partial}{\partial r}M_0(U;r),
+\end{equation}
+and
+\begin{equation}
+  M_2(U;r)=
+  \frac{d^2}{q_r^2}M_0(U;r)
+  +\frac{\sigma^2}{q_r^2}M_1(U;r)
+  -L_\tau(r)\frac{2d\sigma\sqrt{U}}{q_r^2}
+  \phiN\!\left(\frac{q_rU-d}{\sigma\sqrt{U}}\right).
+  \label{eq:m2-finite}
+\end{equation}
+As $U\to\infty$,
+\begin{equation}
+  M_0(\infty;r)=L_\tau(r),
+  \qquad
+  M_1(\infty;r)=\frac{d}{q_r}L_\tau(r),
+\end{equation}
+\begin{equation}
+  M_2(\infty;r)=L_\tau(r)\left(\frac{d^2}{q_r^2}+\frac{d\sigma^2}{q_r^3}\right).
+\end{equation}
+Raw-time finite-window decision integrals include the factor $e^{-rt_0}$ and polynomial expansions of $t=t_0+x$.
+
+\section{Local Kill Clock}
+\label{sec:kill}
+The local kill process is the simplest competing-risk construction and is the canonical introduction to the Erlang mixture. Let $K$ be independent of $D$. A response is observed at raw time $t$ when the decision occurs at $t$ and the kill clock has not fired:
+\begin{equation}
+  p_R(t)=f_D(t)S_K(t).
+  \label{eq:local-kill-density}
+\end{equation}
+This is a subdensity. Its missing mass is assigned to omissions, either because the kill clock fires before the decision or because an upper censoring time is reached before any observed response.
+
+With an upper censoring time $T$, the observed-response probability is
+\begin{equation}
+  P_R(T)=\int_0^T f_D(t)S_K(t)\dd t,
+  \label{eq:kill-window-response}
+\end{equation}
+and the corresponding omission probability is
+\begin{equation}
+  P_O(T)=1-P_R(T).
+  \label{eq:kill-window-omission}
+\end{equation}
+Equivalently,
+\begin{equation}
+  P_O(T)=\int_0^T f_K(k)S_D(k)\dd k+S_K(T)S_D(T),
+\end{equation}
+where the first term is kill-before-decision and the second term is unresolved survival to censoring. These two mechanisms are observationally identical when the data code both as omissions.
+
+\subsection{Equivalence to Bernoulli Contaminant Misses}
+At the response-versus-omission level, a local kill clock is exactly a Bernoulli
+missingness layer. Define
+\begin{equation}
+  p_{\mathrm{miss}}(T)=1-P_R(T).
+\end{equation}
+Then the trial outcome can be generated by first drawing
+$C\sim\mathrm{Bernoulli}(p_{\mathrm{miss}}(T))$. If $C=1$ the trial is coded as
+an omission; if $C=0$ an observed response time is drawn from the conditional
+density
+\begin{equation}
+  f(t\mid R,T)=\frac{f_D(t)S_K(t)}{P_R(T)}, \qquad 0<t\le T.
+\end{equation}
+This is the same Bernoulli mixture structure as an explicit contaminant-miss
+parameter: for a finite RT, the likelihood is multiplied by
+$1-p_{\mathrm{miss}}(T)$, and for an omitted trial the likelihood contribution is
+$p_{\mathrm{miss}}(T)$ plus any process-omission mass left after the
+non-contaminant branch.
+
+There is one important qualification. The Bernoulli layer accounts for the
+\emph{mass} assigned to omissions. The local-kill clock also changes the
+conditional distribution of observed RTs through the survival factor $S_K(t)$.
+Thus a killed Wald model is identical to a simple contaminant-miss Wald model
+only if the observed RT law is also replaced by the killed-and-renormalized law
+above, or if the analysis uses only the response/omission indicator. If the
+finite-RT likelihood keeps the original no-kill Wald density, then a free
+contaminant parameter matches the omission proportion but not the kill-induced
+RT tilting.
+
+For exponential kill and fixed drift, this conditional RT law is itself another
+Wald law. From \eqref{eq:wald-tilt},
+\begin{equation}
+  f_W(x;d,\mu,\sigma)e^{-\lambda(t_0+x)}
+  =e^{-\lambda t_0}L_\tau(\lambda)f_W(x;d,q_\lambda,\sigma),
+  \qquad
+  q_\lambda=\sqrt{\mu^2+2\sigma^2\lambda}.
+\end{equation}
+Therefore exponential local kill with fixed drift can be represented exactly as
+a Bernoulli miss with
+\[
+  p_{\mathrm{miss}}(\infty)=1-e^{-\lambda t_0}L_\tau(\lambda),
+\]
+followed, conditional on response, by a Wald with tilted drift
+$q_\lambda$. For Erlang-2 kill the same Bernoulli decomposition still holds, but
+the conditional RT law is a polynomially tilted Wald,
+\[
+  f_W(x;d,\mu,\sigma)e^{-\lambda(t_0+x)}(1+\lambda(t_0+x))/P_R,
+\]
+not an ordinary Wald density.
+
+\subsection{Exponential Kill}
+For $K\sim\mathrm{Erlang}(1,\lambda)$,
+\begin{equation}
+  p_R(t)=f_D(t)e^{-\lambda t}.
+\end{equation}
+The infinite-window response probability is
+\begin{equation}
+  P_R(\infty)=L_D(\lambda),
+\end{equation}
+and the omission probability is $1-L_D(\lambda)$. For finite $T>t_0$, with $U=T-t_0$,
+\begin{equation}
+  P_R(T)=e^{-\lambda t_0}M_0(U;\lambda).
+  \label{eq:exp-kill-window}
+\end{equation}
+If $T\le t_0$, then $P_R(T)=0$ because no decision can occur before non-decision time has elapsed.
+
+\subsection{Erlang-2 Kill}
+For $K\sim\mathrm{Erlang}(2,\lambda)$,
+\begin{equation}
+  p_R(t)=f_D(t)e^{-\lambda t}(1+\lambda t).
+\end{equation}
+The infinite-window response probability is
+\begin{equation}
+  P_R(\infty)
+  =\int_0^\infty f_D(t)e^{-\lambda t}(1+\lambda t)\dd t
+  =L_D(\lambda)-\lambda L_D'(\lambda).
+  \label{eq:erlang2-kill-prob}
+\end{equation}
+The derivative term enters because $\int t f_D(t)e^{-\lambda t}\dd t=-L_D'(\lambda)$. For finite $T>t_0$,
+\begin{equation}
+  P_R(T)=e^{-\lambda t_0}
+  \left[(1+\lambda t_0)M_0(U;\lambda)+\lambda M_1(U;\lambda)\right].
+  \label{eq:erlang2-kill-window}
+\end{equation}
+
+\subsection{Hybrid Kill}
+For the hybrid kill clock,
+\begin{equation}
+  p_R^{(3)}(t;\lambda,\pi)
+  =
+  \pi f_D(t)S_1(t;\lambda)
+  +(1-\pi)f_D(t)S_2(t;2\lambda).
+  \label{eq:hybrid-kill-density}
+\end{equation}
+Thus every kill-only response probability is the mixture
+\begin{equation}
+  P_R^{(3)}(T;\lambda,\pi)
+  =
+  \pi P_R^{(1)}(T;\lambda)
+  +(1-\pi)P_R^{(2)}(T;2\lambda),
+  \label{eq:hybrid-kill-window}
+\end{equation}
+with omission probability $1-P_R^{(3)}(T;\lambda,\pi)$. The mixture components are both decision-observation subdensities; they differ only in the survival law of the kill clock.
+
+The conditional response-time density given that a response was observed by $T$ is
+\begin{equation}
+  f(t\mid R,T)=\frac{f_D(t)S_K(t)}{P_R(T)},
+  \qquad 0<t\le T.
+\end{equation}
+This conditional density is distinct from the likelihood subdensity in \eqref{eq:local-kill-density}, because the normalization removes the response-versus-omission probability.
+
+\section{Local Guess Clock}
+Let $G$ be a guess clock independent of $D$. A local guess clock differs from a kill clock because its firing produces an observed response. Therefore the observed-response density has two components:
+\begin{equation}
+  p_R(t)=p_D(t)+p_G(t)
+  =f_D(t)S_G(t)+f_G(t)S_D(t).
+  \label{eq:local-guess-density}
+\end{equation}
+The first term is a decision response that wins against the guess clock. The second term is a guess response that wins against the decision process. If responses are analyzed without distinguishing their source, the two subdensities are summed.
+
+With upper censoring at $T$,
+\begin{equation}
+  P_R(T)=\int_0^T f_D(t)S_G(t)\dd t
+  +\int_0^T f_G(t)S_D(t)\dd t.
+  \label{eq:guess-window-response}
+\end{equation}
+Equivalently, because a response has occurred by $T$ unless both the decision process and the guess clock have survived to $T$,
+\begin{equation}
+  P_R(T)=1-S_D(T)S_G(T).
+  \label{eq:guess-window-complement}
+\end{equation}
+The censoring or unresolved probability is $S_D(T)S_G(T)$. In the absence of finite censoring, a proper guess clock eventually fires, so $P_R(\infty)=1$ even when the decision process is defective.
+
+\subsection{Exponential Guess}
+For $G\sim\mathrm{Erlang}(1,\lambda)$,
+\begin{equation}
+  p_D(t)=f_D(t)e^{-\lambda t},
+  \qquad
+  p_G(t)=\lambda e^{-\lambda t}S_D(t).
+\end{equation}
+The infinite-window component probabilities are
+\begin{equation}
+  P_D(\infty)=L_D(\lambda),
+  \qquad
+  P_G(\infty)=\lambda I_0(\lambda)=1-L_D(\lambda).
+  \label{eq:exp-guess-probs}
+\end{equation}
+For finite $T>t_0$, the decision component is the same tilted moment as in exponential kill:
+\begin{equation}
+  P_D(T)=e^{-\lambda t_0}M_0(U;\lambda).
+\end{equation}
+The guess component can be written either as its defining integral or by complementing the decision component:
+\begin{equation}
+  P_G(T)=\int_0^T \lambda e^{-\lambda t}S_D(t)\dd t
+  =1-e^{-\lambda T}S_D(T)-P_D(T).
+  \label{eq:exp-guess-window}
+\end{equation}
+
+\subsection{Erlang-2 Guess}
+For $G\sim\mathrm{Erlang}(2,\lambda)$,
+\begin{equation}
+  p_D(t)=f_D(t)e^{-\lambda t}(1+\lambda t),
+  \qquad
+  p_G(t)=\lambda^2t e^{-\lambda t}S_D(t).
+\end{equation}
+The infinite-window probabilities are
+\begin{equation}
+  P_D(\infty)=L_D(\lambda)-\lambda L_D'(\lambda),
+\end{equation}
+\begin{equation}
+  P_G(\infty)=\lambda^2I_1(\lambda)
+  =1-P_D(\infty).
+  \label{eq:erlang2-guess-probs}
+\end{equation}
+For finite $T>t_0$,
+\begin{equation}
+  P_D(T)=e^{-\lambda t_0}
+  \left[(1+\lambda t_0)M_0(U;\lambda)+\lambda M_1(U;\lambda)\right],
+\end{equation}
+and
+\begin{equation}
+  P_G(T)=1-S_2(T;\lambda)S_D(T)-P_D(T).
+  \label{eq:erlang2-guess-window}
+\end{equation}
+The finite-window complement form is often the most compact expression for the guess component. Direct integration gives the same result after integration by parts.
+
+\subsection{Hybrid Guess}
+For the hybrid guess clock, the observed density is
+\begin{equation}
+  p_R^{(3)}(t;\lambda,\pi)
+  =
+  \pi\left\{f_D(t)S_1(t;\lambda)+f_1(t;\lambda)S_D(t)\right\}
+  +(1-\pi)\left\{f_D(t)S_2(t;2\lambda)+f_2(t;2\lambda)S_D(t)\right\}.
+  \label{eq:hybrid-guess-density}
+\end{equation}
+Thus
+\begin{equation}
+  P_R^{(3)}(T;\lambda,\pi)
+  =
+  \pi P_R^{(1)}(T;\lambda)
+  +(1-\pi)P_R^{(2)}(T;2\lambda).
+\end{equation}
+Unlike the kill mixture in \eqref{eq:hybrid-kill-density}, each guess mixture component itself contains two observed-response subcomponents: a decision-winning term and a guess-winning term.
+
+\section{Combined Local Guess--Kill Clocks}
+With independent decision, guess, and kill times $(D,G,K)$, the observed-response density is
+\begin{equation}
+  p_R(t)=f_D(t)S_G(t)S_K(t)+f_G(t)S_D(t)S_K(t).
+  \label{eq:local-density}
+\end{equation}
+The omission channel has a kill component and, under finite censoring, an unresolved component:
+\begin{equation}
+  P_O(T)=\int_0^T f_K(t)S_D(t)S_G(t)\dd t
+  +S_K(T)S_D(T)S_G(T).
+  \label{eq:combined-omission}
+\end{equation}
+For $T=\infty$, the unresolved term vanishes when the kill and guess clocks are proper.
+
+\subsection{Exponential Guess and Kill}
+For exponential guess and kill clocks, set $a=\lambda_g+\lambda_k$. The density is
+\begin{equation}
+  p_R(t)=e^{-at}\left[f_D(t)+\lambda_gS_D(t)\right].
+\end{equation}
+The infinite-window outcome probabilities are
+\begin{equation}
+  p_D=L_D(a),
+  \qquad
+  p_G=\lambda_g I_0(a),
+  \qquad
+  p_O=\lambda_k I_0(a),
+\end{equation}
+and $p_D+p_G+p_O=1$.
+
+For finite $T$, define
+\begin{equation}
+  D_a(T)=\int_0^T f_D(t)e^{-at}\dd t.
+\end{equation}
+Then
+\begin{equation}
+  P_R(T)=D_a(T)+
+  \lambda_g\frac{1-e^{-aT}S_D(T)-D_a(T)}{a}.
+  \label{eq:combined-exp-window}
+\end{equation}
+If unresolved trials at $T$ are coded as omissions, the omission probability is $1-P_R(T)$. The kill-before-censoring component alone is
+\[
+  1-P_R(T)-e^{-aT}S_D(T).
+\]
+
+\subsection{Erlang-2 Guess and Kill}
+For Erlang-2 guess and kill clocks,
+\begin{equation}
+  S_G(t)S_K(t)=e^{-at}(1+\lambda_gt)(1+\lambda_kt),
+  \qquad a=\lambda_g+\lambda_k.
+\end{equation}
+The observed-response density is
+\begin{equation}
+  p_R(t)=e^{-at}\left[
+  f_D(t)(1+\lambda_gt)(1+\lambda_kt)
+  +\lambda_g^2tS_D(t)(1+\lambda_kt)
+  \right].
+\end{equation}
+The infinite-window outcome probabilities are
+\begin{equation}
+  p_D=L_D(a)-aL_D'(a)+\lambda_g\lambda_kL_D''(a),
+  \label{eq:erlang2-decision-prob}
+\end{equation}
+\begin{equation}
+  p_G=\lambda_g^2\left[I_1(a)+\lambda_kI_2(a)\right],
+  \qquad
+  p_O=\lambda_k^2\left[I_1(a)+\lambda_gI_2(a)\right].
+\end{equation}
+
+For finite $T>t_0$, with $U=T-t_0$, the decision contribution is
+\begin{equation}
+  e^{-at_0}\left[a_0M_0(U;a)+a_1M_1(U;a)+a_2M_2(U;a)\right],
+\end{equation}
+where
+\begin{equation}
+  a_0=1+at_0+\lambda_g\lambda_kt_0^2,
+  \qquad
+  a_1=a+2\lambda_g\lambda_kt_0,
+  \qquad
+  a_2=\lambda_g\lambda_k.
+\end{equation}
+The guess contribution is
+\begin{equation}
+  \int_0^T \lambda_g^2t e^{-\lambda_gt}S_D(t)S_K(t)\dd t,
+\end{equation}
+which reduces to elementary boundary terms and $M_0,M_1,M_2$ after splitting the integral at $t_0$ and integrating by parts. This gives closed finite-window Erlang-2 CDFs for fixed-drift Wald models and for uniform start-point variability with no drift variability.
+
+\subsection{Hybrid Guess--Kill}
+If a single shared hybrid component is used for both local timing processes, then
+\begin{equation}
+  p_R^{(3)}(t)
+  =\pi p_R^{(1)}(t;\lambda_g,\lambda_k)
+  +(1-\pi)p_R^{(2)}(t;2\lambda_g,2\lambda_k),
+  \label{eq:hybrid-local-density}
+\end{equation}
+and the same mixture rule applies to $p_D,p_G,p_O$ and finite-window CDFs. If the guess and kill clocks draw independent mixture indicators, the expansion has four shape pairs $(1,1),(1,2),(2,1),(2,2)$ with weights $\pi_g\pi_k,\pi_g(1-\pi_k),(1-\pi_g)\pi_k,(1-\pi_g)(1-\pi_k)$. The shared-component convention is the one assumed in the closed-form boundary below.
+
+\section{Why the Contaminant View Does Not Remove the \texorpdfstring{$s_v>0$}{sv > 0} Quadrature}
+The full-Gaussian no-clock fixed-criterion CDF in \eqref{eq:full-gaussian-cdf} is simple because the ordinary Wald CDF contains Gaussian terms that remain Gaussian after integrating over $V\sim\Normal(m,s_v^2)$.
+
+Erlang timing changes the structure through exponential tilting. Conditional on a drift value $v$, tilted moments contain
+\begin{equation}
+  q_r(v)=\sqrt{v^2+2\sigma^2r}
+\end{equation}
+and factors such as
+\begin{equation}
+  \exp\!\left[\frac{d}{\sigma^2}\{v-q_r(v)\}\right]
+  \PhiN\!\left(\frac{q_r(v)U-d}{\sigma\sqrt{U}}\right).
+\end{equation}
+The square-root transform $q_r(v)$ prevents completion of the square in $v$. Consequently, the drift mixture of $M_0,M_1,M_2$ is not a Gaussian or bivariate-normal integral, even under the full-Gaussian drift law. The simpler expression \eqref{eq:full-gaussian-cdf} therefore does not yield a closed-form Erlang-2 local timing CDF when $s_v>0$.
+
+The no-clock full-Gaussian CDF integrates expressions of the form
+\[
+  \PhiN(a+bv)
+  \quad\text{and}\quad
+  e^{\alpha v}\PhiN(a+bv),
+\]
+which are closed under Gaussian expectation by \eqref{eq:probit-mixture} and \eqref{eq:gaussian-tilt}. Erlang tilting changes these to expressions involving
+\[
+  e^{\alpha\{v-\sqrt{v^2+c}\}}\PhiN(a+b\sqrt{v^2+c}),
+\]
+which are not Gaussian expectations of affine probit arguments. This remains true for Erlang-2 because the second-moment formula adds polynomial factors in $1/q_r(v)$ rather than removing the square root.
+
+The Bernoulli-contaminant view does not change this conclusion when the kill
+parameters are meant to determine the miss probability. It rewrites the model as
+\[
+  p_{\mathrm{miss}}=1-P_R,
+\]
+but $P_R$ is still the killed response mass. For a fixed criterion and full
+Gaussian drift,
+\begin{equation}
+  P_R(\infty)
+  =
+  E_V\left[
+    e^{-\lambda t_0}
+    \exp\!\left\{\frac{d}{\sigma^2}
+      \left(V-\sqrt{V^2+2\sigma^2\lambda}\right)\right\}
+  \right]
+  \label{eq:sv-kill-mass-obstruction}
+\end{equation}
+for exponential kill, and Erlang-2 adds the factor
+\[
+  1+\lambda t_0+\lambda d/\sqrt{V^2+2\sigma^2\lambda}
+\]
+inside the same expectation. Equation
+\eqref{eq:sv-kill-mass-obstruction} is already outside the affine-Gaussian
+probit and Gaussian-tilting identities used earlier. Setting $A=0$ removes the
+start-point integral, but it does not remove the square-root transform of the
+drift, so it does not produce the desired closed form. For $A>0$, one must also
+average this non-Gaussian transform over distance.
+
+Using an explicit free $p_{\mathrm{Contaminant}}$ parameter can still be a useful
+computational alternative, but it changes what is parameterized. It estimates
+the Bernoulli miss probability directly and no longer provides the deterministic
+mapping from $(m,s_v,b,A,t_0,\sigma,\lambda)$ to the omission probability implied
+by an Erlang kill clock. It also leaves the finite-RT law as the no-kill Wald
+unless the observed-response density is separately replaced by the
+killed-and-renormalized conditional density. Consequently, the contaminant path
+is exact for omission-mass modeling, but it is not a closed-form shortcut for
+the full local-kill likelihood with $s_v>0$.
+
+For the positive-truncated drift law, the same obstruction remains, with the additional truncation boundary $v>0$. Thus Erlang-2 timing with $s_v>0$ is naturally handled by one-dimensional numerical integration over drift or over raw time, depending on the target expression. The hybrid shape 3 process inherits this status: its shape 1 and shape 2 response masses both require the same non-affine drift expectation when $s_v>0$ and the kill parameter determines the Bernoulli miss probability. The mixture is therefore not generally closed form when the kill component has nonzero weight and $s_v>0$, although a model that replaces the kill-derived miss mass by a free contaminant parameter avoids that particular calculation by changing the parameterization.
+
+\section{Subordinator Accumulators}
+\label{sec:igs}
+The Wald accumulator receives Brownian evidence: continuous paths that can move
+down as well as up. This section replaces that evidence by a nondecreasing
+pure-jump process (a subordinator) whose mean and variance grow exactly like
+those of a Wald accumulator with rate-proportional diffusion, and derives its
+first-passage law. Two jump laws share the same parameters and the same first
+two cumulants: the inverse-Gaussian subordinator, with infinitely many small
+jumps (dense evidence), and compound Poisson evidence with exponential packets
+(Section~\ref{sec:igs-packets}). For the first, everything remains in
+univariate normal functions; for the second, in Poisson and Skellam
+probabilities. Both admit closed-form uniform start-point variability through
+the same stop-loss identity.
+
+\subsection{Construction}
+Let $Y_w=\gamma w+W_w$ be a Brownian motion with unit diffusion coefficient and
+drift $\gamma>0$, and for $\delta>0$ define
+\begin{equation}
+  G_x=\inf\{w\ge0:Y_w>\delta x\},\qquad x\ge0 .
+\end{equation}
+Because the level $\delta x$ only rises, $G$ is nondecreasing; by the strong
+Markov property it has independent stationary increments. It is the
+inverse-Gaussian (IG) subordinator: $G_x$ has the Wald law of
+Section~2 with distance $\delta x$, drift $\gamma$ and unit diffusion, i.e.\
+$G_x\sim\mathrm{IG}(\text{mean }\delta x/\gamma,\ \text{shape }\delta^2x^2)$.
+Its Laplace exponent and L\'evy measure are
+\begin{equation}
+  \mathbb E\big[e^{-qG_x}\big]=e^{-x\psi(q)},\qquad
+  \psi(q)=\delta\big(\sqrt{\gamma^2+2q}-\gamma\big),\qquad
+  \nu(\dd y)=\frac{\delta}{\sqrt{2\pi}}\,y^{-3/2}e^{-\gamma^2y/2}\dd y .
+\end{equation}
+The L\'evy measure has infinite mass near $y=0$ (infinitely many small jumps
+in every interval) but finite first moment, so the paths are strictly
+increasing, pure jump and of finite variation, with no flat stretches. $G$ is
+the tempered stable subordinator of index $1/2$.
+
+We parameterize by a mean evidence rate $v>0$ and a noise scale $s>0$,
+\begin{equation}
+  \gamma=\frac1s,\qquad \delta=\frac vs,\qquad c\equiv s^2,
+\end{equation}
+so that
+\begin{equation}
+  \psi(q)=\frac vc\big(\sqrt{1+2cq}-1\big),\qquad
+  \mathbb E[G_x]=vx,\qquad \operatorname{Var}(G_x)=cvx .
+\end{equation}
+The variance-to-mean ratio $c=s^2$ is a property of the evidence process
+(a Fano factor per unit of mean evidence), not a free function of the rate.
+The cumulants are $\kappa_n(G_x)=(2n-3)!!\,v\,c^{\,n-1}x$, i.e.\
+$vx,\ cvx,\ 3c^2vx,\ 15c^3vx,\dots$
+
+\paragraph{Matched comparators.}
+Two processes share the first two cumulants exactly:
+\begin{itemize}
+  \item the Wald accumulator with rate-proportional diffusion,
+  $\dd X_x=v\dd x+s\sqrt v\dd W_x$ (continuous, reversible paths);
+  \item the compound Poisson process with exponential packets,
+  $\psi(q)=vq/(1+cq/2)$, i.e.\ events at rate $2v/c$ carrying exponential
+  evidence of mean $c/2$ (finite activity), whose third and fourth cumulants
+  are $\tfrac32c^2vx$ and $3c^3vx$.
+\end{itemize}
+All three are therefore indistinguishable at the level of the mean and
+variance of the evidence state and differ only in path structure; any
+difference in their first-passage laws is attributable to that structure.
+
+\subsection{First-Passage Law}
+The accumulator finishes at $T_d=\inf\{x:G_x\ge d\}$. Since $G$ is
+nondecreasing, $\{T_d\le x\}=\{G_x\ge d\}$, so the first-passage CDF is the
+upper tail of the IG evidence state at the fixed level $d$. With
+\begin{equation}
+  m=vx,\qquad z=s\sqrt d=\sqrt{cd},\qquad
+  \alpha=\frac{m-d}{z},\qquad \beta=\frac{m+d}{z},
+\end{equation}
+\begin{align}
+  F_d(x)&=\PhiN(\alpha)-e^{2m/c}\PhiN(-\beta),\label{eq:igs-cdf}\\
+  f_d(x)&=\frac{2v}{z}\phiN(\alpha)-\frac{2v}{c}e^{2m/c}\PhiN(-\beta),
+  \label{eq:igs-pdf}
+\end{align}
+for $x>0$. The image term has the same origin as in \eqref{eq:wald-cdf}, but
+here it enters with a minus sign and with the roles of time and distance
+exchanged: the Wald CDF is a survival function of a Gaussian in the distance
+at fixed time, while \eqref{eq:igs-cdf} is a survival function of an IG law in
+the evidence at fixed time. The law is proper, $F_d(\infty)=1$, for every
+$v>0$; there is no defective case because the evidence never decreases, and
+$v\to0$ sends the whole distribution to $+\infty$.
+
+\paragraph{Running-maximum representation.}
+$G_x\ge d$ exactly when $Y$ has not passed $\delta x$ by time $d$, i.e.\ when
+$\max_{w\le d}Y_w\le\delta x$. Hence
+\begin{equation}
+  T_d\overset{d}{=}\frac{1}{\delta}\max_{0\le w\le d}\big(W_w+\gamma w\big)
+  =\frac sv\max_{0\le w\le d}\Big(W_w+\frac ws\Big),
+  \label{eq:igs-max}
+\end{equation}
+which gives \eqref{eq:igs-cdf} from the reflection-principle law of the
+running maximum of drifted Brownian motion and an exact sampler: draw the
+endpoint $Y_d\sim\Normal(d/s,d)$ and the Brownian-bridge maximum
+$\tfrac12\big(Y_d+\sqrt{Y_d^2-2d\log U}\big)$, $U\sim U(0,1)$.
+
+\paragraph{Shape and scale.}
+With $r=d/c$ and $\tilde x=vx/d$,
+\begin{equation}
+  F_d(x)=\PhiN\big(\sqrt r(\tilde x-1)\big)-e^{2r\tilde x}\PhiN\big(-\sqrt r(\tilde x+1)\big),
+\end{equation}
+so each accumulator is a two-parameter scale ($d/v$) and shape ($r$) family.
+The matched Wald has the same two invariants: mean $d/v$ and squared
+coefficient of variation $c/d=1/r$. The race is invariant under
+$(v_i,d,c)\mapsto(kv_i,kd,kc)$ for any $k>0$, equivalently
+$(v_i,B,A,s)\mapsto(kv_i,kB,kA,\sqrt k\,s)$, so one evidence scale must be
+fixed.
+
+From \eqref{eq:igs-max}: as $r\to0$ the drift term is negligible over the
+horizon and $vT_d/z\to|Z|$, $Z\sim\Normal(0,1)$ (a half-normal law); as
+$r\to\infty$ the maximum is attained near the endpoint and
+$T_d\approx d/v+(z/v)Z$, so the coefficient of variation falls as
+$1/\sqrt r$. Between these limits the skewness of $T_d$ stays below that of
+the half-normal ($\approx0.995$), whereas the Wald of the same coefficient of
+variation has skewness $3\,\mathrm{CV}$.
+
+\paragraph{Tails.}
+At the leading edge the density does not vanish:
+\begin{equation}
+  f_d(0^+)=\frac{2v}{z}\phiN(\rho)\,D(\rho),\qquad \rho=\frac dz=\sqrt r,
+\end{equation}
+with $D$ defined in \eqref{eq:igs-mills} below, because a single large jump can
+cross the whole distance immediately. For fixed $x$, $F_d(x)\sim v\,x\,
+\frac{2}{z}\phiN(\rho)D(\rho)$ as $v\to0$: a weak accumulator's chance of
+finishing early falls only linearly in its rate. The matched Wald instead
+needs a large continuous excursion and $F_W(x)$ falls like
+$\exp[-d^2/(2cvx)]$. In the upper tail, $\log S_d(x)\sim-\alpha^2/2
+\approx-(vx)^2/(2cd)$: a Gaussian rather than exponential tail.
+
+\paragraph{Relation to ballistic accumulators.}
+By \eqref{eq:igs-max}, $T_d=d/V$ with launch rate
+\[
+  V=\frac{vd}{s\max_{w\le d}(W_w+w/s)},
+\]
+so at a fixed distance the IG
+subordinator is observationally a point-start ballistic accumulator with this
+positive launch law. The launch law has infinite mean (the maximum has
+positive density at zero) and, more importantly, depends on $d$: changing the
+criterion changes the implied launch distribution, so the IG accumulator is
+not a ballistic model with a criterion-independent drift law.
+
+\paragraph{Race limits.}
+For two independent accumulators sharing $d$ and $c$, the low-criterion limit
+$r\to0$ gives $T_i\approx(z/v_i)|Z_i|$, and the ratio of independent
+half-normals is half-Cauchy, so
+\begin{equation}
+  P(T_1<T_2)\to\frac2\pi\arctan\frac{v_1}{v_2}.
+\end{equation}
+For the matched Wald with $\sigma_i^2=cv_i$, $d\to0$ gives the L\'evy limit
+$T_i\approx d^2/(cv_iZ_i^2)$ and $P(T_1<T_2)\to\frac2\pi\arctan\sqrt{v_1/v_2}$.
+Both tend to one as $d\to\infty$ when $v_1>v_2$; the two processes therefore
+trade speed for accuracy along different curves even though their evidence
+states agree in mean and variance at every time.
+
+\subsection{Uniform Start-Point Variability}
+Let $D\sim U[B,B+A]$. Because $F_d(x)=P(G_x\ge d)$, the distance average is a
+difference of stop-loss transforms of the evidence state:
+\begin{equation}
+  \bar F(x)=\frac1A\int_B^{B+A}P(G_x\ge d)\dd d=\frac{H(B)-H(B+A)}{A},\qquad
+  H(d)=\mathbb E(G_x-d)^+ .
+\end{equation}
+For the IG law,
+\begin{equation}
+  H(d)=(m-d)\PhiN(\alpha)+(m+d)\,e^{2m/c}\PhiN(-\beta),
+\end{equation}
+and the averaged density is $\bar f(x)=v\,[J(B)-J(B+A)]/A$ with
+$J=\partial H/\partial m$,
+\begin{equation}
+  J(d)=\PhiN(\alpha)+e^{2m/c}\PhiN(-\beta)\Big(1+\frac{2(m+d)}c\Big)
+  -\frac{2d}{z}\phiN(\alpha).
+\end{equation}
+Equivalently $J(d)=v^{-1}\int_d^\infty f_y(x)\dd y$, so $J$ decreases from
+$J(0)=1$. No quadrature over the start point is needed.
+
+\subsection{Numerically Stable Forms}
+Write $R(t)=\PhiN(-t)/\phiN(t)$ for the Mills ratio and define its successive
+negative derivatives
+\begin{equation}
+  D(t)=-R'(t)=1-tR(t),\qquad E(t)=-D'(t)=R(t)-tD(t),
+  \label{eq:igs-mills}
+\end{equation}
+all positive. Using $e^{2m/c}\phiN(\beta)=\phiN(\alpha)$ (since
+$\beta^2-\alpha^2=4m/c$), every quantity above factors as
+$\phiN(\alpha)$ times a bracket of positive terms or of integrals of $D$ and
+$E$, with $\beta-\alpha=2\rho$ and $\alpha+\beta=2m/z$:
+\begin{align}
+  S_d&=\phiN(\alpha)\big[R(\alpha)+R(\beta)\big],\\
+  F_d&=\phiN(\alpha)\int_{-\alpha}^{\beta}D(t)\dd t,\\
+  f_d&=\frac{2v}{z}\phiN(\alpha)\Big[D(\beta)+\frac mzR(\beta)\Big],\\
+  H&=z\,\phiN(\alpha)\int_{-\alpha}^{\beta}E(t)\dd t,\qquad
+  L\equiv\mathbb E(d-G_x)^+=H+d-m=z\,\phiN(\alpha)\int_{\alpha}^{\beta}E(t)\dd t,\\
+  J&=\phiN(\alpha)\Big[\int_{-\alpha}^{\beta}D(t)\dd t+2E(\beta)+(\alpha+\beta)D(\beta)\Big],\\
+  1-J&=\phiN(\alpha)\Big[\int_{\alpha}^{\beta}D(t)\dd t+(\beta-\alpha)D(\beta)\Big].
+\end{align}
+Each integral is a difference of the next-lower function at its ends
+($\int_a^bD=R(a)-R(b)$, $\int_a^bE=D(a)-D(b)$); where the ends agree closely
+the integral is taken directly, with a smooth bounded integrand. The averaged
+survivor is $\bar S=[L(B+A)-L(B)]/A$ and the averaged density uses whichever
+of $J$ or $1-J$ is smaller at the ends, so the start-point differences are
+always taken on the side that does not cancel; only when the two ends agree to
+within a few bits is the difference replaced by quadrature of the point-start
+quantity over $\sqrt d$, which then varies little. For large $t$, $D$ and $E$
+follow without subtraction from the tails of the Laplace continued fraction
+$R(t)=1/(t+c_1)$, $c_k=k/(t+c_{k+1})$: $D=c_1R$ and $E=c_1c_2R$.
+
+\paragraph{Race likelihood.}
+Accumulators are independent given their parameters, so with
+$x=T-t_0$ the race density is the usual
+$f_i(x)\prod_{j\ne i}S_j(x)$, with the averaged forms above when $A>0$.
+
+\subsection{Compound Poisson Packets}
+\label{sec:igs-packets}
+\paragraph{Construction.}
+Let evidence arrive in discrete events at rate $\lambda=2v/c$, each carrying an
+independent exponential packet of mean $\theta=c/2$:
+\begin{equation}
+  G_x=\sum_{i=1}^{N_x}\xi_i,\qquad N_x\sim\mathrm{Pois}(\lambda x),\qquad
+  \xi_i\sim\mathrm{Exp}(\text{mean }\theta),
+\end{equation}
+with Laplace exponent and finite L\'evy measure
+\begin{equation}
+  \psi(q)=\frac{vq}{1+cq/2},\qquad \nu(\dd y)=\frac{4v}{c^2}\,e^{-2y/c}\dd y .
+\end{equation}
+The cumulants are
+$\kappa_n(G_x)=n!\,(c/2)^{n-1}vx$, so $\mathbb E[G_x]=vx$ and
+$\operatorname{Var}(G_x)=cvx$ as for the IG subordinator, while the higher
+cumulants are smaller ($\tfrac32c^2vx$ against $3c^2vx$ for the third). The
+paths are step functions: flat between events, with finite activity.
+
+\paragraph{First-passage law.}
+The packet boundaries $\xi_1,\xi_1+\xi_2,\dots$ form a Poisson process of rate
+$2/c$ on the evidence axis. The accumulator reaches $d$ at the first event
+whose packet ends beyond $d$, i.e.\ at event $1+K$ with $K\sim\mathrm{Pois}(b)$
+the number of boundaries in $[0,d]$. Hence
+\begin{equation}
+  T_d\overset{d}{=}\mathrm{Gamma}(1+K,\ \text{rate }\lambda),\qquad
+  K\sim\mathrm{Pois}(b),
+  \label{eq:pk-gamma}
+\end{equation}
+which is also an exact sampler. With
+\begin{equation}
+  a=\lambda x=\frac{2m}{c},\qquad b=\frac{2d}{c},\qquad
+  \Delta=N-K,\quad N\sim\mathrm{Pois}(a)\perp K,
+\end{equation}
+$\Delta$ is Skellam distributed and
+\begin{align}
+  F_d(x)&=P(\Delta\ge1),\qquad S_d(x)=P(\Delta\le0),\\
+  f_d(x)&=\lambda P(\Delta=0)=\lambda\,e^{-a-b}I_0\big(2\sqrt{ab}\big)
+  =\lambda\,e^{-(\sqrt a-\sqrt b)^2}\,\tilde I_0\big(2\sqrt{ab}\big),
+\end{align}
+with $I_0$ the modified Bessel function of the first kind and
+$\tilde I_0(z)=e^{-z}I_0(z)$. The parameters enter only through $a$ and $b$,
+so the scale invariance $(v_i,B,A,s)\mapsto(kv_i,kB,kA,\sqrt k\,s)$ holds as
+for the IG law. From \eqref{eq:pk-gamma},
+\begin{equation}
+  \mathbb E[T_d]=\frac{d+c/2}{v},\qquad
+  \operatorname{Var}(T_d)=\frac{c(c+4d)}{4v^2},
+\end{equation}
+the extra $c/(2v)$ in the mean being the expected overshoot of the last
+packet.
+
+\paragraph{Small criterion.}
+At the leading edge $f_d(0^+)=\lambda e^{-b}$: one event suffices with
+probability $e^{-b}$. As $d\to0$ the law tends to $\mathrm{Exp}(\lambda)$, so
+the finishing time keeps a floor of order $c/(2v)$, whereas the IG law
+collapses to zero on the half-normal scale $z/v$. For a race of two packet
+accumulators sharing $d$ and $c$, the same limit gives
+\begin{equation}
+  P(T_1<T_2)\to\frac{v_1}{v_1+v_2},
+\end{equation}
+against $\frac2\pi\arctan(v_1/v_2)$ for the IG subordinator and
+$\frac2\pi\arctan\sqrt{v_1/v_2}$ for the matched Wald.
+
+\paragraph{Relation to the IG subordinator.}
+Both processes are compound-Poisson-like in their jump structure, but the IG
+L\'evy density $\propto y^{-3/2}e^{-y/(2c)}$ has a non-integrable mass of small
+jumps, whereas the packet density is a single exponential scale. As $c\to0$ at
+fixed $v$ both laws concentrate at $d/v$ with the same Gaussian limit. At
+moderate criteria the two can differ in the sign of the error--correct
+latency difference: for $v_1=2$, $v_2=0.5$, $c=1$, $A=0$, at $d=4$ both give
+about $97\%$ correct, the IG race has faster errors (mean $1.88$ against $2.23$)
+and the packet race slower errors ($2.46$ against $2.21$); at $d=1$ both give
+faster errors. The direction is therefore governed by $b=2d/c$, the criterion
+in packet units, not by the jump law alone.
+
+\paragraph{Uniform start point.}
+Conditional on $N=n$, $G_x$ is the $n$-th boundary of the rate-$2/c$ Poisson
+process on the evidence axis, so its excess over $d$ is the number of
+boundaries beyond $d$ times $\theta$ in mean:
+\begin{equation}
+  H(d)=\mathbb E(G_x-d)^+=\frac c2\,\mathbb E[\Delta^+],\qquad
+  L(d)=\mathbb E(d-G_x)^+=\frac c2\,\mathbb E[\Delta^-],
+\end{equation}
+with $H-L=m-d$. Since $\partial_a\mathbb E[g(N)]=\mathbb E[g(N+1)-g(N)]$,
+\begin{equation}
+  J(d)=\frac{\partial H}{\partial m}=P(\Delta\ge0),\qquad
+  -\frac{\partial J}{\partial d}=\frac2cP(\Delta=0)=\frac{f_d}{v},
+\end{equation}
+so the averaged CDF, survivor and density take the same forms
+$\bar F=[H(B)-H(B+A)]/A$, $\bar S=[L(B+A)-L(B)]/A$ and
+$\bar f=v[J(B)-J(B+A)]/A$ as for the IG law, with the same choice between $J$
+and $1-J$.
+
+\paragraph{Numerics.}
+The Skellam pmf is $P(\Delta=k)=e^{-a-b}(a/b)^{k/2}I_{|k|}(2\sqrt{ab})$.
+Starting from $P(\Delta=0)$, the pmf on either side follows from the Bessel
+ratios $\rho_k=I_{k+1}(z)/I_k(z)$, obtained by the backward recurrence
+$\rho_k=1/\big(2(k+1)/z+\rho_{k+1}\big)$; the ratios are bounded by one, so
+the sums run without overflow. One pass over the side of $\Delta=0$ away from
+the mean of $\Delta$ gives that side's probability, first moment and the
+terms needed for $F$, $S$, $J$, $1-J$, $\mathbb E\Delta^+$ and
+$\mathbb E\Delta^-$; the other side follows by complement and from
+$\mathbb E\Delta^+-\mathbb E\Delta^-=a-b$, and is summed explicitly only when
+the complement would cancel. The number of terms grows like
+$\sqrt{a+b}$, i.e.\ like $\sqrt{d}/s$ and $\sqrt{vx}/s$.
+
+\subsection{Scope}
+Both accumulators are members of the broader family of first passages of
+subordinators (inverse subordinators): gamma and tempered-stable subordinators
+give other jump laws with the same mean--variance coupling available, and the
+compound Poisson packet process is the finite-activity member. None of
+them has signed evidence; downward fluctuations and intrinsic non-finishing
+require a different construction (e.g.\ a drifted Brownian or opponent-counting
+accumulator).
+
+\section{Closed-Form Boundary}
+\begin{center}
+\footnotesize
+\begin{tabular}{p{0.48\textwidth}p{0.20\textwidth}p{0.20\textwidth}}
+\toprule
+Case & Density & CDF \\
+\midrule
+Fixed Wald, no clocks & closed form & closed form \\
+Wald with $A>0$, $s_v=0$ & closed form & closed form \\
+Fixed-criterion full-Gaussian drift, $A=0$, $s_v>0$, no clocks & closed form & closed form \\
+Fixed-criterion positive-truncated drift, $A=0$, $s_v>0$, no clocks & closed form & closed form \\
+Joint $A>0$, full-Gaussian drift, no clocks & closed form & exact analytic distance series (Section~\ref{sec:joint-cdf-recurrence}) \\
+Joint $A>0$, positive-truncated drift, no clocks & closed form & exact analytic distance series (Section~\ref{sec:joint-cdf-recurrence}) \\
+Joint $A>0$, full-Gaussian drift, eventual hit mass & --- & exact analytic distance series \\
+Gaussian-copula race pair ($s_v=0$ or positive-truncated marginals) & closed-form subdensity & closed-form survival and bivariate tail \\
+Gaussian-copula race pair with defective marginals ($s_v=0, m<0$) & closed-form subdensity & closed-form survival and exact joint omission mass \\
+Correlated between-trial drift draws ($s_v>0$) & one-dimensional quadrature / factor integration & one-dimensional quadrature / factor integration \\
+Kill-only exponential/Erlang-2, $s_v=0$ & closed form & closed form \\
+Kill-only with $s_v>0$, kill-derived miss mass & closed-form subdensity in simple density cases & one-dimensional drift/time mixture \\
+Kill-only represented by free Bernoulli contaminant miss & no-kill density unless explicitly replaced by conditional killed density & closed form in the no-kill model; miss mass is a free parameter \\
+Guess-only exponential/Erlang-2, $s_v=0$ & closed form & closed form \\
+Guess-only with $s_v>0$ & algebraic in no-kill density and survivor & algebraic in no-kill survivor \\
+Local guess--kill exponential & closed-form density & closed form \\
+Local guess--kill Erlang-2, $s_v=0$ & closed-form density & closed form \\
+Local guess--kill Erlang-2, $s_v>0$ & one-dimensional mixture & one-dimensional mixture \\
+Kill-only or guess-only hybrid shape 3, $s_v=0$ & mixture of shape 1 and 2 closed forms & mixture of shape 1 and 2 closed forms \\
+Local guess--kill hybrid shape 3, $s_v=0$ & mixture of shape 1 and 2 closed forms & mixture of shape 1 and 2 closed forms \\
+Local guess--kill hybrid shape 3, $s_v>0$ & one-dimensional mixture when $\pi<1$ & one-dimensional mixture when $\pi<1$ \\
+GBM physical start-point variability, no drift variability & closed form & closed form \\
+IG subordinator, uniform start point (Section~\ref{sec:igs}) & closed form & closed form \\
+Compound Poisson packets, uniform start point (Section~\ref{sec:igs-packets}) & Skellam series & Skellam series \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The main rule is structural: finite closed forms appear when the relevant integrals stay within Gaussian, bivariate-normal, probit copula, or tilted-Wald primitive families. The coupled distance--drift image term additionally admits the exact analytic series of Section~\ref{sec:joint-cdf-recurrence}, so the distance average needs no quadrature. Numerical integration remains appropriate when Erlang tilting introduces $q_r(v)=\sqrt{v^2+2\sigma^2r}$ inside a Gaussian drift mixture, or when between-trial drift draws are correlated under $s_v > 0$. Hybrid shape 3 does not introduce a new primitive family; it interpolates between the existing shape 1 and shape 2 cases through $\pi$. A free Bernoulli contaminant-miss parameter is mathematically equivalent to the killed model's response-versus-omission mass after setting $p_{\mathrm{Contaminant}}=1-P_R$, but it is a shortcut only when $p_{\mathrm{Contaminant}}$ is estimated directly or when the killed conditional RT law is supplied separately.
+
+\section{Practical Checklist}
+For learning or deriving a new variant, a useful checklist is:
+\begin{enumerate}
+  \item Decide whether negative drifts are retained or the drift distribution is truncated at zero. This determines whether the distribution is defective and what normalizer is legitimate.
+  \item Decide whether timing clocks use raw time $T$ or evidence time $x=T-t_0$. If clocks start at trial onset, polynomial factors for Erlang-2 contain $t_0+x$, not just $x$.
+  \item Write the target as a density, CDF, survival, or infinite-time mass. Densities are often simpler because they are fixed-time Gaussian moments; CDFs contain reflection-principle image terms.
+  \item If accumulators in a race are correlated via a Gaussian copula on finishing times, evaluate the probit transformation $z_i(t) = \PhiN^{-1}(F_i(t))$. The winning subdensity multiplies the winner's marginal density by a univariate normal CDF $\PhiN((\rho z_1 - z_2)/\sqrt{1-\rho^2})$, requiring no multivariate numerical integration.
+  \item If marginal distributions are defective ($F_i(\infty) < 1$), evaluate the probit quantiles at the marginal plateau $z_{i, \infty} = \PhiN^{-1}(F_i(\infty))$ to compute exact joint and partial omission probabilities under the copula.
+  \item If a clock contributes only $e^{-rt}$, try a Laplace transform or exponential tilt. If it contributes $t e^{-rt}$ or $t^2e^{-rt}$, use transform derivatives or tilted moments.
+  \item If the model uses hybrid shape 3 timing, derive the shape 1 and shape 2 quantities first, put the shape 2 rates on the common mean scale by doubling them, and then mix them with weights $\pi$ and $1-\pi$.
+  \item Inspect the remaining random variable integration. Affine Gaussian arguments usually give closed forms; $\sqrt{v^2+c}$ inside a drift mixture usually does not.
+  \item If a local kill clock is used only to model omissions, it can be replaced by a Bernoulli contaminant-miss probability. If the kill rate is still meant to determine that probability, the killed response mass $P_R$ must still be computed; with $s_v>0$ this is the same non-affine drift expectation that motivates quadrature.
+\end{enumerate}
+
+\section{Further Reading}
+The formulas above are built from standard components. For deeper theory, start with first-passage times of Brownian motion and the inverse-Gaussian distribution, then study multivariate-normal conditioning and exponential tilting. For timing processes, Erlang distributions are integer-shape gamma distributions; their polynomial-exponential survival functions are why shape 1 and shape 2 are algebraically special. The hybrid shape 3 process is best understood as a finite mixture over those two special cases rather than as a new Erlang distribution. For correlated race models, copulas decompose multivariate distributions via Sklar's theorem; the probit rank transform maps marginal hitting times into Gaussian dependence structures. Useful entry points are the linked references in Section 1, especially \href{https://en.wikipedia.org/wiki/Inverse_Gaussian_distribution}{inverse Gaussian first-passage theory}, \href{https://en.wikipedia.org/wiki/Reflection_principle_(Wiener_process)}{the reflection principle}, \href{https://en.wikipedia.org/wiki/Multivariate_normal_distribution}{multivariate normal conditioning}, \href{https://en.wikipedia.org/wiki/Copula_(probability_theory)}{copula theory}, and \href{https://mathworld.wolfram.com/ErlangDistribution.html}{Erlang distributions}.
+
+For the decision-process context, the supplied sequential-sampling chapter is
+the reference for the Brownian/Wiener, OU, criterion, and across-trial
+variability terminology. The supplied time-varying chapter is the reference
+for filtered sustained and transient drift profiles and for the race-versus-
+coactivation comparison. Smith (1995) is the primary source for the
+psychophysically motivated multichannel OU model, while Ratcliff and Van Dongen
+(2011) provide the one-choice diffusion comparison that motivates the
+zero-clipping distinction in Section 3.2.
+Smith and Lilburn (2020) are the source of the two-noise diffusion in
+Section~\ref{sec:two-noise}, with stimulus-dependent and stimulus-independent
+(premature sampling) noise; the constant-input Wald law there is their model
+with $\theta(t)$ held fixed.
+
+\end{document}
