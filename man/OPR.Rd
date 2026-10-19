@@ -58,8 +58,7 @@ number of negative events before absorption, and
 \verb{F(u) = sum_j P(J = j) I_q(K + 2j, beta)}, \code{q = u/(r + u)}, \verb{r = beta/((1 + 2 rho) v)},
 
 with \code{I_q} the regularized incomplete beta function
-(Math/gamma_mixtures.tex). \code{cv = 0} is the fixed rate. The other
-parameterizations have no \code{cv}.
+(Math/gamma_mixtures.tex). \code{cv = 0} is the fixed rate.
 
 \code{parameterization = "background"} samples the net rate \code{v} and a background
 event rate \code{lambda0} shared by both streams, with \code{lambda_p = v + lambda0}
@@ -69,7 +68,15 @@ and \code{lambda_m = lambda0}:\tabular{llllll}{
    \emph{v} \tab log \tab [1e-4, Inf] \tab log(10) \tab  \tab Net event rate \code{lambda_p - lambda_m}. \cr
    \emph{lambda0} \tab log \tab [0, Inf] \tab log(10) \tab  \tab Background event rate in each stream. \cr
    \emph{t0} \tab log \tab [0.05, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{cv} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = 1/\emph{cv}^2 \tab Between-trial CV of the gain. \cr
 }
+
+
+With \code{cv > 0} a gain \code{G} is drawn once per trial from a Gamma law with mean
+1 and shape \code{beta = 1/cv^2}, and both event rates scale with it:
+\code{lambda_p = G (v + lambda0)}, \code{lambda_m = G lambda0}. This is the ratio
+chart's mixture with \code{rho = lambda0 / v}, so the net rate has mean \code{v} and
+CV \code{cv}, and the background varies with it.
 
 
 \code{parameterization = "rates"} samples the event rates directly:\tabular{llllll}{

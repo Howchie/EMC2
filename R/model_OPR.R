@@ -29,10 +29,18 @@
   invisible(NULL)
 }
 
-# Rate CV per row: the cv column of the ratio chart, zero otherwise.
+# Rate CV per row: the cv column of the ratio and background charts, zero
+# otherwise.
 .opr_cv <- function(pars) {
-  if ("cv" %in% colnames(pars) && all(c("v", "rho") %in% colnames(pars)))
+  cn <- colnames(pars)
+  if ("cv" %in% cn && "v" %in% cn && any(c("rho", "lambda0") %in% cn))
     pars[, "cv"] else numeric(nrow(pars))
+}
+
+# Opposing ratio of the Gamma mixture.  On the background chart cv is a trial
+# gain on both streams, which is the ratio chart with rho = lambda0 / v.
+.opr_rho <- function(pars) {
+  if ("rho" %in% colnames(pars)) pars[, "rho"] else pars[, "lambda0"] / pars[, "v"]
 }
 
 dOPR <- function(rt, pars) {
@@ -48,7 +56,7 @@ dOPR <- function(rt, pars) {
   if (any(fix)) out[fix] <- dopr(dt[fix], pars[fix, "K"], r$a[fix], r$b[fix])
   if (any(mix))
     out[mix] <- dopr_gamma(dt[mix], pars[mix, "K"], pars[mix, "v"],
-                           pars[mix, "rho"], cv[mix])
+                           .opr_rho(pars[mix, , drop = FALSE]), cv[mix])
   out[ok][is.na(out[ok])] <- 0
   out
 }
@@ -66,7 +74,7 @@ pOPR <- function(rt, pars) {
   if (any(fix)) out[fix] <- popr(dt[fix], pars[fix, "K"], r$a[fix], r$b[fix])
   if (any(mix))
     out[mix] <- popr_gamma(dt[mix], pars[mix, "K"], pars[mix, "v"],
-                           pars[mix, "rho"], cv[mix])
+                           .opr_rho(pars[mix, , drop = FALSE]), cv[mix])
   out[ok][is.na(out[ok])] <- 0
   out
 }
@@ -85,8 +93,9 @@ rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
   mix <- which(cv > 0 & is.finite(cv))
   if (length(mix)) {
     V <- rgamma(length(mix), 1 / cv[mix]^2, scale = pars[mix, "v"] * cv[mix]^2)
-    r$a[mix] <- (1 + pars[mix, "rho"]) * V
-    r$b[mix] <- pars[mix, "rho"] * V
+    rho <- .opr_rho(pars[mix, , drop = FALSE])
+    r$a[mix] <- (1 + rho) * V
+    r$b[mix] <- rho * V
   }
   K <- pars[, "K"]
   t0 <- pars[, "t0"]
@@ -160,8 +169,7 @@ rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
 #' `F(u) = sum_j P(J = j) I_q(K + 2j, beta)`, `q = u/(r + u)`, `r = beta/((1 + 2 rho) v)`,
 #'
 #' with `I_q` the regularized incomplete beta function
-#' (Math/gamma_mixtures.tex). `cv = 0` is the fixed rate. The other
-#' parameterizations have no `cv`.
+#' (Math/gamma_mixtures.tex). `cv = 0` is the fixed rate.
 #'
 #' `parameterization = "background"` samples the net rate `v` and a background
 #' event rate `lambda0` shared by both streams, with `lambda_p = v + lambda0`
@@ -173,6 +181,13 @@ rOPR <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
 #' | *v* | log | \[1e-4, Inf\] | log(10) | | Net event rate `lambda_p - lambda_m`. |
 #' | *lambda0* | log | \[0, Inf\] | log(10) | | Background event rate in each stream. |
 #' | *t0* | log | \[0.05, Inf\] | log(0) | | Non-decision time. |
+#' | *cv* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = 1/*cv*^2 | Between-trial CV of the gain. |
+#'
+#' With `cv > 0` a gain `G` is drawn once per trial from a Gamma law with mean
+#' 1 and shape `beta = 1/cv^2`, and both event rates scale with it:
+#' `lambda_p = G (v + lambda0)`, `lambda_m = G lambda0`. This is the ratio
+#' chart's mixture with `rho = lambda0 / v`, so the net rate has mean `v` and
+#' CV `cv`, and the background varies with it.
 #'
 #' `parameterization = "rates"` samples the event rates directly:
 #'
@@ -217,7 +232,6 @@ OPR <- function(parameterization = c("ratio", "background", "rates")) {
   r1 <- if (rates) "lambda_p" else "v"
   r2 <- switch(parameterization, ratio = "rho", background = "lambda0",
                rates = "lambda_m")
-  ratio <- parameterization == "ratio"
   p_types <- c(K = log(3), r1 = if (rates) log(20) else log(10),
                r2 = switch(parameterization, ratio = log(1), log(10)),
                t0 = log(0))
@@ -227,8 +241,8 @@ OPR <- function(parameterization = c("ratio", "background", "rates")) {
   minmax <- cbind(K = c(1, Inf), r1 = c(1e-4, Inf), r2 = c(0, Inf),
                   t0 = c(0.05, Inf))
   exception <- c(t0 = 0)
-  if (ratio) {
-    # The Gamma trial rate; cv = 0 is the fixed rate.
+  if (!rates) {
+    # The Gamma trial rate (ratio) or gain (background); cv = 0 is fixed.
     p_types <- c(p_types, cv = log(0))
     transform <- c(transform, cv = "exp")
     minmax <- cbind(minmax, cv = c(1e-4, Inf))

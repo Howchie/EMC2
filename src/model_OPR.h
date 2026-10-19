@@ -583,8 +583,19 @@ inline void chart_rates(int chart, double c1, double c2, double* a, double* b) {
   else { *a = c1; *b = c2; }
 }
 
+// The Gamma mixture is the ratio-chart kernel.  On the background chart cv is
+// a trial gain G ~ Gamma(beta, rate beta) on both streams, lambda+ = G (v +
+// lambda0) and lambda- = G lambda0, which is the ratio chart with net rate G v
+// and rho = lambda0 / v.  The rates chart has no mixture.
+inline bool chart_has_cv(int chart) { return chart != 1; }
+inline void chart_gamma(int chart, double c1, double c2, double* v, double* rho) {
+  *v = c1;
+  *rho = (chart == 2) ? c2 / c1 : c2;
+}
+
 // ===========================================================================
-// Gamma rate mixture (Math/gamma_mixtures.tex, sec. 2), ratio chart only.
+// Gamma rate mixture (Math/gamma_mixtures.tex, sec. 2) on the ratio chart;
+// the background chart reaches it through chart_gamma().
 //
 // The net rate V ~ Gamma(beta, rate beta/v) is drawn once per trial, with
 // beta = 1/cv^2, and lambda+ = (1 + rho) V, lambda- = rho V.  Each event of
@@ -782,7 +793,7 @@ inline double draw_decision(double K, double v, double rho, double cv) {
 }  // namespace gm
 
 // One accumulator row: the fixed-rate State, or the Gamma mixture when
-// cv > 0 (ratio chart only).
+// cv > 0 (ratio and background charts).
 struct Acc {
   bool mix = false;
   State s;
@@ -823,8 +834,10 @@ struct StateMemo {
     s1.K = K; s1.c1 = c1; s1.c2 = c2; s1.cv = cv;
     s1.s.mix = (cv != 0.0);
     if (s1.s.mix) {
-      // Only the ratio chart separates the criterion from the rate.
-      s1.s.g = (chart == 0) ? gm::make_gstate(K, c1, c2, cv) : gm::GState();
+      // The rates chart does not separate the criterion from the rate.
+      double v, rho;
+      chart_gamma(chart, c1, c2, &v, &rho);
+      s1.s.g = chart_has_cv(chart) ? gm::make_gstate(K, v, rho, cv) : gm::GState();
     } else {
       double a, b;
       chart_rates(chart, c1, c2, &a, &b);
@@ -837,7 +850,7 @@ struct StateMemo {
 }  // namespace opr
 
 // Race adapters (model_OPR.cpp).  Column layout: K = 0, then the two rate
-// coordinates, t0 = 3, and cv = 4 under the ratio chart.
+// coordinates, t0 = 3, and cv = 4 under the ratio and background charts.
 double dopr_scalar(double t, const double* par, void* ctx_);
 double popr_scalar(double t, const double* par, void* ctx_);
 void dopr_raw(const double* rt, const double* const* cols, int n_rows,

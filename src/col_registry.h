@@ -478,6 +478,31 @@ namespace frq_cv {
   }
 }
 
+// R/model_FRQ.R — FRQ(parameterization = "gamma"): the same layout with
+// gamma = sv^2 / v (the trial rate's variance-to-mean ratio) in sv's position.
+namespace frq_gamma {
+  enum : int { K = 0, v, gamma, h, t0, plo, clock, N_REQ };
+  static_assert(int(gamma) == int(frq::sv) && int(N_REQ) == int(frq::N_REQ),
+                "frq_gamma must share frq's positions");
+  inline ColSpec spec() {
+    static const char* n[] = {"K", "v", "gamma", "h", "t0", "plo", "clock"};
+    return {n, N_REQ, "FRQ_GAMMA"};
+  }
+}
+
+// R/model_FRQ.R — FRQ(parameterization = "power"): cv1 (the rate CV at
+// v = 1 event/s) in sv's position and the exponent cvpow after clock, with
+// cv = cv1 v^(-cvpow).
+namespace frq_power {
+  enum : int { K = 0, v, cv1, h, t0, plo, clock, cvpow, N_REQ };
+  static_assert(int(cv1) == int(frq::sv) && int(clock) == int(frq::clock),
+                "frq_power must share frq's positions");
+  inline ColSpec spec() {
+    static const char* n[] = {"K", "v", "cv1", "h", "t0", "plo", "clock", "cvpow"};
+    return {n, N_REQ, "FRQ_POWER"};
+  }
+}
+
 // R/model_FRQ.R — FRQ(parameterization = "accel"): the cv layout with the
 // clock acceleration in the clock's position (the clock shape is one).
 namespace frq_accel {
@@ -498,8 +523,8 @@ namespace frq_accel {
 // (v, rho) with lambda+ = (1 + rho) v, lambda- = rho v; (lambda_p, lambda_m)
 // directly under OPR(parameterization = "rates"); or (v, lambda0) with
 // lambda+ = v + lambda0, lambda- = lambda0 under "background".  The charts
-// share the positions; ctx->opr_chart selects the mapping.  Only the ratio
-// chart has the rate CV column (the Gamma rate mixture).
+// share the positions; ctx->opr_chart selects the mapping.  The ratio and
+// background charts have the rate CV column (the Gamma rate mixture).
 namespace opr {
   enum : int { K = 0, r1, r2, t0, cv, N_REQ };
   inline ColSpec spec() {
@@ -511,8 +536,8 @@ namespace opr {
     return {n, cv, "OPR_RATES"};
   }
   inline ColSpec spec_background() {
-    static const char* n[] = {"K", "v", "lambda0", "t0"};
-    return {n, cv, "OPR_BG"};
+    static const char* n[] = {"K", "v", "lambda0", "t0", "cv"};
+    return {n, N_REQ, "OPR_BG"};
   }
 }
 

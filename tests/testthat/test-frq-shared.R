@@ -36,8 +36,8 @@ frqsh_ref_cause <- function(t, P, w_i, accel = FALSE) {
       for (i in seq_len(n)) {
         y <- ww * pd[1, i]; pl <- P[i, "plo"]
         out <- out * if (i == w_i)
-          ww * pd[2, i] * ((1 - pl) * dgamma(y, P[i, "K"]) + pl * dexp(y))
-        else (1 - pl) * pgamma(y, P[i, "K"], lower.tail = FALSE) + pl * exp(-y)
+          ww * pd[2, i] * ((1 - pl) * dgamma(y, P[i, "K"]) + pl * dgamma(y, 2))
+        else (1 - pl) * pgamma(y, P[i, "K"], lower.tail = FALSE) + pl * pgamma(y, 2, lower.tail = FALSE)
       }
       out
     })
@@ -53,7 +53,7 @@ test_that("the shared-rate expectation matches a direct integral", {
     for (l in seq_along(K)) {
       y <- exp(ss + lpsi[l])
       lq <- pgamma(y, K[l], lower.tail = FALSE, log.p = TRUE)
-      out <- out + if (plo[l] > 0) log((1 - plo[l]) * exp(lq) + plo[l] * exp(-y)) else lq
+      out <- out + if (plo[l] > 0) log((1 - plo[l]) * exp(lq) + plo[l] * pgamma(y, 2, lower.tail = FALSE)) else lq
     }
     m <- max(out); w <- exp(out - m)
     m + log(diff(ss[1:2]) * (sum(w) - (w[1] + w[length(w)]) / 2))

@@ -13,22 +13,35 @@
 # (K, v, sv, h, t0, plo, clock); beta, p and lambda are derived in the
 # kernel (src/model_FRQ.h), and sv = 0 is the exact no-variability limit.
 # plo is the probability that an accumulator commits at the low threshold
-# K_lo = 1 instead of K on a trial.  The accel chart samples the rate CV and
+# K_lo = 2 instead of K on a trial.  The accel chart samples the rate CV and
 # runs the clock = 1 law on the operational time (exp(accel u) - 1) / accel.
+# The gamma chart samples gamma = sv^2 / v, the trial rate's variance-to-mean
+# ratio; at clock = 0 and h = 1 it is the excitation increment of the
+# equivalent pure-birth counter.  The power chart samples cv1 and cvpow with
+# cv = cv1 v^(-cvpow), which nests the cv (cvpow = 0), gamma (1/2) and sv (1)
+# charts.
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
   need <- c("K", "v", "h", "t0")
   missing <- setdiff(need, colnames(pars))
-  if (!any(c("sv", "cv") %in% colnames(pars))) missing <- c(missing, "sv")
+  if (!any(c("sv", "cv", "gamma", "cv1") %in% colnames(pars))) missing <- c(missing, "sv")
   if (length(missing))
     stop("FRQ requires parameter columns ", paste(missing, collapse = ", "))
   invisible(NULL)
 }
 
-# Rate SD per row: the sv column, or cv * v under the cv chart.
+# Rate SD per row: the sv column, cv * v under the cv chart,
+# sqrt(gamma * v) under the gamma chart, or cv1 v^(1 - cvpow) under the power
+# chart.
 .frq_sv <- function(pars) {
-  if ("sv" %in% colnames(pars)) pars[, "sv"] else pars[, "cv"] * pars[, "v"]
+  if ("sv" %in% colnames(pars)) pars[, "sv"]
+  else if ("gamma" %in% colnames(pars)) sqrt(pars[, "gamma"] * pars[, "v"])
+  else if ("cv1" %in% colnames(pars)) {
+    pw <- if ("cvpow" %in% colnames(pars)) pars[, "cvpow"] else 0
+    pars[, "cv1"] * pars[, "v"]^(1 - pw)
+  }
+  else pars[, "cv"] * pars[, "v"]
 }
 
 # pars with an sv column, for the entry points that take the rate SD.
@@ -134,7 +147,7 @@ sFRQ <- function(rt, pars) {
 # V < 1 - h is the omission, and otherwise 1 - G(T) = (W - (1 - p)) / p.
 # At sv = 0 the latent is the threshold epoch
 # Y ~ Gamma(K): T = Y / v when h = 1, and T = G^{-1}(Y / E) when Y <= E.
-# With plo > 0 each row first draws its threshold, K_lo = 1 with probability
+# With plo > 0 each row first draws its threshold, K_lo = 2 with probability
 # plo and K otherwise, and the same construction runs at that threshold with
 # the shared p.  An all-Inf trial column is the package's omission convention.
 rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
@@ -170,11 +183,11 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   exc <- valid & om > 0
   pois <- valid & !exc & !is.finite(g[, "beta"])
   beta_r <- valid & !exc & !pois
-  # Threshold per row: K_lo = 1 in the low state.  The draw is made only where
+  # Threshold per row: K_lo = 2 in the low state (FRQ_K_LO in model_FRQ.h).  The draw is made only where
   # plo > 0, so the base model consumes the same uniforms as before.
   kk <- p[, "K"]
   mix <- valid & is.finite(pl) & pl > 0
-  if (any(mix)) kk[mix][runif(sum(mix)) < pl[mix]] <- 1
+  if (any(mix)) kk[mix][runif(sum(mix)) < pl[mix]] <- 2
   hit <- rep(Inf, nrow(p))
   if (any(beta_r)) {
     i <- which(beta_r)
@@ -418,7 +431,7 @@ rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `clock = 1`.
 #'
 #' With `plo > 0` each accumulator independently commits at the low threshold
-#' `K_lo = 1` with probability `plo` on each trial:
+#' `K_lo = 2` with probability `plo` on each trial:
 #' `F(u) = (1 - plo) * I_q(u)(K, beta) + plo * I_q(u)(1, beta)`, with
 #' `I_q(1, beta) = 1 - (1 - q)^beta`. Both thresholds share `beta`, `p` and the
 #' clock. `p` is solved from
@@ -437,10 +450,48 @@ rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' `E`) is solved from `h = F(Inf)` by a bracketed root search. `omega` is
 #' available in every parameterization.
 #'
+#' `parameterization = "gamma"` samples *gamma* = *sv*^2/*v* = *cv*^2 *v*, the
+#' variance-to-mean ratio of the trial input rate, in place of *sv*:
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *gamma* | log | \[1e-4, Inf\] or 0 | log(0) | *beta* = *v*/*gamma*, *sv* = sqrt(*gamma* *v*) | Variance-to-mean ratio of the input rate |
+#'
+#' At `clock = 0` and `h = 1` the law is that of a linear pure-birth counter
+#' whose event rate after `n` events is `v + gamma * n`
+#' (`Math/CounterAndQuorumModels.tex`), so *gamma* is the
+#' excitation increment per event and `lambda = gamma`. A *gamma* shared across
+#' accumulators holds that increment fixed while *v* changes, so differences
+#' in *v* change the shape of the finishing-time law and not only its scale; a
+#' shared *cv* instead makes the increment proportional to *v*. At other clocks
+#' *gamma* is the rate's variance-to-mean ratio, without the excitation
+#' reading. `gamma = 0` is the same exact limit as `sv = 0`, and at equal
+#' values of *sv* and sqrt(*gamma* *v*) the charts give the same likelihood.
+#' The gamma chart is not available with `rate_sharing = "shared"`, which needs
+#' one CV per trial.
+#'
+#' `parameterization = "power"` samples *cv1*, the rate CV at *v* = 1 event/s,
+#' in place of *sv*, and an exponent *cvpow*, with `cv = cv1 * v^(-cvpow)`:
+#'
+#' | **Parameter** | **Transform** | **Bounds** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *cv1* | log | \[1e-4, Inf\] or 0 | log(0) | *cv* = *cv1* *v*^(-*cvpow*) | Rate CV at *v* = 1 |
+#' | *cvpow* | identity | \[-Inf, Inf\] | 0 | | How the rate CV scales with *v* |
+#'
+#' The chart nests the others at fixed exponents: `cvpow = 0` is the cv chart
+#' (*cv1* = *cv*), `cvpow = 1/2` the gamma chart (*cv1*^2 = *gamma*) and
+#' `cvpow = 1` the sv chart (*cv1* = *sv*). At `clock = 0` and `h = 1` the
+#' excitation increment is `gamma = cv1^2 * v^(1 - 2 * cvpow)`, so *cvpow*
+#' measures how that increment scales with the input rate across the
+#' accumulators and cells that share it. *cv1* is a coefficient at
+#' *v* = 1 and correlates with *cvpow* when the rates are far from 1. The
+#' power chart is not available with `rate_sharing = "shared"`.
+#'
 #' `mapped_pars()` adds the derived columns `beta`, `p`, `lambda`, `Etot`
 #' (expected total evidence, `beta * p / (1 - p)`, or `E` at `sv = 0`; `Inf`
 #' at `h = 1`) and `cv` = `sv / v` (`sv` = `cv * v` under
-#' `parameterization = "cv"` or `"accel"`).
+#' `parameterization = "cv"` or `"accel"`; both `sv` and `cv` under
+#' `parameterization = "gamma"` or `"power"`).
 #'
 #' `rate_sharing = "shared"` draws one rate multiplier `W ~ Gamma(beta, 1)`
 #' per trial for all accumulators, in place of one per accumulator. Each
@@ -463,7 +514,9 @@ rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' @param parameterization Rate-variability and clock coordinates: `"sv"`
 #'   (the default) samples the rate SD *sv*; `"cv"` samples the rate CV
 #'   *cv* = *sv*/*v*; `"accel"` samples *cv* and the clock acceleration
-#'   *accel* in place of *clock*.
+#'   *accel* in place of *clock*; `"gamma"` samples the rate's
+#'   variance-to-mean ratio *gamma* = *sv*^2/*v*; `"power"` samples *cv1* and
+#'   *cvpow*, with *cv* = *cv1* *v*^(-*cvpow*).
 #' @param rate_sharing `"independent"` (the default) draws the trial input-rate
 #'   multiplier separately for each accumulator; `"shared"` draws one per trial
 #'   for all accumulators.
@@ -496,6 +549,14 @@ rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                                           accel ~ 1, h ~ 1, t0 ~ 1),
 #'                            contrasts = list(v = list(lM = ADmat)),
 #'                            constants = c(h = qnorm(1)))
+#' # The gamma parameterization: a shared excitation increment at clock = 0.
+#' design_FRQ_gamma <- design(data = forstmann,
+#'                            model = function() FRQ(parameterization = "gamma"),
+#'                            matchfun = matchfun,
+#'                            formula = list(K ~ 1, v ~ lM + E, gamma ~ 1,
+#'                                           h ~ 1, t0 ~ 1),
+#'                            contrasts = list(v = list(lM = ADmat)),
+#'                            constants = c(h = qnorm(1), clock = log(0)))
 #' # One shared trial rate.
 #' design_FRQ_shared <- design(data = forstmann,
 #'                             model = function() FRQ(parameterization = "cv",
@@ -506,18 +567,20 @@ rFRQ_shared <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                             contrasts = list(v = list(lM = ADmat)),
 #'                             constants = c(h = qnorm(1)))
 #' @export
-FRQ <- function(parameterization = c("sv", "cv", "accel"),
+FRQ <- function(parameterization = c("sv", "cv", "accel", "gamma", "power"),
                 rate_sharing = c("independent", "shared")) {
   parameterization <- match.arg(parameterization)
   rate_sharing <- match.arg(rate_sharing)
   shared <- rate_sharing == "shared"
-  if (shared && parameterization == "sv")
+  if (shared && parameterization %in% c("sv", "gamma", "power"))
     stop("FRQ(rate_sharing = \"shared\") needs parameterization = \"cv\" or ",
          "\"accel\": one shared rate has one CV per trial.")
   accel <- parameterization == "accel"
-  # The rate-variability coordinate in kernel column 3: the rate SD sv, or the
-  # rate CV cv = sv / v (the cv and accel charts).
-  rv <- if (accel) "cv" else parameterization
+  # The rate-variability coordinate in kernel column 3: the rate SD sv, the
+  # rate CV cv = sv / v (the cv and accel charts), gamma = sv^2 / v, or the
+  # power chart's cv1, the rate CV at v = 1 (cv = cv1 v^(-cvpow)).
+  power <- parameterization == "power"
+  rv <- if (accel) "cv" else if (power) "cv1" else parameterization
   # Kernel column 7: the clock shape, or the clock acceleration (accel chart).
   ck <- if (accel) "accel" else "clock"
   # K has no explicit transform side: the bound links it, so a sampled K is
@@ -531,10 +594,14 @@ FRQ <- function(parameterization = c("sv", "cv", "accel"),
                "plo" = qnorm(0),
                # A constant-rate evidence clock (no acceleration).
                "ck" = if (accel) log(0) else log(1),
+               # Power chart only (kernel column 7): the exponent of
+               # cv = cv1 v^(-cvpow); 0 is the cv chart.
+               if (power) c("cvpow" = 0),
                # No excess criterion.
                "omega" = log(0))
   transform <- c(K = "exp", v = "exp", rv = "exp", h = "pnorm", t0 = "exp",
-                 plo = "pnorm", ck = "exp", omega = "exp")
+                 plo = "pnorm", ck = "exp", if (power) c(cvpow = "identity"),
+                 omega = "exp")
   # sv (or cv) has no upper bound: sv > v (beta < 1) is a valid, very variable
   # rate, and the kernel solves 1 - p from its own quantile.  Its lower guard
   # keeps a sampled value off the exact zero branch, which is reachable as a
@@ -545,7 +612,9 @@ FRQ <- function(parameterization = c("sv", "cv", "accel"),
   # which is reachable as a constant; likewise clock's, accel's and omega's.
   minmax <- cbind(K = c(2, Inf), v = c(1e-4, Inf), rv = c(1e-4, Inf),
                   h = c(1e-6, 1), t0 = c(0.05, Inf), plo = c(1e-6, 1),
-                  ck = c(1e-4, Inf), omega = c(1e-4, Inf))
+                  ck = c(1e-4, Inf),
+                  if (power) cbind(cvpow = c(-Inf, Inf)),
+                  omega = c(1e-4, Inf))
   exception <- c(t0 = 0, plo = 0, ck = 0, h = 1, rv = 0, omega = 0)
   .rn <- function(x) { x[x == "rv"] <- rv; x[x == "ck"] <- ck; x }
   names(p_types) <- .rn(names(p_types))
@@ -571,7 +640,9 @@ FRQ <- function(parameterization = c("sv", "cv", "accel"),
 
   list(
     type = "RACE",
-    c_name = paste0(if (accel) "FRQ_ACCEL" else if (rv == "cv") "FRQ_CV" else "FRQ",
+    c_name = paste0(if (accel) "FRQ_ACCEL" else if (rv == "cv") "FRQ_CV"
+                    else if (rv == "gamma") "FRQ_GAMMA"
+                    else if (power) "FRQ_POWER" else "FRQ",
                     if (shared) "_SHARED" else ""),
     p_types = p_types,
     p_types_canonical = c("K", "v", rv, "h", "t0"),
@@ -590,6 +661,8 @@ FRQ <- function(parameterization = c("sv", "cv", "accel"),
       # then travel with the parameter matrix.
       # The other rate-variability coordinate.
       other <- if (rv == "cv") cbind(sv = as.numeric(sv)) else
+        if (rv %in% c("gamma", "cv1")) cbind(sv = as.numeric(sv),
+                                 cv = as.numeric(sv / pars[, "v"])) else
         cbind(cv = as.numeric(sv / pars[, "v"]))
       add <- cbind(beta = as.numeric(g[, "beta"]), p = as.numeric(g[, "p"]),
                    lambda = as.numeric(g[, "lambda"]), Etot = as.numeric(g[, "Etot"]),

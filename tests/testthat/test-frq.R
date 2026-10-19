@@ -24,12 +24,13 @@ skip_model_validation()
 # Independent references
 # ---------------------------------------------------------------------------
 
-# With plo > 0 the threshold is K_lo = 1 with probability plo, so every law is
-# the (1 - plo, plo) mixture of the K and K = 1 members on the same p, and p
+# With plo > 0 the threshold is K_lo = 2 (FRQ_K_LO) with probability plo, so every
+# law is the (1 - plo, plo) mixture of the K and K = K_LO members on the same p, and p
 # solves the mixed completion probability.
+K_LO <- 2
 ref_pl <- function(a, b, h, lambda, plo = 0, clock = 0) {
   p <- if (plo > 0 && h < 1) {
-    uniroot(function(x) (1 - plo) * pbeta(x, a, b) + plo * pbeta(x, 1, b) - h,
+    uniroot(function(x) (1 - plo) * pbeta(x, a, b) + plo * pbeta(x, K_LO, b) - h,
             c(0, 1), tol = 1e-15)$root
   } else {
     qbeta(h, a, b)
@@ -47,14 +48,14 @@ ref_q <- function(x, p, lambda, clock) {
 ref_p <- function(x, a, b, h, lambda, plo = 0, clock = 0) {
   p <- ref_pl(a, b, h, lambda, plo, clock)[["p"]]
   z <- ref_q(x, p, lambda, clock)
-  (1 - plo) * pbeta(z$q, a, b) + plo * pbeta(z$q, 1, b)
+  (1 - plo) * pbeta(z$q, a, b) + plo * pbeta(z$q, K_LO, b)
 }
 
 ref_d <- function(x, a, b, h, lambda, plo = 0, clock = 0) {
   p <- ref_pl(a, b, h, lambda, plo, clock)[["p"]]
   z <- ref_q(x, p, lambda, clock)
   main <- p * z$g * z$q^(a - 1) * z$omq^(b - 1) / beta(a, b)
-  low <- p * z$g * z$omq^(b - 1) * b
+  low <- p * z$g * z$q^(K_LO - 1) * z$omq^(b - 1) / beta(K_LO, b)
   (1 - plo) * main + plo * low
 }
 
@@ -833,8 +834,8 @@ test_that("plo preserves the defective contract and the meaning of h and lambda"
 })
 
 test_that("the solved p reproduces h, including beta < 1", {
-  # 1 - h = (1 - plo) I_{1-p}(beta, K) + plo (1 - p)^beta, evaluated from the
-  # kernel's log(1 - p), which keeps its digits where p rounds to one.
+  # 1 - h = (1 - plo) I_{1-p}(beta, K) + plo I_{1-p}(beta, K_LO), evaluated from
+  # the kernel's log(1 - p), which keeps its digits where p rounds to one.
   cases <- rbind(c(K = 3, v = 5, sv = 50, h = 1 - 1e-9, plo = 0.1),
                  c(K = 3, v = 5, sv = 50, h = 1e-5, plo = 0.1),
                  c(K = 8, v = 5, sv = 0.05, h = 0.5, plo = 0.5),
@@ -847,16 +848,18 @@ test_that("the solved p reproduces h, including beta < 1", {
     # Below double range I_x(b, K) is its leading term x^b / (b B(b, K)).
     main <- if (l > -700) pbeta(exp(l), b, cs[["K"]]) else
       exp(b * l - log(b) - lbeta(b, cs[["K"]]))
-    one_m_h <- (1 - cs[["plo"]]) * main + cs[["plo"]] * exp(b * l)
+    low <- if (l > -700) pbeta(exp(l), b, K_LO) else
+      exp(b * l - log(b) - lbeta(b, K_LO))
+    one_m_h <- (1 - cs[["plo"]]) * main + cs[["plo"]] * low
     expect_equal(one_m_h, 1 - cs[["h"]], tolerance = 1e-10,
                  info = paste("case", i))
   }
   # sv = 0: E solves the mixed incomplete gamma.
   E <- unname(EMC2:::frq_rate(4, 5, 0, 0.7, 0.25)[1, "Etot"])
-  expect_equal(0.75 * pgamma(E, 4) + 0.25 * pgamma(E, 1), 0.7, tolerance = 1e-13)
+  expect_equal(0.75 * pgamma(E, 4) + 0.25 * pgamma(E, K_LO), 0.7, tolerance = 1e-13)
   expect_equal(EMC2:::pfrq(c(0.1, 0.5, 2), 4, 5, 0, 0.7, 0.25, clock = 0),
                0.75 * pgamma(E * -expm1(-5 / E * c(0.1, 0.5, 2)), 4) +
-                 0.25 * pgamma(E * -expm1(-5 / E * c(0.1, 0.5, 2)), 1),
+                 0.25 * pgamma(E * -expm1(-5 / E * c(0.1, 0.5, 2)), K_LO),
                tolerance = 1e-12)
 })
 
@@ -872,22 +875,22 @@ test_that("the density is the derivative of the CDF under plo", {
 })
 
 test_that("plo sets the onset density and nests both pure thresholds", {
-  # The low state is a K = 1 counter, so the onset density is plo * v.
-  for (sv in c(0, 2)) for (h in c(1, 0.8))
-    expect_equal(EMC2:::dfrq(1e-10, 3, 5, sv, h, 0.2), 0.2 * 5,
-                 tolerance = 1e-6, info = paste(sv, h))
-  # plo = 1 is the K = 1 model with the same chart.
+  # The low state is a K = K_LO = 2 counter: at sv = 0, h = 1 the onset density
+  # is plo v^2 t, which leads the K = 3 main state's O(t^2).
+  tt <- 1e-6
+  expect_equal(EMC2:::dfrq(tt, 3, 5, 0, 1, 0.2) / tt, 0.2 * 5^2, tolerance = 1e-4)
+  # plo = 1 is the K = K_LO model with the same chart.
   x <- c(0.05, 0.3, 1, 3)
   for (sv in c(0, 2)) for (h in c(1, 0.8))
-    expect_equal(EMC2:::pfrq(x, 3, 5, sv, h, 1), EMC2:::pfrq(x, 1, 5, sv, h),
+    expect_equal(EMC2:::pfrq(x, 3, 5, sv, h, 1), EMC2:::pfrq(x, K_LO, 5, sv, h),
                  tolerance = 1e-12, info = paste(sv, h))
-  # plo = 1 at K = 1 is the base K = 1 model.
-  expect_equal(EMC2:::pfrq(x, 1, 5, 2, 0.8, 0.4), EMC2:::pfrq(x, 1, 5, 2, 0.8),
+  # Any plo at K = K_LO is the base K = K_LO model.
+  expect_equal(EMC2:::pfrq(x, K_LO, 5, 2, 0.8, 0.4), EMC2:::pfrq(x, K_LO, 5, 2, 0.8),
                tolerance = 1e-12)
-  base <- cpp_p(x, 2, 3, 0.9, 1.4, 0)
+  base <- cpp_p(x, 3, 3, 0.9, 1.4, 0)
   prev <- Inf
   for (pl in c(1e-3, 1e-5, 1e-7)) {
-    dev <- max(abs(cpp_p(x, 2, 3, 0.9, 1.4, pl) - base))
+    dev <- max(abs(cpp_p(x, 3, 3, 0.9, 1.4, pl) - base))
     expect_lt(dev, prev)
     prev <- dev
   }
@@ -1055,6 +1058,159 @@ test_that("the cv parameterization is the same model at sv = cv * v", {
   expect_identical(ra$R, rb$R)
 })
 
+test_that("the gamma parameterization is the same model at sv = sqrt(gamma * v)", {
+  m <- FRQ(parameterization = "gamma")
+  expect_identical(m$c_name, "FRQ_GAMMA")
+  expect_identical(names(m$p_types)[1:7],
+                   c("K", "v", "gamma", "h", "t0", "plo", "clock"))
+  expect_equal(exp(m$p_types[["gamma"]]), 0)
+  expect_equal(unname(m$bound$minmax[, "gamma"]), c(1e-4, Inf))
+  expect_equal(unname(m$bound$exception[["gamma"]]), 0)
+  expect_error(FRQ(parameterization = "gamma", rate_sharing = "shared"),
+               "one CV per trial")
+
+  # At clock = 0 and h = 1 the law is the pure-birth counter with rate
+  # v + gamma n: F(u) = I_{1 - exp(-gamma u)}(K, v / gamma).
+  u <- c(0.01, 0.1, 0.3, 0.7, 1.5, 4)
+  K <- 2.5; v <- 5; g <- 1.7; sv <- sqrt(g * v)
+  expect_equal(EMC2:::pfrq(u, K, v, sv, 1, clock = 0),
+               pbeta(-expm1(-g * u), K, v / g), tolerance = 1e-12)
+  expect_equal(unname(EMC2:::frq_rate(K, v, sv, 1, clock = 0)[, "lambda"]), g,
+               tolerance = 1e-12)
+
+  skip_on_cran()
+  set.seed(20261018)
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  dat <- dat[seq_len(80), ]
+  dat$LT <- 0.2; dat$UT <- 1.5
+  dat <- dat[dat$rt >= 0.2 & dat$rt <= 1.5, ]
+  FRQg <- function() FRQ(parameterization = "gamma")
+  mk <- function(model, rv) {
+    f <- list(K ~ 1, v ~ 0 + lM, h ~ lM, t0 ~ 1, clock ~ 1)
+    f[[length(f) + 1]] <- stats::as.formula(paste(rv, "~ 0 + lM"))
+    des <- suppressMessages(design(data = dat, model = model, matchfun = matchfun,
+                                   formula = f, constants = c(clock = log(0))))
+    emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
+                                     compress = FALSE, rt_resolution = NULL))
+    list(des = des, emc = emc)
+  }
+  a <- mk(FRQg, "gamma"); b <- mk(FRQ, "sv")
+  ma <- a$emc[[1]]$model()
+  pa <- sampled_pars(a$des)
+  pa[] <- c(log(1.5), log(4), log(2.5), qnorm(0.9), 0.4, log(0.15),
+            log(0.8), log(2))[seq_along(pa)]
+  pa[grepl("^gamma", names(pa))] <- c(log(0.8), log(2))
+  dadm <- a$emc[[1]]$data[[1]]
+  pars_a <- EMC2:::get_pars_matrix_oo(pa, dadm, ma)
+  expect_equal(unname(pars_a[, "sv"]),
+               unname(sqrt(pars_a[, "gamma"] * pars_a[, "v"])))
+  expect_equal(unname(pars_a[, "cv"]), unname(pars_a[, "sv"] / pars_a[, "v"]))
+  # The sv chart at the same per-cell rate SD (the link adds the 1e-4 floor).
+  pb <- pa
+  names(pb) <- sub("^gamma", "sv", names(pb))
+  for (lev in c("FALSE", "TRUE")) {
+    sv_nat <- unique(pars_a[as.character(dadm$lM) == lev, "sv"])
+    pb[paste0("sv_lM", lev)] <- log(sv_nat - 1e-4)
+  }
+  pb <- pb[names(sampled_pars(b$des))]
+  ll_a <- frq_ll(a$emc, pa); ll_b <- frq_ll(b$emc, pb)
+  expect_true(is.finite(ll_a))
+  expect_equal(ll_a, ll_b, tolerance = 1e-10)
+  # gamma = 0 is the same Poisson counter as sv = 0.
+  pa0 <- pa; pa0[grepl("^gamma", names(pa0))] <- log(0)
+  pb0 <- pb; pb0[grepl("^sv", names(pb0))] <- log(0)
+  expect_equal(frq_ll(a$emc, pa0), frq_ll(b$emc, pb0), tolerance = 1e-12)
+  # The simulators read the same rate SD.
+  pars_b <- EMC2:::get_pars_matrix_oo(pb, b$emc[[1]]$data[[1]], b$emc[[1]]$model())
+  set.seed(5); ra <- ma$rfun(dadm, pars_a)
+  set.seed(5); rb <- b$emc[[1]]$model()$rfun(b$emc[[1]]$data[[1]], pars_b)
+  expect_equal(ra$rt, rb$rt, tolerance = 1e-10)
+  expect_identical(ra$R, rb$R)
+})
+
+test_that("the power parameterization nests the cv, gamma and sv charts", {
+  m <- FRQ(parameterization = "power")
+  expect_identical(m$c_name, "FRQ_POWER")
+  expect_identical(names(m$p_types)[1:8],
+                   c("K", "v", "cv1", "h", "t0", "plo", "clock", "cvpow"))
+  expect_equal(m$p_types[["cvpow"]], 0)
+  expect_identical(m$transform$func[["cvpow"]], "identity")
+  expect_equal(unname(m$bound$minmax[, "cvpow"]), c(-Inf, Inf))
+  expect_error(FRQ(parameterization = "power", rate_sharing = "shared"),
+               "one CV per trial")
+
+  skip_on_cran()
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  dat <- dat[seq_len(80), ]
+  dat$LT <- 0.2; dat$UT <- 1.5
+  dat <- dat[dat$rt >= 0.2 & dat$rt <= 1.5, ]
+  mk <- function(model, rv, extra = list()) {
+    f <- c(list(K ~ 1, v ~ 0 + lM, h ~ lM, t0 ~ 1, clock ~ 1,
+                stats::as.formula(paste(rv, "~ 0 + lM"))), extra)
+    des <- suppressMessages(design(data = dat, model = model, matchfun = matchfun,
+                                   formula = f, constants = c(clock = log(0))))
+    emc <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
+                                     compress = FALSE, rt_resolution = NULL))
+    list(des = des, emc = emc)
+  }
+  a <- mk(function() FRQ(parameterization = "power"), "cv1", list(cvpow ~ 1))
+  ma <- a$emc[[1]]$model()
+  pa <- sampled_pars(a$des)
+  pa[c("K", "v_lMFALSE", "v_lMTRUE", "h_lMTRUE", "t0")] <-
+    c(log(1.5), log(2.5), log(6), 0.4, log(0.15))
+  pa["h"] <- qnorm(0.9)
+  pa[c("cv1_lMFALSE", "cv1_lMTRUE")] <- c(log(0.8), log(1.4))
+  pa["cvpow"] <- 0.3
+  dadm <- a$emc[[1]]$data[[1]]
+  pars_a <- EMC2:::get_pars_matrix_oo(pa, dadm, ma)
+  expect_equal(unname(pars_a[, "sv"]),
+               unname(pars_a[, "cv1"] * pars_a[, "v"]^(1 - pars_a[, "cvpow"])))
+  expect_equal(unname(pars_a[, "cv"]), unname(pars_a[, "sv"] / pars_a[, "v"]))
+  ll_a <- frq_ll(a$emc, pa)
+  expect_true(is.finite(ll_a))
+
+  # The sv chart at the same per-cell rate SD (the link adds the 1e-4 floor).
+  b <- mk(FRQ, "sv")
+  pb <- pa[setdiff(names(pa), "cvpow")]
+  names(pb) <- sub("^cv1", "sv", names(pb))
+  for (lev in c("FALSE", "TRUE")) {
+    sv_nat <- unique(pars_a[as.character(dadm$lM) == lev, "sv"])
+    pb[paste0("sv_lM", lev)] <- log(sv_nat - 1e-4)
+  }
+  pb <- pb[names(sampled_pars(b$des))]
+  expect_equal(ll_a, frq_ll(b$emc, pb), tolerance = 1e-10)
+
+  # cvpow = 0 is the cv chart at the same raw values.
+  c0 <- mk(function() FRQ(parameterization = "cv"), "cv")
+  pa0 <- pa; pa0["cvpow"] <- 0
+  pc <- pa0[setdiff(names(pa0), "cvpow")]
+  names(pc) <- sub("^cv1", "cv", names(pc))
+  expect_equal(frq_ll(a$emc, pa0), frq_ll(c0$emc, pc[names(sampled_pars(c0$des))]),
+               tolerance = 1e-12)
+  # cvpow = 1/2 is the gamma chart at gamma = cv1^2.
+  g <- mk(function() FRQ(parameterization = "gamma"), "gamma")
+  pah <- pa; pah["cvpow"] <- 0.5
+  pg <- pah[setdiff(names(pah), "cvpow")]
+  names(pg) <- sub("^cv1", "gamma", names(pg))
+  for (lev in c("FALSE", "TRUE"))
+    pg[paste0("gamma_lM", lev)] <- log((exp(pah[[paste0("cv1_lM", lev)]]) + 1e-4)^2 - 1e-4)
+  expect_equal(frq_ll(a$emc, pah), frq_ll(g$emc, pg[names(sampled_pars(g$des))]),
+               tolerance = 1e-10)
+  # cv1 = 0 is the Poisson counter.
+  pz <- pa; pz[grepl("^cv1", names(pz))] <- log(0)
+  pbz <- pb; pbz[grepl("^sv", names(pbz))] <- log(0)
+  expect_equal(frq_ll(a$emc, pz), frq_ll(b$emc, pbz), tolerance = 1e-12)
+  # The simulators read the same rate SD.
+  pars_b <- EMC2:::get_pars_matrix_oo(pb, b$emc[[1]]$data[[1]], b$emc[[1]]$model())
+  set.seed(5); ra <- ma$rfun(dadm, pars_a)
+  set.seed(5); rb <- b$emc[[1]]$model()$rfun(b$emc[[1]]$data[[1]], pars_b)
+  expect_equal(ra$rt, rb$rt, tolerance = 1e-10)
+})
+
 test_that("the accel parameterization warps the clock = 1 law", {
   m <- FRQ(parameterization = "accel")
   expect_identical(m$c_name, "FRQ_ACCEL")
@@ -1176,10 +1332,9 @@ test_that("the geometric criterion excess omega has its closed forms", {
                1 - Fq(q, K, b, w), tolerance = 1e-12)
   expect_equal(EMC2:::pfrq(u, K, v, 0, 1, omega = w), FP(v * u, K, w),
                tolerance = 1e-12)
-  # The low state's criterion is (1 + omega) Y_1.
-  r <- w / (1 + w)
+  # The low state's criterion is Y_{K_LO - 1} + (1 + omega) Y_1.
   expect_equal(EMC2:::pfrq(u, K, v, sv, 1, plo = 0.3, omega = w),
-               0.7 * Fq(q, K, b, w) + 0.3 * (1 - ((1 - q) / (1 - r * q))^b),
+               0.7 * Fq(q, K, b, w) + 0.3 * Fq(q, K_LO, b, w),
                tolerance = 1e-12)
   # The criterion integral itself, by quadrature.
   J_cdf <- function(m) integrate(function(y) dgamma(y, K - 1) *

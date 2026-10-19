@@ -245,8 +245,24 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
   } else if (type_std.find("FRQ") != std::string::npos) {
     // FRQ_FADE shares the prefix and is dispatched above.  FRQ_CV is the cv
     // chart: the rate CV in sv's column, otherwise the same adapters.
-    // FRQ_ACCEL is the cv chart with the clock acceleration in clock's column.
-    if (type_std.find("FRQ_ACCEL") != std::string::npos) {
+    // FRQ_ACCEL is the cv chart with the clock acceleration in clock's column;
+    // FRQ_GAMMA holds gamma = sv^2 / v in sv's column; FRQ_POWER holds cv1 there
+    // and its exponent cvpow after clock.
+    if (type_std.find("FRQ_POWER") != std::string::npos) {
+      out.pdf1_ptr       = &dfrq_power_scalar;
+      out.cdf1_ptr       = &pfrq_power_scalar;
+      out.model_dfun_raw = &dfrq_power_raw;
+      out.model_pfun_raw = &pfrq_power_raw;
+      out.logS_at_t_ptr  = &frq_power_logS_at_t;
+      out.col_spec       = emc2col::frq_power::spec();
+    } else if (type_std.find("FRQ_GAMMA") != std::string::npos) {
+      out.pdf1_ptr       = &dfrq_gamma_scalar;
+      out.cdf1_ptr       = &pfrq_gamma_scalar;
+      out.model_dfun_raw = &dfrq_gamma_raw;
+      out.model_pfun_raw = &pfrq_gamma_raw;
+      out.logS_at_t_ptr  = &frq_gamma_logS_at_t;
+      out.col_spec       = emc2col::frq_gamma::spec();
+    } else if (type_std.find("FRQ_ACCEL") != std::string::npos) {
       out.pdf1_ptr       = &dfrq_accel_scalar;
       out.cdf1_ptr       = &pfrq_accel_scalar;
       out.model_dfun_raw = &dfrq_accel_raw;

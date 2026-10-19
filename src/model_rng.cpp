@@ -1415,8 +1415,9 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 }
 
 // Opponent Poisson race simulator.  pars columns: K, the rate chart, t0;
-// chart 0 is (v, rho) with an optional rate CV cv (a Gamma trial rate drawn
-// first), chart 1 is (lambda_p, lambda_m), chart 2 is (v, lambda0).  Each
+// chart 0 is (v, rho) and chart 2 is (v, lambda0), each with an optional rate
+// CV cv (a Gamma trial rate or gain drawn first); chart 1 is (lambda_p,
+// lambda_m).  Each
 // decision time is drawn by inverting the analytic survivor
 // (opr::draw_decision); +Inf is an accumulator that never finishes.
 // [[Rcpp::export]]
@@ -1434,8 +1435,8 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (const char* nm : {"K", c1, c2, "t0"})
     if (!ci.count(nm)) Rcpp::stop("ropr_cpp: missing parameter column '%s'.", nm);
   const int ik = ci.at("K"), i1 = ci.at(c1), i2 = ci.at(c2), it0 = ci.at("t0");
-  // The rate CV (Gamma rate mixture) exists under the ratio chart only.
-  const int icv = (chart == 0 && ci.count("cv")) ? ci.at("cv") : -1;
+  // The rate CV (Gamma rate mixture) is absent under the rates chart.
+  const int icv = (opr::chart_has_cv(chart) && ci.count("cv")) ? ci.at("cv") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1448,8 +1449,10 @@ Rcpp::List ropr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double cv = icv >= 0 ? pars(r, icv) : 0.0;
     double d;
     if (cv > 0.0) {
-      d = opr::gm::make_gstate(pars(r, ik), pars(r, i1), pars(r, i2), cv).ok
-        ? opr::gm::draw_decision(pars(r, ik), pars(r, i1), pars(r, i2), cv)
+      double v, rho;
+      opr::chart_gamma(chart, pars(r, i1), pars(r, i2), &v, &rho);
+      d = opr::gm::make_gstate(pars(r, ik), v, rho, cv).ok
+        ? opr::gm::draw_decision(pars(r, ik), v, rho, cv)
         : R_PosInf;
     } else {
       double a, b;

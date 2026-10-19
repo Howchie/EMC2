@@ -71,7 +71,8 @@
 //   F(x) = (1 - plo) I_{q(x)}(K, beta) + plo I_{q(x)}(K_lo, beta),
 //
 // and likewise for the density, the survivor and the cv = 0 limit with P_K.
-// K_lo is fixed at FRQ_K_LO = 1, where the low component is elementary:
+// K_lo is fixed at FRQ_K_LO = 2 (K_lo = 1 is exponential, so its onset density
+// plo v is confounded with t0).  At K_lo = 1 the low component is elementary:
 // I_q(1, beta) = 1 - (1 - q)^beta and P_1(X) = 1 - e^{-X}.  Its density at
 // onset is plo v, so the low state sets the leading edge of the law.  The
 // draw is per accumulator, so the race still factors over accumulators.
@@ -125,7 +126,7 @@ constexpr double FRQ_CV_POISSON = 1e-4;
 // Threshold of the low state.  Fixed rather than a fitted column; every
 // evaluator takes it from FrqLow, so freeing it later only changes where the
 // value comes from.
-constexpr double FRQ_K_LO = 1.0;
+constexpr double FRQ_K_LO = 2.0;
 
 
 // log(1 - e^y) for y <= 0.
@@ -676,6 +677,21 @@ inline void frq_set_rate(FrqPars& s, bool avail_ok, double v, double clock) {
 // beta-quantile half works in its CV, sv / v, which is 1/sqrt(beta).
 inline double frq_rate_cv(double sv, double v) {
   return (sv == 0.0) ? 0.0 : sv / v;
+}
+
+// The gamma chart's coordinate is gamma = sv^2 / v = cv^2 v, the trial rate's
+// variance-to-mean ratio (at clock = 0 and h = 1 the excitation increment of
+// the equivalent pure-birth counter, rate v + gamma n); its CV is sqrt(gamma / v).
+inline double frq_gamma_cv(double gamma, double v) {
+  return (gamma == 0.0) ? 0.0 : std::sqrt(gamma / v);
+}
+
+// The power chart's coordinates are cv1, the rate CV at v = 1 event/s, and the
+// exponent cvpow of cv = cv1 v^(-cvpow): cvpow = 0 is the cv chart, 1/2 the
+// gamma chart (cv1^2 = gamma) and 1 the sv chart (cv1 = sv).
+inline double frq_power_cv(double cv1, double v, double cvpow) {
+  return (cv1 == 0.0) ? 0.0
+    : (cvpow == 0.0 ? cv1 : cv1 * std::exp(-cvpow * std::log(v)));
 }
 
 // One-shot derive, for callers that hold no memo.
@@ -1412,6 +1428,30 @@ void frq_cv_logS_at_t(double t, const double* const* cols,
                       int /*n_rows_total*/, int n_lR, int /*n_par*/,
                       const int* trunc_mask, int n_unique_trials,
                       const int* isok_all, void* /*ctx_*/, double* logS_out);
+double dfrq_gamma_scalar(double t, const double* par, void* /*ctx_*/);
+double pfrq_gamma_scalar(double t, const double* par, void* /*ctx_*/);
+void dfrq_gamma_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void pfrq_gamma_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void frq_gamma_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* /*ctx_*/, double* logS_out);
+double dfrq_power_scalar(double t, const double* par, void* /*ctx_*/);
+double pfrq_power_scalar(double t, const double* par, void* /*ctx_*/);
+void dfrq_power_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void pfrq_power_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_);
+void frq_power_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* /*ctx_*/, double* logS_out);
 double dfrq_accel_scalar(double t, const double* par, void* /*ctx_*/);
 double pfrq_accel_scalar(double t, const double* par, void* /*ctx_*/);
 void dfrq_accel_raw(const double* rt, const double* const* cols, int n_rows,

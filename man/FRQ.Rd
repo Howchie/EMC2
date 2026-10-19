@@ -5,7 +5,7 @@
 \title{The Finite Reservoir Quorum Process (FRQ)}
 \usage{
 FRQ(
-  parameterization = c("sv", "cv", "accel"),
+  parameterization = c("sv", "cv", "accel", "gamma", "power"),
   rate_sharing = c("independent", "shared")
 )
 }
@@ -13,7 +13,9 @@ FRQ(
 \item{parameterization}{Rate-variability and clock coordinates: \code{"sv"}
 (the default) samples the rate SD \emph{sv}; \code{"cv"} samples the rate CV
 \emph{cv} = \emph{sv}/\emph{v}; \code{"accel"} samples \emph{cv} and the clock acceleration
-\emph{accel} in place of \emph{clock}.}
+\emph{accel} in place of \emph{clock}; \code{"gamma"} samples the rate's
+variance-to-mean ratio \emph{gamma} = \emph{sv}^2/\emph{v}; \code{"power"} samples \emph{cv1} and
+\emph{cvpow}, with \emph{cv} = \emph{cv1} \emph{v}^(-\emph{cvpow}).}
 
 \item{rate_sharing}{\code{"independent"} (the default) draws the trial input-rate
 multiplier separately for each accumulator; \code{"shared"} draws one per trial
@@ -110,10 +112,48 @@ is \code{(1 + omega) * Y_1}. \code{omega > 0} requires \code{K >= 1}. For \code{
 \code{E}) is solved from \code{h = F(Inf)} by a bracketed root search. \code{omega} is
 available in every parameterization.
 
+\code{parameterization = "gamma"} samples \emph{gamma} = \emph{sv}^2/\emph{v} = \emph{cv}^2 \emph{v}, the
+variance-to-mean ratio of the trial input rate, in place of \emph{sv}:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{gamma} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{beta} = \emph{v}/\emph{gamma}, \emph{sv} = sqrt(\emph{gamma} \emph{v}) \tab Variance-to-mean ratio of the input rate \cr
+}
+
+
+At \code{clock = 0} and \code{h = 1} the law is that of a linear pure-birth counter
+whose event rate after \code{n} events is \code{v + gamma * n}
+(\code{Math/CounterAndQuorumModels.tex}), so \emph{gamma} is the
+excitation increment per event and \code{lambda = gamma}. A \emph{gamma} shared across
+accumulators holds that increment fixed while \emph{v} changes, so differences
+in \emph{v} change the shape of the finishing-time law and not only its scale; a
+shared \emph{cv} instead makes the increment proportional to \emph{v}. At other clocks
+\emph{gamma} is the rate's variance-to-mean ratio, without the excitation
+reading. \code{gamma = 0} is the same exact limit as \code{sv = 0}, and at equal
+values of \emph{sv} and sqrt(\emph{gamma} \emph{v}) the charts give the same likelihood.
+The gamma chart is not available with \code{rate_sharing = "shared"}, which needs
+one CV per trial.
+
+\code{parameterization = "power"} samples \emph{cv1}, the rate CV at \emph{v} = 1 event/s,
+in place of \emph{sv}, and an exponent \emph{cvpow}, with \code{cv = cv1 * v^(-cvpow)}:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Bounds} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{cv1} \tab log \tab [1e-4, Inf] or 0 \tab log(0) \tab \emph{cv} = \emph{cv1} \emph{v}^(-\emph{cvpow}) \tab Rate CV at \emph{v} = 1 \cr
+   \emph{cvpow} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab How the rate CV scales with \emph{v} \cr
+}
+
+
+The chart nests the others at fixed exponents: \code{cvpow = 0} is the cv chart
+(\emph{cv1} = \emph{cv}), \code{cvpow = 1/2} the gamma chart (\emph{cv1}^2 = \emph{gamma}) and
+\code{cvpow = 1} the sv chart (\emph{cv1} = \emph{sv}). At \code{clock = 0} and \code{h = 1} the
+excitation increment is \code{gamma = cv1^2 * v^(1 - 2 * cvpow)}, so \emph{cvpow}
+measures how that increment scales with the input rate across the
+accumulators and cells that share it. \emph{cv1} is a coefficient at
+\emph{v} = 1 and correlates with \emph{cvpow} when the rates are far from 1. The
+power chart is not available with \code{rate_sharing = "shared"}.
+
 \code{mapped_pars()} adds the derived columns \code{beta}, \code{p}, \code{lambda}, \code{Etot}
 (expected total evidence, \code{beta * p / (1 - p)}, or \code{E} at \code{sv = 0}; \code{Inf}
 at \code{h = 1}) and \code{cv} = \code{sv / v} (\code{sv} = \code{cv * v} under
-\code{parameterization = "cv"} or \code{"accel"}).
+\code{parameterization = "cv"} or \code{"accel"}; both \code{sv} and \code{cv} under
+\code{parameterization = "gamma"} or \code{"power"}).
 
 \code{rate_sharing = "shared"} draws one rate multiplier \code{W ~ Gamma(beta, 1)}
 per trial for all accumulators, in place of one per accumulator. Each
@@ -121,7 +161,7 @@ accumulator's marginal distribution is unchanged, so \code{cv} must be equal
 across the accumulators of a trial, and the parameterization must be \code{"cv"}
 or \code{"accel"}. Given \code{W} the accumulators race independently. The winner
 density is the independent density times
-\code{E[prod_l Q(K_l, G * psi_l)]}, with \code{G ~ Gamma(beta + K_w, 1)},
+\verb{E[prod_l Q(K_l, G * psi_l)]}, with \code{G ~ Gamma(beta + K_w, 1)},
 \code{psi_l = phi_l(u) * (1 - q_w(u))}, \code{phi = q / (1 - q)} and \code{Q} the
 regularized upper incomplete gamma function. With two accumulators this is
 the beta tail \code{I_(1/(1 + psi))(beta + K_w, K_l)}. With three accumulators,
@@ -161,6 +201,14 @@ design_FRQ_accel <- design(data = forstmann,
                                           accel ~ 1, h ~ 1, t0 ~ 1),
                            contrasts = list(v = list(lM = ADmat)),
                            constants = c(h = qnorm(1)))
+# The gamma parameterization: a shared excitation increment at clock = 0.
+design_FRQ_gamma <- design(data = forstmann,
+                           model = function() FRQ(parameterization = "gamma"),
+                           matchfun = matchfun,
+                           formula = list(K ~ 1, v ~ lM + E, gamma ~ 1,
+                                          h ~ 1, t0 ~ 1),
+                           contrasts = list(v = list(lM = ADmat)),
+                           constants = c(h = qnorm(1), clock = log(0)))
 # One shared trial rate.
 design_FRQ_shared <- design(data = forstmann,
                             model = function() FRQ(parameterization = "cv",

@@ -1,5 +1,5 @@
-# Gamma rate mixtures (Math/gamma_mixtures.tex) for OPR (ratio chart) and
-# RSUB (both evidence laws).  References integrate the fixed-rate kernels
+# Gamma rate mixtures (Math/gamma_mixtures.tex) for OPR (ratio chart, and the
+# trial gain of the background chart) and RSUB (both evidence laws).  References integrate the fixed-rate kernels
 # against the Gamma(1/cv^2, mean v) law of the trial rate by adaptive
 # quadrature between its quantiles.
 
@@ -72,6 +72,24 @@ test_that("RSUB mixtures match quadrature over the rate", {
   }
 })
 
+test_that("the background-chart gain matches quadrature over the gain", {
+  skip_on_cran()
+  cases <- list(c(3, 10, 4, .3), c(1.4, 4, 7, .8), c(2.6, 8, 0, .5))
+  for (cs in cases) {
+    K <- cs[1]; v <- cs[2]; lambda0 <- cs[3]; cv <- cs[4]
+    pars <- cbind(K = K, v = v, lambda0 = lambda0, t0 = 0, cv = cv)
+    for (x in K / v * c(.1, .5, 1, 2, 6)) {
+      info <- paste(c(cs, x), collapse = "/")
+      expect_equal(EMC2:::dOPR(x, pars),
+                   gm_ref(function(G) EMC2:::dopr(x, K, G * (v + lambda0), G * lambda0), 1, cv),
+                   tolerance = 1e-9, info = info)
+      expect_equal(EMC2:::pOPR(x, pars),
+                   gm_ref(function(G) EMC2:::popr(x, K, G * (v + lambda0), G * lambda0), 1, cv),
+                   tolerance = 1e-9, info = info)
+    }
+  }
+})
+
 test_that("small cv approaches the fixed rate", {
   u <- c(.1, .3, 1)
   expect_equal(EMC2:::popr_gamma(u, 3, 10, 1, 1e-3), EMC2:::popr(u, 3, 20, 10),
@@ -93,6 +111,14 @@ test_that("the simulators reproduce the mixture CDFs", {
     m <- if (cpp) n else 4000
     sim <- withr::with_options(list(emc2.cpp_rfun = cpp),
                                EMC2:::.rfun_OPR(lR[seq_len(m)], po[seq_len(m), ], 0L))
+    emp <- vapply(probe, function(x) mean(sim$rt <= x), 0)
+    expect_lt(max(abs(emp - th)), if (cpp) .015 else .03)
+  }
+  pb <- cbind(K = 2.6, v = 8, lambda0 = 5.6, t0 = .1, cv = .5)[rep(1, n), ]
+  for (cpp in c(TRUE, FALSE)) {
+    m <- if (cpp) n else 4000
+    sim <- withr::with_options(list(emc2.cpp_rfun = cpp),
+                               EMC2:::.rfun_OPR(lR[seq_len(m)], pb[seq_len(m), ], 2L))
     emp <- vapply(probe, function(x) mean(sim$rt <= x), 0)
     expect_lt(max(abs(emp - th)), if (cpp) .015 else .03)
   }
@@ -157,6 +183,16 @@ test_that("the compiled race likelihood uses the mixture kernels", {
   ref <- gm_ref_ll(fx$dadm, fx$pars,
     function(u, p) EMC2:::dopr_gamma(u, p["K"], p["v"], p["rho"], p["cv"]),
     function(u, p) EMC2:::popr_gamma(u, p["K"], p["v"], p["rho"], p["cv"],
+                                     lower_tail = FALSE))
+  expect_equal(fx$ll, ref, tolerance = 1e-8)
+  fx <- gm_fixture(function() OPR(parameterization = "background"),
+                   list(K ~ 1, v ~ lM, lambda0 ~ 1, t0 ~ 1, cv ~ lM),
+                   c(K = log(1.4), v = log(4), v_lMTRUE = .9, lambda0 = log(7),
+                     t0 = log(.15), cv = log(.4), cv_lMTRUE = -.3))
+  expect_true(all(fx$pars[, "cv"] > 0))
+  ref <- gm_ref_ll(fx$dadm, fx$pars,
+    function(u, p) EMC2:::dopr_gamma(u, p["K"], p["v"], p["lambda0"] / p["v"], p["cv"]),
+    function(u, p) EMC2:::popr_gamma(u, p["K"], p["v"], p["lambda0"] / p["v"], p["cv"],
                                      lower_tail = FALSE))
   expect_equal(fx$ll, ref, tolerance = 1e-8)
   for (packets in c(FALSE, TRUE)) {

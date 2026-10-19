@@ -123,7 +123,7 @@ NumericVector popr_gamma(NumericVector t, NumericVector K, NumericVector v,
 
 // ---------------------------------------------------------------------------
 // Race adapters.  Column layout (col_registry.h, emc2col::opr): K, the two
-// rate coordinates, t0, and the rate CV under the ratio chart.  ctx->opr_chart selects (v, rho), (lambda_p,
+// rate coordinates, t0, and the rate CV under the ratio and background charts.  ctx->opr_chart selects (v, rho), (lambda_p,
 // lambda_m) or (v, lambda0).  Every accumulator with lambda- > lambda+ is defective.
 // ---------------------------------------------------------------------------
 
@@ -132,9 +132,9 @@ static inline int opr_chart_of(void* ctx_) {
   return ctx != nullptr ? ctx->opr_chart : 0;
 }
 
-// The rate CV column exists under the ratio chart only; elsewhere it is zero.
+// The rate CV column is absent under the rates chart; there it is zero.
 static inline const double* opr_cv_col(const double* const* cols, int chart) {
-  return chart == 0 ? cols[emc2col::opr::cv] : nullptr;
+  return opr::chart_has_cv(chart) ? cols[emc2col::opr::cv] : nullptr;
 }
 
 // State for one row; null for an invalid row.
@@ -151,7 +151,7 @@ double dopr_scalar(double t, const double* par, void* ctx_) {
   const int chart = opr_chart_of(ctx_);
   opr::StateMemo memo(chart);
   const double t0 = par[emc2col::opr::t0];
-  const double cv = chart == 0 ? par[emc2col::opr::cv] : 0.0;
+  const double cv = opr::chart_has_cv(chart) ? par[emc2col::opr::cv] : 0.0;
   const opr::Acc* s = opr_state(memo, par[emc2col::opr::K],
                                 par[emc2col::opr::r1], par[emc2col::opr::r2], t0, cv);
   if (s == nullptr) return 0.0;
@@ -165,7 +165,7 @@ double popr_scalar(double t, const double* par, void* ctx_) {
   const int chart = opr_chart_of(ctx_);
   opr::StateMemo memo(chart);
   const double t0 = par[emc2col::opr::t0];
-  const double cv = chart == 0 ? par[emc2col::opr::cv] : 0.0;
+  const double cv = opr::chart_has_cv(chart) ? par[emc2col::opr::cv] : 0.0;
   const opr::Acc* s = opr_state(memo, par[emc2col::opr::K],
                                 par[emc2col::opr::r1], par[emc2col::opr::r2], t0, cv);
   if (s == nullptr) return 0.0;

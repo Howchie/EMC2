@@ -144,8 +144,11 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
 // ============================================================
 // FRQ (Finite Reservoir Quorum) adapters
 // Column layout: K=0, v=1, sv=2, h=3, t0=4, plo=5, clock=6; the cv chart
-// (FRQ_CV) holds the rate CV sv / v in column 2, and the accel chart
-// (FRQ_ACCEL) the rate CV in column 2 and the clock acceleration in column 6.
+// (FRQ_CV) holds the rate CV sv / v in column 2, the gamma chart (FRQ_GAMMA)
+// gamma = sv^2 / v in column 2, and the accel chart (FRQ_ACCEL) the rate CV in
+// column 2 and the clock acceleration in column 6.  The power chart (FRQ_POWER)
+// holds cv1 in column 2 and its exponent cvpow in column 7, with
+// cv = cv1 v^(-cvpow).
 // plo is the probability of the low-threshold state (zero by default) and
 // clock the registration clock shape (one by default, a constant-rate counter).
 //
@@ -158,16 +161,24 @@ NumericMatrix frq_rate(NumericVector K, NumericVector v, NumericVector sv,
 // and (v, clock), which is recomputed per row for the cost of one log.
 // ============================================================
 
-// Charts sharing the column layout: column 2 holds sv (FRQ_SV) or the rate CV
-// (FRQ_CV_CHART, FRQ_ACCEL_CHART), and column 6 holds the clock shape, or the
-// clock acceleration under the accel chart (whose clock shape is one).
-enum FrqChart : int { FRQ_SV = 0, FRQ_CV_CHART = 1, FRQ_ACCEL_CHART = 2 };
+// Charts sharing the column layout: column 2 holds sv (FRQ_SV), the rate CV
+// (FRQ_CV_CHART, FRQ_ACCEL_CHART), gamma = sv^2 / v (FRQ_GAMMA_CHART) or cv1
+// (FRQ_POWER_CHART), and column 6 holds the clock shape, or the clock
+// acceleration under the accel chart (whose clock shape is one).  The power
+// chart's exponent cvpow (column 7) reaches frq_memo_row as `pw`; the other
+// charts pass zero.
+enum FrqChart : int { FRQ_SV = 0, FRQ_CV_CHART = 1, FRQ_ACCEL_CHART = 2,
+                      FRQ_GAMMA_CHART = 3, FRQ_POWER_CHART = 4 };
 
 template <int CH>
 inline const FrqPars& frq_memo_row(FrqMemo& memo, double k, double v,
                                    double x, double h, double pl, double cu,
-                                   double om) {
+                                   double om, double pw = 0.0) {
   if (CH == FRQ_SV) return memo.get(k, v, x, h, pl, cu, om);
+  if (CH == FRQ_GAMMA_CHART)
+    return memo.get_cv(k, v, frq_gamma_cv(x, v), h, pl, cu, om);
+  if (CH == FRQ_POWER_CHART)
+    return memo.get_cv(k, v, frq_power_cv(x, v, pw), h, pl, cu, om);
   return memo.get_cv(k, v, x, h, pl, CH == FRQ_ACCEL_CHART ? 1.0 : cu, om);
 }
 
@@ -208,7 +219,8 @@ static inline const FrqPars& frq_scalar_row(const double* par, void* ctx_) {
   return frq_memo_row<CH>(memo, par[emc2col::frq::K], par[emc2col::frq::v],
                           par[emc2col::frq::sv], par[emc2col::frq::h],
                           par[emc2col::frq::plo], par[emc2col::frq::clock],
-                          io >= 0 ? par[io] : 0.0);
+                          io >= 0 ? par[io] : 0.0,
+                          CH == FRQ_POWER_CHART ? par[emc2col::frq_power::cvpow] : 0.0);
 }
 
 template <int CH>
@@ -249,6 +261,7 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const double* pw_ = CH == FRQ_POWER_CHART ? cols[emc2col::frq_power::cvpow] : nullptr;
   const int io = frq_omega_col(ctx_);
   const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
@@ -264,7 +277,8 @@ static void dfrq_raw_impl(const double* rt, const double* const* cols, int n_row
       continue;
     }
     const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0);
+                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0,
+                                        pw_ ? pw_[i] : 0.0);
     const double log_pdf = frq_chart_log_pdf<CH>(tt, s, cu_[i]);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -284,6 +298,7 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const double* pw_ = CH == FRQ_POWER_CHART ? cols[emc2col::frq_power::cvpow] : nullptr;
   const int io = frq_omega_col(ctx_);
   const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
@@ -297,7 +312,8 @@ static void pfrq_raw_impl(const double* rt, const double* const* cols, int n_row
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const FrqPars& s = frq_memo_row<CH>(memo, k_[i], v_[i], sv_[i], h_[i],
-                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0);
+                                        pl_[i], cu_[i], om_ ? om_[i] : 0.0,
+                                        pw_ ? pw_[i] : 0.0);
     const double log_surv = frq_chart_log_surv<CH>(tt, s, cu_[i]);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
@@ -317,6 +333,7 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
   const double* t0_ = cols[emc2col::frq::t0];
   const double* pl_ = cols[emc2col::frq::plo];
   const double* cu_ = cols[emc2col::frq::clock];
+  const double* pw_ = CH == FRQ_POWER_CHART ? cols[emc2col::frq_power::cvpow] : nullptr;
   const int io = frq_omega_col(ctx_);
   const double* om_ = io >= 0 ? cols[io] : nullptr;
   FrqMemo memo(frq_cache_from_context(ctx_));
@@ -333,7 +350,8 @@ static void frq_logS_at_t_impl(double t, const double* const* cols, int n_lR,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const FrqPars& s = frq_memo_row<CH>(memo, k_[r], v_[r], sv_[r], h_[r],
-                                          pl_[r], cu_[r], om_ ? om_[r] : 0.0);
+                                          pl_[r], cu_[r], om_ ? om_[r] : 0.0,
+                                        pw_ ? pw_[r] : 0.0);
       const double log_surv = !R_FINITE(t)
         ? (s.ok ? frq_chart_log_surv<CH>(R_PosInf, s, cu_[r]) : R_NaN)
         : frq_chart_log_surv<CH>(tt, s, cu_[r]);
@@ -390,6 +408,54 @@ void frq_cv_logS_at_t(double t, const double* const* cols,
                       const int* isok_all, void* ctx_, double* logS_out) {
   frq_logS_at_t_impl<FRQ_CV_CHART>(t, cols, n_lR, trunc_mask, n_unique_trials,
                            isok_all, ctx_, logS_out);
+}
+
+double dfrq_gamma_scalar(double t, const double* par, void* ctx_) {
+  return dfrq_scalar_impl<FRQ_GAMMA_CHART>(t, par, ctx_);
+}
+double pfrq_gamma_scalar(double t, const double* par, void* ctx_) {
+  return pfrq_scalar_impl<FRQ_GAMMA_CHART>(t, par, ctx_);
+}
+void dfrq_gamma_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  dfrq_raw_impl<FRQ_GAMMA_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void pfrq_gamma_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  pfrq_raw_impl<FRQ_GAMMA_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void frq_gamma_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* ctx_, double* logS_out) {
+  frq_logS_at_t_impl<FRQ_GAMMA_CHART>(t, cols, n_lR, trunc_mask, n_unique_trials,
+                                      isok_all, ctx_, logS_out);
+}
+
+double dfrq_power_scalar(double t, const double* par, void* ctx_) {
+  return dfrq_scalar_impl<FRQ_POWER_CHART>(t, par, ctx_);
+}
+double pfrq_power_scalar(double t, const double* par, void* ctx_) {
+  return pfrq_scalar_impl<FRQ_POWER_CHART>(t, par, ctx_);
+}
+void dfrq_power_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  dfrq_raw_impl<FRQ_POWER_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void pfrq_power_raw(const double* rt, const double* const* cols, int n_rows,
+                    const int* mask, const int* isok,
+                    double* out, double min_ll, void* ctx_) {
+  pfrq_raw_impl<FRQ_POWER_CHART>(rt, cols, n_rows, mask, isok, out, min_ll, ctx_);
+}
+void frq_power_logS_at_t(double t, const double* const* cols,
+                         int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                         const int* trunc_mask, int n_unique_trials,
+                         const int* isok_all, void* ctx_, double* logS_out) {
+  frq_logS_at_t_impl<FRQ_POWER_CHART>(t, cols, n_lR, trunc_mask, n_unique_trials,
+                                      isok_all, ctx_, logS_out);
 }
 
 double dfrq_accel_scalar(double t, const double* par, void* ctx_) {
