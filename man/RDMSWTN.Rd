@@ -148,11 +148,12 @@ With \code{drift_dist = "gamma"} the between-trial drift is instead
 \code{V ~ Gamma(shape = k, rate = tau)} with \code{k = (v/sv)^2} and \code{tau = v/sv^2},
 so \code{v} and \code{sv} are the mean and SD of the drift law (the mean/variance
 chart of Steingroever, Wabersich and Wagenmakers, 2021). The gamma chart
-supports the point-start, clock-free model only: its parameters are \code{v},
-\code{B} (the threshold, \code{b = B}), \code{t0}, \code{s} and \code{sv}, with \code{A}, \code{mG}, \code{mK}
-absent, and \code{erlang_type}, \code{erlang_shape}, \code{posdrift = FALSE} and
-\code{correlated = TRUE} are rejected. \code{sv = 0} is the Wald accumulator. The
-compiled model name is \code{RDMSWTN_GDRIFT}.
+supports the clock-free model only: its parameters are \code{v}, \code{B}, \code{A}
+(start point uniform on \verb{[0, A]}, threshold \code{b = B + A}; default \code{A = 0}),
+\code{t0}, \code{s} and \code{sv}, with \code{mG}, \code{mK} absent, and \code{erlang_type},
+\code{erlang_shape}, \code{posdrift = FALSE} and \code{correlated = TRUE} are rejected.
+\code{sv = 0} is the Wald accumulator. The start-point average is evaluated in
+closed form. The compiled model name is \code{RDMSWTN_GDRIFT}.
 }
 \references{
 Steingroever, H., Wabersich, D., & Wagenmakers, E.-J. (2021).

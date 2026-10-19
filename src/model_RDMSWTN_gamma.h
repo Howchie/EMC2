@@ -17,10 +17,11 @@ void rdmswtn_gdrift_logS_at_t(double t, const double* const* cols,
                               const int* trunc_mask, int n_unique_trials,
                               const int* isok_all, void* ctx_, double* logS_out);
 
-// Decision-time log density / CDF / survivor (t already net of t0).
-double gdrift_log_density(double t, double v, double b, double s, double sv,
+// Decision-time log density / CDF / survivor (t already net of t0).  The
+// distance to threshold is uniform on [B, B + A].
+double gdrift_log_density(double t, double v, double B, double A, double s, double sv,
                           double lf_floor = R_NegInf);
-double gdrift_log_cdf(double t, double v, double b, double s, double sv);
-double gdrift_log_surv(double t, double v, double b, double s, double sv);
+double gdrift_log_cdf(double t, double v, double B, double A, double s, double sv);
+double gdrift_log_surv(double t, double v, double B, double A, double s, double sv);
 
 #endif

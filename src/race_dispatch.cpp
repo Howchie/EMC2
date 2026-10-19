@@ -165,7 +165,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     else if (type_std.find("_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
   } else if (type_std.find("RDMSWTN_GDRIFT") != std::string::npos) {
-    // Gamma drift law: its own kernels and column contract (no A, no clocks;
+    // Gamma drift law: its own kernels and column contract (no clocks;
     // RDMSWTN() refuses those combinations).  Proper: the drift is positive.
     out.pdf1_ptr       = &drdmswtn_gdrift_scalar;
     out.cdf1_ptr       = &prdmswtn_gdrift_scalar;

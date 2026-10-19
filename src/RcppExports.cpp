@@ -2151,37 +2151,39 @@ BEGIN_RCPP
 END_RCPP
 }
 // dRDMSWTN_gdrift_cpp
-Rcpp::NumericVector dRDMSWTN_gdrift_cpp(Rcpp::NumericVector t, Rcpp::NumericVector v, Rcpp::NumericVector B, Rcpp::NumericVector t0, Rcpp::NumericVector s, Rcpp::NumericVector sv, bool log_out);
-RcppExport SEXP _EMC2_dRDMSWTN_gdrift_cpp(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP t0SEXP, SEXP sSEXP, SEXP svSEXP, SEXP log_outSEXP) {
+Rcpp::NumericVector dRDMSWTN_gdrift_cpp(Rcpp::NumericVector t, Rcpp::NumericVector v, Rcpp::NumericVector B, Rcpp::NumericVector A, Rcpp::NumericVector t0, Rcpp::NumericVector s, Rcpp::NumericVector sv, bool log_out);
+RcppExport SEXP _EMC2_dRDMSWTN_gdrift_cpp(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP svSEXP, SEXP log_outSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t(tSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type v(vSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type A(ASEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dRDMSWTN_gdrift_cpp(t, v, B, t0, s, sv, log_out));
+    rcpp_result_gen = Rcpp::wrap(dRDMSWTN_gdrift_cpp(t, v, B, A, t0, s, sv, log_out));
     return rcpp_result_gen;
 END_RCPP
 }
 // pRDMSWTN_gdrift_cpp
-Rcpp::NumericVector pRDMSWTN_gdrift_cpp(Rcpp::NumericVector t, Rcpp::NumericVector v, Rcpp::NumericVector B, Rcpp::NumericVector t0, Rcpp::NumericVector s, Rcpp::NumericVector sv, bool log_out, bool lower_tail);
-RcppExport SEXP _EMC2_pRDMSWTN_gdrift_cpp(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP t0SEXP, SEXP sSEXP, SEXP svSEXP, SEXP log_outSEXP, SEXP lower_tailSEXP) {
+Rcpp::NumericVector pRDMSWTN_gdrift_cpp(Rcpp::NumericVector t, Rcpp::NumericVector v, Rcpp::NumericVector B, Rcpp::NumericVector A, Rcpp::NumericVector t0, Rcpp::NumericVector s, Rcpp::NumericVector sv, bool log_out, bool lower_tail);
+RcppExport SEXP _EMC2_pRDMSWTN_gdrift_cpp(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP svSEXP, SEXP log_outSEXP, SEXP lower_tailSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t(tSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type v(vSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type A(ASEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
-    rcpp_result_gen = Rcpp::wrap(pRDMSWTN_gdrift_cpp(t, v, B, t0, s, sv, log_out, lower_tail));
+    rcpp_result_gen = Rcpp::wrap(pRDMSWTN_gdrift_cpp(t, v, B, A, t0, s, sv, log_out, lower_tail));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4031,8 +4033,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 15},
     {"_EMC2_dRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_clock_cpp, 11},
     {"_EMC2_pRDMSWTN_clock_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_clock_cpp, 11},
-    {"_EMC2_dRDMSWTN_gdrift_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_gdrift_cpp, 7},
-    {"_EMC2_pRDMSWTN_gdrift_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_gdrift_cpp, 8},
+    {"_EMC2_dRDMSWTN_gdrift_cpp", (DL_FUNC) &_EMC2_dRDMSWTN_gdrift_cpp, 8},
+    {"_EMC2_pRDMSWTN_gdrift_cpp", (DL_FUNC) &_EMC2_pRDMSWTN_gdrift_cpp, 9},
     {"_EMC2_drsub", (DL_FUNC) &_EMC2_drsub, 8},
     {"_EMC2_prsub", (DL_FUNC) &_EMC2_prsub, 9},
     {"_EMC2_ss_exg_stop_success_value", (DL_FUNC) &_EMC2_ss_exg_stop_success_value, 8},

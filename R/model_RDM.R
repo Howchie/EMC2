@@ -829,11 +829,12 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' `V ~ Gamma(shape = k, rate = tau)` with `k = (v/sv)^2` and `tau = v/sv^2`,
 #' so `v` and `sv` are the mean and SD of the drift law (the mean/variance
 #' chart of Steingroever, Wabersich and Wagenmakers, 2021). The gamma chart
-#' supports the point-start, clock-free model only: its parameters are `v`,
-#' `B` (the threshold, `b = B`), `t0`, `s` and `sv`, with `A`, `mG`, `mK`
-#' absent, and `erlang_type`, `erlang_shape`, `posdrift = FALSE` and
-#' `correlated = TRUE` are rejected. `sv = 0` is the Wald accumulator. The
-#' compiled model name is `RDMSWTN_GDRIFT`.
+#' supports the clock-free model only: its parameters are `v`, `B`, `A`
+#' (start point uniform on `[0, A]`, threshold `b = B + A`; default `A = 0`),
+#' `t0`, `s` and `sv`, with `mG`, `mK` absent, and `erlang_type`,
+#' `erlang_shape`, `posdrift = FALSE` and `correlated = TRUE` are rejected.
+#' `sv = 0` is the Wald accumulator. The start-point average is evaluated in
+#' closed form. The compiled model name is `RDMSWTN_GDRIFT`.
 #'
 #' @param correlate What `rho` correlates when `correlated = TRUE`: `"times"`
 #'   (default) for a Gaussian copula on the two participating finishing times,
@@ -1012,13 +1013,14 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
 }
 
 # RDMSWTN with a Gamma(k, rate tau) drift law, k = (v/sv)^2, tau = v/sv^2:
-# point start (b = B), no clocks.  Kernels: src/rdmswtn_gamma.h.
+# start uniform on [0, A] below b = B + A, no clocks.  Kernels:
+# src/rdmswtn_gamma.h (point start) and src/rdmswtn_gamma_A.h (A > 0).
 .RDMSWTN_gdrift <- function() {
-  p_types <- c(v = log(1), B = log(1), t0 = log(0), s = log(1), sv = log(0))
-  transform <- c(v = "exp", B = "exp", t0 = "exp", s = "exp", sv = "exp")
-  minmax <- cbind(v = c(1e-3, Inf), B = c(0, Inf), t0 = c(0.05, Inf),
+  p_types <- c(v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1), sv = log(0))
+  transform <- c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", sv = "exp")
+  minmax <- cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf), t0 = c(0.05, Inf),
                   s = c(0, Inf), sv = c(0, Inf))
-  exception <- c(sv = 0, t0 = 0)
+  exception <- c(A = 0, sv = 0, t0 = 0)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   list(
     type = "RACE",
@@ -1028,7 +1030,7 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
     p_types_canonical = names(p_types),
     transform = list(func = .nuis$transform),
     bound = list(minmax = .nuis$minmax, exception = .nuis$exception),
-    Ttransform = function(pars, dadm) cbind(pars, b = pars[, "B"]),
+    Ttransform = function(pars, dadm) cbind(pars, b = pars[, "B"] + pars[, "A"]),
     rfun = function(data = NULL, pars) {
       ok <- attr(pars, "ok")
       if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
@@ -1044,20 +1046,21 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
 
 .gdrift_cols <- function(pars) {
   s <- if ("s" %in% colnames(pars)) pars[, "s"] else rep(1, nrow(pars))
-  b <- if ("B" %in% colnames(pars)) pars[, "B"] else pars[, "b"]
-  list(v = pars[, "v"], b = b, t0 = pars[, "t0"], s = s, sv = pars[, "sv"])
+  A <- if ("A" %in% colnames(pars)) pars[, "A"] else rep(0, nrow(pars))
+  B <- if ("B" %in% colnames(pars)) pars[, "B"] else pars[, "b"] - A
+  list(v = pars[, "v"], B = B, A = A, t0 = pars[, "t0"], s = s, sv = pars[, "sv"])
 }
 
 dRDMSWTN_gdrift <- function(rt, pars) {
   p <- .gdrift_cols(pars)
-  out <- dRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$b, p$t0, p$s, p$sv)
+  out <- dRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$B, p$A, p$t0, p$s, p$sv)
   out[is.na(out)] <- 0
   out
 }
 
 pRDMSWTN_gdrift <- function(rt, pars) {
   p <- .gdrift_cols(pars)
-  out <- pRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$b, p$t0, p$s, p$sv)
+  out <- pRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$B, p$A, p$t0, p$s, p$sv)
   out[is.na(out)] <- 0
   out
 }
@@ -1072,7 +1075,7 @@ rRDMSWTN_gdrift <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
   vary <- is.finite(sv) & sv > 1e-10 * v
   V <- v
   V[vary] <- rgamma(sum(vary), shape = (v[vary] / sv[vary])^2, rate = v[vary] / sv[vary]^2)
-  dt[ok] <- rWald(sum(ok), B = pmax(p$b[ok], 0), v = V, A = rep(0, sum(ok)), s = p$s[ok]) + p$t0[ok]
+  dt[ok] <- rWald(sum(ok), B = pmax(p$B[ok], 0), v = V, A = pmax(p$A[ok], 0), s = p$s[ok]) + p$t0[ok]
   bad_col <- colSums(!is.infinite(dt)) == 0
   R <- max.col(-t(dt), ties.method = "first")
   rt <- dt[cbind(R, seq_len(n_trials))]

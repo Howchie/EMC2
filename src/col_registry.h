@@ -578,11 +578,11 @@ namespace rdmswtn_ut {
 }
 
 // R/model_RDM.R — RDMSWTN(drift_dist = "gamma"): Gamma drift with mean v and
-// SD sv, point start (no A) and no clocks.
+// SD sv, start uniform on [B, B + A] in distance, and no clocks.
 namespace rdmswtn_gamma {
-  enum : int { v = 0, B, t0, s, sv, N_REQ };
+  enum : int { v = 0, B, A, t0, s, sv, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "B", "t0", "s", "sv"};
+    static const char* n[] = {"v", "B", "A", "t0", "s", "sv"};
     return {n, N_REQ, "RDMSWTN_GDRIFT"};
   }
 }
