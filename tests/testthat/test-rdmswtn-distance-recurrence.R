@@ -146,3 +146,31 @@ test_that("clocks compose with the no-clock CDF, survivor and density", {
     expect_abs(lf_k, lfD + lSG, 1e-12)
   }
 })
+
+test_that("small diffusion coefficients average the fixed-distance values", {
+  # Where H's stiffness would set the recurrence step, the distance average is
+  # integrated over the fixed-distance (A = 0) values instead.
+  avg <- function(x, lower_tail) {
+    f <- function(d) {
+      exp(EMC2:::pSWTNspv(rep(x$t, length(d)), x$mu, d, 0, x$s, 0, x$sv,
+                          log_out = TRUE, posdrift = x$pos, lower_tail = lower_tail))
+    }
+    stats::integrate(f, x$b - x$A, x$b, rel.tol = 1e-12, subdivisions = 2000L)$value / x$A
+  }
+  cases <- expand.grid(s = c(0.05, 0.02, 0.01), t = c(0.4, 1.5), mu = c(0.5, 2),
+                       sv = 0.3, b = 1.5, A = 0.8, pos = TRUE)
+  for (i in seq_len(nrow(cases))) {
+    x <- cases[i, ]
+    lF <- swtn_log_p(x)
+    lS <- swtn_log_p(x, FALSE)
+    expect_equal(exp(lF), avg(x, TRUE), tolerance = 1e-9, label = paste("F, case", i))
+    expect_equal(exp(lS), avg(x, FALSE), tolerance = 1e-9, label = paste("S, case", i))
+    expect_equal(exp(lF) + exp(lS), 1, tolerance = 1e-12)
+  }
+  # The two routes agree with the reference on both sides of the switch.
+  x <- cases[1, ]
+  for (s in exp(seq(log(0.05), log(0.2), length.out = 13))) {
+    x$s <- s
+    expect_abs(swtn_log_p(x), log(avg(x, TRUE)), 1e-11, label = paste("log F, s", s))
+  }
+})

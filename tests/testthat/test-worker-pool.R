@@ -1175,3 +1175,14 @@ test_that("growing the pool keeps the completion channel", {
   expect_identical(grown$done, pool$done)
   pool <- grown
 })
+
+test_that("a worker past the deadline counts as lost only when idle", {
+  skip_on_os("windows")
+  skip_if(!dir.exists("/proc"))
+  busy <- parallel::mcparallel({ x <- 0; for (i in 1:5e8) x <- x + 1; x })
+  idle <- parallel::mcparallel(Sys.sleep(10))
+  on.exit(tools::pskill(c(busy$pid, idle$pid)), add = TRUE)
+  expect_true(EMC2:::.emc_wpool_busy(busy$pid, probe = 0.5))
+  expect_false(EMC2:::.emc_wpool_busy(idle$pid, probe = 0.5))
+  expect_false(EMC2:::.emc_wpool_busy(NA_integer_))
+})

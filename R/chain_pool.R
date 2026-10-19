@@ -47,7 +47,8 @@
   invisible(NULL)
 }
 
-.emc_wpool_get_bytes <- function(con, n, deadline = NULL, alive = NULL) {
+.emc_wpool_get_bytes <- function(con, n, deadline = NULL, alive = NULL,
+                                 busy = NULL) {
   if (n <= 0) return(raw(0))
   out <- raw(n)
   got <- 0
@@ -83,6 +84,10 @@
         return(NULL)
       }
       if (proc.time()[["elapsed"]] - started > deadline) {
+        if (is.function(busy) && busy()) {
+          started <- proc.time()[["elapsed"]]
+          next
+        }
         .emc_wpool_transport_fail(sprintf(
           "no %s within %.0f s", if (got == 0) "reply" else "rest of the reply",
           deadline))
@@ -105,7 +110,47 @@
 .emc_wpool_reply <- function(pool, w, deadline = NULL) {
   if (is.null(deadline)) deadline <- .emc_wpool_deadline()
   .emc_wpool_recv(pool$rcs[[w]], deadline = deadline,
-                  alive = .emc_wpool_alive_fn(pool, w))
+                  alive = .emc_wpool_alive_fn(pool, w),
+                  busy = .emc_wpool_busy_fn(pool, w))
+}
+
+.emc_wpool_busy_fn <- function(pool, w) {
+  job <- if (!is.null(pool$jobs) && w <= length(pool$jobs)) pool$jobs[[w]] else NULL
+  if (is.null(job)) return(NULL)
+  function() .emc_wpool_busy(.emc_wpool_job_pid(job))
+}
+
+# CPU ticks (user + system) a process has used, from /proc; NA where /proc is
+# unavailable or the process is gone.
+.emc_wpool_cpu_ticks <- function(pid) {
+  if (length(pid) != 1L || is.na(pid) || !dir.exists("/proc")) return(NA_real_)
+  stat <- suppressWarnings(
+    tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
+             error = function(e) character()))
+  if (!length(stat)) return(NA_real_)
+  # Fields after "(comm) " start at the state (field 3): utime and stime are
+  # fields 14 and 15.
+  f <- strsplit(sub("^.*\\) ", "", stat), " ", fixed = TRUE)[[1L]]
+  if (length(f) < 13L) return(NA_real_)
+  sum(suppressWarnings(as.numeric(f[12:13])))
+}
+
+# A worker past the reply deadline whose CPU time still advances over a short
+# probe is computing (slow, not lost); one that is alive but idle is stuck.
+.emc_wpool_busy <- function(pids, probe = 1) {
+  pids <- pids[!is.na(pids)]
+  if (!length(pids)) return(FALSE)
+  t0 <- vapply(pids, .emc_wpool_cpu_ticks, numeric(1))
+  if (!any(is.finite(t0))) return(FALSE)
+  Sys.sleep(probe)
+  t1 <- vapply(pids, .emc_wpool_cpu_ticks, numeric(1))
+  busy <- any(is.finite(t0) & is.finite(t1) & t1 > t0)
+  if (busy) {
+    .emc_pool_state$slow_waits <-
+      (if (is.null(.emc_pool_state$slow_waits)) 0L
+       else .emc_pool_state$slow_waits) + 1L
+  }
+  busy
 }
 
 .emc_wpool_alive_fn <- function(pool, w) {
@@ -137,10 +182,10 @@
   }, error = function(e) .emc_wpool_transport_fail(conditionMessage(e)))
 }
 
-.emc_wpool_recv <- function(con, deadline = NULL, alive = NULL) {
+.emc_wpool_recv <- function(con, deadline = NULL, alive = NULL, busy = NULL) {
   parts <- list()
   repeat {
-    header <- .emc_wpool_get_bytes(con, 8, deadline, alive)
+    header <- .emc_wpool_get_bytes(con, 8, deadline, alive, busy)
     if (is.null(header)) return(NULL)
     n <- readBin(header, "double", 1L, size = 8, endian = "little")
     more <- is.finite(n) && n < 0
@@ -149,7 +194,7 @@
       .emc_wpool_transport_fail("implausible message length on the pipe")
       return(NULL)
     }
-    payload <- .emc_wpool_get_bytes(con, n, deadline, alive)
+    payload <- .emc_wpool_get_bytes(con, n, deadline, alive, busy)
     if (is.null(payload)) return(NULL)
     if (!length(parts) && !more) {
       parts <- list(payload)
@@ -282,7 +327,12 @@
       }
       if (!is.null(deadline) &&
           proc.time()[["elapsed"]] - started > deadline) {
-        return(list(code = "timeout"))
+        pids <- vapply(pending(), function(w) {
+          pid <- .emc_wpool_job_pid(pool$jobs[[w]])
+          if (is.null(pid)) NA_integer_ else as.integer(pid)
+        }, integer(1))
+        if (!.emc_wpool_busy(pids)) return(list(code = "timeout"))
+        started <- proc.time()[["elapsed"]]
       }
     }
     if (idle > 16L) { Sys.sleep(wait); wait <- min(max(wait * 2, 5e-5), 2e-3) }

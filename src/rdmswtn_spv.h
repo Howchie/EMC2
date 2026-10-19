@@ -716,11 +716,128 @@ inline double integral_S(const Law& L, double r_lo, double r_hi) {
   }
 }
 
+// ---- fixed-distance values and distance quadrature --------------------------
+
+// log F and log S at a single distance r (the A = 0 law), from the closed-form
+// initial values.  The survivor is S = (U - H)/Z when it is the small side
+// (U > Z/2 whenever S > 1/2, so a misjudged proxy costs at most a factor two),
+// otherwise 1 - (T + H)/Z; the full-Gaussian F at r decides which.
+inline double point_log_F(const Law& L, double r) {
+  return std::fmin(log_sum_exp(seed_log_T(L, r), seed_log_H(L, r)) - L.logZ, 0.0);
+}
+
+inline double point_log_S(const Law& L, double r) {
+  auto from_cdf = [](double lF) {
+    if (ISNAN(lF)) return lF;
+    return (lF >= 0.0) ? R_NegInf : log1m_exp(lF);
+  };
+  const double h1 = (L.mut - r) / L.S;
+  const double ell = 2.0 * r * L.mu / L.s2 + 2.0 * r * r * L.sv2 / (L.s2 * L.s2);
+  const double h2 = (-(L.mu + 2.0 * r * L.sv2 / L.s2) * L.t - r) / L.S;
+  const double proxy = log_sum_exp(log_Phi(h1), ell + log_Phi(h2));
+  const double lH = seed_log_H(L, r);
+  if (proxy > -M_LN2) {
+    const double lU = seed_log_U(L, r);
+    if (lU > lH) return std::fmin(log_diff_exp(lU, lH) - L.logZ, 0.0);
+    return from_cdf(log_sum_exp(seed_log_T(L, r), lH) - L.logZ);
+  }
+  const double lF = log_sum_exp(seed_log_T(L, r), lH) - L.logZ;
+  if (!(lF > -M_LN2)) return from_cdf(lF);
+  const double lU = seed_log_U(L, r);
+  if (lU > lH) return std::fmin(log_diff_exp(lU, lH) - L.logZ, 0.0);
+  return from_cdf(lF);
+}
+
+// The recurrence's step is bounded by kStiffBudget / (a + beta r): H's
+// homogeneous mode is stiff although H itself varies on the scale S.  When
+// that bound, rather than the Gaussian factors, would set the step count, the
+// distance average is instead integrated over the fixed-distance values,
+// which are smooth on the scale S.
+constexpr double kQuadSwitch = 30.0;  // stiff steps per unit of span / S
+constexpr double kQuadTol    = 1e-11; // |K15 - G7| relative to the running integral
+constexpr int    kQuadMaxPanels = 4000;
+// Narrowest panel, in units of S: below it a panel is accepted at whatever
+// error the fixed-distance values allow (they lose digits as rho -> 1).
+constexpr double kQuadMinPanel = 1e-3;
+
+inline bool quad_preferred(const Law& L, double r_hi) {
+  const double stiff = L.a + L.beta * r_hi;
+  return stiff * L.S > kQuadSwitch * kStiffBudget;
+}
+
+// log of the integral of exp(f) over [r_lo, r_hi] for f monotone in r
+// (decreasing: the mass sits at r_lo).  Gauss-Kronrod 7-15 panels march away
+// from the dominant end; monotonicity bounds what is left by the integrand at
+// the current position times the remaining length, which ends the march.
+template <class F>
+inline double quad_log_integral(F f, double r_lo, double r_hi, bool decreasing,
+                                double width) {
+  static const double xk[8] = {0.991455371120812639206854697526329,
+                               0.949107912342758524526189684047851,
+                               0.864864423359769072789712788640926,
+                               0.741531185599394439863864773280788,
+                               0.586087235467691130294144845693013,
+                               0.405845151377397166906606412076961,
+                               0.207784955007898467600689403773245,
+                               0.000000000000000000000000000000000};
+  static const double wk[8] = {0.022935322010529224963732008058970,
+                               0.063092092629978553290700663189204,
+                               0.104790010322250183839876322541518,
+                               0.140653259715525918745189590510238,
+                               0.169004726639267902826583426598550,
+                               0.190350578064785409913256402421014,
+                               0.204432940075298892414161999234649,
+                               0.209482141084727828012999174891714};
+  static const double wg[4] = {0.129484966168869693270611432679082,
+                               0.279705391489276667901467771423780,
+                               0.381830050505118944950369775488975,
+                               0.417959183673469387755102040816327};
+  const double dir = decreasing ? 1.0 : -1.0;
+  double r0 = decreasing ? r_lo : r_hi;
+  const double r_end = decreasing ? r_hi : r_lo;
+  const double f0 = f(r0);
+  if (ISNAN(f0)) return R_NaN;
+  if (f0 == R_NegInf) return R_NegInf;
+  double acc = 0.0, w = std::min(width, dir * (r_end - r0));
+  for (int panel = 0; panel < kQuadMaxPanels; ++panel) {
+    const double rem = dir * (r_end - r0);
+    if (!(rem > 1e-15 * (1.0 + std::fabs(r_end)))) return f0 + std::log(acc);
+    w = std::min(w, rem);
+    const double half = 0.5 * w, mid = r0 + dir * half;
+    double fc[15];
+    fc[7] = std::exp(f(mid) - f0);
+    for (int j = 0; j < 7; ++j) {
+      fc[j] = std::exp(f(mid - half * xk[j]) - f0);
+      fc[14 - j] = std::exp(f(mid + half * xk[j]) - f0);
+    }
+    double k15 = wk[7] * fc[7], g7 = wg[3] * fc[7];
+    for (int j = 0; j < 7; ++j) {
+      k15 += wk[j] * (fc[j] + fc[14 - j]);
+      if (j % 2 == 1) g7 += wg[j / 2] * (fc[j] + fc[14 - j]);
+    }
+    k15 *= half;
+    g7 *= half;
+    if (ISNAN(k15)) return R_NaN;
+    const double err = std::fabs(k15 - g7);
+    if (err > kQuadTol * (acc + k15) && w > kQuadMinPanel * width) {
+      w *= 0.5;
+      continue;
+    }
+    acc += k15;
+    r0 += dir * w;
+    if (err < 1e-3 * kQuadTol * (acc + k15)) w *= 2.0;
+    const double f_at = f(r0);
+    if (ISNAN(f_at)) return R_NaN;
+    if (f_at - f0 + std::log(dir * (r_end - r0)) <= std::log(kSkipTol * acc))
+      return f0 + std::log(acc);
+  }
+  return R_NaN;
+}
+
 // log of the integral of d J(d) over [r_lo, r_hi]; the decision density
 // averaged over the distance range is that integral / (A t Z).  d J(d) is
-// log-concave for d > 0, so the range is split at its mode and each part is
-// integrated towards the mode, along which the integrand grows.  J and K are
-// re-seeded in closed form at the start of every step.
+// log-concave for d > 0 and closed form, so the range is split at its mode and
+// each part is integrated by quadrature from the mode outwards.
 inline double integral_dJ(const Law& L, double r_lo, double r_hi) {
   auto slope = [&](double r, double& d_slope) {
     const double w = w_of(L, r);
@@ -752,54 +869,18 @@ inline double integral_dJ(const Law& L, double r_lo, double r_hi) {
     r_mode = r;
   }
 
-  auto part = [&](double r_from, double r_to) {
-    const double dir = (r_to >= r_from) ? 1.0 : -1.0;
-    double r0 = r_from, logI = R_NegInf;
-    for (int step = 0; step < kMaxSteps; ++step) {
-      const double rem = dir * (r_to - r0);
-      if (!(rem > 1e-15 * (1.0 + std::fabs(r_to)))) break;
-      const Aux ax = aux_at(L, r0);
-      if (ax.lJ == R_NegInf) return R_NegInf;
-      const double lwK = L.pos ? ax.lK - ax.lJ + std::log(L.u * L.S2) : R_NegInf;
-      const FactorPlan pJ = plan_factor(0.0, ax.rJ, 1.0 / L.S2, dir);
-      const FactorPlan pK = plan_factor(lwK, ax.rK, 1.0 / L.S2 + L.u * L.u, dir);
-      double habs = std::min({rem, pJ.hmax, pK.hmax});
-      if (!(habs > 0.0)) return R_NaN;
-      bool done = false;
-      for (int attempt = 0; attempt < 40 && !done; ++attempt) {
-        const double h = dir * habs;
-        const double K0 = (habs > pK.h_inactive) ? std::exp(ax.lK - ax.lJ) : 0.0;
-        const double l0 = h * ax.rG, l1 = -h * h / L.S2;
-        const double hu = h * L.u;
-        const double m0 = l0 - hu * ax.w0, m1 = l1 - hu * hu;
-        const double wK = habs * habs * L.u * (std::fabs(r0) + habs);
-        const int nmin = static_cast<int>(std::ceil(std::max(std::fabs(l0), std::fabs(m0)))) + 3;
-        double Jn = 1.0, Kn = K0, Jp = 0.0, Kp = 0.0;
-        double sum = r0 + 0.5 * h;
-        int quiet = 0;
-        for (int n = 0; n < kMaxTerms; ++n) {
-          const double inv = 1.0 / (n + 1);
-          const double nJ = (l0 * Jn + l1 * Jp + hu * Kn) * inv;
-          const double nK = (m0 * Kn + m1 * Kp) * inv;
-          Jp = Jn; Kp = Kn; Jn = nJ; Kn = nK;
-          sum += Jn * (r0 / (n + 2) + h / (n + 3));
-          const double mag = std::fabs(Jn) * (std::fabs(r0) + habs) + wK * std::fabs(Kn);
-          if (n + 1 >= nmin && mag <= kTermTol * std::fabs(sum)) {
-            if (++quiet >= 2) { done = true; break; }
-          } else {
-            quiet = 0;
-          }
-        }
-        if (!done) { habs *= 0.5; continue; }
-        if (!(sum > 0.0)) return R_NaN;
-        logI = log_sum_exp(logI, ax.lJ + std::log(habs * sum));
-        r0 += h;
-      }
-      if (!done) return R_NaN;
-    }
-    return logI;
+  // Each side of the mode is monotone and integrated from the mode outwards,
+  // on the width of the Gaussian factors (the drift-truncation edge adds the
+  // curvature u^2).
+  auto f = [&](double r) {
+    const double lJ = log_G(L, r) + (L.pos ? log_Phi(w_of(L, r)) : 0.0);
+    return std::log(r) + lJ;
   };
-  return log_sum_exp(part(r_lo, r_mode), part(r_hi, r_mode));
+  const double width = 1.0 / std::sqrt(1.0 / L.S2 + (L.pos ? L.u * L.u : 0.0));
+  const double left = (r_mode > r_lo) ? quad_log_integral(f, r_lo, r_mode, false, width) : R_NegInf;
+  const double right = (r_hi > r_mode) ? quad_log_integral(f, r_mode, r_hi, true, width) : R_NegInf;
+  if (ISNAN(left) || ISNAN(right)) return R_NaN;
+  return log_sum_exp(left, right);
 }
 
 // Full-Gaussian eventual hit and miss masses at distance r and averaged over
@@ -918,6 +999,9 @@ inline double log_cdf(double t, double mu, double b, double A, double s,
   double out;
   if (!(span > 1e-12 * std::max(1.0, r_hi))) {
     out = log_sum_exp(seed_log_T(L, r_hi), seed_log_H(L, r_hi)) - L.logZ;
+  } else if (quad_preferred(L, r_hi)) {
+    out = quad_log_integral([&](double r) { return point_log_F(L, r); },
+                            r_lo, r_hi, true, L.S) - std::log(span);
   } else {
     out = integral_F(L, r_lo, r_hi) - std::log(span) - L.logZ;
   }
@@ -992,7 +1076,12 @@ inline double log_surv(double t, double mu, double b, double A, double s,
   }
   const Law L = make_law(t, mu, s, sv, pos);
   const double span = r_hi - r_lo;
-  const bool point = !(span > 1e-12 * std::max(1.0, r_hi));
+  if (!(span > 1e-12 * std::max(1.0, r_hi))) return point_log_S(L, r_hi);
+  if (quad_preferred(L, r_hi)) {
+    const double lS = quad_log_integral([&](double r) { return point_log_S(L, r); },
+                                        r_lo, r_hi, false, L.S);
+    return ISNAN(lS) ? lS : std::fmin(lS - std::log(span), 0.0);
+  }
   auto from_cdf = [](double lF) {
     if (ISNAN(lF)) return lF;
     return (lF >= 0.0) ? R_NegInf : log1m_exp(lF);
@@ -1004,23 +1093,6 @@ inline double log_surv(double t, double mu, double b, double A, double s,
   const double ell = 2.0 * r_hi * mu / L.s2 + 2.0 * r_hi * r_hi * L.sv2 / (L.s2 * L.s2);
   const double h2 = (-(mu + 2.0 * r_hi * L.sv2 / L.s2) * t - r_hi) / L.S;
   const double proxy = log_sum_exp(log_Phi(h1), ell + log_Phi(h2));
-
-  if (point) {
-    // S = (U - H)/Z when the survivor is the small side (U > Z/2 whenever
-    // S > 1/2, so a misjudged proxy costs at most a factor two), otherwise
-    // 1 - (T + H)/Z.
-    const double lH = seed_log_H(L, r_hi);
-    if (proxy > -M_LN2) {
-      const double lU = seed_log_U(L, r_hi);
-      if (lU > lH) return std::fmin(log_diff_exp(lU, lH) - L.logZ, 0.0);
-      return from_cdf(log_sum_exp(seed_log_T(L, r_hi), lH) - L.logZ);
-    }
-    const double lF = log_sum_exp(seed_log_T(L, r_hi), lH) - L.logZ;
-    if (!(lF > -M_LN2)) return from_cdf(lF);
-    const double lU = seed_log_U(L, r_hi);
-    if (lU > lH) return std::fmin(log_diff_exp(lU, lH) - L.logZ, 0.0);
-    return from_cdf(lF);
-  }
 
   const double log_span = std::log(span);
   double lF = R_NaN;
