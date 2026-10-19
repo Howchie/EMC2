@@ -479,6 +479,14 @@ pRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE,
     .Call(`_EMC2_pRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
+dRDMSWTN_gdrift_cpp <- function(t, v, B, t0, s, sv, log_out = FALSE) {
+    .Call(`_EMC2_dRDMSWTN_gdrift_cpp`, t, v, B, t0, s, sv, log_out)
+}
+
+pRDMSWTN_gdrift_cpp <- function(t, v, B, t0, s, sv, log_out = FALSE, lower_tail = TRUE) {
+    .Call(`_EMC2_pRDMSWTN_gdrift_cpp`, t, v, B, t0, s, sv, log_out, lower_tail)
+}
+
 drsub <- function(t, v, B, A, s, packets = FALSE, log_out = FALSE, cv = as.numeric( c(0.0))) {
     .Call(`_EMC2_drsub`, t, v, B, A, s, packets, log_out, cv)
 }

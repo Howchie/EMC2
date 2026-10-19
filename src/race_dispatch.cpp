@@ -11,6 +11,7 @@
 #include "model_FRQfade.h"
 #include "model_OPR.h"
 #include "model_RSUB.h"
+#include "model_RDMSWTN_gamma.h"
 #include "time_clock.h"
 #include <cmath>
 #include <memory>
@@ -163,6 +164,16 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
     else if (type_std.find("_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
+  } else if (type_std.find("RDMSWTN_GDRIFT") != std::string::npos) {
+    // Gamma drift law: its own kernels and column contract (no A, no clocks;
+    // RDMSWTN() refuses those combinations).  Proper: the drift is positive.
+    out.pdf1_ptr       = &drdmswtn_gdrift_scalar;
+    out.cdf1_ptr       = &prdmswtn_gdrift_scalar;
+    out.model_dfun_raw = &drdmswtn_gdrift_raw;
+    out.model_pfun_raw = &prdmswtn_gdrift_raw;
+    out.logS_at_t_ptr  = &rdmswtn_gdrift_logS_at_t;
+    out.col_spec       = emc2col::rdmswtn_gamma::spec();
+    out.ctx.t0_index   = emc2col::rdmswtn_gamma::t0;
   } else if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM".
     // RDMSWTN_TT (finite exhaustion clock) and RDMSWTN_UT (accelerating

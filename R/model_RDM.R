@@ -825,18 +825,45 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #'   drifts and allow intrinsic omissions.
 #' @param correlated Logical. If `TRUE`, add the correlation parameter `rho`
 #'   and use the correlated race likelihood and simulator.
+#' With `drift_dist = "gamma"` the between-trial drift is instead
+#' `V ~ Gamma(shape = k, rate = tau)` with `k = (v/sv)^2` and `tau = v/sv^2`,
+#' so `v` and `sv` are the mean and SD of the drift law (the mean/variance
+#' chart of Steingroever, Wabersich and Wagenmakers, 2021). The gamma chart
+#' supports the point-start, clock-free model only: its parameters are `v`,
+#' `B` (the threshold, `b = B`), `t0`, `s` and `sv`, with `A`, `mG`, `mK`
+#' absent, and `erlang_type`, `erlang_shape`, `posdrift = FALSE` and
+#' `correlated = TRUE` are rejected. `sv = 0` is the Wald accumulator. The
+#' compiled model name is `RDMSWTN_GDRIFT`.
+#'
 #' @param correlate What `rho` correlates when `correlated = TRUE`: `"times"`
 #'   (default) for a Gaussian copula on the two participating finishing times,
 #'   or `"drifts"` for correlated between-trial drift draws in the style of
 #'   [BAwLcorr()]. `"drifts"` requires `sv > 0` on the correlated rows.
+#' @param drift_dist Between-trial drift law: `"normal"` (default; truncated
+#'   at zero when `posdrift = TRUE`) or `"gamma"` (mean `v`, SD `sv`).
 #' @return A model list compatible with [design()].
+#'
+#' @references Steingroever, H., Wabersich, D., & Wagenmakers, E.-J. (2021).
+#'   Modeling across-trial variability in the Wald drift rate parameter.
+#'   *Behavior Research Methods, 53*, 1060-1076.
 #'
 #' @export
 #'
 RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
-                    correlated = FALSE, correlate = c("times", "drifts")) {
+                    correlated = FALSE, correlate = c("times", "drifts"),
+                    drift_dist = c("normal", "gamma")) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
   correlate <- match.arg(correlate)
+  drift_dist <- match.arg(drift_dist)
+  if (drift_dist == "gamma") {
+    if (erlang_type != "none" || !identical(as.integer(erlang_shape), 1L))
+      stop("RDMSWTN(drift_dist = \"gamma\") does not support guess or kill clocks.")
+    if (!isTRUE(posdrift))
+      stop("RDMSWTN(drift_dist = \"gamma\") has a positive drift law; posdrift = FALSE does not apply.")
+    if (correlated)
+      stop("RDMSWTN(drift_dist = \"gamma\") does not support correlated = TRUE.")
+    return(.RDMSWTN_gdrift())
+  }
   drift_corr <- correlated && correlate == "drifts"
   if (correlated && erlang_type != "none") {
     stop("Correlated RDMSWTN does not support guess or kill clocks; use erlang_type = \"none\".")
@@ -982,6 +1009,77 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
       }
     }
   )
+}
+
+# RDMSWTN with a Gamma(k, rate tau) drift law, k = (v/sv)^2, tau = v/sv^2:
+# point start (b = B), no clocks.  Kernels: src/rdmswtn_gamma.h.
+.RDMSWTN_gdrift <- function() {
+  p_types <- c(v = log(1), B = log(1), t0 = log(0), s = log(1), sv = log(0))
+  transform <- c(v = "exp", B = "exp", t0 = "exp", s = "exp", sv = "exp")
+  minmax <- cbind(v = c(1e-3, Inf), B = c(0, Inf), t0 = c(0.05, Inf),
+                  s = c(0, Inf), sv = c(0, Inf))
+  exception <- c(sv = 0, t0 = 0)
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  list(
+    type = "RACE",
+    c_name = "RDMSWTN_GDRIFT",
+    correlated = FALSE,
+    p_types = .nuis$p_types,
+    p_types_canonical = names(p_types),
+    transform = list(func = .nuis$transform),
+    bound = list(minmax = .nuis$minmax, exception = .nuis$exception),
+    Ttransform = function(pars, dadm) cbind(pars, b = pars[, "B"]),
+    rfun = function(data = NULL, pars) {
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      rRDMSWTN_gdrift(data$lR, pars, ok = ok)
+    },
+    dfun = function(rt, pars) dRDMSWTN_gdrift(rt, pars),
+    pfun = function(rt, pars) pRDMSWTN_gdrift(rt, pars),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+
+.gdrift_cols <- function(pars) {
+  s <- if ("s" %in% colnames(pars)) pars[, "s"] else rep(1, nrow(pars))
+  b <- if ("B" %in% colnames(pars)) pars[, "B"] else pars[, "b"]
+  list(v = pars[, "v"], b = b, t0 = pars[, "t0"], s = s, sv = pars[, "sv"])
+}
+
+dRDMSWTN_gdrift <- function(rt, pars) {
+  p <- .gdrift_cols(pars)
+  out <- dRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$b, p$t0, p$s, p$sv)
+  out[is.na(out)] <- 0
+  out
+}
+
+pRDMSWTN_gdrift <- function(rt, pars) {
+  p <- .gdrift_cols(pars)
+  out <- pRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$b, p$t0, p$s, p$sv)
+  out[is.na(out)] <- 0
+  out
+}
+
+rRDMSWTN_gdrift <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
+  if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
+  p <- .gdrift_cols(pars)
+  nr <- length(levels(lR))
+  n_trials <- nrow(pars) / nr
+  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
+  v <- p$v[ok]; sv <- p$sv[ok]
+  vary <- is.finite(sv) & sv > 1e-10 * v
+  V <- v
+  V[vary] <- rgamma(sum(vary), shape = (v[vary] / sv[vary])^2, rate = v[vary] / sv[vary]^2)
+  dt[ok] <- rWald(sum(ok), B = pmax(p$b[ok], 0), v = V, A = rep(0, sum(ok)), s = p$s[ok]) + p$t0[ok]
+  bad_col <- colSums(!is.infinite(dt)) == 0
+  R <- max.col(-t(dt), ties.method = "first")
+  rt <- dt[cbind(R, seq_len(n_trials))]
+  R <- factor(levels(lR)[R], levels = levels(lR))
+  R[bad_col] <- NA
+  rt[bad_col] <- Inf
+  data.frame(R = R, rt = rt)
 }
 
 # Sampling scale for the RDMSWTN mean drift.  With posdrift = TRUE the

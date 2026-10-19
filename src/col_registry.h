@@ -577,6 +577,16 @@ namespace rdmswtn_ut {
   }
 }
 
+// R/model_RDM.R — RDMSWTN(drift_dist = "gamma"): Gamma drift with mean v and
+// SD sv, point start (no A) and no clocks.
+namespace rdmswtn_gamma {
+  enum : int { v = 0, B, t0, s, sv, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "t0", "s", "sv"};
+    return {n, N_REQ, "RDMSWTN_GDRIFT"};
+  }
+}
+
 // R/model_ROU.R — ROU, the racing Ornstein-Uhlenbeck (leaky accumulator).
 // Identical to RDM apart from the leak k, so an RDM design converts by adding
 // k~1; k = 0 is the Wiener race, reached through the PDE rather than by

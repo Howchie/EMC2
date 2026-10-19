@@ -9,7 +9,8 @@ RDMSWTN(
   erlang_type = "none",
   posdrift = TRUE,
   correlated = FALSE,
-  correlate = c("times", "drifts")
+  correlate = c("times", "drifts"),
+  drift_dist = c("normal", "gamma")
 )
 }
 \arguments{
@@ -30,6 +31,9 @@ and use the correlated race likelihood and simulator.}
 (default) for a Gaussian copula on the two participating finishing times,
 or \code{"drifts"} for correlated between-trial drift draws in the style of
 \code{\link[=BAwLcorr]{BAwLcorr()}}. \code{"drifts"} requires \code{sv > 0} on the correlated rows.}
+
+\item{drift_dist}{Between-trial drift law: \code{"normal"} (default; truncated
+at zero when \code{posdrift = TRUE}) or \code{"gamma"} (mean \code{v}, SD \code{sv}).}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.
@@ -139,4 +143,19 @@ it is what earlier versions did.
 Correlated RDMSWTN currently supports only \code{erlang_type = "none"}.
 \code{\link[=LogicalRulesRDMSWTN]{LogicalRulesRDMSWTN()}} remains an independent model; correlated
 logical-rule races are not supported.
+
+With \code{drift_dist = "gamma"} the between-trial drift is instead
+\code{V ~ Gamma(shape = k, rate = tau)} with \code{k = (v/sv)^2} and \code{tau = v/sv^2},
+so \code{v} and \code{sv} are the mean and SD of the drift law (the mean/variance
+chart of Steingroever, Wabersich and Wagenmakers, 2021). The gamma chart
+supports the point-start, clock-free model only: its parameters are \code{v},
+\code{B} (the threshold, \code{b = B}), \code{t0}, \code{s} and \code{sv}, with \code{A}, \code{mG}, \code{mK}
+absent, and \code{erlang_type}, \code{erlang_shape}, \code{posdrift = FALSE} and
+\code{correlated = TRUE} are rejected. \code{sv = 0} is the Wald accumulator. The
+compiled model name is \code{RDMSWTN_GDRIFT}.
+}
+\references{
+Steingroever, H., Wabersich, D., & Wagenmakers, E.-J. (2021).
+Modeling across-trial variability in the Wald drift rate parameter.
+\emph{Behavior Research Methods, 53}, 1060-1076.
 }

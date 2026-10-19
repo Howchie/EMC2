@@ -1368,7 +1368,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                   adapter.ctx.is_local_kill_guess;
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
-        if (type_std.find("RDMSWTN") != std::string::npos) {
+        if (type_std.find("RDMSWTN") != std::string::npos &&
+            type_std.find("RDMSWTN_GDRIFT") == std::string::npos) {
           const double* sv_col = pars_cols[emc2col::rdmswtn::sv];
           bool sv_zero = true;
           bool lambda_active = false;
