@@ -1,0 +1,48 @@
+      state  variant chain choice      tau     cost objective         q
+ checkpoint baseline     1      0 11.25163 10.26323   115.478 0.6027228
+       hmc    shear collapsed
+ 0.1990565 4.228995       0.2
+      state  variant chain choice      tau     cost objective         q
+ checkpoint baseline     2      0 11.84367 10.25983  121.5139 0.6027228
+       hmc    shear collapsed
+ 0.1810572 5.607424       0.2
+      state  variant chain choice      tau     cost objective         q
+ checkpoint baseline     3      0 12.51436 10.53067  131.7845 0.6027228
+       hmc   shear collapsed
+ 0.2066078 5.23288       0.2
+      state variant chain choice      tau     cost objective         q
+ checkpoint   point     1      0 11.65674 10.60541  123.6245 0.6113861
+       hmc    shear collapsed
+ 0.2018358 4.652434       0.2
+      state variant chain choice      tau     cost objective         q
+ checkpoint   point     2      0 11.91421 10.72275  127.7531 0.6113861
+       hmc    shear collapsed
+ 0.1958449 6.157042       0.2
+      state variant chain choice   tau     cost objective         q       hmc
+ checkpoint   point     3      0 13.37 10.62845  142.1023 0.6113861 0.2126924
+    shear collapsed
+ 5.289901       0.2
+      state         variant chain choice      tau     cost objective         q
+ checkpoint point_no_credit     1      0 10.45377 10.31759  107.8577 0.6113861
+       hmc    shear collapsed
+ 0.2018358 4.165688       0.2
+      state         variant chain choice      tau     cost objective         q
+ checkpoint point_no_credit     2      0 11.64818 10.30022  119.9788 0.6113861
+       hmc    shear collapsed
+ 0.1958449 5.465874       0.2
+      state         variant chain choice      tau     cost objective         q
+ checkpoint point_no_credit     3      0 12.19311 10.50509  128.0898 0.6113861
+       hmc    shear collapsed
+ 0.2126924 5.090083       0.2
+      state variant chain choice      tau     cost objective         q
+ checkpoint  latest     1      0 10.45377 10.37401  108.4475 0.6188119
+       hmc    shear collapsed
+ 0.1981105 4.165688       0.2
+      state variant chain choice      tau     cost objective         q
+ checkpoint  latest     2      0 11.64818 10.39397  121.0709 0.6188119
+       hmc    shear collapsed
+ 0.2072191 5.465874       0.2
+      state variant chain choice      tau     cost objective         q      hmc
+ checkpoint  latest     3      0 12.19311 10.63697  129.6978 0.6188119 0.231987
+    shear collapsed
+ 5.090083       0.2

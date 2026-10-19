@@ -1,0 +1,13 @@
+EMC2 from /data/work/EMC2_dev_oo/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/19c4c6df-25fb-4858-8ef0-fdc4d9b6acea/scratchpad/libbf/EMC2  shrink_g: TRUE 
+transport seed 1: cpu 19579 s elapsed 841 s
+         mu.v_LoadHigh mu.v_LoadLow  mu.K mu.t0_LoadHigh mu.t0_LoadLow mu.sv
+ess              6.389        6.040 6.842         18.606         7.913 6.120
+per_kcpu         0.326        0.308 0.349          0.950         0.404 0.313
+lag1             0.896        0.896 0.872          0.582         0.697 0.897
+jump10           0.867        0.887 0.941          1.339         1.308 0.881
+rhat             1.414        1.467 1.373          1.114         1.344 1.448
+all group: ESS min 6 median 53  min/kCPU 0.31  max rhat 1.467
+           [,1]  [,2]  [,3]
+hmc       40400 40400 40400
+shear      1480  2054  1704
+collapsed    21    20    19

@@ -1,0 +1,60 @@
+        state variant chain choice      tau     cost objective         q
+ pair_point_2  latest     1      0 16.55624 12.78309  211.6399 0.9616337
+        hmc    shear collapsed
+ 0.03896116 3.753481     0.005
+        state variant chain choice      tau     cost objective         q
+ pair_point_2  latest     2      0 19.52646 12.61109  246.2498 0.9616337
+        hmc    shear collapsed
+ 0.03262307 3.887888         0
+        state variant chain choice      tau    cost objective         q
+ pair_point_2  latest     3      0 23.16549 12.8254  297.1068 0.9616337
+        hmc    shear collapsed
+ 0.02512998 3.589543      0.01
+      state variant chain choice     tau     cost objective         q       hmc
+ pair_new_2  latest     1      0 14.0667 10.72063  150.8039 0.6571782 0.1203177
+    shear collapsed
+ 3.691491     0.035
+      state variant chain choice      tau     cost objective         q
+ pair_new_2  latest     2      0 14.23124 9.513002  135.3818 0.6571782
+       hmc   shear collapsed
+ 0.1540434 3.44641         0
+      state variant chain choice      tau    cost objective         q       hmc
+ pair_new_2  latest     3      0 12.84786 10.0938  129.6838 0.6571782 0.1714837
+    shear collapsed
+ 3.178409      0.03
+      state variant chain choice     tau     cost objective         q       hmc
+ pair_new_3  latest     1      0 19.4243 11.89097  230.9737 0.5990099 0.1583739
+    shear collapsed
+ 5.215034      0.09
+      state variant chain choice      tau     cost objective         q
+ pair_new_3  latest     2      0 33.97098 8.555431  290.6364 0.5990099
+       hmc    shear collapsed
+ 0.1756826 2.555977     0.015
+      state variant chain choice      tau     cost objective         q
+ pair_new_3  latest     3      0 23.14482 9.795243  226.7092 0.5990099
+       hmc    shear collapsed
+ 0.1914532 3.421557      0.02
+        state variant chain choice      tau     cost objective         q
+ pair_point_3  latest     1      0 29.55046 13.17587   389.353 0.9269802
+        hmc    shear collapsed
+ 0.07310169 3.843921         0
+        state variant chain choice      tau     cost objective         q
+ pair_point_3  latest     2      0 25.63367 13.17282  337.6676 0.9269802
+        hmc    shear collapsed
+ 0.04698661 4.594261     0.015
+        state variant chain choice      tau     cost objective         q
+ pair_point_3  latest     3      0 16.34582 13.75987  224.9164 0.9269802
+        hmc    shear collapsed
+ 0.05850631 4.344026      0.01
+           state variant chain choice     tau     cost objective         q
+ arm_pointsave_1  latest     1      0 9.66321 14.41553  139.3003 0.9220297
+        hmc   shear collapsed
+ 0.07671188 6.76688       0.2
+           state variant chain choice      tau     cost objective         q
+ arm_pointsave_1  latest     2      0 12.65102 14.07112  178.0141 0.9220297
+       hmc    shear collapsed
+ 0.2530711 5.952791       0.2
+           state variant chain choice      tau     cost objective         q
+ arm_pointsave_1  latest     3      0 9.109777 14.67089  133.6485 0.9220297
+       hmc    shear collapsed
+ 0.1032545 6.498764       0.2

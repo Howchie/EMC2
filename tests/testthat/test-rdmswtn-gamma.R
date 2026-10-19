@@ -244,3 +244,51 @@ test_that("start-point variability: hard corners and the A -> 0 limit", {
   dA <- gdrift_d(0.4, 2, 1, 1, 0.8, A = 1e-6)
   expect_lt(abs(dA / d0 - 1), 1e-5)
 })
+
+test_that("a gamma drift drawn as zero is a driftless hit, not an omission", {
+  skip_on_cran()
+  set.seed(11)
+  n <- 10000
+  lR <- factor(rep("a", n), levels = "a")
+  # k = (v / sv)^2 ~ 1.6e-4: most gamma draws underflow to zero
+  pars <- cbind(v = 0.05, B = 1, t0 = 0, s = 1, sv = 4)[rep(1, n), ]
+  sim <- EMC2:::rRDMSWTN_gdrift(lR, pars)
+  expect_equal(mean(is.infinite(sim$rt)), 0)
+  q <- c(0.2, 1, 5, 50)
+  expect_equal(vapply(q, function(x) mean(sim$rt <= x), numeric(1)),
+               gdrift_p(q, 0.05, 1, 1, 4), tolerance = 0.03)
+})
+
+test_that("Wald draws are exact at small and zero drift", {
+  set.seed(12)
+  n <- 20000
+  # zero drift: the Levy law, P(T <= t) = 2 Phi(-b / (s sqrt t))
+  x <- EMC2:::rWald(n, B = rep(1.2, n), v = rep(0, n), A = rep(0, n), s = 0.8, posdrift = FALSE)
+  for (t in c(0.5, 2, 20)) {
+    P <- 2 * pnorm(-1.2 / (0.8 * sqrt(t)))
+    expect_lt(abs(mean(x <= t) - P), 4 * sqrt(P * (1 - P) / n))
+  }
+  # a tiny drift gives draws that are not quantized
+  x <- EMC2:::rWald(1000, B = rep(1, 1000), v = rep(1.1e-6, 1000), A = rep(0, 1000))
+  expect_gt(length(unique(round(x[x < 100] * 2^13))), 900)
+})
+
+test_that("large q keeps the survivor's digits", {
+  # S is linear in a vanishing threshold, so log S drops by log(10) per decade
+  b <- 10^-(8:17)
+  lS <- EMC2:::pRDMSWTN_gdrift_cpp(rep(1, length(b)), rep(0.5, length(b)), b, rep(0, length(b)),
+                                    rep(0, length(b)), rep(1, length(b)), rep(sqrt(5) / 10, length(b)),
+                                    log_out = TRUE, lower_tail = FALSE)
+  expect_true(all(is.finite(lS)))
+  expect_lt(max(abs(diff(lS) + log(10))), 1e-6)
+})
+
+test_that("R-level dfun/pfun recycle rt against one parameter row", {
+  pars <- cbind(v = 2, B = 1, A = 0.4, t0 = 0.1, s = 1, sv = 0.7)
+  rt <- c(0.3, 0.6, 1.5)
+  expect_equal(EMC2:::dRDMSWTN_gdrift(rt, pars),
+               vapply(rt, function(x) EMC2:::dRDMSWTN_gdrift(x, pars), numeric(1)))
+  expect_equal(EMC2:::pRDMSWTN_gdrift(rt, pars),
+               vapply(rt, function(x) EMC2:::pRDMSWTN_gdrift(x, pars), numeric(1)))
+  expect_length(EMC2:::dRDMSWTN_gdrift(rt, pars[1, ]), 3)
+})

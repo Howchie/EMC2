@@ -30,36 +30,18 @@ pRDM <- function(rt, pars)
 rWald <- function(n, B, v, A, s = 1, posdrift = TRUE)
 # random function for single accumulator
 {
-  rwaldt <- function(n, k, l, s = 1, tiny = 1e-6) {
+  rwaldt <- function(n, k, l, s = 1) {
     # random sample of n from a Wald (or Inverse Gaussian)
-    # k = criterion, l = rate, s = diffusion SD
-    # about same speed as statmod rinvgauss
-
-    rlevy <- function(n = 1, m = 0, c = 1) {
-      if (any(c < 0)) stop("c must be positive")
-      c / qnorm(1 - runif(n) / 2)^2 + m
-    }
-
+    # k = criterion, l = rate >= 0, s = diffusion SD
+    # Michael-Schucany-Haas with the smaller root rationalized: no
+    # subtraction and no division by l, so it is exact down to l = 0 (the
+    # Levy law k^2 / (s Z)^2, where the root is always kept).
     s <- rep(s, length.out = n)
-    flag <- l > abs(tiny)
-    x <- rep(NA, times = n)
-
-    x[!flag] <- rlevy(sum(!flag), 0, (k[!flag] / s[!flag])^2)
-    mu <- k / l
-    lambda <- (k / s)^2
-
-    y <- rnorm(sum(flag))^2
-    mu.0 <- mu[flag]
-    lambda.0 <- lambda[flag]
-
-    x.0 <- mu.0 + mu.0^2 * y / (2 * lambda.0) -
-      sqrt(4 * mu.0 * lambda.0 * y + mu.0^2 * y^2) * mu.0 / (2 * lambda.0)
-
-    z <- runif(length(x.0))
-    test <- mu.0 / (mu.0 + x.0)
-    x.0[z > test] <- mu.0[z > test]^2 / x.0[z > test]
-    x[flag] <- x.0
-    x[x < 0] <- max(x)
+    sy <- s^2 * rnorm(n)^2
+    x <- 2 * k^2 / (2 * k * l + sy + sqrt(sy * (4 * k * l + sy)))
+    z <- runif(n)
+    flip <- z * (k + l * x) > k
+    x[flip] <- (k[flip] / l[flip])^2 / x[flip]
     x
   }
   
@@ -1051,16 +1033,25 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
   list(v = pars[, "v"], B = B, A = A, t0 = pars[, "t0"], s = s, sv = pars[, "sv"])
 }
 
+# rt and the rows of pars are recycled to a common length, as in dRDMSWTN.
+.gdrift_recycle <- function(rt, pars) {
+  if (is.null(dim(pars))) pars <- matrix(pars, nrow = 1, dimnames = list(NULL, names(pars)))
+  n <- max(length(rt), nrow(pars))
+  list(rt = rep(rt, length.out = n), pars = pars[rep(seq_len(nrow(pars)), length.out = n), , drop = FALSE])
+}
+
 dRDMSWTN_gdrift <- function(rt, pars) {
-  p <- .gdrift_cols(pars)
-  out <- dRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$B, p$A, p$t0, p$s, p$sv)
+  rp <- .gdrift_recycle(rt, pars)
+  p <- .gdrift_cols(rp$pars)
+  out <- dRDMSWTN_gdrift_cpp(rp$rt, p$v, p$B, p$A, p$t0, p$s, p$sv)
   out[is.na(out)] <- 0
   out
 }
 
 pRDMSWTN_gdrift <- function(rt, pars) {
-  p <- .gdrift_cols(pars)
-  out <- pRDMSWTN_gdrift_cpp(rep(rt, length.out = nrow(pars)), p$v, p$B, p$A, p$t0, p$s, p$sv)
+  rp <- .gdrift_recycle(rt, pars)
+  p <- .gdrift_cols(rp$pars)
+  out <- pRDMSWTN_gdrift_cpp(rp$rt, p$v, p$B, p$A, p$t0, p$s, p$sv)
   out[is.na(out)] <- 0
   out
 }
@@ -1075,14 +1066,17 @@ rRDMSWTN_gdrift <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
   vary <- is.finite(sv) & sv > 1e-10 * v
   V <- v
   V[vary] <- rgamma(sum(vary), shape = (v[vary] / sv[vary])^2, rate = v[vary] / sv[vary]^2)
-  dt[ok] <- rWald(sum(ok), B = pmax(p$B[ok], 0), v = V, A = pmax(p$A[ok], 0), s = p$s[ok]) + p$t0[ok]
+  # posdrift = FALSE keeps V = 0 (a gamma draw below the double range) as the
+  # driftless hit rather than an omission; V is never negative here
+  dt[ok] <- rWald(sum(ok), B = pmax(p$B[ok], 0), v = V, A = pmax(p$A[ok], 0), s = p$s[ok],
+                  posdrift = FALSE) + p$t0[ok]
   bad_col <- colSums(!is.infinite(dt)) == 0
   R <- max.col(-t(dt), ties.method = "first")
   rt <- dt[cbind(R, seq_len(n_trials))]
   R <- factor(levels(lR)[R], levels = levels(lR))
   R[bad_col] <- NA
   rt[bad_col] <- Inf
-  data.frame(R = R, rt = rt)
+  .apply_timed_guess_winner(data.frame(R = R, rt = rt), levels(lR))
 }
 
 # Sampling scale for the RDMSWTN mean drift.  With posdrift = TRUE the

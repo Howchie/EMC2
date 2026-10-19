@@ -1,0 +1,29 @@
+* installing *source* package ‘EMC2’ ...
+** this is package ‘EMC2’ version ‘3.4.0’
+** using staged installation
+configure: EMC2 build configuration
+  build profile : legacy
+  march         : native (default)
+  compiler      : g++-13
+  R CXXFLAGS    : -g -O2 -ffile-prefix-map=/build/r-base-uOlBBs/r-base-4.6.1=. -fstack-protector-strong -Wformat -Werror=format-security -Wdate-time -D_FORTIFY_SOURCE=2
+  OpenMP        : available (compile/link flags only via --enable-openmp)
+  OpenMP SIMD   : on (-fopenmp-simd)
+  header deps   : available
+  parallel build : -j32 (32 of 32 usable cores; auto)
+configure: src/Makevars written (profile=legacy)
+** libs
+using C compiler: ‘gcc-13 (Ubuntu 13.4.0-6ubuntu1~22~ppa2) 13.4.0’
+using C++ compiler: ‘g++-13 (Ubuntu 13.4.0-6ubuntu1~22~ppa2) 13.4.0’
+make: Nothing to be done for 'all'.
+installing to /data/work/EMC2_dev_oo/.Rlib_alloc_review/00LOCK-EMC2_dev_oo/00new/EMC2/libs
+** R
+** data
+*** moving datasets to lazyload DB
+** inst
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+** building package indices
+** installing vignettes
+** checking absolute paths in shared objects and dynamic libraries
+* DONE (EMC2)

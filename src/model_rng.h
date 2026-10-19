@@ -52,28 +52,19 @@ inline double rtnorm_lower_r(double mu, double sd, double lo) {
   return mu + sd * z;
 }
 
-// Wald/inverse-Gaussian first passage time: criterion k, rate l, diffusion s.
-// Michael-Schucany-Haas sampler, matches R's rwaldt (model_RDM.R:33-63)
-// distributionally (draw order differs).
+// Wald/inverse-Gaussian first passage time: criterion k, rate l >= 0,
+// diffusion s.  Michael-Schucany-Haas sampler, matches R's rwaldt
+// (model_RDM.R) distributionally (draw order differs).  The smaller root is
+// rationalized: no subtraction and no division by l, so it is exact down to
+// l = 0 (the Levy law, where the root is always kept).
 inline double rwald_fpt_r(double k, double l, double s) {
-  const double tiny = 1e-6;
-  if (l <= tiny) {
-    // Degenerate zero-drift case -> Levy distribution.
-    const double c = (k / s) * (k / s);
-    const double u = R::unif_rand();
-    const double q = R::qnorm(1.0 - u / 2.0, 0.0, 1.0, 1, 0);
-    return c / (q * q);
-  }
-  const double mu = k / l;
-  const double lambda = (k / s) * (k / s);
   double y = R::norm_rand();
-  y = y * y;
-  double x0 = mu + mu * mu * y / (2.0 * lambda) -
-              std::sqrt(4.0 * mu * lambda * y + mu * mu * y * y) * mu / (2.0 * lambda);
-  if (!(x0 > 0.0)) x0 = mu;  // numerical edge case, R's x[x<0]<-max(x) has no scalar analogue
+  const double sy = s * s * y * y;
+  const double x0 = 2.0 * k * k / (2.0 * k * l + sy + std::sqrt(sy * (4.0 * k * l + sy)));
   const double z = R::unif_rand();
-  const double test = mu / (mu + x0);
-  return (z > test) ? (mu * mu / x0) : x0;
+  if (!(z * (k + l * x0) > k)) return x0;
+  const double mu = k / l;
+  return mu * mu / x0;
 }
 
 // Full rWald semantics for a single accumulator: start-point range,

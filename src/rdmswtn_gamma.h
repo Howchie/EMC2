@@ -147,7 +147,8 @@ inline double logG(double nu, double x) {
   return walk_from(nu, x).log_g0();
 }
 
-inline double log1m_exp(double a) {  // log(1 - e^a), a <= 0
+inline double log1m_exp(double a) {  // log(1 - e^a); a >= 0 (rounding above 0) gives -Inf
+  if (a >= 0.0) return NEG_INF;
   return a > -LOG2 ? std::log(-std::expm1(a)) : std::log1p(-std::exp(a));
 }
 
@@ -431,7 +432,9 @@ constexpr int DENS_SWEEP_MAX = 48;   // walk on down to k for f, else seed G_k a
 
 inline double moment_logS(double k, double p, double delta, double z, double q,
                           bool want_dens, double& lDk, int& terms) {
-  const double r = 1.0 - 2.0 / q, lp = std::log(p);
+  // 1 - r and log r are formed from 2 / q directly: r rounds to 1 for large q
+  const double omr = 2.0 / q, r = 1.0 - omr, lp = std::log(p);
+  const double lr = (r > 0.0) ? std::log1p(-omr) : NAN_D;
   const double ip = 1.0 / p, ip2 = ip * ip, zp = z * ip;
   const double peak = p * delta - k, sd = std::sqrt(p * p + p * delta);
   double half = 8.0 * sd + 6.0;
@@ -461,8 +464,8 @@ inline double moment_logS(double k, double p, double delta, double z, double q,
     }
     const double d_lo = u0, d_lo1 = u1;   // D_(k+mlo), D_(k+mlo+1), same scale
     const double rp = std::pow(r, mlo - 2);
-    const double head = (r > 0.0) ? -std::expm1((mlo - 2) * std::log(r)) : 1.0 - rp;
-    const double sum = T * head + (1.0 - r) * rp * H;
+    const double head = (r > 0.0) ? -std::expm1((mlo - 2) * lr) : 1.0 - rp;
+    const double sum = T * head + omr * rp * H;
     const double sc_top = std::exp(-(ls - (l0 + dconst)));  // top values' scale vs final
     const double g_hi = d_top / d_top1;
     const double g_lo = d_lo1 / d_lo;
@@ -941,23 +944,24 @@ inline Out gamma_wald(double t, double d, double s, double k, double tau, int wa
   if (f_first) {
     const double lF = moment_logF(k, p, delta, z, lDk, t1);
     if (std::isfinite(lF)) {
-      o.logF = lF;
+      o.logF = std::min(0.0, lF);
       o.logf = ldt + lDk;
       o.logS = log1m_exp(lF);
       if ((want & WANT_SURV) && o.logS < std::log(TAIL_SMALL)) {
         const double lS = moment_logS(k, p, delta, z, q, false, ld2, t2);
-        if (std::isfinite(lS)) o.logS = lS;
+        if (std::isfinite(lS)) o.logS = std::min(0.0, lS);
       }
       done = true;
     }
   }
   if (!done) {
     o.logS = moment_logS(k, p, delta, z, q, want & WANT_PDF, lDk, t1);
+    if (o.logS > 0.0) o.logS = 0.0;   // NaN (no window closed) is kept
     o.logf = ldt + lDk;
     o.logF = log1m_exp(o.logS);
     if ((want & WANT_CDF) && o.logF < std::log(TAIL_SMALL)) {
       const double lF = moment_logF(k, p, delta, z, ld2, t2);
-      if (std::isfinite(lF)) o.logF = lF;
+      if (std::isfinite(lF)) o.logF = std::min(0.0, lF);
     }
   }
   if ((want & WANT_PDF) && !std::isfinite(o.logf))
