@@ -108,6 +108,7 @@
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 #include <utility>
 #include "inc_gamma.h"
 
@@ -392,34 +393,100 @@ struct FrqMixEval {
 // Root of m(t) = h for an increasing m, bracketed by [t_a, t_b] and started at
 // t_start.  The residual is log m - log h on the lower half and
 // log(1 - h) - log(1 - m) on the upper half, so a completion probability within
-// rounding of either end keeps its digits.  Newton steps that leave the
-// bracket, or fail to shrink the residual, are replaced by bisection.
+// rounding of either end keeps its digits.  Steps that leave the bracket are
+// replaced by bisection.
+//
+// From the second iterate the step is Halley's, with the curvature r''/r'
+// taken from the change in slope between the last two iterates, so it needs
+// nothing beyond what the evaluator already returns.  A Newton-type step
+// delta leaves an error of about |r''/(2 r')| delta^2; when that is below
+// tolerance the step is taken as the root without a confirming evaluation.
+//
+// Either end may be infinite (a seeded solve, started from a nearby root
+// rather than a computed bracket).  While a side is still open, steps are
+// capped at FRQ_SEED_STEP, doubling on each consecutive capped step, so a
+// poor seed walks out to a bracket instead of jumping into an overflow.
+constexpr double FRQ_SEED_STEP = 0.5;
+constexpr double FRQ_SOLVE_TOL = 1e-15;
 template <class Eval>
 inline bool frq_mix_solve(double h, double t_a, double t_b, double t_start,
                           Eval ev, double* t_out) {
   const bool lower = (h <= 0.5);
   const double lh = std::log(h), l1h = std::log1p(-h);
   double a = std::min(t_a, t_b), b = std::max(t_a, t_b);
-  double t = (t_start > a && t_start < b) ? t_start : 0.5 * (a + b);
   if (!(b > a)) { *t_out = a; return R_FINITE(a); }
-  for (int it = 0; it < 100; ++it) {
+  double t = (t_start > a && t_start < b) ? t_start : 0.5 * (a + b);
+  if (!R_FINITE(t)) return false;
+  double cap = FRQ_SEED_STEP;
+  double t_prev = R_NaN, g_prev = R_NaN;
+  int it = 0;
+  for (; it < 100; ++it) {
     const FrqMixEval e = ev(t, lower);
     const double r = lower ? e.lm - lh : l1h - e.l1m;
     if (ISNAN(r)) return false;
     if (std::abs(r) <= 1e-14) break;
     if (r < 0.0) a = t; else b = t;
-    const double dr = std::exp(e.lD - (lower ? e.lm : e.l1m));
-    double tn = t - r / dr;
-    if (!(tn > a && tn < b)) tn = 0.5 * (a + b);
-    if (std::abs(tn - t) <= 1e-15 * (1.0 + std::abs(t))) { t = tn; break; }
+    const double g = std::exp(e.lD - (lower ? e.lm : e.l1m));
+    // Curvature r''/r' by the slope change since the previous iterate; it
+    // bounds the error of an accepted step only when the two are close.
+    const double gap = std::abs(t - t_prev);
+    const double c = (gap > 0.0) ? (g - g_prev) / ((t - t_prev) * g) : R_NaN;
+    const bool c_local = gap <= 1e-2;
+    t_prev = t; g_prev = g;
+    const double dn = -r / g;
+    double tn = t + dn;
+    bool newton = true;
+    if (R_FINITE(c) && std::abs(0.5 * c * dn) < 0.5)
+      tn = t + dn / (1.0 + 0.5 * c * dn);
+    if (R_FINITE(a) && R_FINITE(b)) {
+      if (!(tn > a && tn < b)) { tn = 0.5 * (a + b); newton = false; }
+    } else if (!(tn > a && tn < b) || std::abs(tn - t) > cap) {
+      tn = (r < 0.0) ? t + cap : t - cap;
+      cap *= 2.0;
+      newton = false;
+    }
+    const double step = std::abs(tn - t);
+    const double scale = 1.0 + std::abs(t);
+    if (step <= FRQ_SOLVE_TOL * scale) { t = tn; break; }
+    // A local estimate gets a safety factor of 10; without one, assume
+    // |r''/r'| <= 200.
+    const double half_c = (R_FINITE(c) && c_local) ? 5.0 * std::abs(c) : 100.0;
     t = tn;
+    if (newton && half_c * step * step <= FRQ_SOLVE_TOL * scale) break;
   }
   *t_out = t;
-  return R_FINITE(t);
+  // A bracketed solve keeps its last iterate; an open one has not converged.
+  return R_FINITE(t) && (it < 100 || (R_FINITE(a) && R_FINITE(b)));
 }
 
+// A previously solved root, used to start the next solve near its answer.
+// log_E is the expected total evidence (log(beta p / (1 - p)) for cv > 0), the
+// coordinate that scales most nearly in proportion with K.  A seed moves to a
+// new K along `slope`, d log_E / dK measured between the seed's last two roots,
+// or by log(K / K_seed) before it has two.  It only sets the starting point:
+// the solved root does not depend on it beyond the solver tolerance.
+struct FrqSeed {
+  double K = R_NaN;
+  double log_E = R_NaN;
+  double slope = R_NaN;
+  bool ok() const { return R_FINITE(K) && R_FINITE(log_E); }
+  double start(double K_new) const {
+    return log_E + (R_FINITE(slope) ? slope * (K_new - K)
+                                    : std::log(K_new / K));
+  }
+  void update(double K_new, double log_E_new) {
+    if (ok() && K_new != K) {
+      const double m = (log_E_new - log_E) / (K_new - K);
+      slope = (R_FINITE(m) && m >= 0.0) ? m : R_NaN;
+    }
+    K = K_new;
+    log_E = log_E_new;
+  }
+};
+
 inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
-                                  double plo = 0.0, double omega = 0.0) {
+                                  double plo = 0.0, double omega = 0.0,
+                                  const FrqSeed* seed = nullptr) {
   s = FrqAvail();
   if (ISNAN(K) || ISNAN(cv) || ISNAN(h)) return;
   if (!(K >= FRQ_SHAPE_MIN) || !R_FINITE(K)) return;
@@ -453,37 +520,59 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
     if (h == 1.0) {
       s.E = R_PosInf; s.log_E = R_PosInf;
       s.p = 1.0; s.log_p = 0.0; s.om_p = 0.0; s.log_om_p = R_NegInf;
-    } else if (W.active) {
-      // The excess criterion lies between Y_K and (1 + omega) Y_K, so the root
-      // lies in [E_0, (1 + omega) E_0] for each component's omega = 0 root E_0.
-      double ta = R_PosInf, tb = R_NegInf;
-      if (L.plo < 1.0) {
-        const double E0 = R::qgamma(h, K, 1.0, 1, 0);
-        if (!(E0 > 0.0) || !R_FINITE(E0)) return;
-        ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
-      }
-      if (L.active) {
-        const double E0 = (L.K_lo == 1.0) ? -std::log1p(-h)
-                                          : R::qgamma(h, L.K_lo, 1.0, 1, 0);
-        if (!(E0 > 0.0) || !R_FINITE(E0)) return;
-        ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
-      }
-      tb += W.log1p_omega;
-      const double lgK = s.lgamma_K;
-      auto ev = [&](double t, bool lower) {
+      s.ok = true;
+      return;
+    }
+    // The completion probability in t = log E.
+    const double lgK = s.lgamma_K;
+    auto ev = [&](double t, bool lower) {
+      const double X = std::exp(t);
+      FrqMixEval e{};
+      if (W.active) {
         const FrqOmComp c = frq_omega_mix_pois(
-          std::exp(t), t, K, lgK, L, W,
-          (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
-        FrqMixEval e;
+          X, t, K, lgK, L, W, (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
         e.lm = c.lF; e.l1m = c.lS; e.lD = c.lf + t;
-        return e;
-      };
-      double t;
-      if (!frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, &t)) return;
-      s.E = std::exp(t); s.log_E = t;
-      if (!(s.E > 0.0) || !R_FINITE(s.E)) return;
-      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
-    } else {
+      } else if (L.active) {
+        double lmain, llow;
+        if (lower) {
+          gamma_log_pq_fast(K, X, t, lgK, &lmain, nullptr);
+          llow = frq_low_gamma_tail(X, t, L, true);
+          e.lm = frq_low_mix(lmain, llow, L);
+        } else {
+          gamma_log_pq_fast(K, X, t, lgK, nullptr, &lmain);
+          llow = frq_low_gamma_tail(X, t, L, false);
+          e.l1m = frq_low_mix(lmain, llow, L);
+        }
+        e.lD = frq_low_mix(K * t - lgK, L.K_lo * t - L.lgamma_lo, L) - X;
+      } else {
+        if (lower) gamma_log_pq_fast(K, X, t, lgK, &e.lm, nullptr);
+        else gamma_log_pq_fast(K, X, t, lgK, nullptr, &e.l1m);
+        e.lD = K * t - lgK - X;
+      }
+      return e;
+    };
+    // Without a seed the root comes from the gamma quantiles: directly, or as
+    // the bracket of the mixture solve.
+    auto cold = [&](double* t_out) -> bool {
+      if (W.active) {
+        // The excess criterion lies between Y_K and (1 + omega) Y_K, so the
+        // root lies in [E_0, (1 + omega) E_0] for each component's omega = 0
+        // root E_0.
+        double ta = R_PosInf, tb = R_NegInf;
+        if (L.plo < 1.0) {
+          const double E0 = R::qgamma(h, K, 1.0, 1, 0);
+          if (!(E0 > 0.0) || !R_FINITE(E0)) return false;
+          ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
+        }
+        if (L.active) {
+          const double E0 = (L.K_lo == 1.0) ? -std::log1p(-h)
+                                            : R::qgamma(h, L.K_lo, 1.0, 1, 0);
+          if (!(E0 > 0.0) || !R_FINITE(E0)) return false;
+          ta = std::min(ta, std::log(E0)); tb = std::max(tb, std::log(E0));
+        }
+        tb += W.log1p_omega;
+        return frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, t_out);
+      }
       double E = (L.plo == 1.0) ? R_NaN : R::qgamma(h, K, 1.0, 1, 0);
       if (L.active) {
         const double E_lo = (L.K_lo == 1.0) ? -std::log1p(-h)
@@ -491,34 +580,25 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
         if (L.plo == 1.0) {
           E = E_lo;
         } else {
-          if (!(E > 0.0) || !R_FINITE(E) || !(E_lo > 0.0)) return;
-          const double lgK = s.lgamma_K;
-          auto ev = [&](double t, bool lower) {
-            const double X = std::exp(t);
-            FrqMixEval e;
-            double lmain, llow;
-            if (lower) {
-              gamma_log_pq_fast(K, X, t, lgK, &lmain, nullptr);
-              llow = frq_low_gamma_tail(X, t, L, true);
-              e.lm = frq_low_mix(lmain, llow, L);
-            } else {
-              gamma_log_pq_fast(K, X, t, lgK, nullptr, &lmain);
-              llow = frq_low_gamma_tail(X, t, L, false);
-              e.l1m = frq_low_mix(lmain, llow, L);
-            }
-            e.lD = frq_low_mix(K * t - lgK, L.K_lo * t - L.lgamma_lo, L) - X;
-            return e;
-          };
+          if (!(E > 0.0) || !R_FINITE(E) || !(E_lo > 0.0)) return false;
           const double ta = std::log(E), tb = std::log(E_lo);
-          double t;
-          if (!frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, &t)) return;
-          E = std::exp(t);
+          return frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, t_out);
         }
       }
-      if (!(E > 0.0) || !R_FINITE(E)) return;
-      s.E = E; s.log_E = std::log(E);
-      s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
+      if (!(E > 0.0) || !R_FINITE(E)) return false;
+      *t_out = std::log(E);
+      return true;
+    };
+    double t = R_NaN;
+    bool solved = false;
+    if (seed != nullptr && seed->ok()) {
+      const double t0 = (L.plo == 1.0) ? seed->log_E : seed->start(K);
+      solved = frq_mix_solve(h, R_NegInf, R_PosInf, t0, ev, &t);
     }
+    if (!solved && !cold(&t)) return;
+    s.E = std::exp(t); s.log_E = t;
+    if (!(s.E > 0.0) || !R_FINITE(s.E)) return;
+    s.p = 0.0; s.log_p = R_NegInf; s.om_p = 1.0; s.log_om_p = 0.0;
     s.ok = true;
     return;
   }
@@ -536,74 +616,96 @@ inline void frq_derive_avail_into(FrqAvail& s, double K, double cv, double h,
     if (!W.lo_unit) W.lb_lo1 = lbeta_fast(L.K_lo - 1.0, beta + 1.0);
   }
   double log_p = 0.0, log_om_p = R_NegInf;
-  if (h < 1.0 && W.active) {
-    // Solved in t = logit p.  The excess criterion lies between Y_K and
-    // (1 + omega) Y_K, which brackets each component's root between its
-    // omega = 0 logit t_0 and t_0 + log(1 + omega).
-    double ta = R_PosInf, tb = R_NegInf;
-    double lp0, lomp0;
-    if (L.plo < 1.0) {
-      if (!frq_beta_quantile_logs(h, K, beta, lb, &lp0, &lomp0)) return;
-      ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
-    }
-    if (L.active) {
-      if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &lp0, &lomp0,
-                                  true)) return;
-      ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
-    }
-    tb += W.log1p_omega;
+  if (h < 1.0) {
+    // The completion probability in t = logit p, held as the pair
+    // (log p, log(1 - p)).
+    const double lb_lo = s.lo.lbeta_lo;
     auto ev = [&](double t, bool lower) {
       const double lp = -frq_log1pexp(-t), lomp = -frq_log1pexp(t);
-      const FrqOmComp c = frq_omega_mix_beta(
-        lp, lomp, K, beta, lb, s.lo, W,
-        (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
-      FrqMixEval e;
-      e.lm = c.lF; e.l1m = c.lS; e.lD = c.lf + lp + lomp;
+      FrqMixEval e{};
+      if (W.active) {
+        const FrqOmComp c = frq_omega_mix_beta(
+          lp, lomp, K, beta, lb, s.lo, W,
+          (lower ? FRQ_OM_F : FRQ_OM_S) | FRQ_OM_FD);
+        e.lm = c.lF; e.l1m = c.lS; e.lD = c.lf + lp + lomp;
+        return e;
+      }
+      const double p = std::exp(lp), omp = std::exp(lomp);
+      if (L.active) {
+        if (lower) {
+          e.lm = frq_low_mix(frq_log_ibeta(p, omp, lp, lomp, K, beta, lb),
+                             frq_log_ibeta(p, omp, lp, lomp, L.K_lo, beta,
+                                           lb_lo), L);
+        } else {
+          e.l1m = frq_low_mix(frq_log_ibeta(omp, p, lomp, lp, beta, K, lb),
+                              frq_log_ibeta(omp, p, lomp, lp, beta, L.K_lo,
+                                            lb_lo), L);
+        }
+        e.lD = frq_low_mix(K * lp - lb, L.K_lo * lp - lb_lo, L) + beta * lomp;
+      } else {
+        if (lower) e.lm = frq_log_ibeta(p, omp, lp, lomp, K, beta, lb);
+        else e.l1m = frq_log_ibeta(omp, p, lomp, lp, beta, K, lb);
+        e.lD = K * lp - lb + beta * lomp;
+      }
       return e;
     };
-    double t;
-    if (!frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, &t)) return;
-    log_p = -frq_log1pexp(-t);
-    log_om_p = -frq_log1pexp(t);
-    if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return;
-  } else if (h < 1.0) {
-    if (L.plo == 1.0) {
-      if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &log_p,
-                                  &log_om_p, true)) return;
-    } else {
-      if (!frq_beta_quantile_logs(h, K, beta, lb, &log_p, &log_om_p)) return;
+    // Without a seed the root comes from the beta quantiles: directly, or as
+    // the bracket of the mixture solve.
+    auto cold = [&]() -> bool {
+      if (W.active) {
+        // The excess criterion lies between Y_K and (1 + omega) Y_K, which
+        // brackets each component's root between its omega = 0 logit t_0 and
+        // t_0 + log(1 + omega).
+        double ta = R_PosInf, tb = R_NegInf;
+        double lp0, lomp0;
+        if (L.plo < 1.0) {
+          if (!frq_beta_quantile_logs(h, K, beta, lb, &lp0, &lomp0)) return false;
+          ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
+        }
+        if (L.active) {
+          if (!frq_beta_quantile_logs(h, L.K_lo, beta, lb_lo, &lp0, &lomp0,
+                                      true)) return false;
+          ta = std::min(ta, lp0 - lomp0); tb = std::max(tb, lp0 - lomp0);
+        }
+        tb += W.log1p_omega;
+        double t;
+        if (!frq_mix_solve(h, ta, tb, 0.5 * (ta + tb), ev, &t)) return false;
+        log_p = -frq_log1pexp(-t);
+        log_om_p = -frq_log1pexp(t);
+        return true;
+      }
+      if (L.plo == 1.0)
+        return frq_beta_quantile_logs(h, L.K_lo, beta, lb_lo, &log_p,
+                                      &log_om_p, true);
+      if (!frq_beta_quantile_logs(h, K, beta, lb, &log_p, &log_om_p))
+        return false;
       if (L.active) {
-        // Solved in t = logit p, held as the pair (log p, log(1 - p)).
         double lp_lo, lomp_lo;
-        if (!frq_beta_quantile_logs(h, L.K_lo, beta, s.lo.lbeta_lo, &lp_lo,
-                                    &lomp_lo, true)) return;
-        const double lb_lo = s.lo.lbeta_lo;
-        auto ev = [&](double t, bool lower) {
-          const double lp = -frq_log1pexp(-t), lomp = -frq_log1pexp(t);
-          const double p = std::exp(lp), omp = std::exp(lomp);
-          FrqMixEval e;
-          if (lower) {
-            e.lm = frq_low_mix(frq_log_ibeta(p, omp, lp, lomp, K, beta, lb),
-                               frq_log_ibeta(p, omp, lp, lomp, L.K_lo, beta,
-                                             lb_lo), L);
-          } else {
-            e.l1m = frq_low_mix(frq_log_ibeta(omp, p, lomp, lp, beta, K, lb),
-                                frq_log_ibeta(omp, p, lomp, lp, beta, L.K_lo,
-                                              lb_lo), L);
-          }
-          e.lD = frq_low_mix(K * lp - lb, L.K_lo * lp - lb_lo, L) + beta * lomp;
-          return e;
-        };
+        if (!frq_beta_quantile_logs(h, L.K_lo, beta, lb_lo, &lp_lo, &lomp_lo,
+                                    true)) return false;
         const double ta = log_p - log_om_p, tb = lp_lo - lomp_lo;
         double t;
-        if (!frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, &t)) return;
+        if (!frq_mix_solve(h, ta, tb, ta + L.plo * (tb - ta), ev, &t))
+          return false;
         log_p = -frq_log1pexp(-t);
         log_om_p = -frq_log1pexp(t);
       }
+      return true;
+    };
+    bool solved = false;
+    if (seed != nullptr && seed->ok()) {
+      const double t0 = ((L.plo == 1.0) ? seed->log_E : seed->start(K)) -
+        std::log(beta);
+      double t;
+      if (frq_mix_solve(h, R_NegInf, R_PosInf, t0, ev, &t)) {
+        log_p = -frq_log1pexp(-t);
+        log_om_p = -frq_log1pexp(t);
+        solved = true;
+      }
     }
+    if (!solved && !cold()) return;
     if (ISNAN(log_p) || !(log_p > R_NegInf) || log_p > 0.0) return;
   }
-
   s.beta = beta;
   s.p = std::exp(log_p);
   s.log_p = log_p;
@@ -741,26 +843,67 @@ inline std::uint64_t frq_cache_bits(double x) {
   return bits;
 }
 
+// Shared exact-key cache, direct-mapped: a key owns one slot, chosen by its
+// hash, and a colliding key overwrites it.  A trend or covariate on K makes
+// nearly every row a new key, so a node-based map would allocate per row; the
+// fixed table never allocates after its first use, and clear() only advances
+// the generation that marks slots valid.
+//
+// Each miss is solved from a seed: the last root solved for the same
+// (cv, h, plo, omega) -- the key without K -- or failing that the last root
+// solved for any key.  Seeds only set where the solve starts, so they survive
+// clear() and carry the previous particle's roots into the next one.
 struct FrqCache {
-  std::unordered_map<FrqCacheKey, FrqAvail, FrqCacheKeyHash> entries;
+  static constexpr std::size_t SLOTS = 4096;  // power of two
+  static constexpr std::size_t SEED_FAMILIES_MAX = 4096;
+  struct Slot {
+    FrqCacheKey key;
+    std::uint64_t gen = 0;
+    FrqAvail avail;
+  };
+  std::vector<Slot> slots;
+  std::uint64_t gen = 1;
+  std::unordered_map<FrqCacheKey, FrqSeed, FrqCacheKeyHash> seeds;
+  FrqSeed last_seed;
 
-  FrqCache() { entries.reserve(256); }
+  void clear() { ++gen; }
 
-  void clear() { entries.clear(); }
-
-  // std::unordered_map is node-based, so a reference handed out here survives
-  // later insertions; only clear() invalidates it, and that runs between
-  // particles, outside any evaluator call.
+  // The reference is valid until the next get() or clear(); the memo copies
+  // it straight away.
   const FrqAvail& get(double K, double cv, double h, double plo,
                       double omega = 0.0) {
+    if (slots.empty()) slots.resize(SLOTS);
     const FrqCacheKey key{{frq_cache_bits(K), frq_cache_bits(cv),
                            frq_cache_bits(h), frq_cache_bits(plo),
                            frq_cache_bits(omega)}};
-    const auto found = entries.find(key);
-    if (found != entries.end()) return found->second;
-    const auto inserted = entries.emplace(
-      key, frq_derive_avail(K, cv, h, plo, omega));
-    return inserted.first->second;
+    // Round values such as K = 3 have all-zero low mantissa bits, so the
+    // hash is finalised (splitmix64) before its low bits pick the slot.
+    std::uint64_t z = FrqCacheKeyHash{}(key);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    z ^= z >> 31;
+    Slot& slot = slots[z & (SLOTS - 1)];
+    if (slot.gen == gen && slot.key == key) return slot.avail;
+    const FrqCacheKey family{{0, key.bits[1], key.bits[2], key.bits[3],
+                              key.bits[4]}};
+    const auto fs = seeds.find(family);
+    const FrqSeed* seed = (fs != seeds.end()) ? &fs->second
+      : (last_seed.ok() ? &last_seed : nullptr);
+    frq_derive_avail_into(slot.avail, K, cv, h, plo, omega, seed);
+    slot.key = key;
+    slot.gen = gen;
+    const FrqAvail& av = slot.avail;
+    if (av.ok && R_FINITE(av.log_E)) {
+      // The global seed crosses families, so it keeps no slope.
+      last_seed.K = K;
+      last_seed.log_E = av.log_E;
+      if (fs != seeds.end()) fs->second.update(K, av.log_E);
+      else {
+        if (seeds.size() >= SEED_FAMILIES_MAX) seeds.clear();
+        seeds.emplace(family, last_seed);
+      }
+    }
+    return av;
   }
 };
 
@@ -961,9 +1104,10 @@ inline FrqOmComp frq_omega_beta_comp(double log_q, double log_omq, double Kc,
   const bool series_F = (want & FRQ_OM_F) &&
     frq_omega_series_beta(log_q, log_omq, Kc, beta, lb_c, w,
                           FRQ_OMEGA_SERIES_SHORT, &out.lF);
+  double lIr = R_NaN;
   if ((want & FRQ_OM_S) || ((want & FRQ_OM_F) && !series_F)) {
-    const double T = lead + beta * (log_omq - log_omrq) +
-      frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc, beta, lb_c);
+    lIr = frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc, beta, lb_c);
+    const double T = lead + beta * (log_omq - log_omrq) + lIr;
     out.lS = frq_logaddexp(frq_log_ibeta(omq, q, log_omq, log_q, beta, Kc, lb_c),
                            T);
     if ((want & FRQ_OM_F) && !series_F) {
@@ -977,9 +1121,14 @@ inline FrqOmComp frq_omega_beta_comp(double log_q, double log_omq, double Kc,
   if (want & FRQ_OM_FD) {
     double lf = w.log_s + lead + std::log(beta) - (beta + 1.0) * log_omrq;
     if (beta != 1.0) lf += (beta - 1.0) * log_omq;
+    // I_x(K - 1, beta + 1) = I_x(K, beta) + x^{K-1} (1 - x)^beta /
+    // (beta B(K, beta)), two positive terms, reuses the survivor's I_rq(K, beta)
+    // when it was formed.
     if (!unit_c)
-      lf += frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc - 1.0, beta + 1.0,
-                          lb_c1);
+      lf += ISNAN(lIr)
+        ? frq_log_ibeta(rq, omrq, log_rq, log_omrq, Kc - 1.0, beta + 1.0, lb_c1)
+        : frq_logaddexp(lIr, (Kc - 1.0) * log_rq + beta * log_omrq - lb_c -
+                                 std::log(beta));
     out.lf = lf;
   }
   return out;
@@ -1011,8 +1160,9 @@ inline FrqOmComp frq_omega_pois_comp(double X, double log_X, double Kc,
   const bool series_F = (want & FRQ_OM_F) &&
     frq_omega_series_pois(X, log_X, Kc, lg_c, w, FRQ_OMEGA_SERIES_SHORT,
                           &out.lF);
+  double lPr = R_NaN;
   if ((want & FRQ_OM_S) || ((want & FRQ_OM_F) && !series_F)) {
-    double lPr, lP, lQ;
+    double lP, lQ;
     frq_omega_pgamma(Kc, rX, log_rX, lg_c, &lPr, nullptr);
     frq_omega_pgamma(Kc, X, log_X, lg_c, &lP, &lQ);
     const double T = lead - w.s * X + lPr;
@@ -1027,8 +1177,13 @@ inline FrqOmComp frq_omega_pois_comp(double X, double log_X, double Kc,
   if (want & FRQ_OM_FD) {
     double lf = w.log_s + lead - w.s * X;
     if (!unit_c) {
+      // P_{K-1}(z) = P_K(z) + z^{K-1} e^{-z} / Gamma(K), two positive terms,
+      // reuses the survivor's P_K(rX) when it was formed.
       double lP1;
-      frq_omega_pgamma(Kc - 1.0, rX, log_rX, lg_c1, &lP1, nullptr);
+      if (ISNAN(lPr))
+        frq_omega_pgamma(Kc - 1.0, rX, log_rX, lg_c1, &lP1, nullptr);
+      else
+        lP1 = frq_logaddexp(lPr, (Kc - 1.0) * log_rX - rX - lg_c);
       lf += lP1;
     }
     out.lf = lf;

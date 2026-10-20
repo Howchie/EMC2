@@ -52,7 +52,8 @@ NumericVector dfrq(NumericVector t, NumericVector K, NumericVector v,
   frq_check_len(omega, n, "omega");
   NumericVector out(n);
   auto pick = frq_pick;
-  FrqMemo memo;
+  FrqCache cache;
+  FrqMemo memo(&cache);
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
                                 pick(h, i), pick(plo, i), pick(clock, i),
@@ -84,7 +85,8 @@ NumericVector pfrq(NumericVector t, NumericVector K, NumericVector v,
   frq_check_len(omega, n, "omega");
   NumericVector out(n);
   auto pick = frq_pick;
-  FrqMemo memo;
+  FrqCache cache;
+  FrqMemo memo(&cache);
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(K, i), pick(v, i), pick(sv, i),
                                 pick(h, i), pick(plo, i), pick(clock, i),
