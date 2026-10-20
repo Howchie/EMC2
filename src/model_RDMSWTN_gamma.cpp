@@ -175,7 +175,8 @@ Rcpp::NumericVector dRDMSWTN_gdrift_cpp(Rcpp::NumericVector t, Rcpp::NumericVect
     Rcpp::stop("dRDMSWTN_gdrift_cpp: arguments must have equal lengths.");
   Rcpp::NumericVector out(n);
   for (R_xlen_t i = 0; i < n; ++i) {
-    const double l = gdrift_log_density(t[i] - t0[i], v[i], B[i], A[i], s[i], sv[i]);
+    const double l = gdrift_log_density(t[i] - t0[i], v[i], B[i], A[i], s[i], sv[i],
+                                        log_out ? R_NegInf : kLogUnderflow);
     out[i] = log_out ? l : std::exp(l);
   }
   return out;

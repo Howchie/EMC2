@@ -43,6 +43,7 @@ constexpr double PIMG_BAND = 0.1;      // |1 - k| below this: image term also fr
 constexpr int PIMG_MAX_TERMS = 2000;   // when it is at most this long
 constexpr double LOG_T_SMALL = -6.907755278982137;   // log 1e-3
 constexpr double T_SMALL_U = 3.090232306167813;      // Phi(-u) >= 1e-3 below this
+constexpr double LOG_T_LADDER = -11.512925464970229;  // log 1e-5: T = 1 - C keeps ~11 digits above this
 constexpr int FALLBACK_PANELS = 128;  // composite Gauss-Legendre when the closed form fails
 constexpr double FALLBACK_TOL = 1e-11; // two panel counts agree to this (relative, in logs)
 constexpr double COND_MAX = 1e5;       // closed form kept while it loses < 5 digits
@@ -396,6 +397,16 @@ inline bool endpoint(double t, double d, double s, double k, double tau, double 
   if (!lower && (u <= T_SMALL_U || std::log(0.977) + R::pgamma(u + 2.0, k, 1.0 / p, 0, 1) > LOG_T_SMALL))
     lower = true;
   const double lp = std::log(p);
+  // That bound is loose for broad laws (small k).  With z < 0 the lower ladder
+  // runs about p u terms and the upper series about (41 / p)^2 (its terms fall
+  // like e^(-p sqrt(n))); when the ladder is the shorter, its C gives T = 1 - C
+  // directly, which keeps enough digits down to T = 1e-5.
+  const double pu = p * u;
+  if (!lower && z < 0.0 && pu + 8.0 * std::sqrt(pu) + 10.0 < (41.0 / p) * (41.0 / p)) {
+    double lA0, lA1;
+    if (ladder_lower(k, p, u, e.lD, e.lD1, lA0, lA1) && log1m_exp(lA0 - lp) > LOG_T_LADDER)
+      lower = true;
+  }
   for (int pass = 0; pass < 2; ++pass) {
     const bool lo = (pass == 0) ? lower : !lower;
     if (lo) {

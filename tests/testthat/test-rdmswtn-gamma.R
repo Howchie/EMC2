@@ -245,6 +245,41 @@ test_that("start-point variability: hard corners and the A -> 0 limit", {
   expect_lt(abs(dA / d0 - 1), 1e-5)
 })
 
+test_that("start-point variability with a broad drift law is accurate and cheap", {
+  # k = (v/sv)^2 from 7e-5 to 0.2: the upper convolution series is long there
+  # and the closed form can fail, so the ladder, the moment-length exit and the
+  # adaptive fallback all take part
+  cases <- rbind(c(t = 0.3, v = 0.0024, B = 1.61, A = 0.4, s = 0.253, sv = 0.289),
+                 c(t = 1, v = 0.0024, B = 1.61, A = 0.4, s = 0.253, sv = 0.289),
+                 c(t = 0.5, v = 0.09, B = 1.61, A = 0.4, s = 0.255, sv = 0.289),
+                 c(t = 1, v = 0.125, B = 2.33, A = 0.4, s = 0.256, sv = 0.289))
+  for (i in seq_len(nrow(cases))) {
+    g <- as.list(cases[i, ])
+    lf <- gdrift_d(g$t, g$v, g$B, g$s, g$sv, log = TRUE, A = g$A)
+    lF <- log(gdrift_p(g$t, g$v, g$B, g$s, g$sv, A = g$A))
+    expect_lt(abs(lf - log(gdrift_A_ref(g$t, g$v, g$B, g$A, g$s, g$sv, "f"))), 1e-8)
+    expect_lt(abs(lF - log(gdrift_A_ref(g$t, g$v, g$B, g$A, g$s, g$sv, "F"))), 1e-8)
+  }
+  n <- 2000
+  g <- as.list(cases[1, ])
+  el <- system.time(gdrift_d(rep(g$t, n), g$v, g$B, g$s, g$sv, A = g$A))[["elapsed"]]
+  expect_lt(el, 1)
+  # early times: both tails are bounded from the point CDF at B, so a density
+  # far below the double range is 0 at once and the survivor is 1
+  tt <- rep(0.01, n)
+  el <- system.time(d <- gdrift_d(tt, 0.637, 2.33, 0.271, 0.289, A = 0.4))[["elapsed"]]
+  expect_true(all(d == 0))
+  expect_lt(el, 1)
+  expect_true(all(gdrift_p(tt[1:10], 0.637, 2.33, 0.271, 0.289, lower = FALSE, A = 0.4) == 1))
+  # the bounds hold where they are not negligible
+  ts <- c(0.05, 0.1, 0.2)
+  lFB <- log(gdrift_p(ts, 0.637, 2.33, 0.271, 0.289))
+  lfA <- gdrift_d(ts, 0.637, 2.33, 0.271, 0.289, log = TRUE, A = 0.4)
+  lFA <- log(gdrift_p(ts, 0.637, 2.33, 0.271, 0.289, A = 0.4))
+  expect_true(all(lFA <= lFB + 1e-12))
+  expect_true(all(lfA <= lFB + log((2.33 + 0.4) / (ts * 0.4)) + 1e-12))
+})
+
 test_that("a gamma drift drawn as zero is a driftless hit, not an omission", {
   skip_on_cran()
   set.seed(11)
