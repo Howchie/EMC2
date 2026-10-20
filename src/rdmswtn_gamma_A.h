@@ -50,7 +50,7 @@ constexpr int CONV_MAX_TERMS = 200000;
 // log(1 - 1e-4): a tail formed as one minus this keeps all but four digits
 constexpr double LOG_COMPLEMENT_OK = -1.0000500033334732e-4;
 
-enum APath { A_POINT = 1, A_SHORT = 2, A_CLOSED = 3, A_BAND = 4, A_FALLBACK = 5 };
+enum APath { A_POINT = 1, A_SHORT = 2, A_CLOSED = 3, A_BAND = 4, A_FALLBACK = 5, A_FAR = 6 };
 
 struct AOut {
   double logf = NAN_D, logF = NAN_D, logS = NAN_D;
@@ -599,16 +599,38 @@ inline bool closed_or_band(double t, double B, double A, double s, double k, dou
 }
 
 // Driver.  B >= 0 is the near distance, A >= 0 the width of the start range.
-inline AOut gamma_wald_A(double t, double B, double A, double s, double k, double tau) {
+// want and lf_floor as for gamma_wald: a log density below lf_floor (with want
+// = WANT_PDF) may come back as an upper bound still below it.
+inline AOut gamma_wald_A(double t, double B, double A, double s, double k, double tau,
+                         int want = WANT_ALL, double lf_floor = NEG_INF) {
   AOut r;
   if (!(t > 0.0)) { r.logf = NEG_INF; r.logF = NEG_INF; r.logS = 0.0; return r; }
   if (!(A > 0.0)) {
-    const Out o = gamma_wald(t, B, s, k, tau, WANT_ALL);
+    const Out o = gamma_wald(t, B, s, k, tau, want, 0, lf_floor);
     r.logf = o.logf; r.logF = o.logF; r.logS = o.logS; r.path = A_POINT;
     return r;
   }
   const double rt = std::sqrt(t), ss = s * rt;
   const double p = tau * s / rt, uH = (B + A) / ss, Delta = A / ss;
+  // Early times.  The first-passage time grows with the distance on every
+  // path, so F(t | d) <= F(t | B) on [B, B + A]; and for each drift V the
+  // start-averaged density (1/A) int (d / t) phi_ss(d - V t) dd is at most
+  // (B + A) / (t A) P(V t + ss Z >= B) <= (B + A) / (t A) F(t | B), the Wald
+  // CDF being at least Phi((V t - B) / ss).  Both bounds are returned when
+  // they are negligible on the scale the caller asked for (as far_tail does).
+  if (B > 0.0 && k / p < B / ss) {
+    const Out o = gamma_wald(t, B, s, k, tau, WANT_CDF);
+    const double lF = o.logF, lfb = lF + std::log((B + A) / (t * A));
+    double thr = LOG_NEGLIGIBLE;
+    if (want == WANT_SURV) thr = LOG_UNIT;
+    if (want == WANT_PDF) thr = std::max(thr, lf_floor);
+    const bool far = (lF < LOG_NEGLIGIBLE && lfb < LOG_NEGLIGIBLE) ||
+      (want == WANT_PDF ? lfb < thr : (want == WANT_SURV && lF < thr));
+    if (far) {
+      r.logf = lfb; r.logF = lF; r.logS = 0.0; r.path = A_FAR;
+      return r;
+    }
+  }
   // the span in units of the scale on which f, F and S vary with the distance
   const double span = Delta * (1.0 + uH + std::fabs(k / p - uH) + p);
   if (span < SHORT_SPAN4) {

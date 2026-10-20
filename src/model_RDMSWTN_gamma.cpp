@@ -19,6 +19,9 @@ namespace gcol = emc2col::rdmswtn_gamma;
 // Drift SD below this fraction of the mean is the Wald limit: the gamma
 // correction to the Wald law is O(cv^2).
 constexpr double kWaldCv = 1e-6;
+// exp() of a log below this is 0 in double, so a density that is returned on the
+// natural scale may be bounded there.
+constexpr double kLogUnderflow = -746.0;
 
 inline bool wald_limit(double v, double sv) {
   return !emc2_isfinite(sv) || !(sv > kWaldCv * v);
@@ -50,7 +53,7 @@ inline double gdrift_log(double tt, double v, double B, double A, double s, doub
   }
   const double k = (v / sv) * (v / sv), tau = v / (sv * sv);
   if (A > 0.0) {
-    const AOut o = gamma_wald_A(tt, B, A, s, k, tau);
+    const AOut o = gamma_wald_A(tt, B, A, s, k, tau, want, lf_floor);
     return (want == WANT_PDF) ? o.logf : (want == WANT_CDF ? o.logF : o.logS);
   }
   const Out o = gamma_wald(tt, B, s, k, tau, want, 0, lf_floor);
@@ -75,7 +78,7 @@ double drdmswtn_gdrift_scalar(double t, const double* par, void* /*ctx_*/) {
   const double tt = t - par[gcol::t0];
   if (!(tt > 0.0)) return 0.0;
   const double l = gdrift_log_density(tt, par[gcol::v], par[gcol::B], par[gcol::A],
-                                     par[gcol::s], par[gcol::sv]);
+                                     par[gcol::s], par[gcol::sv], kLogUnderflow);
   return R_FINITE(l) ? std::exp(l) : 0.0;
 }
 
