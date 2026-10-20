@@ -44,6 +44,7 @@ constexpr int PIMG_MAX_TERMS = 2000;   // when it is at most this long
 constexpr double LOG_T_SMALL = -6.907755278982137;   // log 1e-3
 constexpr double T_SMALL_U = 3.090232306167813;      // Phi(-u) >= 1e-3 below this
 constexpr int FALLBACK_PANELS = 128;  // composite Gauss-Legendre when the closed form fails
+constexpr double FALLBACK_TOL = 1e-11; // two panel counts agree to this (relative, in logs)
 constexpr double COND_MAX = 1e5;       // closed form kept while it loses < 5 digits
 constexpr int CONV_MAX_TERMS = 200000;
 // log(1 - 1e-4): a tail formed as one minus this keeps all but four digits
@@ -625,14 +626,33 @@ inline AOut gamma_wald_A(double t, double B, double A, double s, double k, doubl
     r.path = A_SHORT;
     return r;
   }
-  const int panels = std::min(FALLBACK_PANELS, static_cast<int>(std::ceil(span)));
-  r.logf = NEG_INF; r.logF = NEG_INF; r.logS = NEG_INF;
-  for (int j = 0; j < panels; ++j) {
-    const AOut q = point_average(t, B + A * j / panels, A / panels, s, k, tau, 8);
-    r.logf = lse2(r.logf, q.logf); r.logF = lse2(r.logF, q.logF); r.logS = lse2(r.logS, q.logS);
+  // The span overstates the panels needed when the drift law is broad, so the
+  // count doubles from 2 until two counts agree, up to the span's count.
+  const int pmax = std::min(FALLBACK_PANELS, std::max(2, static_cast<int>(std::ceil(span))));
+  auto composite = [&](int panels) {
+    AOut c;
+    c.logf = NEG_INF; c.logF = NEG_INF; c.logS = NEG_INF;
+    for (int j = 0; j < panels; ++j) {
+      const AOut q = point_average(t, B + A * j / panels, A / panels, s, k, tau, 8);
+      c.logf = lse2(c.logf, q.logf); c.logF = lse2(c.logF, q.logF); c.logS = lse2(c.logS, q.logS);
+    }
+    const double lpn = std::log(static_cast<double>(panels));
+    c.logf -= lpn; c.logF = std::min(0.0, c.logF - lpn); c.logS = std::min(0.0, c.logS - lpn);
+    return c;
+  };
+  auto same = [](double a, double b) {
+    if (!std::isfinite(a) || !std::isfinite(b)) return a == b;
+    return std::fabs(a - b) <= FALLBACK_TOL * std::max(1.0, std::fabs(a));
+  };
+  int panels = std::min(2, pmax);
+  r = composite(panels);
+  while (panels < pmax) {
+    panels = std::min(2 * panels, pmax);
+    const AOut q = composite(panels);
+    const bool agree = same(q.logf, r.logf) && same(q.logF, r.logF) && same(q.logS, r.logS);
+    r = q;
+    if (agree) break;
   }
-  const double lpn = std::log(static_cast<double>(panels));
-  r.logf -= lpn; r.logF = std::min(0.0, r.logF - lpn); r.logS = std::min(0.0, r.logS - lpn);
   r.path = A_FALLBACK;
   return r;
 }

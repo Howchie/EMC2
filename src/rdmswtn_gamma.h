@@ -505,7 +505,7 @@ inline double moment_logS(double k, double p, double delta, double z, double q,
 constexpr int F_MAX_TERMS = 20000;
 
 inline int moment_F_length(double k, double z, double delta) {
-  double prod = 1.0, lt = 0.0, lmax = 0.0;
+  double prod = 1.0, lt = 0.0, lmax = 0.0, g_prev = 0.0, lt_prev = 0.0;
   for (int nn = 0; nn < F_MAX_TERMS; ++nn) {
     const double g = saddle(k + nn, z) / (saddle(nn + 1.0, delta) + delta);
     prod *= g;
@@ -513,6 +513,16 @@ inline int moment_F_length(double k, double z, double delta) {
       lt += std::log(prod); prod = 1.0;
       lmax = std::max(lmax, lt);
       if (g < 1.0 && lt < lmax - 41.0 + 2.0 * std::log1p(-g)) return nn + 8;
+      // While the ratio rises no later block falls faster than this one, and
+      // the stopping drop only grows: give up once that rate cannot reach it
+      // within F_MAX_TERMS (small p, where the terms fall like e^(-p sqrt(n))).
+      if (nn > 7 && g >= g_prev) {
+        const double rate = lt_prev - lt;
+        const double blocks = (F_MAX_TERMS - 1 - nn) / 8.0;
+        const double need = lt - (lmax - 41.0 + (g < 1.0 ? 2.0 * std::log1p(-g) : 0.0));
+        if (rate <= 0.0 || rate * blocks < need) return -1;
+      }
+      g_prev = g; lt_prev = lt;
     }
   }
   return -1;
