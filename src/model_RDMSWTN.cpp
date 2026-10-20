@@ -37,6 +37,9 @@ static inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A,
 static inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, bool posdrift) {
   if (tt <= 0.0) return 0.0;
   if (posdrift && mu <= 0.0) return 0.0;
+  // The natural CDF is NaN at t = +Inf; the log survivor gives the
+  // never-finish mass.
+  if (tt == R_PosInf) return wald_k0_log_surv(tt, b, mu, A);
   const double cdf = pwald_k0(tt, b, mu, A);
   const double cl = std::max(0.0, std::min(1.0, cdf));
   if (cl <= 0.0) return 0.0;  // survivor ~ 1: -F below natural resolution
@@ -261,8 +264,8 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
     double logS = 0.0;
-    bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
+    bool bad = false, failed = false;
+    for (int k = 0; k < n_lR && !bad && !failed; ++k) {
       const int r = start + k;
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double t0_r = t0_[r];
@@ -339,7 +342,8 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
                                                dispatch.lambda_g, dispatch.lambda_k,
                                                20, kill_shape, dispatch.guess, pd, omega);
         if (log_s == R_NegInf) { bad = true; break; }
-        if (!ISNAN(log_s)) logS += std::fmin(log_s, 0.0);
+        if (ISNAN(log_s)) { failed = true; break; }
+        logS += std::fmin(log_s, 0.0);
         continue;
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
@@ -362,12 +366,14 @@ void rdmswtn_logS_at_t(double t, const double* const* cols,
                                                dispatch.lambda_g, dispatch.lambda_k,
                                                20, kill_shape, dispatch.guess, pd, omega);
         if (log_s == R_NegInf) { bad = true; break; }
-        if (!ISNAN(log_s)) logS += std::fmin(log_s, 0.0);
+        if (ISNAN(log_s)) { failed = true; break; }
+        logS += std::fmin(log_s, 0.0);
         continue;
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
     }
-    logS_out[j] = bad ? R_NegInf : logS;
+    // NaN sends the trial to the per-trial normaliser.
+    logS_out[j] = failed ? R_NaN : (bad ? R_NegInf : logS);
   }
 }

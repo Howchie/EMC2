@@ -188,6 +188,11 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
     out.ctx.t0_index   = emc2col::rdmswtn::t0;
     out.ctx.defective_upper_tail = true;
+    // rdmswtn_logS_at_t answers t = +Inf with each accumulator's
+    // never-finish mass (-Inf when proper), so truncation stays on the
+    // batched log survivors instead of the scalar 1 - F path, which loses
+    // every survivor below the double resolution of F.
+    out.ctx.supports_batched_defective_truncation = true;
     const bool tt = type_std.find("RDMSWTN_TT") != std::string::npos;
     const bool ut = type_std.find("RDMSWTN_UT") != std::string::npos;
     if (tt || ut) {

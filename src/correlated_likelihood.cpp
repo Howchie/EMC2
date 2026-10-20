@@ -1745,16 +1745,21 @@ double c_log_likelihood_corr_drift(
               // [LT, Inf) window and must not be subtracted.
               log_z = log_s_lt[static_cast<size_t>(j)];
             } else {
-              log_z = log_diff_exp(log_s_lt[static_cast<size_t>(j)],
-                                   log_s_ut[static_cast<size_t>(j)]);
+              const double ls_lt = log_s_lt[static_cast<size_t>(j)];
+              const double ls_ut = log_s_ut[static_cast<size_t>(j)];
+              log_z = log_diff_exp(ls_lt, ls_ut);
               // A retained never-finish atom joins S(LT) - S(UT), as in the
               // scalar normaliser.  Given the node the racers are
               // independent, so S(+Inf | z) is the per-racer plateau product
               // (the batched callbacks cannot all be queried at +Inf).
-              if (R_FINITE(log_z) && node_ctx.retains_defective_atom(ut))
-                log_z = log_sum_exp(log_z, log_surv_trial(R_PosInf, j));
+              double log_atom = R_NegInf;
+              if (R_FINITE(log_z) && node_ctx.retains_defective_atom(ut)) {
+                log_atom = log_surv_trial(R_PosInf, j);
+                log_z = log_sum_exp(log_z, log_atom);
+              }
               need_scalar_fallback =
-                !(R_FINITE(log_z) && log_z > log_prob_eps);
+                !(R_FINITE(log_z) && log_z > log_prob_eps &&
+                  trunc_window_resolved(ls_lt, ls_ut, log_atom));
             }
           }
 

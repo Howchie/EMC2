@@ -2717,7 +2717,11 @@ double c_log_likelihood_race(
     const double* rt_ptr = rt_eval;
     const double* const* pars_cm = cols_view;
     const bool dense_floor_raw_log_lik_prev = dense_ctx.floor_raw_log_lik;
-    if (has_time) dense_ctx.floor_raw_log_lik = false;
+    // Truncated trials floor after dividing by the normaliser: a component
+    // below min_ll can still give a likely trial once Z is tiny too.  The
+    // untruncated sum below re-applies the per-component floor.
+    const bool raw_for_trunc = apply_truncation_correction && may_need_ct && !has_time;
+    if (has_time || raw_for_trunc) dense_ctx.floor_raw_log_lik = false;
     if (any_win_eval) {
       model_dfun_raw(rt_ptr, pars_cm, n_trials,
                      idx_win_eval_ptr, isok_ptr,
@@ -2946,12 +2950,11 @@ double c_log_likelihood_race(
           if (!trunc_mask[static_cast<size_t>(j)]) continue;
           const double logS_LT_j = logS_LT_vec[static_cast<size_t>(j)];
           const double logS_UT_j = logS_UT_vec[static_cast<size_t>(j)];
-          double logP = log_diff_exp(logS_LT_j, logS_UT_j);
-          if (batch_defective_atom) {
-            logP = log_sum_exp(logP,
-                               logS_inf_vec[static_cast<size_t>(j)]);
-          }
-          if (R_FINITE(logP) && logP > kLogProbEps) {
+          const double log_atom_j = batch_defective_atom
+            ? logS_inf_vec[static_cast<size_t>(j)] : R_NegInf;
+          const double logP = log_sum_exp(log_diff_exp(logS_LT_j, logS_UT_j), log_atom_j);
+          if (R_FINITE(logP) && logP > kLogProbEps &&
+              trunc_window_resolved(logS_LT_j, logS_UT_j, log_atom_j)) {
             logZ_batch[static_cast<size_t>(j)] = logP;
           } else {
             // NaN (bad params), catastrophic cancellation, or P≈0:
@@ -3001,7 +3004,8 @@ double c_log_likelihood_race(
           bool hit_min_ll = false;
           for (int k = 0; k < n_lR_j; ++k) {
             double v = lds_ptr[start_row_idx + k];
-            if (!has_time && v <= min_ll) hit_min_ll = true;
+            // Raw kernels return min_ll exactly only when they floor anyway.
+            if (!has_time && (raw_for_trunc ? v == min_ll : v <= min_ll)) hit_min_ll = true;
             current_trial_ll_sum += v;
           }
           if (has_time && n_resp_ptr[unique_trial_idx] > 0) {
@@ -3035,8 +3039,10 @@ double c_log_likelihood_race(
 
       // No truncation (or all_finite_trials guarantees none): plain sum.
       double current_trial_ll_sum = 0.0;
-      for (int k = 0; k < n_lR_j; ++k)
-        current_trial_ll_sum += lds_ptr[start_row_idx + k];
+      for (int k = 0; k < n_lR_j; ++k) {
+        const double v = lds_ptr[start_row_idx + k];
+        current_trial_ll_sum += (raw_for_trunc && !(v > min_ll)) ? min_ll : v;
+      }
       if (has_time && n_resp_ptr[unique_trial_idx] > 0) {
         int idx_W = -1, idx_T = -1;
         for (int k = 0; k < n_lR_j; ++k) {

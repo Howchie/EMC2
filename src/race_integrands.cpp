@@ -486,7 +486,9 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                 cdf1, model_specific_context)
         : R_NegInf;
   double logP = log_sum_exp(log_diff_exp(logS_LT, logS_UT), log_defective_atom);
-  if (R_FINITE(logP) && logP > log_prob_eps) return logP;
+  if (R_FINITE(logP) && logP > log_prob_eps &&
+      trunc_window_resolved(logS_LT, logS_UT, log_defective_atom))
+    return logP;
 
   // The window mass is at most S(LT). Integration only recovers it from a
   // cancelling difference of resolved survivors: when S(LT) is itself below

@@ -4,6 +4,7 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -328,6 +329,19 @@ inline double raw_log_zero(double min_ll, bool floor_raw) {
 inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
   if (!R_FINITE(log_x)) return raw_log_zero(min_ll, floor_raw);
   return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
+}
+
+// Whether the closed-form truncation mass S(LT) - S(UT) + atom is resolved.
+// When the survivors agree to within sqrt(eps) relatively, their difference
+// keeps fewer than half the digits of S and must come from integrating the
+// density over the window instead.  A retained never-finish atom that carries
+// more than sqrt(eps) of S(LT) makes that cancellation immaterial.
+inline bool trunc_window_resolved(double logS_LT, double logS_UT, double log_atom) {
+  static const double kLogSqrtEps =
+      0.5 * std::log(std::numeric_limits<double>::epsilon());
+  static const double kSqrtEps = std::exp(kLogSqrtEps);
+  if (logS_LT - logS_UT > kSqrtEps) return true;
+  return log_atom > logS_LT + kLogSqrtEps;
 }
 
 // ---------------------------------------------------------------------------

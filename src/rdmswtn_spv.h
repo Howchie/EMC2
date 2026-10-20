@@ -153,7 +153,7 @@ inline double normal_hazard(double x) { return std::exp(-log_mills(x)); }
 struct Law {
   double t, mu, s, sv;
   bool pos;
-  double s2, sv2, Q, sqrtQ, S, S2, c, c2, mut, rho, u, k, a, beta;
+  double s2, sv2, Q, sqrtQ, S, S2, c, c2, mut, rho, om, u, k, a, beta;
   double log_delta;  // log(2 sv phi(mu/sv) / s^2); -Inf for full-Gaussian drift
   double logZ;       // log Phi(mu/sv); 0 for full-Gaussian drift
   double log_c, log_S;
@@ -177,6 +177,7 @@ inline Law make_law(double t, double mu, double s, double sv, bool pos) {
   L.c = std::sqrt(L.c2);
   L.mut = mu * t;
   L.rho = sv * std::sqrt(t) / L.sqrtQ;
+  L.om = L.s2 / L.Q;   // 1 - rho^2, formed without cancellation
   L.u = sv / (s * L.sqrtQ);
   L.k = 1.0 + 2.0 * L.sv2 * t / L.s2;
   L.a = 2.0 * mu / L.s2;
@@ -249,7 +250,7 @@ inline double bvn(const Law& L, double x, double y) {
 // side longer than kPostPanel (possible only as sl^2 -> 1, when it can
 // stretch over hundreds of units with its curvature concentrated next to the
 // mode) is cut into panels that double in width away from the mode.
-inline double log_posterior_mills(double x0, double sl, double zlo,
+inline double log_posterior_mills(double x0, double sl, double om, double zlo,
                                   int nodes = kPostNodes,
                                   double first_panel = kPostPanel,
                                   bool allow_closed_form = true) {
@@ -258,11 +259,10 @@ inline double log_posterior_mills(double x0, double sl, double zlo,
   auto df = [&](double z, double& d2) {
     const double x = x0 + sl * z;
     const double lam = normal_hazard(x);
-    d2 = std::fmin(-1.0 + sl * sl * (1.0 - lam * (lam - x)), -1e-12);
+    d2 = std::fmin(-om - sl * sl * lam * (lam - x), -1e-300);
     return -z + sl * (x - lam);
   };
 
-  const double om = std::fma(-sl, sl, 1.0);
   if (allow_closed_form && om > 0.0) {
     const double k = std::sqrt(om);
     const double full = log_mills(x0 / k) - std::log(k);
@@ -276,7 +276,7 @@ inline double log_posterior_mills(double x0, double sl, double zlo,
       if (log_bound < full - M_LN2) {
         // The mass below zlo, int_{-inf}^{zlo} = I(x0, -sl, -zlo), starts at
         // its own maximum: one side of quadrature, and less than half of full.
-        const double log_below = log_posterior_mills(x0, -sl, -zlo, nodes, first_panel, false);
+        const double log_below = log_posterior_mills(x0, -sl, om, -zlo, nodes, first_panel, false);
         return full + std::log1p(-std::exp(log_below - full));
       }
     }
@@ -406,7 +406,7 @@ inline double seed_log_H(const Law& L, double r) {
   }
   const double xH = (r + post_mean(L, r) * L.t) / L.c;
   RDMSWTN_SPV_COUNT(seeds_post, 1);
-  return L.log_c + log_G(L, r) + log_posterior_mills(xH, L.rho, -w_of(L, r));
+  return L.log_c + log_G(L, r) + log_posterior_mills(xH, L.rho, L.om, -w_of(L, r));
 }
 
 // Posterior-form T (want_T) or U.  The representation whose Mills argument is
@@ -415,11 +415,12 @@ inline double seed_log_H(const Law& L, double r) {
 inline double post_log_TU(const Law& L, double r, bool want_T) {
   const double pre = L.log_c + log_G(L, r);
   const double zlo = -w_of(L, r);
-  const double xT = (r - post_mean(L, r) * L.t) / L.c;
+  // r - post_mean t = s^2 (r - mu t) / Q, formed without cancellation.
+  const double xT = L.om * (r - L.mut) / L.c;
   const bool native_T = (xT >= 0.0);
   auto form = [&](bool T) {
-    return pre + (T ? log_posterior_mills(xT, -L.rho, zlo)
-                    : log_posterior_mills(-xT, L.rho, zlo));
+    return pre + (T ? log_posterior_mills(xT, -L.rho, L.om, zlo)
+                    : log_posterior_mills(-xT, L.rho, L.om, zlo));
   };
   if (native_T == want_T) return form(want_T);
   const double other = form(!want_T);
