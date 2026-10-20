@@ -27,6 +27,26 @@ test_that("an indefinite likelihood Hessian is projected, and a missing one fall
   expect_null(attr(EMC2:::.emc_attach_lik(eff, list(lik))[[1]], "lik"))
 })
 
+test_that("a flat likelihood direction keeps the approximation's mode near the fit", {
+  # The likelihood has no curvature along the second coordinate, but the
+  # prior pulls the conditional mode x there off the group mean.
+  H <- diag(c(4, 0, 1e-6))
+  P <- diag(c(1, 1 / 0.09, 1))
+  mu <- c(0, -4, 0)
+  x <- c(0.2, -3.7, 0.5)
+  lik <- EMC2:::.emc_lik_canonical(H, x, P, mu)
+  # The mode under the fitting prior is still x.
+  expect_equal(drop(solve(lik$prec + P, lik$lin + P %*% mu)), x)
+  # The approximation's own mode lies within the trust radius of x.
+  radius <- EMC2:::.EMC_LIK_MODE_RADIUS_SD * sqrt(diag(solve(P)))
+  own_mode <- drop(solve(lik$prec, lik$lin))
+  expect_true(all(abs(own_mode - x) <= radius * (1 + 1e-8)))
+  expect_equal(lik$prec[1, 1], 4)
+  # So a conditional under a far wider group variance stays near x too.
+  wide <- solve(lik$prec + P / 1e4, lik$lin + P %*% mu / 1e4)
+  expect_true(all(abs(wide - x) <= radius * (1 + 1e-6)))
+})
+
 test_that("the Laplace-conditional proposal leaves a conjugate posterior invariant, even when wrong", {
   skip_model_validation()
   ybar <- c(1.5, -0.5); Li <- diag(1 / c(0.3, 0.5))

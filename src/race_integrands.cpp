@@ -488,6 +488,16 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
   double logP = log_sum_exp(log_diff_exp(logS_LT, logS_UT), log_defective_atom);
   if (R_FINITE(logP) && logP > log_prob_eps) return logP;
 
+  // The window mass is at most S(LT). Integration only recovers it from a
+  // cancelling difference of resolved survivors: when S(LT) is itself below
+  // eps, or the survivor rises across the window (rounding in the kernel, never
+  // a distribution), the integrand is below the same resolution and the
+  // adaptive rules only exhaust their subdivision limits on its noise. The
+  // window then holds no resolvable mass, as the final check below would
+  // conclude.
+  if (logS_LT <= log_prob_eps || logS_UT > logS_LT)
+    return log_defective_atom > log_prob_eps ? log_defective_atom : R_NegInf;
+
   // Only falls back to GSL integration if the analytic trick fails (e.g. due to catastrophic cancellation)
   gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
   double log_total = R_NegInf;

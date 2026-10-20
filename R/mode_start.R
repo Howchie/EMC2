@@ -233,6 +233,11 @@
   covariance
 }
 
+# How far beyond the start (Mahalanobis distance under the group prior) the
+# subject mode search may evaluate the likelihood. 20 SDs is a prior penalty of
+# ~200 nats past the start, beyond any mode a hierarchical subject can have.
+.EMC_MODE_MAX_EXTRA_SD <- 20
+
 .emc_optimize_subject <- function(x0, prior, ll_batch, maxit = 2000L,
                                   proposal_prior_scale = 1, blocks = NULL,
                                   start_covariance = FALSE) {
@@ -253,7 +258,18 @@
     }
     last$ll
   }
+  # BFGS starts its line search with a unit step along the raw gradient, so a
+  # steep likelihood throws the first trial point tens of prior SDs away, where
+  # some likelihoods are finite but very slow (RDMSWTN sv > 0 at s ~ 1e-7 took
+  # 30 s per call). Points that far beyond the start are treated as outside
+  # the support without evaluating the likelihood; BFGS backtracks.
+  far <- function(x) {
+    delta <- x - prior$mu
+    sqrt(max(0, drop(crossprod(delta, precision %*% delta))))
+  }
+  max_radius <- far(x0) + .EMC_MODE_MAX_EXTRA_SD
   objective <- function(x) {
+    if (!(far(x) <= max_radius)) return(1e10)
     ll <- loglik(x)
     if (length(ll) != 1L || !is.finite(ll)) return(1e10)
     delta <- x - prior$mu
@@ -385,10 +401,26 @@
 # from the mode condition, where the likelihood gradient equals
 # precision (x - mu). It does not involve the group prior, so new_particle()
 # combines it with whatever group state is current.
+#
+# Along an eigendirection with little curvature but a nonzero gradient the
+# quadratic's own mode lies far away (at infinity for zero curvature), and a
+# conditional frame under a wider group variance moves its centre toward it:
+# the shear's log-sd moves then transport subjects to points the likelihood
+# never supported (RDMSWTN with sv near 0 is flat in log sv, and its survivor
+# is very slow at huge sv). The curvature in each eigendirection is
+# raised just enough to keep that mode within .EMC_LIK_MODE_RADIUS_SD group
+# prior SDs of x. The gradient at x is kept, so the conditional mode under
+# the fitting prior is still x.
+.EMC_LIK_MODE_RADIUS_SD <- 10
+
 .emc_lik_canonical <- function(ll_hess, x, precision, mu) {
   e <- eigen((ll_hess + t(ll_hess)) / 2, symmetric = TRUE)
-  prec <- e$vectors %*% (pmax(e$values, 0) * t(e$vectors))
-  lin <- drop(prec %*% x + precision %*% (x - mu))
+  grad <- drop(precision %*% (x - mu))
+  g_e <- drop(crossprod(e$vectors, grad))
+  prior_sd <- sqrt(pmax(colSums(e$vectors * (solve(precision) %*% e$vectors)), 0))
+  lambda <- pmax(e$values, 0, abs(g_e) / (.EMC_LIK_MODE_RADIUS_SD * prior_sd))
+  prec <- e$vectors %*% (lambda * t(e$vectors))
+  lin <- drop(prec %*% x + grad)
   if (!all(is.finite(prec)) || !all(is.finite(lin))) return(NULL)
   list(prec = prec, lin = lin)
 }

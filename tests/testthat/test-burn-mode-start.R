@@ -331,3 +331,21 @@ test_that("poor Laplace covariances use the window in every sampling stage", {
     expect_equal(out[[1]]$chains_var[[2]], covariance)
   }
 })
+
+test_that("the subject mode search never evaluates far beyond the start", {
+  # A steep likelihood: BFGS's first unit step along the raw gradient would
+  # land hundreds of prior SDs away.
+  prior <- list(mu = c(0, 0), var = diag(2))
+  far_calls <- 0L
+  ll_batch <- function(x) {
+    if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
+    r <- sqrt(rowSums(x^2))
+    far_calls <<- far_calls + sum(r > 1 + EMC2:::.EMC_MODE_MAX_EXTRA_SD + 1e-8)
+    -500 * rowSums(sweep(x, 2L, c(0.3, -0.2))^2)
+  }
+  result <- EMC2:::.emc_optimize_subject(c(1, 0), prior, ll_batch)
+  expect_identical(far_calls, 0L)
+  expect_identical(result$reason, "ok")
+  exact_mode <- drop(solve(diag(2) + 1000 * diag(2), 1000 * c(0.3, -0.2)))
+  expect_equal(result$alpha, exact_mode, tolerance = 1e-4)
+})
