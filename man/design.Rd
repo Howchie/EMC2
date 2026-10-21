@@ -139,8 +139,9 @@ number of Gauss-Hermite nodes per proposal and defaults to \code{5}
 curvature scale, so few nodes are needed; at least 3). The named
 parameter must (i) belong to a race model (not \code{DDM()}), (ii) be a sampled
 model parameter (not a \code{constant}, and not a \code{custom_p_vector} design),
-(iii) use an intercept-only design (\code{~ 1}), and (iv) have a finite lower
-bound. See Details. This is a sampling/efficiency feature and does not change
+and (iii) use an intercept-only design (\code{~ 1}). Trend parameters (e.g. the
+weight of a trend on \code{B}) qualify, whatever the design of the parameter the
+trend acts on. See Details. This is a sampling/efficiency feature and does not change
 the model's likelihood.}
 
 \item{behavioral_functions}{Names of entries in \code{functions} whose outputs
@@ -187,8 +188,9 @@ and the group-level mean, variance and covariances are then sampled from the
 complete subject vectors exactly as for any other parameter. This is a
 partially collapsed Gibbs sampler with the same posterior as the ordinary
 one. For \code{type = "single"} the parameter's prior plays the role of the group
-distribution. The integration interval is clipped to the parameter's bounds
-and, for \code{t0}, to just below the subject's fastest response time.
+distribution. The integration interval is clipped to the parameter's bounds,
+if it has any, and, for \code{t0}, to just below the subject's fastest response
+time; a parameter without bounds is integrated over its whole sampled axis.
 
 Marginalising does not alter the model: turning it off yields the same
 posterior, only sampled with the parameter left in. It typically improves

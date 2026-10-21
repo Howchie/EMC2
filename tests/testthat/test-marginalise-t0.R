@@ -380,3 +380,58 @@ test_that("flexible marginalise n_nodes options are parsed and propagated correc
   emc4 <- make_emc(dat, des4, type = "standard", prior = pr4, compress = TRUE, n_chains = 1)
   expect_equal(emc4[[1]]$marginalise$n_nodes, 5L)
 })
+
+test_that("a trend parameter is marginalised whatever the design of its base parameter", {
+  skip_on_cran()
+  skip_on_os("windows")
+  dat_tr <- dat
+  dat_tr$trial <- ave(seq_len(nrow(dat_tr)), dat_tr$subjects, FUN = seq_along) / 100
+  tr <- make_trend(par_names = "B", cov_names = "trial", kernels = "exp_incr")
+  des_tr <- design(data = dat_tr, model = LBA, trend = tr, matchfun = matchfun,
+                   formula = list(v ~ lM, sv ~ 1, B ~ E, A ~ 1, t0 ~ 1,
+                                  B.w ~ 1, B.d_ei ~ 1),
+                   constants = c(sv = log(1)), marginalise = "B.w",
+                   report_p_vector = FALSE)
+  pn <- names(sampled_pars(des_tr))
+  pm <- c(v = 1, v_lMTRUE = 1, B = log(.8), B_Eneutral = .2, B_Eaccuracy = .4,
+          A = log(.3), t0 = log(.2), B.w = 0, B.d_ei = 0)
+  pr <- prior(des_tr, type = "standard", pmean = pm[pn],
+              psd = setNames(rep(.4, length(pn)), pn))
+  RNGkind("L'Ecuyer-CMRG")
+  set.seed(123)
+  emc <- make_emc(dat_tr, des_tr, type = "standard", prior = pr,
+                  compress = TRUE, n_chains = 1)
+  expect_identical(emc[[1]]$par_names[emc[[1]]$marginalised_idx], "B.w")
+  emc <- EMC2:::run_emc(emc, stage = "preburn", stop_criteria = list(iter = 12),
+                        cores_for_chains = 1, particle_factor = 15,
+                        verbose = FALSE)
+  s1 <- emc[[1]]
+  samples <- s1$samples
+  it <- 2:samples$idx
+  expect_true(all(apply(samples$alpha, 1L, function(x) diff(range(x))) > 0))
+  expect_gt(diff(range(samples$theta_mu["B.w", it])), 0)
+  expect_true(any(samples$theta_var["B.w", "B", it] != 0))
+
+  # B.w has no bounds, so the rule is not clipped; near the posterior it
+  # matches a fine grid over the whole conditional.
+  cond <- EMC2:::.marginal_conditional(
+    samples$theta_mu[pn, samples$idx], samples$theta_var[pn, pn, samples$idx],
+    EMC2:::.marginal_par_idx(pn, s1$marginalise))
+  X <- matrix(samples$alpha[pn, 1, samples$idx], 3, length(pn), byrow = TRUE,
+              dimnames = list(NULL, pn))
+  X[, "v"] <- X[, "v"] + c(-0.03, 0, 0.03)
+  d1 <- s1$data[[1]]
+  grid <- EMC2:::compute_marginal_grid(
+    X, d1, s1$model, EMC2:::.marginal_batch_spec(s1$marginalise, cond, X))
+  m <- EMC2:::.marginal_cond_mean(cond, X)
+  ref <- vapply(1:3, function(r) {
+    g <- seq(grid$mode[r] - 12 * grid$sd[r], grid$mode[r] + 12 * grid$sd[r],
+             length.out = 2001)
+    P <- X[rep(r, length(g)), , drop = FALSE]
+    P[, "B.w"] <- g
+    lp <- EMC2:::calc_ll_manager(P, d1, s1$model) + dnorm(g, m[r], cond$sd, log = TRUE)
+    mx <- max(lp)
+    mx + log(sum(exp(lp - mx)) * diff(g[1:2]))
+  }, numeric(1))
+  expect_equal(EMC2:::marginal_ll_from_grid(grid), ref, tolerance = 1e-3)
+})

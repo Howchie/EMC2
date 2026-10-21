@@ -89,11 +89,6 @@ validate_marginalise_design <- function(marginalise, design, model) {
   if (!identical(rhs, "1")) {
     stop("marginalise parameter '", p, "' must use an intercept-only design (~ 1)")
   }
-  mm <- spec$bound$minmax
-  if (is.null(mm) || is.null(colnames(mm)) || !p %in% colnames(mm) ||
-      !is.finite(mm[1L, p])) {
-    stop("marginalise parameter '", p, "' must have a finite lower bound")
-  }
   if (!is.null(design$constants) && p %in% names(design$constants)) {
     stop("marginalise parameter '", p, "' cannot be fixed as a constant")
   }
@@ -196,8 +191,9 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' curvature scale, so few nodes are needed; at least 3). The named
 #' parameter must (i) belong to a race model (not `DDM()`), (ii) be a sampled
 #' model parameter (not a `constant`, and not a `custom_p_vector` design),
-#' (iii) use an intercept-only design (`~ 1`), and (iv) have a finite lower
-#' bound. See Details. This is a sampling/efficiency feature and does not change
+#' and (iii) use an intercept-only design (`~ 1`). Trend parameters (e.g. the
+#' weight of a trend on `B`) qualify, whatever the design of the parameter the
+#' trend acts on. See Details. This is a sampling/efficiency feature and does not change
 #' the model's likelihood.
 #' @param TC Optional list of truncation/censoring settings (`LT`, `LC`, `UC`,
 #'   `UT`, `pContaminant`, `guess_exclude`, ..., as for
@@ -241,8 +237,9 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' complete subject vectors exactly as for any other parameter. This is a
 #' partially collapsed Gibbs sampler with the same posterior as the ordinary
 #' one. For `type = "single"` the parameter's prior plays the role of the group
-#' distribution. The integration interval is clipped to the parameter's bounds
-#' and, for `t0`, to just below the subject's fastest response time.
+#' distribution. The integration interval is clipped to the parameter's bounds,
+#' if it has any, and, for `t0`, to just below the subject's fastest response
+#' time; a parameter without bounds is integrated over its whole sampled axis.
 #'
 #' Marginalising does not alter the model: turning it off yields the same
 #' posterior, only sampled with the parameter left in. It typically improves
