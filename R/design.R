@@ -123,7 +123,12 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' Choose from the drift diffusion model (`DDM()`, `DDMt0natural()`),
 #' the log-normal race model (`LNR()`), the linear ballistic model (`LBA()`),
 #' the racing diffusion model (`RDM()`, `RDMt0natural()`), or define your own
-#' model functions.
+#' model functions. An independent race model can be wrapped in
+#' [mix_states()], which adds a two-state accumulator mixture on the named
+#' parameters (`<par>_mix`, `<par>_below` or `<par>_above`, and `pmix`), e.g.
+#' `mix_states(LBA, pars = "v", alt = "below")`. `mix_states()` takes a
+#' constructor, so a model configured with arguments is passed as
+#' `function() RDMSWTN(drift_dist = "gamma")`.
 #' @param data A data frame. `data` can be used to automatically detect
 #'  `factors`, `Rlevels` and `covariates` in a dataset. The variable `R` needs
 #'  to be a factor variable indicating the response variable. Any numeric column

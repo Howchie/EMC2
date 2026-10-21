@@ -51,7 +51,12 @@ Example: \code{c("right", "left")}}
 Choose from the drift diffusion model (\code{DDM()}, \code{DDMt0natural()}),
 the log-normal race model (\code{LNR()}), the linear ballistic model (\code{LBA()}),
 the racing diffusion model (\code{RDM()}, \code{RDMt0natural()}), or define your own
-model functions.}
+model functions. An independent race model can be wrapped in
+\code{\link[=mix_states]{mix_states()}}, which adds a two-state accumulator mixture on the named
+parameters (\verb{<par>_mix}, \verb{<par>_below} or \verb{<par>_above}, and \code{pmix}), e.g.
+\code{mix_states(LBA, pars = "v", alt = "below")}. \code{mix_states()} takes a
+constructor, so a model configured with arguments is passed as
+\code{function() RDMSWTN(drift_dist = "gamma")}.}
 
 \item{data}{A data frame. \code{data} can be used to automatically detect
 \code{factors}, \code{Rlevels} and \code{covariates} in a dataset. The variable \code{R} needs
