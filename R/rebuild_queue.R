@@ -23,11 +23,14 @@
     .emc_rebuild_queue$map <- map
     .emc_rebuild_queue$pid <- pid
   }
-  emc_claim_reset(map, 1L)
+  # A fresh key per round: a fork left over from an earlier round still maps
+  # the counter, and must not claim this round's jobs.
+  key <- .emc_rebuild_queue$key <- (.emc_rebuild_queue$key %||% 0L) %% 1000000L + 1L
+  emc_claim_reset(map, key)
   parts <- auto_mclapply(seq_len(cores), function(worker) {
     indices <- integer(n); values <- vector("list", n); used <- 0L
     repeat {
-      claim <- emc_claim_next(map, 1L, n)
+      claim <- emc_claim_next(map, key, n)
       if (claim < 0L) break
       i <- order[claim + 1L]
       used <- used + 1L

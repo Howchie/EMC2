@@ -60,3 +60,65 @@ int emc_arm_parent_death() {
   return 0;
 #endif
 }
+
+// A fit run in its own Rscript (R/fit_host.R) must not outlive the session
+// that asked for it, whichever way that session ends: an interrupt, RStudio's
+// Stop button, `kill`, `kill -9`, or a crash.  The session holds the write end
+// of a pipe on the fit's stdin and never writes to it.  The kernel closes that
+// end when the session dies, however it dies, so end-of-file on stdin is the
+// signal.  A thread blocks on it and then kills the fit's process group, which
+// takes every chain, template and worker with it whatever their own state.
+//
+// The fit leads its own group so the kill cannot reach the session, and so a
+// terminal's Ctrl-C reaches only the session, which then ends the fit itself.
+
+#ifndef _WIN32
+#include <pthread.h>
+#include <signal.h>
+#include <cerrno>
+
+namespace {
+void* emc_stdin_watch(void*) {
+  char buf[256];
+  for (;;) {
+    const ssize_t got = read(0, buf, sizeof(buf));
+    if (got > 0) continue;
+    if (got < 0 && errno == EINTR) continue;
+    break;
+  }
+  kill(-getpgrp(), SIGKILL);
+  return nullptr;
+}
+} // namespace
+#endif
+
+//' Lead a new process group that dies when stdin reaches end-of-file
+//'
+//' @return the process group id, or 0 where the platform has no equivalent.
+//' @noRd
+// [[Rcpp::export]]
+int emc_host_detach() {
+#ifndef _WIN32
+  if (setpgid(0, 0) != 0) return 0;
+  pthread_t tid;
+  if (pthread_create(&tid, nullptr, emc_stdin_watch, nullptr) != 0) return 0;
+  pthread_detach(tid);
+  return static_cast<int>(getpgrp());
+#else
+  return 0;
+#endif
+}
+
+//' SIGKILL a process group
+//'
+//' @return TRUE when the signal was delivered.
+//' @noRd
+// [[Rcpp::export]]
+bool emc_kill_group(int pgid) {
+#ifndef _WIN32
+  if (pgid <= 1) return false;
+  return kill(-static_cast<pid_t>(pgid), SIGKILL) == 0;
+#else
+  return false;
+#endif
+}

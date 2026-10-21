@@ -1550,6 +1550,37 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
   invisible(NULL)
 }
 
+# A forked child must die with its caller: an interrupted mclapply SIGTERMs
+# it, and its own workers follow through their death signal.  `fun` arms only
+# in a fork, never in the process that made it, which mclapply() also runs
+# `fun` in when it has one core.
+.emc_armed <- function(fun) {
+  owner <- Sys.getpid()
+  function(...) {
+    if (Sys.getpid() != owner &&
+        identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
+      stop("the calling process exited before this child started")
+    fun(...)
+  }
+}
+
+# A forked child's first full garbage collection sweeps every page of its
+# parent's small-object heap, dead objects included, and so takes a private
+# copy of all of it.  Collecting in the parent first releases the pages that
+# hold only garbage, about halving what each child copies once a long fit has
+# churned its heap.  Throttled, since chains fork too.
+.emc_fork_gc <- new.env(parent = emptyenv())
+.emc_gc_before_fork <- function(n_forks) {
+  if (n_forks < 3L) return(invisible(NULL))
+  now <- proc.time()[["elapsed"]]
+  last <- if (identical(.emc_fork_gc$pid, Sys.getpid())) .emc_fork_gc$at else -Inf
+  if (now - last < 10) return(invisible(NULL))
+  invisible(gc(full = TRUE))
+  .emc_fork_gc$pid <- Sys.getpid()
+  .emc_fork_gc$at <- proc.time()[["elapsed"]]
+  invisible(NULL)
+}
+
 auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
                           mc.set.seed = TRUE){
   if(mc.cores <= 1) return(lapply(X, FUN, ...))
@@ -1558,15 +1589,8 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
     on.exit(parallel::stopCluster(cluster), add = TRUE)
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
   } else{
-    # A forked child must die with its caller: an interrupted mclapply
-    # SIGTERMs it, and its own workers follow through their death signal.
-    fun <- FUN
-    FUN <- function(...) {
-      if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
-        stop("the calling process exited before this child started")
-      fun(...)
-    }
-    list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
+    .emc_gc_before_fork(mc.cores)
+    list_out <- parallel::mclapply(X, .emc_armed(FUN), mc.cores = mc.cores,
                                    mc.preschedule = mc.preschedule,
                                    mc.set.seed = mc.set.seed, ...)
     failed <- vapply(list_out, inherits, logical(1), what = "try-error")

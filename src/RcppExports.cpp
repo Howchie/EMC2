@@ -3483,6 +3483,27 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_host_detach
+int emc_host_detach();
+RcppExport SEXP _EMC2_emc_host_detach() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(emc_host_detach());
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_kill_group
+bool emc_kill_group(int pgid);
+RcppExport SEXP _EMC2_emc_kill_group(SEXP pgidSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type pgid(pgidSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_kill_group(pgid));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rlf_fht_pdf_cdf_vec
 Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma, double alpha, double b0, double z0, int nx, int n_out, bool adaptive, double lower_extent);
 RcppExport SEXP _EMC2_rlf_fht_pdf_cdf_vec(SEXP tSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP nxSEXP, SEXP n_outSEXP, SEXP adaptiveSEXP, SEXP lower_extentSEXP) {
@@ -4120,6 +4141,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_emc_arm_parent_death", (DL_FUNC) &_EMC2_emc_arm_parent_death, 0},
+    {"_EMC2_emc_host_detach", (DL_FUNC) &_EMC2_emc_host_detach, 0},
+    {"_EMC2_emc_kill_group", (DL_FUNC) &_EMC2_emc_kill_group, 1},
     {"_EMC2_rlf_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_fht_pdf_cdf_vec, 10},
     {"_EMC2_rlf_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_pdf_cdf_vec, 14},
     {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},

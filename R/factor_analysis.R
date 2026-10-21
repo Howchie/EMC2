@@ -143,7 +143,7 @@ align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TR
     totalIterations <- totalIterations + 1
     if(verbose) cat(paste0("* iteration: ", totalIterations), "\n")
     lambda_hat_new <- 0 * lambda_hat
-    sp_res <- parallel::mclapply(X = 1:mcmcIterations, FUN = sp_new, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat,
+    sp_res <- parallel::mclapply(X = 1:mcmcIterations, FUN = .emc_armed(sp_new), lambda_varimax, q, p, dim_all_c, all_c, lambda_hat,
                                  st, cost.matrix, perm, mc.cores = n_cores)
     min_costs <- sapply(sp_res, FUN = function(x) return(x$min_cost))
     v_vectors <- do.call(rbind, lapply(sp_res, FUN = function(x) return(x$min_perm)))

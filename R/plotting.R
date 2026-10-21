@@ -408,7 +408,7 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
             x <- seq(pmin_cur, pmax_cur, length.out = n_point)
             x <- c(x, cur_par)
             x <- unique(sort(x))
-            ll <- unlist(mclapply(1:length(x), lfun, dadm = dadm, use_c = use_c,
+            ll <- unlist(mclapply(1:length(x), .emc_armed(lfun), dadm = dadm, use_c = use_c,
                 x = x, p_vector = p_vector, pname = cur_name,
                 mc.cores = n_cores))
             do.call(plot, c(list(x, ll), fix_dots_plot(add_defaults(dots,

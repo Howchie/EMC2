@@ -107,6 +107,31 @@ test_that("twenty pool rounds do not retain retired or nested processes", {
   expect_setequal(after, before)
 })
 
+test_that("a kept template's stopped workers exit without waiting to be collected", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  ctx <- list(tag = "ctx", data = list(1))
+  session <- EMC2:::.emc_wpool_session_start(ctx, 1L)
+  skip_if(is.null(session), "no clean-process backend here")
+  on.exit(EMC2:::.emc_wpool_session_stop(session), add = TRUE)
+  state <- EMC2:::.emc_pool_state
+  outer <- state$session_slot
+  on.exit(state$session_slot <- outer, add = TRUE)
+  state$session_slot <- EMC2:::.emc_wpool_session_slot(session, 1L)
+  template <- EMC2:::.emc_wpool_job_pid(session$templates[[1L]]$job)
+  for (round in 1:2) {
+    pool <- EMC2:::.emc_wpool_start(2, ctx, persistent = TRUE)
+    expect_true(isTRUE(pool$kept))
+    workers <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
+    EMC2:::.emc_wpool_stop(pool)
+    deadline <- Sys.time() + 5
+    while (any(vapply(workers, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
+           Sys.time() < deadline) Sys.sleep(0.05)
+    expect_false(any(vapply(workers, EMC2:::.emc_wpool_pid_alive, logical(1))))
+    expect_true(EMC2:::.emc_wpool_pid_alive(template))
+  }
+})
+
 test_that("spawned workers descend from a history-free template", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))

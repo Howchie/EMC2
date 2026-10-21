@@ -53,7 +53,7 @@ h.unnormalized.posterior <- function(proposals, data, info, n_cores, hyper_only)
       lws <- mapply(calc_ll_manager, proposals_list, data,
                     MoreArgs = list(model = info$model))
     } else {
-      lws <- parallel::mcmapply(calc_ll_manager, proposals_list, data,
+      lws <- parallel::mcmapply(.emc_armed(calc_ll_manager), proposals_list, data,
                                 MoreArgs = list(model = info$model),
                                 mc.cores = n_cores)
     }

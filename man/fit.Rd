@@ -59,7 +59,10 @@ or Mac OS. For Windows, only parallelization across chains
 (\code{cores_for_chains}) is available.}
 
 \item{cores_for_chains}{An integer. How many cores to use across chains.
-Defaults to the number of chains. The total number of cores used is equal to \code{cores_per_chain} * \code{cores_for_chains}.}
+Defaults to the number of chains. The total number of cores used is equal to \code{cores_per_chain} * \code{cores_for_chains}.
+On Linux and Mac OS, a fit using more than one core runs in a separate R
+process that holds only the fit, and ends with the calling session (including
+on interrupt). \code{options(emc2.fit_host = FALSE)} runs it in the calling session.}
 
 \item{max_tries}{An integer. How many times should it try to meet the finish
 conditions as specified by \code{stop_criteria}? Defaults to 20. \code{max_tries} is

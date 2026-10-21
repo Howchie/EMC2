@@ -1,6 +1,15 @@
 # EMC2 3.4.0
 ## Development
 
+-   **Fits run in their own process.** A fit using more than one core now
+    runs in a separate R process that holds only the fit, so its chains and
+    workers no longer each copy the calling session's workspace, and the
+    process and everything it started end with the session however it is
+    stopped. Models with custom trend kernels now use spawned workers
+    instead of forks, and every fork EMC2 makes (including in `predict()`)
+    dies with its parent. `options(emc2.fit_host = FALSE)` restores
+    in-session fitting.
+
 -   **New model `RSUB()`:** racing subordinators. Each accumulator's
     evidence is a nondecreasing pure-jump Levy process with mean `v u` and
     variance `s^2 v u`, finishing at a uniform-start criterion

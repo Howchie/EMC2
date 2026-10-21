@@ -256,12 +256,12 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
     } else {
       mapped_pars <- NULL
     }
-    simDat <- suppressWarnings(mclapply(1:n_post,function(i){
+    simDat <- suppressWarnings(mclapply(1:n_post,.emc_armed(function(i){
       cur_dots <- make_data_dots
       if (!is.null(mapped_pars)) cur_dots$mapped_parameters <- mapped_pars[[i]]
       do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]),
                            fix_dots(cur_dots, make_data)))
-    },mc.cores=n_cores))
+    }),mc.cores=n_cores))
     failed <- vapply(simDat, inherits, logical(1), what = "try-error")
     if (any(failed)) {
       first_error <- as.character(simDat[[which(failed)[1L]]])
@@ -274,12 +274,12 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
     in_bounds <- !sapply(simDat, is.logical)
     if(any(!in_bounds)){
       good_post <- sample(1:n_post, sum(!in_bounds))
-      simDat[!in_bounds] <- suppressWarnings(mclapply(good_post,function(i){
+      simDat[!in_bounds] <- suppressWarnings(mclapply(good_post,.emc_armed(function(i){
         cur_dots <- make_data_dots
         if (!is.null(mapped_pars)) cur_dots$mapped_parameters <- mapped_pars[[i]]
         do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE),
                              fix_dots(cur_dots, make_data)))
-      },mc.cores=n_cores))
+      }),mc.cores=n_cores))
       failed <- vapply(simDat, inherits, logical(1), what = "try-error")
       if (any(failed)) {
         first_error <- as.character(simDat[[which(failed)[1L]]])
@@ -478,6 +478,16 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                     thin = FALSE, rhat_version = "old",
                     save_pw_ll = FALSE,
                     ...){
+  # Run in a fresh process holding only the fit (R/fit_host.R), so that the
+  # forks the fit makes do not each copy the calling session's workspace.
+  n_chains <- if (missing(cores_for_chains)) {
+    if (is.character(emc)) 2L else length(emc)
+  } else cores_for_chains
+  if (.emc_host_wanted(cores_per_chain * n_chains)) {
+    emc <- .emc_host_call("fit.emc", .emc_host_args(fit.emc, environment(),
+                                                     list(...)))
+    return(restore_custom_kernel_pointers(emc, quiet = TRUE))
+  }
 
   dots <- add_defaults(list(...), n_blocks = 1, verboseProgress = FALSE,
                        trim = TRUE, r_cores = 1)
@@ -632,6 +642,9 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #' (``cores_for_chains``) is available.
 #' @param cores_for_chains An integer. How many cores to use across chains.
 #' Defaults to the number of chains. The total number of cores used is equal to ``cores_per_chain`` * ``cores_for_chains``.
+#' On Linux and Mac OS, a fit using more than one core runs in a separate R
+#' process that holds only the fit, and ends with the calling session (including
+#' on interrupt). `options(emc2.fit_host = FALSE)` runs it in the calling session.
 #' @param max_tries An integer. How many times should it try to meet the finish
 #' conditions as specified by ``stop_criteria``? Defaults to 20. ``max_tries`` is
 #' ignored if the required number of iterations has not been reached yet.

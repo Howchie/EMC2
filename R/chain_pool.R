@@ -348,10 +348,28 @@
   installed <- nzchar(ns_path) &&
     file.exists(file.path(ns_path, "Meta", "package.rds"))
   rscript <- file.path(R.home("bin"), "Rscript")
-  if (!installed || !file.exists(rscript) || .emc_wpool_has_custom_ptr(ctx)) {
+  if (!installed || !file.exists(rscript) ||
+      (.emc_wpool_has_custom_ptr(ctx) && !.emc_wpool_custom_restorable(ctx$model))) {
     return("fork")
   }
   "spawn"
+}
+
+# A spawned template rebuilds custom trend kernels from their registration
+# (.emc_wpool_template()), so only a kernel without one forces the fork backend.
+.emc_wpool_custom_restorable <- function(model) {
+  spec <- if (is.function(model)) tryCatch(model(), error = function(e) NULL)
+          else model
+  if (!is.list(spec)) return(TRUE)
+  if (!is.null(spec$trend)) {
+    return(all(vapply(spec$trend, function(entry) {
+      if (!identical(entry$kernel, "custom")) return(TRUE)
+      reg <- attr(entry, "custom_registration")
+      !is.null(reg) && !is.null(reg$file) && file.exists(reg$file)
+    }, logical(1))))
+  }
+  if (any(c("p_types", "rfun", "Ttransform") %in% names(spec))) return(TRUE)
+  all(vapply(spec, .emc_wpool_custom_restorable, logical(1)))
 }
 
 .emc_wpool_has_custom_ptr <- function(ctx) {
@@ -576,7 +594,8 @@
   status <- tryCatch(system2(
     file.path(R.home("bin"), "Rscript"),
     c("--vanilla", "-e", shQuote(expr), shQuote(boot)),
-    stdout = log, stderr = log, wait = FALSE
+    stdout = log, stderr = log, wait = FALSE,
+    env = paste0("EMC2_CPP_CACHE=", shQuote(.emc_cpp_cache_dir()))
   ), error = function(e) 1L)
   if (!identical(as.integer(status), 0L)) {
     unlink(c(req, ans, boot, pidfile, log))
@@ -1116,6 +1135,7 @@
 
 .emc_wpool_template <- function(boot) {
   base <- readRDS(boot$ctx)
+  base$model <- .restore_custom_model_container(base$model, quiet = TRUE)
   ctx <- base
   rc <- fifo(boot$req, "rb", blocking = TRUE)
   wc <- fifo(boot$ans, "wb", blocking = TRUE)
@@ -1133,22 +1153,27 @@
       # over the one it booted with; recycling within a block keeps it.
       if (!is.null(command$ctx)) {
         upd <- readRDS(command$ctx)
+        if (!is.null(upd$model))
+          upd$model <- .restore_custom_model_container(upd$model, quiet = TRUE)
         ctx <- base
         ctx[names(upd)] <- upd
       }
       keys <- as.character(command$idx)
       old <- jobs[keys]
       old <- old[!vapply(old, is.null, logical(1))]
-      if (length(old)) parallel::mccollect(old, wait = TRUE)
+      if (length(old)) .emc_wpool_wait_gone(old)
       jobs[keys] <- NULL
       made <- tryCatch({
         for (w in seq_along(keys)) {
           jobs[[keys[w]]] <- local({
             i <- w
+            # Detached: a worker exits as soon as its pool stops it.  An
+            # attached one would wait to be collected, and the template
+            # collects only when it next forks a worker in the same slot.
             parallel::mcparallel(
               .emc_wpool_serve(command$req[i], command$ans[i], ctx,
                                inherited = list(rc, wc)),
-              detached = FALSE
+              detached = TRUE
             )
           })
         }
@@ -1159,7 +1184,7 @@
         born <- born[!vapply(born, is.null, logical(1))]
         if (length(born)) {
           for (job in born) try(tools::pskill(job$pid), silent = TRUE)
-          try(parallel::mccollect(born, wait = TRUE), silent = TRUE)
+          .emc_wpool_wait_gone(born)
         }
         jobs[keys] <- NULL
         stop(conditionMessage(made))
@@ -1172,13 +1197,24 @@
   }
   if (length(jobs)) {
     for (job in jobs) try(tools::pskill(job$pid), silent = TRUE)
-    try(parallel::mccollect(jobs, wait = TRUE), silent = TRUE)
+    .emc_wpool_wait_gone(jobs)
   }
   if (orphaned) {
     dir <- dirname(boot$req)
     if (is.character(dir) && length(dir) == 1L && nzchar(dir)) {
       try(unlink(dir, recursive = TRUE), silent = TRUE)
     }
+  }
+  invisible(NULL)
+}
+
+# Wait for detached workers to exit; parallel reaps them.
+.emc_wpool_wait_gone <- function(jobs) {
+  pids <- vapply(jobs, function(x) as.integer(x$pid), integer(1))
+  wait <- 0.0005
+  while (any(vapply(pids, .emc_wpool_pid_alive, logical(1)))) {
+    Sys.sleep(wait)
+    wait <- min(wait * 2, 0.02)
   }
   invisible(NULL)
 }

@@ -928,7 +928,7 @@ register_trend <- function(trend_parameters, file, transforms = NULL, base = "ad
       }
     }, add = TRUE)
   }
-  Rcpp::sourceCpp(file)
+  Rcpp::sourceCpp(file, cacheDir = .emc_cpp_cache_dir())
   maker <- "EMC2_make_custom_trend_ptr"
   if (!exists(maker, mode = "function", inherits = TRUE)) {
     # Try to derive maker name from macro usage in the file

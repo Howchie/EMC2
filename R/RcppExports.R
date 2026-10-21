@@ -835,6 +835,22 @@ emc_arm_parent_death <- function() {
     .Call(`_EMC2_emc_arm_parent_death`)
 }
 
+#' Lead a new process group that dies when stdin reaches end-of-file
+#'
+#' @return the process group id, or 0 where the platform has no equivalent.
+#' @noRd
+emc_host_detach <- function() {
+    .Call(`_EMC2_emc_host_detach`)
+}
+
+#' SIGKILL a process group
+#'
+#' @return TRUE when the signal was delivered.
+#' @noRd
+emc_kill_group <- function(pgid) {
+    .Call(`_EMC2_emc_kill_group`, pgid)
+}
+
 rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, n_out = 400L, adaptive = TRUE, lower_extent = NA_real_) {
     .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, n_out, adaptive, lower_extent)
 }
