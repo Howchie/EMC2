@@ -501,12 +501,12 @@ inline double moment_logS(double k, double p, double delta, double z, double q,
 // towards 1 like 1 - p / (2 sqrt(n)) (terms ~ e^(-p sqrt(n))), so the tail past
 // a last ratio g is bounded by 2 / (1 - g)^2 times the last term rather than
 // geometrically; the sum is ended where the saddle model has dropped that far
-// below e^-40 of its maximum.
+// below e^-40 of its maximum.  -1 when that takes more than max_terms.
 constexpr int F_MAX_TERMS = 20000;
 
-inline int moment_F_length(double k, double z, double delta) {
+inline int moment_F_length(double k, double z, double delta, int max_terms = F_MAX_TERMS) {
   double prod = 1.0, lt = 0.0, lmax = 0.0, g_prev = 0.0, lt_prev = 0.0;
-  for (int nn = 0; nn < F_MAX_TERMS; ++nn) {
+  for (int nn = 0; nn < max_terms; ++nn) {
     const double g = saddle(k + nn, z) / (saddle(nn + 1.0, delta) + delta);
     prod *= g;
     if ((nn & 7) == 7) {
@@ -515,10 +515,10 @@ inline int moment_F_length(double k, double z, double delta) {
       if (g < 1.0 && lt < lmax - 41.0 + 2.0 * std::log1p(-g)) return nn + 8;
       // While the ratio rises no later block falls faster than this one, and
       // the stopping drop only grows: give up once that rate cannot reach it
-      // within F_MAX_TERMS (small p, where the terms fall like e^(-p sqrt(n))).
+      // within max_terms (small p, where the terms fall like e^(-p sqrt(n))).
       if (nn > 7 && g >= g_prev) {
         const double rate = lt_prev - lt;
-        const double blocks = (F_MAX_TERMS - 1 - nn) / 8.0;
+        const double blocks = (max_terms - 1 - nn) / 8.0;
         const double need = lt - (lmax - 41.0 + (g < 1.0 ? 2.0 * std::log1p(-g) : 0.0));
         if (rate <= 0.0 || rate * blocks < need) return -1;
       }

@@ -151,13 +151,42 @@ inline bool ladder_lower(double k, double p, double u, double lD0, double lD1,
 }
 
 // ------------------------------------------------------------ upper series
+// moment_F_length's scan with the term ratio's log, which varies slowly in n,
+// taken at the middle of each block of 8 past the first LEN_EXACT terms; the
+// margin keeps the length at or above the exact scan's.
+constexpr int LEN_EXACT = 64, LEN_MARGIN = 16;
+inline int upper_length(double k, double z, double u, int max_terms = F_MAX_TERMS) {
+  double prod = 1.0, lt = 0.0, lmax = 0.0, g_prev = 0.0, lt_prev = 0.0;
+  for (int nn = 7; nn < max_terms; nn += 8) {
+    double g;
+    if (nn < LEN_EXACT) {
+      for (int m = nn - 7; m <= nn; ++m) { g = saddle(k + m, z) / (saddle(m + 1.0, u) + u); prod *= g; }
+      lt += std::log(prod); prod = 1.0;
+    } else {
+      const double mid = nn - 3.5;
+      lt += 8.0 * std::log(saddle(k + mid, z) / (saddle(mid + 1.0, u) + u));
+      g = saddle(k + nn, z) / (saddle(nn + 1.0, u) + u);
+    }
+    lmax = std::max(lmax, lt);
+    if (g < 1.0 && lt < lmax - 41.0 + 2.0 * std::log1p(-g)) return nn + 1 + LEN_MARGIN;
+    if (nn > 7 && g >= g_prev) {
+      const double rate = lt_prev - lt;
+      const double blocks = (max_terms - 1 - nn) / 8.0;
+      const double need = lt - (lmax - 41.0 + (g < 1.0 ? 2.0 * std::log1p(-g) : 0.0));
+      if (rate <= 0.0 || rate * blocks < need) return -1;
+    }
+    g_prev = g; lt_prev = lt;
+  }
+  return -1;
+}
+
 // B0 = sum_n w_n I_n, B1 = sum_n (n + 1) w_n I_(n+1), B2 = sum_{n even} w_n I_(n+1),
 // w_n = J_(k+n)(z) / J_k(z),
 // I_n = G_(n+1)(u) (I_n = (n + 2) I_(n+2) + u I_(n+1), downward).
 inline bool series_upper(double k, double p, double u, double lD0, double lD1,
                          double& lB0, double& lB1, double& lB2) {
   const double z = p - u;
-  int N = moment_F_length(k, z, u);
+  int N = upper_length(k, z, u);
   if (N < 0) return false;
   thread_local std::vector<double> Ibuf;
   for (int attempt = 0; attempt < 3 && N <= 2 * F_MAX_TERMS; ++attempt, N *= 2) {
@@ -305,6 +334,15 @@ inline bool narrow_conv(double k, double p, double u, Endpoint& e) {
   return true;
 }
 
+// The expansions about u leave out the mass of Y near 0, which adds at most
+// Phi(-u) <= phi(u) / u to T and phi(u) / u^2 to Pf; they are kept only while
+// that is below e^LOG_BRANCH_OK of the results (it is not when k is tiny).
+constexpr double LOG_BRANCH_OK = -29.933606208922594;   // log 1e-13
+inline bool branch_negligible(double u, double lT, double lPf) {
+  const double lphi = -0.5 * u * u - LOG_SQRT_2PI, lu = std::log(u);
+  return lphi - lu < lT + LOG_BRANCH_OK && lphi - 2.0 * lu < lPf + LOG_BRANCH_OK;
+}
+
 // ------------------------------------------------------------ wide series
 // Broad drift law at a large distance (as the point kernel's WIDE branch): with
 // g_Y slowly varying on the unit scale around u, expand Q_Y(u - eps) and
@@ -313,11 +351,14 @@ inline bool narrow_conv(double k, double p, double u, Endpoint& e) {
 //   Pf = psi_Y(u) + g_Y(u) sum_{n even>=2} d_(n-2) / (2^(n/2) (n/2)!),
 // d_n = g_Y^(n)(u) / g_Y(u) by the recurrence in rdmswtn_gamma.h, and
 // psi_Y(u) = (Q_Y(u) / p) [k Q(k + 1, p u) / Q(k, p u) - p u].
-constexpr double WIDE_CONV_SLOPE = 1.0;
+// Without the Wald's exponential part the branch point's share is e^(-u^2/2),
+// so the series holds from a smaller distance than in the point kernel; it is
+// ended relative to the sums, as the asymptotic floor allows.
+constexpr double WIDE_CONV_U = 7.0, WIDE_CONV_SLOPE = 3.0, WIDE_CONV_TOL = 1e-14;
 
 inline bool wide_conv(double k, double p, double u, Endpoint& e) {
   const double slope = (k - 1.0) / u - p;
-  if (!(u >= WIDE_DELTA && std::fabs(slope) <= WIDE_CONV_SLOPE && std::fabs(k - 1.0) <= WIDE_CURV * u * u))
+  if (!(u >= WIDE_CONV_U && std::fabs(slope) <= WIDE_CONV_SLOPE && std::fabs(k - 1.0) <= WIDE_CURV * u * u))
     return false;
   const double lg = R::dgamma(u, k, 1.0 / p, 1), lQ = R::pgamma(u, k, 1.0 / p, 0, 1);
   const double lQ1 = R::pgamma(u, k + 1.0, 1.0 / p, 0, 1);
@@ -329,6 +370,7 @@ inline bool wide_conv(double k, double p, double u, Endpoint& e) {
   double d[WIDE_MAX + 2];
   d[0] = 1.0; d[1] = slope;
   double cn = 1.0, sT = 0.0, sP = 0.0;
+  const double qg = std::exp(lQ - lg), pg = qg * psi_rel;
   int quiet = 0;
   bool conv = false;
   for (int n = 2; n <= WIDE_MAX; n += 2) {
@@ -337,18 +379,75 @@ inline bool wide_conv(double k, double p, double u, Endpoint& e) {
     cn /= n;                               // 1 / (2^(n/2) (n/2)!) = prod 1 / (2 j)
     const double tT = cn * d[n - 1], tP = cn * d[n - 2];
     sT += tT; sP += tP;
-    if (n >= 6 && std::fabs(tT) <= EPS * 1e-2 && std::fabs(tP) <= EPS * 1e-2) {
+    if (n >= 6 && std::fabs(tT) <= WIDE_CONV_TOL * std::fabs(qg - sT) &&
+        std::fabs(tP) <= WIDE_CONV_TOL * std::fabs(pg + sP)) {
       if (++quiet >= 2) { conv = true; break; }
     } else quiet = 0;
     if (!std::isfinite(sT) || !std::isfinite(sP)) return false;
   }
   if (!conv) return false;
   // in units of g: T / g = Q / g - sT, Pf / g = psi / g + sP
-  const double qg = std::exp(lQ - lg);
-  const double Tg = qg - sT, Pg = qg * psi_rel + sP;
+  const double Tg = qg - sT, Pg = pg + sP;
   if (!(Tg > 0.0 && Pg > 0.0)) return false;
-  e.lT = lg + std::log(Tg);
-  e.lPf = lg + std::log(Pg);
+  const double lT = lg + std::log(Tg), lPf = lg + std::log(Pg);
+  if (!branch_negligible(u, lT, lPf)) return false;
+  e.lT = lT;
+  e.lPf = lPf;
+  return true;
+}
+
+// ------------------------------------------------------------ tilted series
+// Steep g_Y at u (as the point kernel's tilt_branch, without the exponential
+// part): with psi = (k - 1)/u - p < 0, g_Y(u + h) = g_Y(u) e^(psi h) phi(h),
+// phi(h) = sum_j c_j h^j, and
+//   T = int g_Y(u + h) Phi(h) dh,  Pf = int g_Y(u + h) Psi(h) dh,  Psi(h) = h Phi(h) + phi(h),
+// so with z_j = E (Z + psi)^j / j!, beta_j = (z_j + beta_(j-1)) / (-psi) and
+// gamma_j = (beta_j + gamma_(j-1)) / (-psi),
+//   T = g_Y(u) e^(psi^2/2) sum_j c_j j! beta_j,  Pf = g_Y(u) e^(psi^2/2) sum_j c_j j! gamma_j.
+// The series is asymptotic: its terms bottom out near j ~ -psi u at about
+// e^(psi u) of the sums.
+constexpr double TILT_CONV_REACH = 30.0, TILT_CONV_TOL = 1e-13;
+
+inline bool tilt_conv(double k, double p, double u, Endpoint& e) {
+  const double psi = (k - 1.0) / u - p;
+  if (!(psi < 0.0)) return false;
+  const double eps = std::fabs(k - 1.0) / (2.0 * u * u);
+  const double reach = -psi - 1.0 / psi + 1.0;
+  if (!(eps * reach * reach <= TILT_GATE && 2.0 * (reach + 2.0) <= u && -psi * u >= TILT_CONV_REACH))
+    return false;
+  const double lg = R::dgamma(u, k, 1.0 / p, 1);
+  if (!std::isfinite(lg)) return false;
+  // c_j of phi: log phi = sum_(m>=2) l_m h^m, l_m = (k-1) (-1)^(m+1) / (m u^m)
+  double c[WIDE_MAX + 1], l[WIDE_MAX + 1];
+  c[0] = 1.0; l[0] = l[1] = 0.0;
+  { double um = 1.0 / u;
+    for (int m = 2; m <= WIDE_MAX; ++m) { um /= u; l[m] = (k - 1.0) * ((m & 1) ? 1.0 : -1.0) * um / m; } }
+  const double ia = -1.0 / psi;
+  double z2 = 0.0, z1 = 1.0, beta = 0.0, gam = 0.0, jf = 1.0, sT = 0.0, sP = 0.0;
+  int quiet = 0;
+  bool conv = false;
+  for (int j = 0; j <= WIDE_MAX; ++j) {
+    double zj = 1.0;
+    if (j >= 1) {
+      double cj = 0.0;
+      for (int m = 2; m <= j; ++m) cj += m * l[m] * c[j - m];
+      c[j] = cj / j;
+      jf *= j;
+      zj = (psi * z1 + z2) / j; z2 = z1; z1 = zj;
+    }
+    beta = (zj + beta) * ia; gam = (beta + gam) * ia;
+    const double cjf = c[j] * jf, tT = cjf * beta, tP = cjf * gam;
+    sT += tT; sP += tP;
+    if (j >= 4 && std::fabs(tT) <= TILT_CONV_TOL * std::fabs(sT) && std::fabs(tP) <= TILT_CONV_TOL * std::fabs(sP)) {
+      if (++quiet >= 2) { conv = true; break; }
+    } else quiet = 0;
+    if (!std::isfinite(sT) || !std::isfinite(sP) || !std::isfinite(jf)) return false;
+  }
+  if (!conv || !(sT > 0.0) || !(sP > 0.0)) return false;
+  const double lm = lg + 0.5 * psi * psi, lT = lm + std::log(sT), lPf = lm + std::log(sP);
+  if (!branch_negligible(u, lT, lPf)) return false;
+  e.lT = lT;
+  e.lPf = lPf;
   return true;
 }
 
@@ -360,13 +459,13 @@ inline double median_W(double k, double p) {
 
 // Point values and gamma (+) normal pieces at distance d = u s sqrt(t).
 inline bool endpoint(double t, double d, double s, double k, double tau, double p,
-                     double u, bool lower, Endpoint& e) {
+                     double u, bool lower, Endpoint& e, const Out* pt = nullptr) {
   // near k = 1 the image term is also wanted from the positive series, which
   // avoids the 1 / (1 - k) form when it converges
   const bool want_pimg = std::fabs(1.0 - k) < PIMG_BAND;
   e.u = u; e.lower = lower; e.both = false;
   if (u > 0.0) {
-    const Out o = gamma_wald(t, d, s, k, tau, WANT_ALL);
+    const Out o = pt ? *pt : gamma_wald(t, d, s, k, tau, WANT_ALL);
     e.lF = o.logF; e.lS = o.logS;
     e.lD = o.logf + std::log(t / u);
   } else {
@@ -375,11 +474,13 @@ inline bool endpoint(double t, double d, double s, double k, double tau, double 
   }
   if (!std::isfinite(e.lD)) return false;
   const double z = p - u;
-  if (z < 0.0) {
+  // D at shape k + 1 seeds the upward recurrences (z < 0); the expansions do not use it
+  auto need_D1 = [&]() {
+    if (!(z < 0.0) || std::isfinite(e.lD1)) return true;
     const Out o1 = gamma_wald(t, d, s, k + 1.0, tau, WANT_PDF);
     e.lD1 = o1.logf + std::log(t / u);
-    if (!std::isfinite(e.lD1)) return false;
-  }
+    return std::isfinite(e.lD1);
+  };
   const double sdY = std::sqrt(k) / p, y0 = k / p;
   if (p >= NARROW_P && sdY <= NARROW_SD && std::fabs(y0 - u) <= p / 3.0) {
     Endpoint en = e;
@@ -396,6 +497,11 @@ inline bool endpoint(double t, double d, double s, double k, double tau, double 
   // T >= P(eps > -2) P(Y > u + 2).
   if (!lower && (u <= T_SMALL_U || std::log(0.977) + R::pgamma(u + 2.0, k, 1.0 / p, 0, 1) > LOG_T_SMALL))
     lower = true;
+  // the expansions about u give T and Pf to full relative precision when they hold
+  if (!lower && (wide_conv(k, p, u, e) || tilt_conv(k, p, u, e))) {
+    e.lower = false;
+    return std::isfinite(e.lT);
+  }
   const double lp = std::log(p);
   // That bound is loose for broad laws (small k).  With z < 0 the lower ladder
   // runs about p u terms and the upper series about (41 / p)^2 (its terms fall
@@ -404,6 +510,7 @@ inline bool endpoint(double t, double d, double s, double k, double tau, double 
   const double pu = p * u;
   if (!lower && z < 0.0 && pu + 8.0 * std::sqrt(pu) + 10.0 < (41.0 / p) * (41.0 / p)) {
     double lA0, lA1;
+    if (!need_D1()) return false;
     if (ladder_lower(k, p, u, e.lD, e.lD1, lA0, lA1) && log1m_exp(lA0 - lp) > LOG_T_LADDER)
       lower = true;
   }
@@ -411,19 +518,21 @@ inline bool endpoint(double t, double d, double s, double k, double tau, double 
     const bool lo = (pass == 0) ? lower : !lower;
     if (lo) {
       double lA0, lA1;
+      if (!need_D1()) return false;
       if (!ladder_lower(k, p, u, e.lD, e.lD1, lA0, lA1)) continue;
       e.lC = lA0 - lp; e.lSf = lA1 - 2.0 * lp;
       if (pass == 1 && !(e.lC < LOG_COMPLEMENT_OK)) return false;
       double lB0, lB1, lB2;
-      const int nser = want_pimg ? moment_F_length(k, z, u) : -1;
+      const int nser = want_pimg ? upper_length(k, z, u, PIMG_MAX_TERMS) : -1;
       if (nser >= 0 && nser <= PIMG_MAX_TERMS &&
           series_upper(k, p, u, e.lD, e.lD1, lB0, lB1, lB2))
         e.lPimg = e.lD + lB2;
     } else {
       double lB0, lB1, lB2;
-      if (wide_conv(k, p, u, e)) {
+      if (wide_conv(k, p, u, e) || tilt_conv(k, p, u, e)) {
         // the image term from the series only when that is short
       } else {
+        if (!need_D1()) return false;
         if (!series_upper(k, p, u, e.lD, e.lD1, lB0, lB1, lB2)) continue;
         e.lT = e.lD + lB0; e.lPf = e.lD + lB1; e.lPimg = e.lD + lB2;
       }
@@ -465,15 +574,16 @@ inline double lmax(std::initializer_list<double> xs) {
 // Closed form at shape k.  cond is the ratio of the summed term magnitudes to
 // the smallest of the results formed (f, and F or S by difference), so about
 // log10(cond) digits are lost to cancellation.
+// ptB, when given, is the point kernel at (t, B) with WANT_ALL.
 inline bool closed_A(double t, double B, double A, double s, double k, double tau,
-                     AOut& r, double& cond, bool* used_ik = nullptr) {
+                     AOut& r, double& cond, bool* used_ik = nullptr, const Out* ptB = nullptr) {
   const double rt = std::sqrt(t), ss = s * rt;
   const double p = tau * s / rt, uL = B / ss, uH = (B + A) / ss, Delta = A / ss;
   const double y0 = k / p, med = median_W(k, p), ik = 1.0 / (1.0 - k), aik = std::fabs(ik);
   const bool upper_all = uL > med;
   const bool lower_all = uH <= med;
   Endpoint eL, eH;
-  if (!endpoint(t, B, s, k, tau, p, uL, !upper_all, eL)) return false;
+  if (!endpoint(t, B, s, k, tau, p, uL, !upper_all, eL, ptB)) return false;
   if (!endpoint(t, B + A, s, k, tau, p, uH, lower_all, eH)) return false;
   const double lDt = std::log(Delta * t), lDelta = std::log(Delta);
   // E[W 1{W <= u}], E[W 1{W > u}], Pi and Sg with their summed term magnitudes
@@ -579,9 +689,9 @@ inline AOut point_average(double t, double B, double A, double s, double k, doub
 // interpolation in k from k = 1 -+ K_BAND, 1 -+ 2 K_BAND (the density, which has
 // no 1 / (1 - k) term, at k itself).
 inline bool closed_or_band(double t, double B, double A, double s, double k, double tau,
-                           AOut& r, double& cond) {
+                           AOut& r, double& cond, const Out* ptB = nullptr) {
   bool used_ik = true;
-  const bool ok = closed_A(t, B, A, s, k, tau, r, cond, &used_ik);
+  const bool ok = closed_A(t, B, A, s, k, tau, r, cond, &used_ik, ptB);
   if (std::fabs(1.0 - k) >= K_BAND || (ok && cond < COND_MAX && !used_ik)) return ok;
   const double kn[4] = {1.0 - 2.0 * K_BAND, 1.0 - K_BAND, 1.0 + K_BAND, 1.0 + 2.0 * K_BAND};
   AOut rn[4];
@@ -629,8 +739,13 @@ inline AOut gamma_wald_A(double t, double B, double A, double s, double k, doubl
   // (B + A) / (t A) P(V t + ss Z >= B) <= (B + A) / (t A) F(t | B), the Wald
   // CDF being at least Phi((V t - B) / ss).  Both bounds are returned when
   // they are negligible on the scale the caller asked for (as far_tail does).
+  // the point values at B are kept for the closed form's near endpoint
+  Out oB;
+  bool have_B = false;
   if (B > 0.0 && k / p < B / ss) {
-    const Out o = gamma_wald(t, B, s, k, tau, WANT_CDF);
+    oB = gamma_wald(t, B, s, k, tau, WANT_ALL);
+    have_B = true;
+    const Out& o = oB;
     const double lF = o.logF, lfb = lF + std::log((B + A) / (t * A));
     double thr = LOG_NEGLIGIBLE;
     if (want == WANT_SURV) thr = LOG_UNIT;
@@ -650,7 +765,7 @@ inline AOut gamma_wald_A(double t, double B, double A, double s, double k, doubl
     return r;
   }
   double cond = R_PosInf;
-  if (span >= SHORT_SPAN8 && closed_or_band(t, B, A, s, k, tau, r, cond) && cond < COND_MAX) {
+  if (span >= SHORT_SPAN8 && closed_or_band(t, B, A, s, k, tau, r, cond, have_B ? &oB : nullptr) && cond < COND_MAX) {
     r.path = (std::fabs(1.0 - k) < K_BAND && r.path == A_BAND) ? A_BAND : A_CLOSED;
     return r;
   }
