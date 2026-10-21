@@ -8,7 +8,7 @@
 \alias{loo_pooled}
 \title{WAIC and PSIS-LOO for a single fitted model}
 \usage{
-waic_subject(emc, stage = "sample", filter = 0, subject)
+waic_subject(emc, stage = "sample", filter = 0, subject, balance_by = NULL)
 
 waic_pooled(
   emc,
@@ -16,10 +16,11 @@ waic_pooled(
   filter = 0,
   pointwise = c("trial", "subject"),
   K = 200,
-  cores = 1
+  cores = 1,
+  balance_by = NULL
 )
 
-loo_subject(emc, stage = "sample", filter = 0, subject)
+loo_subject(emc, stage = "sample", filter = 0, subject, balance_by = NULL)
 
 loo_pooled(
   emc,
@@ -27,40 +28,50 @@ loo_pooled(
   filter = 0,
   pointwise = c("trial", "subject"),
   K = 200,
-  cores = 1
+  cores = 1,
+  balance_by = NULL
 )
 }
 \arguments{
 \item{emc}{An emc object.}
 
-\item{stage}{Character. The sampling stage to use. Defaults to `"sample"`.}
+\item{stage}{Character. The sampling stage to use. Defaults to \code{"sample"}.}
 
 \item{filter}{Integer or numeric vector. Iterations to remove from the start
-of `stage`, or a vector of iterations to keep, as in \code{\link{get_pars}()}.}
+of \code{stage}, or a vector of iterations to keep, as in \code{\link{get_pars}()}.}
 
 \item{subject}{Subject name or index to compute the criterion for.}
 
-\item{pointwise}{Character string, `"trial"` (default) or `"subject"`.
-`"trial"` treats each trial as one pointwise unit. `"subject"` gives the
+\item{balance_by}{\code{NULL} (default) or a character vector of data column
+names. If supplied, every cell of the crossing of these columns receives
+equal total weight: trial \eqn{i} in cell \eqn{c} is weighted
+\eqn{N / (C n_c)}, where \eqn{N} is the number of trials, \eqn{C} the number
+of observed cells and \eqn{n_c} the trials in cell \eqn{c}. The criterion
+then estimates predictive accuracy for a design in which all cells are
+equally frequent, on the same scale as the unweighted criterion (the two
+coincide when cells are balanced). Requires \code{pointwise = "trial"}.}
+
+\item{pointwise}{Character string, \code{"trial"} (default) or \code{"subject"}.
+\code{"trial"} treats each trial as one pointwise unit. \code{"subject"} gives the
 hierarchical leave-one-subject-out criterion: each subject's log-likelihood
-is marginalised over the group distribution using `K` importance draws per
+is marginalised over the group distribution using \code{K} importance draws per
 posterior iteration. Single-level fits fall back to summed conditional
 subject log-likelihoods.}
 
 \item{K}{Integer (default 200). Importance draws from the group distribution
-per posterior iteration when `pointwise = "subject"`.}
+per posterior iteration when \code{pointwise = "subject"}.}
 
 \item{cores}{Integer (default 1). Cores for the pointwise log-likelihood
 computation and, for LOO, for PSIS.}
 }
 \value{
-A single number: the WAIC estimate (`waic_*`) or the LOOIC estimate
-(`loo_*`).
+A single number: the WAIC estimate (\verb{waic_*}) or the LOOIC estimate
+(\verb{loo_*}).
 }
 \description{
-Compute WAIC or PSIS-LOO for one `emc` fit, either for a single subject or
+Compute WAIC or PSIS-LOO for one \code{emc} fit, either for a single subject or
 pooled over all subjects. These are the per-model building blocks behind the
-`WAIC` and `LOO` columns of \code{\link{compare}()}; use them when you only
+\code{WAIC} and \code{LOO} columns of \code{\link{compare}()}; use them when you only
 need one model's criterion. Both are on the deviance scale (lower is better).
 }
 \details{
@@ -73,6 +84,7 @@ and p_waic diagnostics can be retrieved with \code{\link{waic_warnings}()}.
 waic_pooled(samples_LNR)
 loo_subject(samples_LNR, subject = 1)
 loo_pooled(samples_LNR, pointwise = "subject", cores = 4)
+loo_pooled(samples_LNR, balance_by = "S")
 }
 }
 \seealso{

@@ -13,6 +13,7 @@ compare(
   WAIC = TRUE,
   LOO = FALSE,
   pointwise = c("trial", "subject"),
+  balance_by = NULL,
   K = 200,
   cores_for_loo = 1,
   cores_for_props = 4,
@@ -55,6 +56,13 @@ for each posterior draw of the group-level parameters (theta_mu, theta_var),
 log-likelihood is estimated via log-mean-exp. This gives well-conditioned PSIS
 importance weights where summing conditional per-trial LLs would give Pareto-k >> 1.
 Ignored unless \code{WAIC} or \code{LOO} is \code{TRUE}.}
+
+\item{balance_by}{\code{NULL} (default) or a character vector of data column
+names. If supplied, WAIC and LOO give every cell of the crossing of these
+columns equal total weight (see \code{\link{waic_loo}}), so rare but
+important cells are not swamped by frequent ones. The weighted criteria stay
+on the scale of the unweighted ones. Requires \code{pointwise = "trial"}; other
+criteria are unaffected.}
 
 \item{K}{Integer (default 200). Number of importance samples drawn from the group
 prior per posterior iteration when \code{pointwise = "subject"}. Higher values give a

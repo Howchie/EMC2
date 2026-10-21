@@ -52,6 +52,39 @@ test_that("compare supports subject-level pointwise aggregation for LOO", {
   expect_false(isTRUE(all.equal(out_trial$LOO, out_subject$LOO)))
 })
 
+test_that("balance_by gives every cell equal weight in WAIC and LOO", {
+  dat <- get_data(samples_LNR)
+  ll <- EMC2:::.ll_matrix_pooled(samples_LNR)
+  pw_waic <- suppressWarnings(loo::waic(ll))$pointwise[, "waic"]
+  pw_loo <- suppressWarnings(loo::loo(ll))$pointwise[, "looic"]
+  n_c <- table(dat$R)
+  w <- nrow(dat) / (length(n_c) * as.numeric(n_c[as.character(dat$R)]))
+  expect_equal(sum(w), nrow(dat))
+  expect_equal(waic_pooled(samples_LNR, balance_by = "R"), sum(w * pw_waic))
+  expect_equal(loo_pooled(samples_LNR, balance_by = "R"), sum(w * pw_loo))
+
+  out <- compare(list(samples_LNR), WAIC = TRUE, LOO = TRUE, balance_by = "R",
+                 BayesFactor = FALSE, print_summary = FALSE)
+  expect_equal(out$WAIC, sum(w * pw_waic))
+  expect_equal(out$LOO, sum(w * pw_loo))
+  expect_identical(attr(out, "balance_by"), "R")
+
+  sub <- names(samples_LNR[[1]]$data)[1]
+  keep <- dat$subjects == sub
+  n_s <- table(dat$R[keep])
+  w_s <- sum(keep) / (length(n_s) * as.numeric(n_s[as.character(dat$R[keep])]))
+  expect_equal(waic_subject(samples_LNR, subject = sub, balance_by = "R"),
+               sum(w_s * pw_waic[keep]))
+
+  expect_error(waic_pooled(samples_LNR, balance_by = "nope"), "not in the data")
+  expect_error(loo_pooled(samples_LNR, balance_by = "R", pointwise = "subject"),
+               "pointwise")
+
+  plain <- compare(list(samples_LNR), WAIC = TRUE, BayesFactor = FALSE,
+                   print_summary = FALSE)
+  expect_error(compare(list(out, plain), print_summary = FALSE), "balance_by")
+})
+
 test_that("compare combines saved outputs and recomputes all metric weights", {
   saved <- data.frame(
     MD = c(10, 12), wMD = c(.99, .01),

@@ -16,7 +16,8 @@ compare_subject(
   subject = NULL,
   WAIC = TRUE,
   LOO = FALSE,
-  pointwise = c("trial", "subject")
+  pointwise = c("trial", "subject"),
+  balance_by = NULL
 )
 }
 \arguments{
@@ -47,6 +48,10 @@ If a vector is supplied, only the iterations in the vector will be considered.}
 \item{pointwise}{Character string, one of \code{"trial"} or \code{"subject"}, passed to
 \code{compare()} for pooled WAIC/LOO comparisons. If \code{subject} is specified for
 \code{compare_subject()}, the pointwise unit remains the selected subject's trials.}
+
+\item{balance_by}{\code{NULL} (default) or a character vector of data column
+names; each subject's WAIC/LOO gives every cell of their crossing equal
+weight. See \code{\link{compare}()}.}
 }
 \value{
 List of matrices for each subject of effective number of parameters,

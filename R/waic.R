@@ -180,13 +180,48 @@ waic_warnings <- function() {
   out
 }
 
+# Per-trial weights that give every cell of the crossing of `balance_by` the
+# same total weight. Weights are aligned with the columns of the pointwise
+# log-likelihood matrix and average 1, so a weighted criterion equals the
+# ordinary one when the cells are balanced.
+.balance_weights <- function(emc, balance_by, subject = NULL) {
+  dat <- get_data(emc)
+  if (!is.data.frame(dat))
+    stop("`balance_by` is not supported for joint models.")
+  if (!is.character(balance_by) || length(balance_by) == 0L || anyNA(balance_by))
+    stop("`balance_by` must be a character vector of data column names.")
+  missing <- setdiff(balance_by, names(dat))
+  if (length(missing) > 0L)
+    stop("`balance_by` column(s) not in the data: ", paste(missing, collapse = ", "))
+  if (!is.null(subject)) {
+    if (is.numeric(subject)) subject <- names(emc[[1]]$data)[subject]
+    dat <- dat[as.character(dat$subjects) == as.character(subject), , drop = FALSE]
+  }
+  cell <- interaction(dat[balance_by], drop = TRUE, sep = ":")
+  n_c <- tabulate(cell)
+  nrow(dat) / (nlevels(cell) * n_c[as.integer(cell)])
+}
+
+# Weighted total of a pointwise criterion; plain total without weights.
+.weighted_ic <- function(pointwise, weights) {
+  if (is.null(weights)) return(sum(pointwise))
+  if (length(weights) != length(pointwise))
+    stop("`balance_by` weights do not match the pointwise log-likelihood (",
+         length(weights), " trials vs ", length(pointwise), " columns).")
+  sum(weights * pointwise)
+}
+
 # Per-subject WAIC: [n_iter x n_trials] log-likelihood matrix -> scalar WAIC
-waic_from_ll <- function(ll_mat) {
-  .loo_call(function() loo::waic(ll_mat)$estimates["waic", "Estimate"])
+waic_from_ll <- function(ll_mat, weights = NULL) {
+  .loo_call(function() {
+    fit <- loo::waic(ll_mat)
+    if (is.null(weights)) fit$estimates["waic", "Estimate"]
+    else .weighted_ic(fit$pointwise[, "waic"], weights)
+  })
 }
 
 # Pooled or subject-level PSIS-LOO from a pointwise log-likelihood matrix.
-loo_from_ll <- function(ll_mat, cores = 1) {
+loo_from_ll <- function(ll_mat, cores = 1, weights = NULL) {
   .loo_call(function() {
     fit <- if (cores > 1L)
       .emc_wpool_run_loo(ll_mat, cores = cores)
@@ -195,7 +230,8 @@ loo_from_ll <- function(ll_mat, cores = 1) {
     # If a clean wrapper cannot be created, retain correctness and avoid
     # forking from compare()'s dirty frame by running PSIS serially.
     if (is.null(fit)) fit <- loo::loo(ll_mat, cores = 1L)
-    fit$estimates["looic", "Estimate"]
+    if (is.null(weights)) fit$estimates["looic", "Estimate"]
+    else .weighted_ic(fit$pointwise[, "looic"], weights)
   })
 }
 
@@ -225,6 +261,14 @@ loo_from_ll <- function(ll_mat, cores = 1) {
 #' per posterior iteration when `pointwise = "subject"`.
 #' @param cores Integer (default 1). Cores for the pointwise log-likelihood
 #' computation and, for LOO, for PSIS.
+#' @param balance_by `NULL` (default) or a character vector of data column
+#' names. If supplied, every cell of the crossing of these columns receives
+#' equal total weight: trial \eqn{i} in cell \eqn{c} is weighted
+#' \eqn{N / (C n_c)}, where \eqn{N} is the number of trials, \eqn{C} the number
+#' of observed cells and \eqn{n_c} the trials in cell \eqn{c}. The criterion
+#' then estimates predictive accuracy for a design in which all cells are
+#' equally frequent, on the same scale as the unweighted criterion (the two
+#' coincide when cells are balanced). Requires `pointwise = "trial"`.
 #'
 #' @return A single number: the WAIC estimate (`waic_*`) or the LOOIC estimate
 #' (`loo_*`).
@@ -234,44 +278,59 @@ loo_from_ll <- function(ll_mat, cores = 1) {
 #' waic_pooled(samples_LNR)
 #' loo_subject(samples_LNR, subject = 1)
 #' loo_pooled(samples_LNR, pointwise = "subject", cores = 4)
+#' loo_pooled(samples_LNR, balance_by = "S")
 #' }
 #' @name waic_loo
 NULL
 
 #' @rdname waic_loo
 #' @export
-waic_subject <- function(emc, stage = "sample", filter = 0, subject) {
+waic_subject <- function(emc, stage = "sample", filter = 0, subject,
+                         balance_by = NULL) {
   ll_mat <- .ll_matrix_subject(emc, stage = stage, filter = filter, subject = subject)
-  waic_from_ll(ll_mat)
+  weights <- if (is.null(balance_by)) NULL else
+    .balance_weights(emc, balance_by, subject = subject)
+  waic_from_ll(ll_mat, weights = weights)
 }
 
 #' @rdname waic_loo
 #' @export
 waic_pooled <- function(emc, stage = "sample", filter = 0,
-                        pointwise = c("trial", "subject"), K = 200, cores = 1) {
+                        pointwise = c("trial", "subject"), K = 200, cores = 1,
+                        balance_by = NULL) {
   pointwise <- match.arg(pointwise)
+  if (!is.null(balance_by) && pointwise == "subject")
+    stop("`balance_by` requires `pointwise = \"trial\"`.")
   ll_all <- if (pointwise == "trial")
     .ll_matrix_pooled(emc, stage = stage, filter = filter, cores = cores)
   else
     .marg_ll_matrix(emc, stage = stage, filter = filter, K = K, cores = cores)
-  waic_from_ll(ll_all)
+  weights <- if (is.null(balance_by)) NULL else .balance_weights(emc, balance_by)
+  waic_from_ll(ll_all, weights = weights)
 }
 
 #' @rdname waic_loo
 #' @export
-loo_subject <- function(emc, stage = "sample", filter = 0, subject) {
+loo_subject <- function(emc, stage = "sample", filter = 0, subject,
+                        balance_by = NULL) {
   ll_mat <- .ll_matrix_subject(emc, stage = stage, filter = filter, subject = subject)
-  loo_from_ll(ll_mat)
+  weights <- if (is.null(balance_by)) NULL else
+    .balance_weights(emc, balance_by, subject = subject)
+  loo_from_ll(ll_mat, weights = weights)
 }
 
 #' @rdname waic_loo
 #' @export
 loo_pooled <- function(emc, stage = "sample", filter = 0,
-                       pointwise = c("trial", "subject"), K = 200, cores = 1) {
+                       pointwise = c("trial", "subject"), K = 200, cores = 1,
+                       balance_by = NULL) {
   pointwise <- match.arg(pointwise)
+  if (!is.null(balance_by) && pointwise == "subject")
+    stop("`balance_by` requires `pointwise = \"trial\"`.")
   ll_all <- if (pointwise == "trial")
     .ll_matrix_pooled(emc, stage = stage, filter = filter, cores = cores)
   else
     .marg_ll_matrix(emc, stage = stage, filter = filter, K = K, cores = cores)
-  loo_from_ll(ll_all, cores = cores)
+  weights <- if (is.null(balance_by)) NULL else .balance_weights(emc, balance_by)
+  loo_from_ll(ll_all, cores = cores, weights = weights)
 }

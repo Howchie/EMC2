@@ -26,6 +26,12 @@
 #' log-likelihood is estimated via log-mean-exp. This gives well-conditioned PSIS
 #' importance weights where summing conditional per-trial LLs would give Pareto-k >> 1.
 #' Ignored unless `WAIC` or `LOO` is `TRUE`.
+#' @param balance_by `NULL` (default) or a character vector of data column
+#' names. If supplied, WAIC and LOO give every cell of the crossing of these
+#' columns equal total weight (see \code{\link{waic_loo}}), so rare but
+#' important cells are not swamped by frequent ones. The weighted criteria stay
+#' on the scale of the unweighted ones. Requires `pointwise = "trial"`; other
+#' criteria are unaffected.
 #' @param K Integer (default 200). Number of importance samples drawn from the group
 #' prior per posterior iteration when `pointwise = "subject"`. Higher values give a
 #' more accurate marginal likelihood estimate at proportionally higher cost.
@@ -80,7 +86,7 @@
 
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                         BayesFactor = TRUE, WAIC = TRUE, LOO = FALSE,
-                        pointwise = c("trial", "subject"),
+                        pointwise = c("trial", "subject"), balance_by = NULL,
                         K = 200, cores_for_loo = 1, cores_for_props = 4, cores_per_prop = 1, both_splits = FALSE,
                         print_summary=TRUE,digits=0,digits_p=3, ..., loo = NULL) {
   if (is.data.frame(sList)) sList <- list(sList)
@@ -93,6 +99,8 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     LOO <- loo
   }
   pointwise <- match.arg(pointwise)
+  if (!is.null(balance_by) && pointwise == "subject")
+    stop("`balance_by` requires `pointwise = \"trial\"`.")
   if (isTRUE(BayesFactor) && any(vapply(sList, function(x)
         is(x, "emc") && !is.null(x[[1]]$pooled), logical(1)))) {
     message("Bayes factors are not available for fits with pooled parameters; skipping them.")
@@ -111,6 +119,10 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     metric_names <- c("MD", "WAIC", "LOO", "DIC", "BPIC")
     if (any(vapply(sList, nrow, integer(1)) == 0L))
       stop("Saved compare() outputs must be non-empty data frames.")
+    saved_balance <- attr(sList[[1]], "balance_by")
+    if (!all(vapply(sList, function(x) identical(attr(x, "balance_by"), saved_balance),
+                    logical(1))))
+      stop("Saved compare() outputs must use the same `balance_by` cells.")
 
     first_names <- names(sList[[1]])
     if (length(first_names) == 0L || anyDuplicated(first_names))
@@ -177,6 +189,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     for (metric in metric_sets[[1]])
       out[[paste0("w", metric)]] <- getp(out[[metric]])
     attr(out, "pw_ll") <- NULL
+    attr(out, "balance_by") <- saved_balance
 
     if (print_summary) {
       tmp <- out
@@ -224,8 +237,10 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
           .marg_ll_matrix(sList[[i]], stage=stage, filter=sflist[[i]], K=K,
                           cores=cores_for_loo)
         }
-        if(WAIC) WAICs[i] <- waic_from_ll(ll_mat)
-        if(LOO) LOOs[i] <- loo_from_ll(ll_mat, cores=cores_for_loo)
+        weights <- if (is.null(balance_by)) NULL else
+          .balance_weights(sList[[i]], balance_by, subject = subj)
+        if(WAIC) WAICs[i] <- waic_from_ll(ll_mat, weights = weights)
+        if(LOO) LOOs[i] <- loo_from_ll(ll_mat, cores=cores_for_loo, weights = weights)
       }, error = function(e) {
         if(WAIC) warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
         if(LOO) warning("LOO computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
@@ -269,6 +284,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     }
     print(tmp)
   }
+  if (!is.null(balance_by) && (WAIC || LOO)) attr(out, "balance_by") <- balance_by
   invisible(out)
 }
 
@@ -763,6 +779,9 @@ get_BayesFactor <- function(MLL1, MLL2){
 #' @param pointwise Character string, one of `"trial"` or `"subject"`, passed to
 #' `compare()` for pooled WAIC/LOO comparisons. If `subject` is specified for
 #' `compare_subject()`, the pointwise unit remains the selected subject's trials.
+#' @param balance_by `NULL` (default) or a character vector of data column
+#' names; each subject's WAIC/LOO gives every cell of their crossing equal
+#' weight. See \code{\link{compare}()}.
 #'
 #' @return List of matrices for each subject of effective number of parameters,
 #' mean deviance, deviance of mean, DIC, BPIC and associated weights.
@@ -774,12 +793,13 @@ get_BayesFactor <- function(MLL1, MLL2){
 #' @export
 compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
   print_summary=TRUE,digits=3,return_summary=FALSE,n_cores=1,subject=NULL,WAIC=TRUE,LOO=FALSE,
-  pointwise = c("trial", "subject")) {
+  pointwise = c("trial", "subject"), balance_by = NULL) {
   pointwise <- match.arg(pointwise)
 
   compare_one <- function(subject,sList,stage,filter,use_best_fit)
     compare(sList,subject=subject,stage=stage,filter=filter,use_best_fit=use_best_fit,
-            BayesFactor=FALSE,WAIC=WAIC,LOO=LOO,pointwise=pointwise,print_summary=FALSE)
+            BayesFactor=FALSE,WAIC=WAIC,LOO=LOO,pointwise=pointwise,
+            balance_by=balance_by,print_summary=FALSE)
 
   if(is(sList, "emc")) sList <- list(sList)
   subjects <- names(sList[[1]][[1]]$data)
@@ -796,7 +816,8 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
     for (i in subjects) {
       cat(".")
       out[[i]] <- compare(sList,subject=i,BayesFactor=FALSE,
-        stage=stage,filter=filter,use_best_fit=use_best_fit,WAIC=WAIC,LOO=LOO,pointwise=pointwise,print_summary=FALSE)
+        stage=stage,filter=filter,use_best_fit=use_best_fit,WAIC=WAIC,LOO=LOO,pointwise=pointwise,
+        balance_by=balance_by,print_summary=FALSE)
      }
   }
   wDIC <- lapply(out,function(x)x["wDIC"])

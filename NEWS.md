@@ -10,6 +10,14 @@
     dies with its parent. `options(emc2.fit_host = FALSE)` restores
     in-session fitting.
 
+-   **Equal-cell-weight WAIC and LOO.** `compare()`, `compare_subject()`,
+    `waic_*()` and `loo_*()` take `balance_by`, a character vector of data
+    columns whose crossing defines cells. Each cell then gets equal total
+    weight, so the criterion scores a design with all cells equally
+    frequent and rare cells are not swamped by common ones. Values stay on
+    the scale of the ordinary criterion and match it when cells are
+    balanced.
+
 -   **New model `RSUB()`:** racing subordinators. Each accumulator's
     evidence is a nondecreasing pure-jump Levy process with mean `v u` and
     variance `s^2 v u`, finishing at a uniform-start criterion
