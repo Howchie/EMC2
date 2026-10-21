@@ -1606,6 +1606,80 @@ inline double wald_k0_log_surv_closed(double t, double mu, double A,
   return ISNAN(out) ? NA_REAL : out;
 }
 
+// Upper-tail antiderivative of the point survivor in d, for mu t > d.  With
+// x1 = (mu t - d)/sqrt(t), x2 = x1 + delta, delta = 2 d/sqrt(t), the survivor
+// integrates to
+//   int S(t; d) dd = phi(x1) N(d) / (2 mu) + const,
+//   N = delta m(x1) - 2 k(x1) + R(x1) - R(x2),  m = 1 - x R = R T1,  k = m T2,
+// where T_n = n / (x + T_{n+1}) are the tails of the Mills-ratio continued
+// fraction.  The Mills difference is R1 R2 (delta - D1) with
+//   D_n = T_n(x1) - T_n(x2) = T_n(x1) T_n(x2) (delta - D_{n+1}) / n,
+// so neither it nor any tail difference is formed by subtraction; both
+// recursions run backward from `depth`.
+inline double wald_k0_surv_tail_N(double x1, double delta, int depth) {
+  const double x2 = x1 + delta;
+  double Ta = (depth + 1) / x1, Tb = (depth + 1) / x2;
+  double D = (depth + 1) * delta / (x1 * x2);
+  double T2a = 0.0;
+  for (int n = depth; n >= 1; --n) {
+    Ta = n / (x1 + Ta);
+    Tb = n / (x2 + Tb);
+    D = Ta * Tb * (delta - D) * (1.0 / n);
+    if (n == 2) T2a = Ta;
+  }
+  const double R1 = 1.0 / (x1 + Ta), R2 = 1.0 / (x2 + Tb);
+  const double m1 = R1 * Ta;
+  return delta * m1 - 2.0 * m1 * T2a + R1 * R2 * (delta - D);
+}
+
+// Smallest x1(d_hi) at which the upper-tail form is used; the continued
+// fraction depth 4 + 150/x keeps double accuracy above it.
+constexpr double WALD_K0_SURV_TAIL_X = 1.5;
+// Q(5.62) < 1e-8 bounds the start-point survivor, so above this x1(d_hi) the
+// natural CDF would be saturated and is not worth evaluating.
+constexpr double WALD_K0_SURV_SAT_X = 5.62;
+
+// Log survivor for the A > 0 start-point average in the upper tail
+// (mu > 0, x1(d_hi) >= WALD_K0_SURV_TAIL_X):
+//   A S_A(t) = [phi(x1_hi) N_hi - phi(x1_lo) N_lo] / (2 mu).
+// phi(x1_lo)/phi(x1_hi) = exp(-Delta) with Delta formed without squaring.
+// Returns NaN when that outer difference keeps less than 1e-6 of its terms
+// (start ranges narrow against the drift scale).
+inline double wald_k0_log_surv_tail(double t, double mu, double A,
+                                    double d_lo, double d_hi) {
+  const double sqt = std::sqrt(t);
+  const double x1_hi = (mu * t - d_hi) / sqt;
+  const double x1_lo = (mu * t - d_lo) / sqt;
+  const int depth = 4 + static_cast<int>(std::ceil(150.0 / x1_hi));
+  const double N_hi = wald_k0_surv_tail_N(x1_hi, 2.0 * d_hi / sqt, depth);
+  const double N_lo = wald_k0_surv_tail_N(x1_lo, 2.0 * d_lo / sqt, depth);
+  const double Delta = (d_hi - d_lo) * (2.0 * mu * t - d_lo - d_hi) / (2.0 * t);
+  const double lo_term = std::exp(-Delta) * N_lo;
+  const double val = N_hi - lo_term;
+  if (!(val > 0.0) ||
+      val < 1e-6 * std::fmax(std::fabs(N_hi), std::fabs(lo_term)))
+    return NA_REAL;
+  return log_phi_std(x1_hi) + std::log(val) - std::log(2.0 * mu) - std::log(A);
+}
+
+// Never-finish mass of the start-point average, log[(1/A) int (1 - e^{2 mu d}) dd]:
+// -Inf for mu >= 0.  With e = 2 mu, w = d_hi - d_lo and g = expm1(e w)/(e w),
+// the integral is -w expm1(e d_lo + log g), which cancels for neither small
+// |e| d nor narrow start ranges; log g uses its series for small |e w|.
+inline double wald_k0_log_surv_inf(double mu, double A, double d_lo, double d_hi) {
+  if (mu >= 0.0) return R_NegInf;
+  const double e = 2.0 * mu;
+  const double w = d_hi - d_lo;
+  const double ew = e * w;
+  const double log_g = (std::fabs(ew) < 1e-2)
+      ? std::log1p(ew * (0.5 + ew * (1.0 / 6.0 + ew * (1.0 / 24.0 +
+                   ew * (1.0 / 120.0 + ew / 720.0)))))
+      : std::log(std::expm1(ew) / ew);
+  const double J = -w * std::expm1(e * d_lo + log_g);
+  if (!(J > 0.0)) return R_NegInf;
+  return std::fmin(std::log(J) - std::log(A), 0.0);
+}
+
 inline double wald_k0_log_surv(double t, double b, double mu, double A) {
   if (!(b > 0.0)) return R_NegInf;
   if (!(t > 0.0)) return 0.0;
@@ -1616,9 +1690,12 @@ inline double wald_k0_log_surv(double t, double b, double mu, double A) {
   if (d_hi <= d_lo) return R_NegInf;  // all starts at/above threshold
   // Starts with d <= 0 are absorbed immediately and contribute no survivor
   // mass, so the average runs over the positive-d part only.
+  if (t == R_PosInf) return wald_k0_log_surv_inf(mu, A, d_lo, d_hi);
   double out = NA_REAL;
   if (emc2_isfinite(t)) {
-    out = wald_k0_log_surv_closed(t, mu, A, d_lo, d_hi);
+    if (mu > 0.0 && (mu * t - d_hi) >= WALD_K0_SURV_TAIL_X * std::sqrt(t))
+      out = wald_k0_log_surv_tail(t, mu, A, d_lo, d_hi);
+    if (ISNAN(out)) out = wald_k0_log_surv_closed(t, mu, A, d_lo, d_hi);
   }
   if (ISNAN(out)) {
     out = wald_k0_log_avg_over_d(d_lo, d_hi, [&](double d) {

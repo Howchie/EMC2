@@ -40,6 +40,10 @@ static inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A
   // The natural CDF is NaN at t = +Inf; the log survivor gives the
   // never-finish mass.
   if (tt == R_PosInf) return wald_k0_log_surv(tt, b, mu, A);
+  // Far upper tail: the survivor is below the CDF's resolution, so go straight
+  // to the log survivor.
+  if (mu > 0.0 && (mu * tt - b) >= WALD_K0_SURV_SAT_X * std::sqrt(tt))
+    return wald_k0_log_surv(tt, b, mu, A);
   const double cdf = pwald_k0(tt, b, mu, A);
   const double cl = std::max(0.0, std::min(1.0, cdf));
   if (cl <= 0.0) return 0.0;  // survivor ~ 1: -F below natural resolution
