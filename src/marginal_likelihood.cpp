@@ -240,9 +240,11 @@ static void marginal_feasible(DataFrame data, NumericVector constants, String ty
 // scale of the centre and the curvature scale within a quarter of the rule's;
 // otherwise it is placed again at that fitted peak while the placements
 // converge. Particles whose rules do not converge go to probe triples, which
-// locate the peak for a final rule there. A peak within reach of a hard edge
-// of the feasible interval is truncated, so it is integrated by
-// Gauss-Legendre up to the edge instead. Given `log_offset`, the rest of each
+// locate the peak for a final rule there; their steps are limited in length
+// and kept inside a bracket on the peak. A peak the triples do not locate is
+// integrated by Gauss-Legendre around the best node evaluated. A peak within
+// reach of a hard edge of the feasible interval is truncated, so it is
+// integrated by Gauss-Legendre up to the edge instead. Given `log_offset`, the rest of each
 // particle's selection weight, particles that cannot be selected keep their
 // first rule. Otherwise every particle is treated on its own, so its value is
 // a fixed function of that particle and its start. The registered kernel is reused verbatim (nodes
@@ -366,6 +368,13 @@ static MarginalGrid calc_ll_oo_marginal_core(
   std::vector<double> c(static_cast<size_t>(np)), h(static_cast<size_t>(np), sigma);
   std::vector<double> v(static_cast<size_t>(np), NA_REAL), sv(static_cast<size_t>(np), NA_REAL);
   std::vector<char> fitted(static_cast<size_t>(np), 0), done(static_cast<size_t>(np), 0);
+  // The best node evaluated so far, and an interval known to hold the peak
+  // of a unimodal integrand.
+  std::vector<double> xb(static_cast<size_t>(np), NA_REAL), gb(static_cast<size_t>(np), R_NegInf);
+  std::vector<double> br_lo(static_cast<size_t>(np), x_lo), br_hi(static_cast<size_t>(np), x_hi);
+  auto see = [&](size_t ii, double x, double gx) {
+    if (R_FINITE(gx) && gx > gb[ii]) { gb[ii] = gx; xb[ii] = x; }
+  };
   for (int i = 0; i < np; ++i) {
     const double ci = centre_in.size() ? centre_in[i] : mu_of(i);
     c[static_cast<size_t>(i)] = clamp(R_FINITE(ci) ? ci : mu_of(i));
@@ -409,6 +418,7 @@ static MarginalGrid calc_ll_oo_marginal_core(
       bool finite = true;
       for (int k = 0; k < n_nodes; ++k) {
         const double gk = gx(j, k), d = z[static_cast<size_t>(k)];
+        see(ii, X(j, k), gk);
         if (!R_FINITE(gk)) { finite = false; break; }
         T0 += gk; T1 += gk * d; T2 += gk * d * d;
         if (gk > best) { best = gk; xbest = X(j, k); }
@@ -512,6 +522,27 @@ static MarginalGrid calc_ll_oo_marginal_core(
       const int i = active[static_cast<size_t>(j)];
       const size_t ii = static_cast<size_t>(i);
       g.rounds[i] += 1;
+      for (int k = 0; k < 3; ++k) see(ii, X(j, k), gx(j, k));
+      int kb = 0;
+      for (int k = 1; k < 3; ++k) if (gx(j, k) > gx(j, kb)) kb = k;
+      // Narrow the bracket: for a unimodal integrand the peak lies on the
+      // uphill side of the triple's middle, or between its ends when the
+      // middle is highest.
+      if (R_FINITE(gx(j, kb))) {
+        double lo = br_lo[ii], hi = br_hi[ii];
+        if (kb == 0) hi = std::min(hi, X(j, 1));
+        else if (kb == 2) lo = std::max(lo, X(j, 1));
+        else { lo = std::max(lo, X(j, 0)); hi = std::min(hi, X(j, 2)); }
+        if (!(hi > lo)) { lo = X(j, 0); hi = X(j, 2); }   // not unimodal: restart
+        br_lo[ii] = lo; br_hi[ii] = hi;
+      }
+      // An uphill step goes at most four triple widths past the triple's
+      // highest end, and never outside the bracket; once the middle is
+      // highest the parabola's peak lies between the triple's ends.
+      const double width = X(j, 2) - X(j, 0);
+      const double far_lo = kb == 0 ? X(j, 0) - 4.0 * width : X(j, 0);
+      const double far_hi = kb == 2 ? X(j, 2) + 4.0 * width : X(j, 2);
+      const double h_probe = h[ii];
       double vi, si;
       if (marginal_parabola(X(j, 0), gx(j, 0), X(j, 1), gx(j, 1), X(j, 2), gx(j, 2), &vi, &si)) {
         si = std::min(si, sigma);
@@ -525,12 +556,33 @@ static MarginalGrid calc_ll_oo_marginal_core(
           located[ii] = 1;
           continue;
         }
-        c[ii] = vc; h[ii] = si;
+        // A bracket narrower than the centring tolerance locates the peak as
+        // well as a centred rule would, though a kinked or truncated peak
+        // never passes the curvature check.
+        if (kb == 1 && br_hi[ii] - br_lo[ii] <= max_offset * si) {
+          located[ii] = 1;
+          v[ii] = std::min(br_hi[ii], std::max(br_lo[ii], vc));
+          continue;
+        }
+        const bool reached = vc >= far_lo && vc <= far_hi;
+        c[ii] = std::min(far_hi, std::max(far_lo, vc));
+        h[ii] = reached ? si : std::min(2.0 * h[ii], sigma);
+      } else if (kb == 1) {
+        c[ii] = X(j, 1);
+        h[ii] = 0.5 * h[ii];
       } else {
-        int kb = 0;
-        for (int k = 1; k < 3; ++k) if (gx(j, k) > gx(j, kb)) kb = k;
-        c[ii] = X(j, kb);
+        c[ii] = kb == 0 ? far_lo : far_hi;
         h[ii] = std::min(2.0 * h[ii], sigma);
+      }
+      // A step out of the bracket returns to the best node evaluated, with a
+      // narrower triple, so the search cannot cycle between the bracket's ends.
+      const double cand = clamp(c[ii]);
+      if ((cand < br_lo[ii] || cand > br_hi[ii]) && R_FINITE(xb[ii]) &&
+          br_lo[ii] <= xb[ii] && xb[ii] <= br_hi[ii]) {
+        c[ii] = xb[ii];
+        h[ii] = 0.5 * h_probe;
+      } else {
+        c[ii] = std::min(br_hi[ii], std::max(br_lo[ii], cand));
       }
       next.push_back(i);
     }
@@ -543,20 +595,29 @@ static MarginalGrid calc_ll_oo_marginal_core(
   for (int i = 0; i < np; ++i) {
     const size_t ii = static_cast<size_t>(i);
     if (done[ii]) continue;
-    if (fitted[ii] && rule_inside(v[ii], sv[ii])) {
+    if (located[ii] && rule_inside(v[ii], sv[ii])) {
       gh_rows.push_back(i);
     } else {
       // A peak near an edge, or one never resolved: Gauss-Legendre over the
-      // feasible part of the window around it.
-      const double cc = fitted[ii] ? v[ii] : mu_of(i);
+      // feasible part of the window around it. An unresolved peak's last
+      // fitted vertex was never checked, so the window is centred on the best
+      // node evaluated and kept inside the bracket.
+      const bool use_best = !located[ii] && R_FINITE(xb[ii]);
+      const double cc = located[ii] ? v[ii] : (use_best ? xb[ii] : mu_of(i));
       const double ss = fitted[ii] ? sv[ii] : sigma;
-      double a = std::max(x_lo, cc - span * ss), b = std::min(x_hi, cc + span * ss);
+      // A bracket that excludes the best node came from a multimodal
+      // integrand and is not used.
+      const bool bracketed = use_best && br_lo[ii] <= cc && cc <= br_hi[ii];
+      const double lo = bracketed ? std::max(x_lo, br_lo[ii]) : x_lo;
+      const double hi = bracketed ? std::min(x_hi, br_hi[ii]) : x_hi;
+      double a = std::max(lo, cc - span * ss), b = std::min(hi, cc + span * ss);
       if (!(b > a)) {
         // The window lies wholly outside the feasible interval: integrate the
-        // feasible window of the same width nearest to it.
+        // feasible window of the same width nearest to it, from the edge on
+        // its side (finite, since the window lies beyond it).
         const double w = 2.0 * span * ss;
-        if (cc > x_hi) { b = x_hi; a = std::max(x_lo, x_hi - w); }
-        else { a = x_lo; b = std::min(x_hi, x_lo + w); }
+        if (cc > hi) { b = hi; a = std::max(lo, hi - w); }
+        else { a = lo; b = std::min(hi, lo + w); }
       }
       gl_rows.push_back(i); gl_a.push_back(a); gl_b.push_back(b);
     }
@@ -598,7 +659,8 @@ static MarginalGrid calc_ll_oo_marginal_core(
       const size_t ii = static_cast<size_t>(i);
       g.rounds[i] += 1;
       g.gl_used += 1;
-      if (fitted[ii]) { g.mode[i] = v[ii]; g.sd[i] = sv[ii]; }
+      if (located[ii]) { g.mode[i] = v[ii]; g.sd[i] = sv[ii]; }
+      else if (R_FINITE(xb[ii])) { g.mode[i] = xb[ii]; g.sd[i] = fitted[ii] ? sv[ii] : sigma; }
       for (int k = 0; k < n_gl; ++k) {
         g.nodes(i, k) = X(j, k);
         g.log_terms(i, k) = gx(j, k) + LW(j, k);

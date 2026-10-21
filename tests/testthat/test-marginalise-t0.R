@@ -435,3 +435,56 @@ test_that("a trend parameter is marginalised whatever the design of its base par
   }, numeric(1))
   expect_equal(EMC2:::marginal_ll_from_grid(grid), ref, tolerance = 1e-3)
 })
+
+test_that("a peak far from the prior centre is located, not replaced by an unchecked vertex", {
+  skip_on_cran()
+  skip_on_os("windows")
+  # Unbinned RTs and scattered proposals put sharp peaks several prior SDs
+  # from the centre. The peak search used to overshoot by many units and then
+  # build its rule at the last, never-checked parabola vertex (errors of
+  # hundreds to thousands of nats).
+  dat_tr <- dat
+  dat_tr$trial <- ave(seq_len(nrow(dat_tr)), dat_tr$subjects, FUN = seq_along) / 100
+  tr <- make_trend(par_names = "B", cov_names = "trial", kernels = "exp_incr")
+  des_tr <- design(data = dat_tr, model = LBA, trend = tr, matchfun = matchfun,
+                   formula = list(v ~ lM, sv ~ 1, B ~ E, A ~ 1, t0 ~ 1,
+                                  B.w ~ 1, B.d_ei ~ 1),
+                   constants = c(sv = log(1)), marginalise = "B.w",
+                   report_p_vector = FALSE)
+  pn <- names(sampled_pars(des_tr))
+  pm <- c(v = 1, v_lMTRUE = 1, B = log(.8), B_Eneutral = .2, B_Eaccuracy = .4,
+          A = log(.3), t0 = log(.2), B.w = 0, B.d_ei = 0)
+  psd <- setNames(rep(.4, length(pn)), pn)
+  psd["B.w"] <- 0.5
+  pr <- prior(des_tr, type = "standard", pmean = pm[pn], psd = psd)
+  emc <- make_emc(dat_tr, des_tr, type = "standard", prior = pr,
+                  compress = TRUE, n_chains = 1, rt_resolution = NULL)
+  s1 <- emc[[1]]
+  d1 <- s1$data[[1]]
+  V <- diag(psd^2)
+  dimnames(V) <- list(pn, pn)
+  V["B.w", "B"] <- V["B", "B.w"] <- 0.4 * psd[["B.w"]] * psd[["B"]]
+  cond <- EMC2:::.marginal_conditional(pm[pn], V,
+                                       EMC2:::.marginal_par_idx(pn, s1$marginalise))
+  RNGkind("Mersenne-Twister", "Inversion", "Rejection")
+  set.seed(3)
+  X <- matrix(pm[pn], 6, length(pn), byrow = TRUE, dimnames = list(NULL, pn))
+  X[-1, ] <- X[-1, ] + matrix(rnorm(5 * length(pn), 0, 0.15), 5)
+  m <- EMC2:::.marginal_cond_mean(cond, X)
+  ref <- vapply(seq_len(nrow(X)), function(r) {
+    g <- seq(m[r] - 10 * cond$sd, m[r] + 10 * cond$sd, length.out = 8001)
+    P <- X[rep(r, length(g)), , drop = FALSE]
+    P[, "B.w"] <- g
+    lp <- EMC2:::calc_ll_manager(P, d1, s1$model) + dnorm(g, m[r], cond$sd, log = TRUE)
+    mx <- max(lp)
+    mx + log(sum(exp(lp - mx)) * diff(g[1:2]))
+  }, numeric(1))
+  for (K in c(5L, 13L)) {
+    spec <- EMC2:::.marginal_batch_spec(s1$marginalise, cond, X)
+    spec$n_nodes <- K
+    q <- EMC2:::marginal_ll_from_grid(EMC2:::compute_marginal_grid(X, d1, s1$model, spec))
+    # The likelihood floor puts kinks in these poorly fitting proposals'
+    # integrands, which costs a few hundredths of a nat.
+    expect_lt(max(abs(q - ref)), 0.05)
+  }
+})
