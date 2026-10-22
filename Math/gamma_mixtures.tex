@@ -1,0 +1,236 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,booktabs,array}
+\usepackage[hidelinks]{hyperref}
+\newtheorem{proposition}{Proposition}
+\newcommand{\Pois}{\operatorname{Pois}}
+\newcommand{\Gam}{\operatorname{Gamma}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Ireg}{I}
+\title{Gamma Rate Mixtures for Opponent, Subordinator and Packet Accumulators:\\ Exact Laws and Fixed-Node Implementation}
+\date{October 17, 2026}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Three accumulators are given a trial-level rate that varies as a Gamma distribution with shape $\beta$ and mean $\bar v$ (rate CV $\beta^{-1/2}$, continuous in $\beta$): the opponent Poisson counter in ratio coordinates, the inverse-Gaussian (IG) subordinator accumulator, and the compound-Poisson packet accumulator. The first and third have exact positive-term series in regularised incomplete beta functions, obtained by rewriting each accumulator as a homogeneous counter with a random integer criterion whose law does not depend on the rate; the first also has a hypergeometric closed-form density. The IG subordinator has no closed form for real $\beta$, and is evaluated by a fixed-node Gauss rule whose variable and weight are chosen so that the integrand is smooth and positive on the rule's support; the rule attains $10^{-12}$--$10^{-15}$ relative accuracy with 24--32 nodes across the regimes tested, including survivors below $10^{-16}$. Uniform start-point variability is retained in every case. All statements were checked against adaptive quadrature of the conditional laws.
+\end{abstract}
+
+\section{Conventions}
+Decision time is $x$ and the criterion distance is $d$; a uniform start point is $D\sim U[B,B+A]$. The trial rate is
+\[
+V\sim\Gam(\beta,\text{rate } r_v),\qquad r_v=\beta/\bar v,\qquad \E V=\bar v,\quad \mathrm{CV}(V)=\beta^{-1/2},
+\]
+with density $g(v)=r_v^{\beta}v^{\beta-1}e^{-r_v v}/\Gamma(\beta)$. Write $P_\beta(y)=\gamma(\beta,y)/\Gamma(\beta)$ and $Q_\beta=1-P_\beta$ for the regularised incomplete gamma functions, $\Ireg_q(a,b)$ for the regularised incomplete beta function, $\varphi,\Phi$ for the standard normal density and CDF, $R(y)=\Phi(-y)/\varphi(y)$ for the Mills ratio and $D(y)=1-yR(y)$, $E(y)=R(y)-yD(y)$ for its negative derivatives; all three are positive and are evaluated from the Laplace continued fraction for large arguments. A beta-prime law with shape $a$, tail index $\beta$ and scale $r$ has CDF $\Ireg_{x/(r+x)}(a,\beta)$ and density
+\begin{equation}
+f_{\mathrm{BP}}(x;a,\beta,r)=\frac{r^{\beta}x^{a-1}}{B(a,\beta)\,(r+x)^{a+\beta}},
+\label{eq:bp}
+\end{equation}
+which is the law of $Y/V$ for $Y\sim\Gam(a,1)$ and $V\sim\Gam(\beta,\text{rate } r)$. Its moments are $\E[X^k]=r^k\,\Gamma(a+k)\Gamma(\beta-k)/(\Gamma(a)\Gamma(\beta))$ for $k<\beta$.
+
+\section{Opponent counter with Gamma net rate}
+
+\subsection{Model}
+Evidence is $X(u)=N_+(u)-N_-(u)$ with independent Poisson streams of rates $a$ and $b$, and the accumulator finishes at $U_K=\inf\{u: X(u)\ge K\}$. In ratio coordinates with opposing activity proportional to the net rate,
+\[
+a=(1+\rho)V,\qquad b=\rho V,\qquad \rho\ge0,
+\]
+and $V$ is drawn once per trial. Conditional on $V$ the finishing time is proper, with mean $K/V$ and variance $K(1+2\rho)/V^2$; its skewness lies between that of the Gamma counter ($\rho=0$) and that of the moment-matched Wald ($\rho\to\infty$).
+
+\subsection{Random-criterion representation}
+Superpose the two streams. The total stream $N_+(u)+N_-(u)$ is Poisson with rate
+\[
+\Lambda=a+b=(1+2\rho)V,
+\]
+and each event is positive independently with probability
+\begin{equation}
+p_+=\frac{a}{a+b}=\frac{1+\rho}{1+2\rho},\qquad p_-=1-p_+=\frac{\rho}{1+2\rho},
+\label{eq:pplus}
+\end{equation}
+which does not depend on $V$. Let $J$ be the number of negative events registered before absorption. The walk is absorbed on its $(K+2J)$th event in total, and by the hitting-time theorem for a walk with unit upward steps
+\begin{equation}
+w_j\equiv\Prob(J=j)=\frac{K}{K+2j}\binom{K+2j}{j}p_+^{\,K+j}p_-^{\,j}
+=\frac{K\,\Gamma(K+2j)}{j!\,\Gamma(K+j+1)}\,p_+^{\,K+j}p_-^{\,j},\qquad j=0,1,\dots
+\label{eq:wj}
+\end{equation}
+The Gamma-function form extends \eqref{eq:wj} to real $K\ge1$, where it is the law of the criterion-indexed subordinator; $\sum_j w_j=1$ for every $\rho\ge0$ and real $K$ (numerically to $4\times10^{-16}$ at $K=3.5$, $\rho=1$). Conditional on $J=j$ the finishing time is the waiting time for $K+2j$ events of the total stream,
+\[
+U_K\mid J=j,\,V\;\sim\;\Gam\!\big(K+2j,\ \text{rate }(1+2\rho)V\big),
+\]
+and this holds whatever the law of $V$. The accumulator is therefore a homogeneous Poisson counter with a random criterion $K+2J$ whose distribution is fixed by $(K,\rho)$ alone. This representation requires ratio coordinates: in background coordinates $a=V+\lambda_0$, $b=\lambda_0$ the event sign probability depends on $V$ and the criterion law no longer separates from the rate. A trial gain $G\sim\Gam(\beta,\text{rate }\beta)$ on both streams of the background coordinates, $a=G(v+\lambda_0)$ and $b=G\lambda_0$, does keep $p_+=(v+\lambda_0)/(v+2\lambda_0)$ fixed; it is this mixture with net rate $Gv$ and $\rho=\lambda_0/v$, so the background varies with the signal from trial to trial.
+
+\subsection{Marginal laws}
+Integrating the conditional Gamma over $V$ gives, with
+\begin{equation}
+r=\frac{r_v}{1+2\rho}=\frac{\beta}{(1+2\rho)\bar v},\qquad q(x)=\frac{x}{r+x},
+\end{equation}
+the positive-term series
+\begin{align}
+F(x)&=\sum_{j\ge0}w_j\,\Ireg_{q(x)}(K+2j,\beta),
+\label{eq:opF}\\
+S(x)&=\sum_{j\ge0}w_j\,\Ireg_{1-q(x)}(\beta,K+2j),
+\label{eq:opS}\\
+f(x)&=\sum_{j\ge0}w_j\,f_{\mathrm{BP}}(x;K+2j,\beta,r).
+\label{eq:opf}
+\end{align}
+The density also has the closed form
+\begin{equation}
+f(x)=\frac{\Gamma(\beta+K)}{\Gamma(\beta)\Gamma(K)}\,
+\frac{r_v^{\beta}(1+\rho)^{K}x^{K-1}}{[\,r_v+(1+2\rho)x\,]^{\beta+K}}\;
+{}_2F_1\!\left(\frac{\beta+K}{2},\frac{\beta+K+1}{2};K+1;\;\frac{4\rho(1+\rho)x^2}{[\,r_v+(1+2\rho)x\,]^2}\right),
+\label{eq:ophyp}
+\end{equation}
+whose argument equals $4p_+p_-\,q(x)^2<1$, so the hypergeometric series converges for every $x$; \eqref{eq:ophyp} and \eqref{eq:opf} agree to $10^{-15}$ relative and both agree with direct quadrature of the Bessel density. At $\rho=0$ only $j=0$ survives and \eqref{eq:opF}--\eqref{eq:opf} reduce to the beta-prime law with shape $K$, tail $\beta$ and scale $\beta/\bar v$: the proper linear-clock Gamma-mixed counter is the $\rho=0$ member of this family.
+
+Moments follow from the beta-prime moments and the mean total event count $\E[K+2J]=K/(p_+-p_-)=K(1+2\rho)$: for $\beta>2$,
+\begin{equation}
+\E[U_K]=\frac{K\beta}{\bar v(\beta-1)},\qquad
+\mathrm{CV}^2(U_K)=\frac{(1+2\rho)(\beta-1)}{K(\beta-2)}+\frac{1}{\beta-2}.
+\end{equation}
+
+\subsection{Implementation}
+\paragraph{Weights.} The $w_j$ depend on $(K,\rho)$ only and are computed once per parameter vector from $w_0=p_+^K$ and
+\begin{equation}
+\frac{w_{j+1}}{w_j}=\frac{(K+2j)(K+2j+1)}{(j+1)(K+j+1)}\,p_+p_-\;\longrightarrow\;4p_+p_-=\frac{4\rho(1+\rho)}{(1+2\rho)^2}<1 .
+\end{equation}
+The ratio can exceed one for the first few terms when $K$ is large (the mode of $J$ moves away from zero) and is eventually decreasing toward its limit, so the sequence is summed until $w_j<\varepsilon$ with the ratio below one; since each incomplete-beta factor lies in $[0,1]$, the truncation error of \eqref{eq:opF}--\eqref{eq:opS} is bounded by the omitted weight mass $\le w_{J}\,\varrho/(1-\varrho)$ with $\varrho$ the current ratio. For $\rho\le1$ about $300$ terms give $10^{-13}$; for $\rho=2$ about $500$; as $\rho\to\infty$ the count grows like $(1-4p_+p_-)^{-1}$ and the diffusion (Wald) limit is the appropriate model.
+
+\paragraph{Incomplete-beta terms.} Only one library evaluation of $\Ireg$ is needed per $x$. With $h_a=q^{a}(1-q)^{\beta}/B(a,\beta)$,
+\begin{align}
+\Ireg_q(a+2,\beta)&=\Ireg_q(a,\beta)-\frac{h_a}{a}\left[1+\frac{q\,(a+\beta)}{a+1}\right],
+\label{eq:rec}\\
+h_{a+2}&=h_a\,q^2\,\frac{(a+\beta)(a+\beta+1)}{a(a+1)},
+\end{align}
+and the survivor terms obey the same recurrence with the sign reversed. The direction matters. $\Ireg_q(a,\beta)$ decreases in $a$ and the subtracted bracket in \eqref{eq:rec} is comparable to $\Ireg_q(a,\beta)$ itself whenever $q$ is small, so the CDF is evaluated by starting \eqref{eq:rec} at the truncation shape $K+2J$ and running \emph{downward}, where every step is an addition. The survivor $\Ireg_{1-q}(\beta,a)$ increases in $a$ and is run \emph{upward} from $a=K$, again by additions. Each series is thus a sum of positive terms built by positive recurrences and holds full relative precision at both tails; whichever of $F$ and $S$ is smaller is computed directly. Cost per evaluation is one $\Ireg$ and $O(J)$ arithmetic; in an interpreted prototype with a library call per term this was already two hundred times faster than adaptive quadrature of the conditional CDF. The density is cheapest through \eqref{eq:ophyp} when a reliable ${}_2F_1$ is available ($\sim6\,\mu$s); the series \eqref{eq:opf}, with $f_{\mathrm{BP}}(x;a+2)/f_{\mathrm{BP}}(x;a)=q^2(a+\beta)(a+\beta+1)/(a(a+1))$, is the robust alternative when the hypergeometric argument approaches one.
+
+\section{IG subordinator accumulator with Gamma rate}
+
+\subsection{Conditional law and scale structure}
+Conditional on $V$, evidence is the IG subordinator with mean rate $V$ and Fano factor $c=s^2$, and the point-start finishing time has
+\begin{equation}
+F_d(x\mid V)=\Phi(\alpha)-e^{2m/c}\Phi(-\bar\beta),\qquad m=Vx,\quad z=\sqrt{cd},\quad \alpha=\frac{m-d}{z},\quad \bar\beta=\frac{m+d}{z}.
+\label{eq:igF}
+\end{equation}
+The rate is a pure time scale: with $M=\max_{0\le w\le d}(W_w+w/s)$ the running maximum of a drifted Brownian motion, whose law does not involve $V$,
+\begin{equation}
+T_d=\frac{s}{V}\,M .
+\label{eq:runmax}
+\end{equation}
+Hence every moment of the mixture factorises, $\E[T_d^k]=\E[T_d^k\mid V=1]\,(\beta/\bar v)^k\,\Gamma(\beta-k)/\Gamma(\beta)$, finite for $k<\beta$; in particular the mean is finite for $\beta>1$, which a rate law with positive density at zero (a positively truncated Gaussian, say) cannot provide. The law is proper for every $\beta>0$. There is no closed form for real $\beta$: \eqref{eq:runmax} gives $F(x)=\E_M[Q_\beta(r_v sM/x)]$, an incomplete gamma function of a running maximum, which is elementary only for integer $\beta$.
+
+\subsection{Stable conditional forms}
+Using $e^{2m/c}\varphi(\bar\beta)=\varphi(\alpha)$, every conditional quantity is $\varphi(\alpha)$ times a bracket of positive terms:
+\begin{align}
+S_d(x\mid V)&=\varphi(\alpha)\big[R(\alpha)+R(\bar\beta)\big], &
+F_d(x\mid V)&=\varphi(\alpha)\!\int_{-\alpha}^{\bar\beta}D(t)\dd t=\Phi(\alpha)-\varphi(\alpha)R(\bar\beta),
+\label{eq:stabSF}\\
+f_d(x\mid V)&=\frac{2V}{z}\varphi(\alpha)\Big[D(\bar\beta)+\frac{m}{z}R(\bar\beta)\Big], &
+H_d&=z\varphi(\alpha)\!\int_{-\alpha}^{\bar\beta}E,\quad
+L_d=z\varphi(\alpha)\!\int_{\alpha}^{\bar\beta}E,
+\label{eq:stabfHL}
+\end{align}
+with $J_d=\varphi(\alpha)\big[\int_{-\alpha}^{\bar\beta}D+2E(\bar\beta)+(\alpha+\bar\beta)D(\bar\beta)\big]$ and $1-J_d=\varphi(\alpha)\big[\int_{\alpha}^{\bar\beta}D+(\bar\beta-\alpha)D(\bar\beta)\big]$, where $H_d=\E(G_x-d)^+$ and $L_d=\E(d-G_x)^+$ are the stop-loss transforms of the evidence state and $J_d=\partial H_d/\partial m$. The uniform-start averages are
+\begin{equation}
+\bar F=\frac{H_B-H_{B+A}}{A},\qquad \bar S=\frac{L_{B+A}-L_B}{A},\qquad \bar f=V\,\frac{J_B-J_{B+A}}{A},
+\label{eq:startavg}
+\end{equation}
+with $1-J$ substituted for $J$ when the ends are close to one. The integrals of $D$ and $E$ are differences of $R$ and $D$ at the ends, or direct quadrature of a bounded integrand when the ends agree closely. These forms carry relative accuracy for any $V$, which is what makes a quadrature over $V$ viable: the integrand is never a difference of large terms.
+
+\subsection{Localisation and choice of quadrature variable}
+Every form in \eqref{eq:stabSF}--\eqref{eq:stabfHL} carries the factor $\varphi(\alpha)$ with $\alpha=(Vx-d)/z$, or vanishes for $\alpha\ll0$ in the case of $F$. As a function of $V$ at fixed $x$, the survivor, density and stop-loss quantities are therefore supported on the window
+\begin{equation}
+\mathcal W_x=\Big[\,\max\!\Big(0,\frac{d_{\min}-\kappa z}{x}\Big),\ \frac{d_{\max}+\kappa z}{x}\,\Big],\qquad \kappa\approx8,
+\label{eq:window}
+\end{equation}
+with $d_{\min}=B$, $d_{\max}=B+A$ (and $z=\sqrt{c\,d_{\max}}$), outside which they are below $e^{-\kappa^2/2}\approx10^{-14}$ of their peak. The CDF-type quantities ($F$, $H$, $J$) equal one on the far side of the window and are handled by complement: for $V$ above the window $F_d(x\mid V)=1$ to the same accuracy, so
+\begin{equation}
+F(x)=\int_{\mathcal W_x}F_d(x\mid v)\,g(v)\dd v\;+\;Q_\beta\!\big(r_v V_{\mathrm{hi}}\big),
+\label{eq:Fwindow}
+\end{equation}
+the second term being the Gamma mass above $V_{\mathrm{hi}}=(d_{\max}+\kappa z)/x$, and likewise for $H$ and $J$ with their large-$V$ limits ($m-d$ and $1$). Two regimes follow from how the window sits against the Gamma density.
+
+\paragraph{Regime J (window rule).} When the window is not far into the Gamma tail, specifically when $r_vV_{\mathrm{hi}}\le 60$, integrate over $\mathcal W_x$ with a fixed Gauss rule. If the lower end is zero, the Gamma factor $v^{\beta-1}$ is non-analytic there and is put into the weight: Gauss--Jacobi on $u\in[-1,1]$ with weight $(1+u)^{\beta-1}$, nodes $v_i=V_{\mathrm{hi}}(1+u_i)/2$, and weights $\omega_i\,(V_{\mathrm{hi}}/2)^{\beta}\,r_v^{\beta}e^{-r_vv_i}/\Gamma(\beta)$. If the lower end is positive, Gauss--Legendre on the window with the whole Gamma density in the integrand. The nodes depend on $x$ through $V_{\mathrm{hi}}$ only by scaling, so one Jacobi node set per $\beta$ serves every $x$.
+
+\paragraph{Regime L (Laguerre rule).} When $r_vV_{\mathrm{hi}}>60$ (early times: the transition at $V\approx d/x$ lies far above the Gamma bulk, so $F$ is small and $S\approx1$), use generalised Gauss--Laguerre with weight $v^{\beta-1}e^{-v}$: nodes $v_i=\xi_i/r_v$, weights $\omega_i/\Gamma(\beta)$, which integrate the Gamma density exactly and place nodes where its mass is. Here the small quantity $F$ (and $f$) is accumulated from the Gamma tail, and $S=1-F$.
+
+In both regimes the integrand is the stable conditional form at each node, and $F$ or $S$ is computed directly according to which is smaller. The threshold $60$ is not delicate: with 32 nodes both rules are accurate on either side of it, and the switch only needs to avoid the two failure modes---Laguerre nodes missing a transition that has collapsed toward $V=0$ at late times, and a Jacobi window so wide that $e^{-r_vv}$ varies over hundreds of e-folds across it at early times.
+
+\subsection{Accuracy}
+Against adaptive quadrature of the conditional forms to $10^{-13}$, the rule with 32 nodes gave relative errors below $10^{-13}$ in $\min(F,S)$ and $f$ for
+\[
+(d,c,\beta,\bar v)\in\{(2,.5,2.5,1.5),\ (2,.5,6,1.5),\ (.5,.5,2,1),\ (1,1,1.3,2),\ (3,2,1.1,1)\}
+\]
+over scaled times $x\bar v/d\in[0.02,100]$, with survivors ranging from $0.99$ down to $10^{-17}$. For the hardest case tried, $d/c=100$ with $\beta=10$, errors reached $10^{-9}$ near the regime switch and $10^{-12}$ elsewhere; 48 nodes restored $10^{-14}$. The cost is one evaluation of the stable conditional forms per node, comparable to a bivariate-normal evaluation, which is itself a Gauss rule of similar order.
+
+\subsection{Running-maximum alternative for the point-start survivor}
+For $A=0$ the survivor and density admit a rule whose nodes are independent of $x$ altogether. From \eqref{eq:runmax}, with $\theta=r_vs/x$,
+\[
+S(x)=\E_M\big[P_\beta(\theta M)\big],\qquad f(x)=\frac{1}{x}\,\E_M\Big[\frac{(\theta M)^{\beta}e^{-\theta M}}{\Gamma(\beta)}\Big],
+\]
+and since $P_\beta(y)=y^{\beta}\times(\text{entire function})$, both integrands are $M^{\beta}$ times an analytic function. Gauss--Jacobi on $[0,\mu+8\sigma]$ with weight $M^{\beta}$, where $\mu=d/s$, $\sigma=\sqrt d$ and
+\[
+f_M(y)=\frac{2}{\sigma}\,\varphi\!\Big(\frac{y-\mu}{\sigma}\Big)\Big[D\!\Big(\frac{y+\mu}{\sigma}\Big)+\frac{y}{\sigma}R\!\Big(\frac{y+\mu}{\sigma}\Big)\Big],
+\]
+gives $10^{-14}$ with 32 nodes for all $x\bar v/d\ge0.25$. It does not extend to the start-point average, because the running maximum over $[0,d]$ changes with $d$; the window rule above is the general method.
+
+\section{Packet accumulator with Gamma rate}
+
+\subsection{Random-criterion representation}
+Conditional on $V$, evidence arrives in events at rate $\lambda=2V/c$, each carrying an independent exponential packet of mean $c/2$, so the packet boundaries form a Poisson process of rate $2/c$ on the evidence axis. The accumulator reaches $d$ at the first event whose packet ends beyond $d$, i.e.\ after
+\begin{equation}
+N=1+\Pois(b),\qquad b=\frac{2d}{c},
+\end{equation}
+events, with $T_d\mid N=n,V\sim\Gam(n,\text{rate }2V/c)$. The criterion law depends on $(d,c)$ only, and the rate enters through the Gamma waiting time alone, exactly as in the opponent counter.
+
+\subsection{Marginal laws}
+With
+\begin{equation}
+r=\frac{c\,r_v}{2}=\frac{\beta c}{2\bar v},\qquad q(x)=\frac{x}{r+x},\qquad \pi_n(b)=\frac{b^{n}e^{-b}}{n!},
+\end{equation}
+\begin{equation}
+\begin{gathered}
+F(x)=\sum_{n\ge0}\pi_n(b)\,\Ireg_{q}(n+1,\beta),\qquad
+S(x)=\sum_{n\ge0}\pi_n(b)\,\Ireg_{1-q}(\beta,n+1),\\
+f(x)=\sum_{n\ge0}\pi_n(b)\,f_{\mathrm{BP}}(x;n+1,\beta,r).
+\end{gathered}
+\label{eq:pk}
+\end{equation}
+Each term is a proper linear-clock Gamma-mixed counter with criterion $n+1$. Moments, for $\beta>1$ and $\beta>2$ respectively:
+\[
+\E[T_d]=\frac{d+c/2}{\bar v}\cdot\frac{\beta}{\beta-1},\qquad
+\E[T_d^2]=\Big(\frac{c}{2}\Big)^{2}\frac{(b^2+4b+2)\,\beta^2}{\bar v^{2}(\beta-1)(\beta-2)} .
+\]
+
+\subsection{Uniform start point}
+Averaging $\pi_n(2D/c)$ over $D\sim U[B,B+A]$ replaces the Poisson weights by
+\begin{equation}
+\bar w_n=\frac{c}{2A}\Big[P_{n+1}\!\Big(\frac{2(B+A)}{c}\Big)-P_{n+1}\!\Big(\frac{2B}{c}\Big)\Big],\qquad \sum_n\bar w_n=1,
+\label{eq:pkw}
+\end{equation}
+and \eqref{eq:pk} holds with $\bar w_n$ in place of $\pi_n(b)$; the start-point average is thus free, requiring no quadrature over either $D$ or $V$. (Verified against two-dimensional quadrature over $(D,V)$ to $10^{-14}$.) The weights follow from $P_{n+1}(y)=P_n(y)-y^{n}e^{-y}/n!$, a downward recurrence with positive terms.
+
+\subsection{Implementation}
+The structure is that of Section~2.4 with the criterion stepping by one rather than two: $h_{a+1}=h_a\,q\,(a+\beta)/a$ and
+\[
+\Ireg_q(a+1,\beta)=\Ireg_q(a,\beta)-\frac{h_a}{a},
+\]
+run downward for $F$ and upward for $S$. The number of terms grows like $b+\kappa\sqrt b$ for the Poisson weights, and like the width of \eqref{eq:pkw}, which is at most $2(B+A)/c$ plus a few standard deviations.
+
+\section{Summary}
+\begin{center}
+\small\begin{tabular}{@{}l l p{4.2cm} p{3.6cm}@{}}
+\toprule
+Accumulator & Rate law & Point start & Uniform start\\
+\midrule
+Opponent counter, ratio coordinates & $\Gam(\beta)$ & positive series in $\Ireg$; ${}_2F_1$ density & not applicable (integer criterion)\\
+IG subordinator & $\Gam(\beta)$ & 24--32-node Gauss rule & same rule on stop-loss forms\\
+Packet accumulator & $\Gam(\beta)$ & positive series in $\Ireg$ & same series, weights \eqref{eq:pkw}\\
+\bottomrule
+\end{tabular}
+\end{center}
+In all three the rate mixture is proper, has finite moments of order below $\beta$, and nests the proper Gamma-mixed linear-clock counter: at $\rho=0$ for the opponent counter, and term by term for the packet accumulator. The two series are sums of positive terms built from one incomplete-beta evaluation and a positive recurrence per time point. The subordinator's integrand is kept positive by the Mills-ratio forms, which is what allows a low-order fixed Gauss rule, in the variable and with the weight dictated by where the integrand lives, to replace adaptive integration.
+
+\end{document}

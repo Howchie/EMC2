@@ -23,7 +23,7 @@
 \maketitle
 
 \begin{abstract}
-This note gives a mathematical description of one-boundary Wald and Ornstein--Uhlenbeck (OU) accumulators, their racing constructions (including the Race of OUs, or ROU, and the pooled/coactivation ROUp model), bounded two-boundary OU diffusion (BOU), the pulse-drift extension, and a finite time transformation of the Wald process (RDMSWTN\_TT). It also collects identities for non-decision time, uniform start-point variability, Gaussian drift variability, Gaussian copulas for correlated finishing times, and Erlang guess and kill clocks, including a hybrid clock that mixes shape 1 and shape 2 timing. Special attention is given to defective negative-drift Wald processes, the distinction between full-Gaussian and positive-truncated drift laws (and how they contrast with rectified models), copula rank coupling of finite and defective finishing times, and the boundary between closed-form expressions and one-dimensional quadrature. A gamma drift law, parameterised by its mean and standard deviation, is treated without quadrature through positive series of incomplete-gamma and parabolic-cylinder terms. The two-noise diffusion of Smith and Lilburn (2020), with stimulus-dependent and stimulus-independent noise, is restated, together with its Wald form when the stimulus input is constant within a trial. A final pair of models replaces Brownian evidence by a nondecreasing pure-jump process with the same rate-proportional mean and variance, either the inverse-Gaussian subordinator or compound Poisson evidence with exponential packets; their first-passage laws and uniform start-point averages are closed form in normal functions and in Skellam probabilities respectively. Ballistic race models are not covered here; they are derived in a companion note, since they are not first-passage laws and share none of the machinery below.
+This note gives a mathematical description of one-boundary Wald and Ornstein--Uhlenbeck (OU) accumulators, their racing constructions (including the Race of OUs, or ROU, and the pooled/coactivation ROUp model), bounded two-boundary OU diffusion (BOU), the pulse-drift extension, and a finite time transformation of the Wald process (RDMSWTN\_TT). It also collects identities for non-decision time, uniform start-point variability, Gaussian drift variability, Gaussian copulas for correlated finishing times, and Erlang guess and kill clocks, including a hybrid clock that mixes shape 1 and shape 2 timing. Special attention is given to defective negative-drift Wald processes, the distinction between full-Gaussian and positive-truncated drift laws (and how they contrast with rectified models), copula rank coupling of finite and defective finishing times, and the boundary between closed-form expressions and one-dimensional quadrature. A gamma drift law, parameterised by its mean and standard deviation, is treated without quadrature through positive series of incomplete-gamma and parabolic-cylinder terms. The two-noise diffusion of Smith and Lilburn (2020), with stimulus-dependent and stimulus-independent noise, is restated, together with its Wald form when the stimulus input is constant within a trial. That form is derived from Poisson evidence registration plus a baseline noise source (variance $s^2+\kappa v$), and extended to opponent (excitatory minus inhibitory) Poisson evidence, in which suppression of the drift raises the diffusion rate. A final pair of models replaces Brownian evidence by a nondecreasing pure-jump process with the same rate-proportional mean and variance, either the inverse-Gaussian subordinator or compound Poisson evidence with exponential packets; their first-passage laws and uniform start-point averages are closed form in normal functions and in Skellam probabilities respectively. Ballistic race models are not covered here; they are derived in a companion note, since they are not first-passage laws and share none of the machinery below.
 \end{abstract}
 
 \tableofcontents
@@ -1163,10 +1163,12 @@ not depend on the evidence it carries. Smith and Lilburn
 \emph{Vision for the Blind: Visual Psychophysics and Blinded Inference for
 Decision Models} (Psychonomic Bulletin \& Review, 27, 882--910), proposed a
 diffusion with two independent noise sources: one that scales with the
-stimulus and one that does not. This section restates their construction and
-records what it implies for the one-boundary Wald law. The model and its
-interpretation are theirs; the only step added here is the special case of a
-constant within-trial stimulus input.
+stimulus and one that does not. This section restates their construction,
+shows that it gives a closed-form Wald law when the input is constant within a
+trial, identifies the stimulus-dependent source with Poisson shot noise in that
+case, and extends the shot-noise source to opponent (excitatory minus
+inhibitory) Poisson streams. The general model and its interpretation are
+theirs.
 
 \paragraph{The Smith--Lilburn process.}
 In their formulation, a stimulus-driven input $\theta(t)\ge0$ is passed to the
@@ -1193,65 +1195,256 @@ $\theta(t)$ is a smoothly rising growth function, $\sigma_1$ is fixed
 stimulus-independent term lets the process make fast errors early in the
 trial, when $\theta(t)$ is still small.
 
-\paragraph{Constant input: a Wald law with drift-dependent diffusion.}
-Suppose the input is constant within a trial, $\theta(t)\equiv\theta$, and write
-the drift as $v=\mu\theta$. Then \eqref{eq:sl-one-noise} is a Brownian motion
-with constant drift $v$ and constant diffusion rate
+\paragraph{Time-homogeneous input: a closed-form Wald law.}
+If the input is constant within a trial, $\theta(t)\equiv\theta$,
+\eqref{eq:sl-one-noise} has constant drift $v=\mu\theta$ and constant
+diffusion rate
 \begin{equation}
-  \sigma^2(v)=\sigma_2^2+\sigma_1^2\theta
-  =\sigma_2^2+\kappa\,v,
+  \sigma^2=\sigma_2^2+\sigma_1^2\theta .
+  \label{eq:sl-constant}
+\end{equation}
+The first-passage time to a criterion at distance $d$ is then exactly the Wald
+law of Section~2 at this $\sigma$,
+\begin{equation}
+  f(x)=f_W(x;d,v,\sigma),\qquad F(x)=F_W(x;d,v,\sigma).
+\end{equation}
+The uniform start-point average of Section~2 applies unchanged, so the
+start-point-averaged density and CDF remain closed form. In a race of
+independent accumulators, each with its own constant input, the defective
+density of a response by accumulator $i$ is $f_i(x)\prod_{j\ne i}S_j(x)$, with
+each factor at its own $(v_j,\sigma_j)$. The time-varying growth function is
+what takes the general model out of closed form; the two noise sources do not.
+
+\paragraph{Scale.}
+Multiplying the process by $c>0$ maps $(d,\mu,\sigma_1,\sigma_2)$ to
+$(cd,c\mu,c\sigma_1,c\sigma_2)$ and leaves the first-passage law unchanged. One
+scale constraint is therefore needed. Smith and Lilburn fix $\sigma_1$; fixing
+$\sigma_2$ or a criterion distance $d$ works equally well.
+
+\subsection{Poisson Shot Noise as the Stimulus-Dependent Source}
+\label{sec:baseline-poisson}
+\paragraph{Poisson evidence registration.}
+The stimulus-dependent stream has a natural time-homogeneous source. Let
+evidence for accumulator $i$ arrive as events of a Poisson process $N_i(x)$
+with constant rate $\Lambda_i$, each event moving the accumulator by a fixed
+amount $\varepsilon$ in criterion units. Then
+\begin{equation}
+  \mathbb E[\varepsilon N_i(x)]=\varepsilon\Lambda_i x,
   \qquad
-  \kappa=\frac{\sigma_1^2}{\mu}.
+  \operatorname{Var}[\varepsilon N_i(x)]=\varepsilon^2\Lambda_i x .
+\end{equation}
+When many events occur before the criterion is reached ($d/\varepsilon\gg1$),
+the functional central limit theorem replaces $\varepsilon N_i$ by a Gaussian
+diffusion with these moments. That diffusion is the stimulus-dependent term of
+\eqref{eq:sl-two-noise} with constant input: take the input to be the event
+rate, $\theta_i=\Lambda_i$, with gain $\mu=\varepsilon$ and
+$\sigma_1=\varepsilon$. Mean and variance are then both proportional to the
+input, as the term $\mu\theta\dd t+\sigma_1\sqrt\theta\dd W^{(1)}$ requires.
+Section~\ref{sec:igs} keeps the jump structure instead of the diffusion limit
+(the compound Poisson packet process of Section~\ref{sec:igs-packets} has the
+same mean and variance, $vx$ and $cvx$).
+
+\paragraph{Baseline plus Poisson noise.}
+The stimulus-independent stream is a baseline source with diffusion rate $s^2$
+($s=\sigma_2$, premature-sampling noise), independent of the Poisson events.
+Writing the drift as $v_i=\varepsilon\Lambda_i$, the two variances add to
+\begin{equation}
+  \boxed{\;\dd X_i=v_i\dd t+\sqrt{s^2+\kappa\,v_i}\;\dd W_i,
+  \qquad \kappa=\frac{\sigma_1^2}{\mu}=\varepsilon .\;}
+  \label{eq:baseline-poisson}
+\end{equation}
+Equivalently, \eqref{eq:sl-constant} expressed in the drift:
+\begin{equation}
+  \sigma^2(v)=s^2+\kappa\,v .
   \label{eq:sl-affine}
 \end{equation}
-The diffusion rate is therefore affine in the drift. The intercept is the
-stimulus-independent floor $\sigma_2^2$, and the slope $\kappa$ is the
-stimulus-linked variance per unit of drift. Conditional on $v$, the
-first-passage time is exactly the Wald law of Section~2 with
-$\sigma=\sigma(v)$:
-\begin{equation}
-  f(x\mid v)=f_W\!\big(x;d,v,\sqrt{\sigma_2^2+\kappa v}\big),
-  \qquad
-  F(x\mid v)=F_W\!\big(x;d,v,\sqrt{\sigma_2^2+\kappa v}\big).
-\end{equation}
-For a fixed drift, $\sigma$ is again a constant. The uniform start-point
-average of Section~2 therefore applies unchanged at $\sigma(v)$, and the
-start-point-averaged density and CDF remain closed form.
+The coefficient $\kappa$ is the evidence carried by one event. It belongs to the
+registration process, so it is shared by accumulators that use the same
+evidence code, while the input $\theta_i$ is specific to each accumulator and
+condition. Through \eqref{eq:sl-affine}, an accumulator's noise therefore
+depends on its own drift. Everything in the closed-form paragraph above
+applies, at $\sigma_i=\sigma(v_i)$.
 
-Equation~\eqref{eq:sl-affine} is equivalent to $\sigma^2(v)=\sigma_2^2(1+\rho v)$
-with $\rho=\kappa/\sigma_2^2$. The form in $\kappa$ keeps the two noise sources
-separate: changing the floor $\sigma_2$ does not change the stimulus-linked
-slope. Two limits are informative:
+Two limits are informative:
 \begin{itemize}
-  \item $\sigma_1=0$ gives the ordinary Wald accumulator with
-  drift-independent noise $\sigma_2$.
-  \item $\sigma_2=0$ gives purely rate-proportional diffusion, $\sigma^2=\kappa v$.
+  \item $\kappa=0$ gives the ordinary Wald accumulator with drift-independent
+  noise $s$.
+  \item $s=0$ gives purely rate-proportional diffusion, $\sigma^2=\kappa v$.
   This is the Brownian matched comparator of Section~\ref{sec:igs}, with
   $c=\kappa$.
 \end{itemize}
-The $\sigma_2$ floor is what separates the Smith--Lilburn process from that
-comparator. Without it, a weakly driven accumulator ($v\to0$) is also nearly
-noiseless and almost never finishes early. With it, noise is present at every
-drift, so weak or incorrect accumulators can still reach the boundary early.
-For the constant-input case, this is the premature-sampling mechanism.
+The baseline $s$ is what separates the model from that comparator. Without it,
+a weakly driven accumulator ($v\to0$) is also nearly noiseless and almost never
+finishes early. With it, noise is present at every drift, so weak or incorrect
+accumulators can still reach the criterion early. For constant input this is
+the premature-sampling mechanism. The form $\sigma^2=s^2(1+\rho v)$, with
+$\rho=\kappa/s^2$, is equivalent, but writing the model in $(s,\kappa)$ keeps
+the two sources separate: a condition effect on the baseline leaves the
+per-event coefficient unchanged.
 
-\paragraph{Scale.}
-Multiplying the process by $c>0$ maps $(d,v,\sigma_2,\kappa)$ to
-$(cd,cv,c\sigma_2,c\kappa)$ and leaves the first-passage law unchanged, because
-$c^2\sigma^2(v)=(c\sigma_2)^2+(c\kappa)(cv)$. One scale constraint is therefore
-needed. Smith and Lilburn fix $\sigma_1$, which is equivalent to fixing
-$\kappa$ when the gain $\mu$ is absorbed into $v$. Fixing the floor $\sigma_2$ or
-a distance $d$ works equally well; none of these choices loses generality.
+\paragraph{Derivation chain.}
+The model rests on the following steps, each with its own justification:
+\begin{enumerate}
+  \item two independent noise sources, one stimulus-dependent and one not
+  (Smith \& Lilburn, 2020);
+  \item time-homogeneous input within a trial, hence an exact Wald first-passage
+  law for a single criterion;
+  \item the stimulus-dependent source is Poisson evidence registration with
+  fixed event size (the neural motivation for shot-noise evidence is Smith,
+  2010), hence mean and variance both proportional to the rate;
+  \item a Gaussian diffusion approximation, valid when many events precede a
+  response;
+  \item independent racing accumulators, hence closed-form choice and RT
+  likelihoods.
+\end{enumerate}
+The model is thus the time-homogeneous, single-criterion racing case of the
+Smith--Lilburn diffusion, with its stimulus-dependent source identified as
+Poisson shot noise.
 
+\paragraph{Power family.}
+A convenient generalisation is $\sigma^2(v)=s^2+\kappa v^{2\gamma}$. The
+Poisson case is $\gamma=\tfrac12$. Other values have no counting
+interpretation, but they nest the Poisson model for testing.
+
+\paragraph{Scale in drift form.}
+In $(d,v,s,\kappa)$ the scale map is $(cd,cv,cs,c\kappa)$, because
+$c^2\sigma^2(v)=(cs)^2+(c\kappa)(cv)$. Fixing $\sigma_1$, as Smith and Lilburn
+do, is equivalent to fixing $\kappa$ when the gain is absorbed into $v$.
+Under the power family the map is $\kappa\mapsto c^{2-2\gamma}\kappa$.
+
+\subsection{Opponent-Poisson Noise}
+\label{sec:opponent-poisson}
+\paragraph{Construction.}
+Let each accumulator receive an excitatory and an inhibitory Poisson stream,
+\begin{equation}
+  X_i(x)=\varepsilon\big(N_{i,+}(x)-N_{i,-}(x)\big),
+  \qquad
+  N_{i,\pm}\sim\text{Poisson process with rate }\lambda_{i,\pm}/\varepsilon .
+\end{equation}
+The mean depends on the difference of the rates and the variance on their sum:
+\begin{equation}
+  v_i=\lambda_{i,+}-\lambda_{i,-},
+  \qquad
+  \operatorname{Var}[X_i(x)]=\varepsilon\,D_i x,
+  \qquad
+  D_i=\lambda_{i,+}+\lambda_{i,-}.
+\end{equation}
+Write the inhibitory rate as a fraction of the excitatory one,
+$\lambda_{i,-}=r_i\lambda_{i,+}$ with $0\le r_i<1$. Then
+\begin{equation}
+  D_i=v_i\,m_i,\qquad m_i=\frac{1+r_i}{1-r_i}\ge1 .
+\end{equation}
+With the baseline added, the diffusion limit is
+\begin{equation}
+  \boxed{\;\dd X_i=v_i\dd t+\sqrt{s^2+\kappa\,v_i\,m_i}\;\dd W_i\;}
+  \label{eq:opponent-poisson}
+\end{equation}
+For fixed rates this is again a constant-coefficient Wald accumulator. The
+first-passage law, the start-point average and the race likelihood are exactly
+those of Section~\ref{sec:baseline-poisson} with $\sigma^2_i=s^2+\kappa
+v_im_i$. At $r_i=0$, $m_i=1$ and \eqref{eq:opponent-poisson} reduces to
+\eqref{eq:baseline-poisson}.
+
+\paragraph{Opposition read from a log-rate drift model.}
+Suppose the drift of accumulator $i$ is specified on the log scale as a sum of
+terms, and collect its negative (suppressive) terms into an opposition
+$O_i\ge0$, so that $v_i=v_{0,i}e^{-O_i/2}$ with $v_{0,i}$ the unopposed rate.
+Reading the suppression as divisive inhibition, $1-r_i=e^{-O_i/2}$, gives
+\begin{equation}
+  m_i=2e^{O_i/2}-1,
+  \qquad
+  \lambda_{i,+}=v_{0,i},
+  \qquad
+  \lambda_{i,-}=v_{0,i}\big(1-e^{-O_i/2}\big),
+\end{equation}
+and therefore
+\begin{equation}
+  v_i=v_{0,i}\,e^{-O_i/2},
+  \qquad
+  D_i=v_{0,i}\big(2-e^{-O_i/2}\big).
+\end{equation}
+Opposition creates negative evidence events: they lower the mean but add to the
+variance. The ratio $m_i$ is not a free parameter; it follows from the drift
+model, so the noise model adds only the coefficient $\kappa$.
+
+\paragraph{Thinning versus cancellation.}
+The map $O\mapsto r$ is an assumption about mechanism, not a consequence of the
+drift model. Two mechanisms with the same unopposed rate $v_0$ and the same mean
+drift $v=v_0p$, $p=e^{-O/2}$, differ in their noise:
+\begin{itemize}
+  \item \emph{Thinning.} Opposition lowers the probability $p$ that a positive
+  event is registered. The registered events are again Poisson, with rate
+  $v_0p$, so $D=v_0p=v$: the single-stream model
+  \eqref{eq:baseline-poisson}.
+  \item \emph{Cancellation.} Positive events arrive at rate $v_0$ and
+  independent negative events at rate $v_0(1-p)$, so $D=v_0(2-p)$: the
+  opponent model \eqref{eq:opponent-poisson}.
+\end{itemize}
+The two are nested ($m\equiv1$ against $m=2e^{O/2}-1$) and identical in their
+mean drift, so comparing them asks whether opposition suppresses evidence
+registration or adds independently fluctuating counter-evidence.
+
+\paragraph{Predictions.}
+With the unopposed rate $v_0$ held fixed, $\sigma^2=s^2+\kappa(2v_0-v)$, so
+higher drift goes with \emph{lower} diffusion rate. The model can produce an
+inverse drift--noise relation without a negative variance coefficient. This is
+not a general prediction, because $v_0$ also varies across conditions and
+accumulators. Second, as $x\to0$ the Wald density behaves as
+$f_W(x)\propto\exp\{-d^2/(2\sigma^2x)\}$. Among accumulators with the same
+criterion distance, the one with the largest $\sigma$ therefore dominates the
+leading edge of the RT distribution. An opposed, low-drift accumulator can
+then produce a disproportionate share of the fastest responses, even though its
+mean drift is smaller.
+
+\paragraph{Independence.}
+The excitatory and inhibitory streams act within an accumulator. If all streams
+are mutually independent, so are the accumulators, and the race density remains
+$f_i(x)\prod_{j\ne i}S_j(x)$ with ordinary Wald factors. Opponent evidence
+within an accumulator is distinct from competitive interaction between
+accumulators: shared or cross-inhibitory streams would correlate the
+accumulators and need the copula or joint constructions of later sections.
+
+\paragraph{Relation to Smith (2010).}
+Smith (\href{https://doi.org/10.1016/j.jmp.2009.12.002}{2010}), \emph{From
+Poisson Shot Noise to the Integrated Ornstein--Uhlenbeck Process: Neurally
+Principled Models of Information Accumulation in Decision-Making and Response
+Time} (Journal of Mathematical Psychology, 54, 266--283), gives the neural
+account. His excitatory--inhibitory shot-noise model passes the two streams through
+decaying synaptic responses, giving an Ornstein--Uhlenbeck evidence velocity
+whose integral approaches Wiener behaviour on long time scales. Equation
+\eqref{eq:opponent-poisson} can be read as the time-homogeneous limit of that
+construction when the synaptic responses are fast relative to the decision
+time: it keeps the difference-mean and sum-variance
+structure and drops the synaptic filtering.
+
+\subsection{Across-Trial Drift Variability and Related Models}
+\label{sec:noise-sv}
 \paragraph{Across-trial drift variability.}
 The Gaussian mixing identities of Sections~3 and~4 rely on the conditional
 evidence state $Vx+\sigma\sqrt x\,\varepsilon$ being Gaussian in $V$ with a
 fixed $\sigma$. When $\sigma=\sigma(V)$, that state is no longer jointly
 Gaussian in $(V,\varepsilon)$, so the closed-form $s_v>0$ expressions do not
 carry over. The drift mixture then needs one-dimensional quadrature over $V$.
-A full-Gaussian drift law also needs care, because $\sigma^2(v)$ in
-\eqref{eq:sl-affine} must stay positive. The input $\theta$ is nonnegative in
-their construction, so a positive-truncated drift law is the natural pairing.
+A full-Gaussian drift law also needs care, because $\sigma^2(v)$ must stay
+positive. Rates are nonnegative in the Poisson construction, so a
+positive-truncated drift law is the natural pairing. With $s_v=0$ both noise
+models above stay closed form.
+
+\paragraph{Related models.}
+Smith (\href{https://doi.org/10.3758/s13423-022-02237-3}{2023}), \emph{``Reliable
+Organisms from Unreliable Components'' Revisited: The Linear Drift, Linear
+Infinitesimal Variance Model of Decision Making} (Psychonomic Bulletin \&
+Review, 30, 1323--1359), proposed the linear drift, linear infinitesimal variance (LDLIV)
+dual-diffusion model, in which drift and diffusion rate are both linear in the
+current accumulated state:
+\begin{equation}
+  \dd X_t=(pX_t+q)\dd t+\sqrt{2\sigma X_t}\,\dd W_t .
+\end{equation}
+Its diffusion rate $2\sigma X_t$ depends on the state, not on the external
+input, and its first-passage times generally need numerical solution. It is
+nevertheless a close precedent for independently racing evidence processes
+with psychologically motivated noise, and Smith compares it directly against
+the racing Wald model.
 
 \section{Ornstein--Uhlenbeck and Related Models}
 The Ornstein--Uhlenbeck (OU) diffusion generalizes the standard Brownian
@@ -2384,6 +2577,9 @@ Kill-only or guess-only hybrid shape 3, $s_v=0$ & mixture of shape 1 and 2 close
 Local guess--kill hybrid shape 3, $s_v=0$ & mixture of shape 1 and 2 closed forms & mixture of shape 1 and 2 closed forms \\
 Local guess--kill hybrid shape 3, $s_v>0$ & one-dimensional mixture when $\pi<1$ & one-dimensional mixture when $\pi<1$ \\
 GBM physical start-point variability, no drift variability & closed form & closed form \\
+Baseline plus Poisson noise, $\sigma^2=s^2+\kappa v$, $s_v=0$ (Section~\ref{sec:baseline-poisson}) & closed form & closed form \\
+Opponent-Poisson noise, $\sigma^2=s^2+\kappa vm$, $s_v=0$ (Section~\ref{sec:opponent-poisson}) & closed form & closed form \\
+Drift-dependent noise with $s_v>0$ & one-dimensional quadrature & one-dimensional quadrature \\
 IG subordinator, uniform start point (Section~\ref{sec:igs}) & closed form & closed form \\
 Compound Poisson packets, uniform start point (Section~\ref{sec:igs-packets}) & Skellam series & Skellam series \\
 \bottomrule
@@ -2419,7 +2615,12 @@ psychophysically motivated multichannel OU model, while Ratcliff and Van Dongen
 zero-clipping distinction in Section 3.2.
 Smith and Lilburn (2020) are the source of the two-noise diffusion in
 Section~\ref{sec:two-noise}, with stimulus-dependent and stimulus-independent
-(premature sampling) noise; the constant-input Wald law there is their model
-with $\theta(t)$ held fixed.
+(premature sampling) noise. The baseline-plus-Poisson Wald law of
+Section~\ref{sec:baseline-poisson} is their model with a constant input,
+whose stimulus-dependent source is identified as Poisson shot noise. Smith (2010) is the neural source for shot-noise evidence and for
+excitatory--inhibitory (opponent) streams, of which
+Section~\ref{sec:opponent-poisson} is a time-homogeneous limit. Smith (2023)
+gives a related race of independent diffusions whose variance depends on the
+accumulated state (LDLIV).
 
 \end{document}
