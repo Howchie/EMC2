@@ -861,10 +861,12 @@ run_stage <- function(pmwgs,
     }
     j <- start_iter + i
     if (alloc_on) {
-      # The allocation charges wall time on the cores this chain holds now
-      # (a chain's share grows when other chains finish their block).
+      # The allocation charges wall time on the chain's own share of the
+      # cores: those it takes over when other chains finish their block would
+      # otherwise idle, so they cost the fit nothing.
       el_iter <- proc.time()[["elapsed"]]
-      cores_it <- .emc_cores_now(core_ctl, n_cores)
+      cores_it <- if (is.null(core_ctl)) n_cores else
+        max(1L, core_ctl$total %/% core_ctl$n_slots)
     }
 
     assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())

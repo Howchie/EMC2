@@ -581,11 +581,11 @@ test_that("a move earns its evidence at an exploration rate and runs no faster t
   sol <- EMC2:::.emc_alloc_solve_units(u)
   expect_equal(sol$x[1], n0 / B)
   expect_equal(sol$joint, n0 / B)
-  # Half the evidence in: the floor collects the rest, the cap is twice the
-  # evidence rate.
+  # Half the evidence in: the floor collects the rest, and a measured move
+  # may run at one move per iteration.
   half <- ms; half$g_n <- c(n0 / 2, 400); half$c_n <- n0 / 2
   uh <- EMC2:::.emc_alloc_units(half, NULL, TRUE, FALSE, B = B)
-  expect_equal(c(uh$units[[1]]$floor, uh$units[[1]]$cap), c(n0 / 2 / B, n0 / B))
+  expect_equal(c(uh$units[[1]]$floor, uh$units[[1]]$cap), c(n0 / 2 / B, 1))
   expect_equal(uh$joint$floor, n0 / 2 / B)
   # Without B (no rebuild horizon) nothing is floored or capped by evidence.
   u0 <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE)
@@ -600,7 +600,7 @@ test_that("the evidence cap is twice the rate over the iterations the evidence s
   # evidence and the iterations behind it discounted alike: the cap is twice
   # that rate whatever the next block's length.
   d <- EMC2:::.EMC_ALLOC_EVIDENCE_DECAY
-  x <- 0.3
+  x <- 1.5
   iters <- 200 + d * 100
   ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.99, 0.6), g_fac = c(0.5, 0.9),
              g_measured = c(TRUE, TRUE), g_n = c(x * iters, 400), g_iters = c(iters, 0),
@@ -615,6 +615,12 @@ test_that("the evidence cap is twice the rate over the iterations the evidence s
   ms$g_iters <- NULL
   expect_equal(EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = 400)$units[[1]]$cap,
                2 * x * iters / 400)
+  # A measured move that ran little may still run at one move per iteration:
+  # a plan that ran none of it does not cap it down for good.
+  low <- ms; low$g_iters <- c(iters, 0); low$g_n <- c(0.01 * iters, 400)
+  low$c_n <- 0.01 * iters
+  ul <- EMC2:::.emc_alloc_units(low, NULL, TRUE, FALSE, B = 400)
+  expect_equal(c(ul$units[[1]]$cap, ul$joint$cap), c(1, 1))
   # The span of a closing block is the allocation window's iteration count.
   expect_equal(EMC2:::.emc_alloc_block_iters(list(alloc = list(window = list(n = 37L)))), 37)
   expect_equal(EMC2:::.emc_alloc_block_iters(list()), 0)

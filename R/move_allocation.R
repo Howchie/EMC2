@@ -11,9 +11,10 @@
 #   subjects: alpha_s at the end of the previous iteration -> just before the
 #     subject HMC round, the last update of the iteration;
 # together with the cost of the rest of the iteration, of each shear round
-# and collapsed move, as wall time on the cores the chain holds
+# and collapsed move, as wall time on the chain's own share of the cores
 # (.emc_reserved_cost), so work that leaves the chain's workers idle is
-# charged for them. Subject moves run as rounds over the workers: a particle
+# charged for them; cores taken over from chains that finished their block
+# are free. Subject moves run as rounds over the workers: a particle
 # step or HMC transition costs its worker CPU, and the rest of a round's wall
 # time is a fixed cost, paid in the rest of the iteration for the particle
 # round (which always runs) and once per iteration for the HMC round by any
@@ -65,8 +66,8 @@
 # multiply coordinate k's rho by its factor at x_c, so the solver takes the
 # best of a grid over x_c, each with the per-unit allocation on the reduced
 # rhos and x_c c_coll added to C_rest. Its factors are measured at the
-# current rate, so x_c may grow to at most twice that rate per rebuild (or
-# the shared round cap, whichever is larger).
+# current rate, so x_c may grow to at most one move per iteration or twice
+# that rate per rebuild (or the shared round cap), whichever is larger.
 #
 # Each subject's particle step is a move like the others: it runs with
 # probability q_s, multiplies coordinate i's rho by 1 - q_s + q_s p_i and
@@ -1260,10 +1261,13 @@
 # subject without enough HMC evidence counts as h = 0.
 # B: transitions until the next rebuild. A move with fewer than
 # .EMC_ALLOC_ROUND_EVIDENCE moves behind it runs at the exploration rate that
-# collects the rest by then, and no move runs faster than twice the rate its
-# evidence was gathered at (its moves over the iterations they span, both
-# discounted alike): trust grows with evidence, and a move measured as
-# useless fades with it.
+# collects the rest by then, and a measured move runs at up to one move per
+# iteration, or twice the rate its evidence was gathered at (its moves over
+# the iterations they span, both discounted alike) where that is higher:
+# beyond one per iteration the moves share iterations, whose saturation the
+# evidence gathered at a lower rate cannot identify. A cap tied to the rate
+# alone would ratchet a move down for good after one plan that ran little of
+# it.
 .emc_alloc_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
   n <- nrow(ms$s_rho)
   bounds <- function(n_ev, iters) {
@@ -1271,7 +1275,7 @@
     n0 <- .EMC_ALLOC_ROUND_EVIDENCE
     floor <- max(0, n0 - n_ev) / B
     span <- if (length(iters) && is.finite(iters) && iters > 0) iters else B
-    list(floor = floor, cap = max(floor, 2 * n_ev / span))
+    list(floor = floor, cap = max(floor, 2 * n_ev / span, if (n_ev > 0) 1 else 0))
   }
   has_C_rest <- length(ms$C_rest) == 1L && is.finite(ms$C_rest)
   C_rest <- if (has_C_rest) ms$C_rest else 1
