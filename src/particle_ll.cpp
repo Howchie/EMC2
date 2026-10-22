@@ -626,10 +626,19 @@ struct PtMapper {
     }
     const bool skip_inv = (i > 0) && use_invariants;
     if (trend_runtime) {
-      if (!trend_plan_ready) build_trend_plan();
-      update_pt_only(table, designs, trend_runtime.get(), transform_specs,
-                     nullptr, nullptr, &trend_map_next, &trend_postmap,
-                     &trend_premap_mask);
+      // The plan's postmap list leaves out the split-transform (pre_transform_terms)
+      // parameters, and the table only knows which those are once its design plan
+      // exists, i.e. after the first map.  Particle 0 takes the general route, which
+      // reads the split set after mapping; building the plan before that would
+      // transform a split parameter a second time.
+      if (trend_plan_ready) {
+        update_pt_only(table, designs, trend_runtime.get(), transform_specs,
+                       nullptr, nullptr, &trend_map_next, &trend_postmap,
+                       &trend_premap_mask);
+      } else {
+        update_pt_only(table, designs, trend_runtime.get(), transform_specs);
+        build_trend_plan();
+      }
     } else {
       update_pt_only(table, designs, nullptr, transform_specs,
                      skip_inv ? &invariant_design_mask : nullptr,
