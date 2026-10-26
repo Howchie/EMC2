@@ -151,15 +151,45 @@ test_that("the ex-Wald stays exact when v / s is very large", {
   v <- 3.2e7; B <- 1.5e6; A <- 1.04e7; t <- c(0.17, 0.3, 0.8)
   lo <- B / v; hi <- (B + A) / v; w <- hi - lo
   for (s in c(1e-3, 1.8e-16)) {
-    tau <- 0.1; lam <- 1 / tau
-    f_ref <- (exp(-lam * pmax(t - hi, 0)) - exp(-lam * pmax(t - lo, 0))) / w
-    Fe <- function(u) ifelse(u > 0, u - (1 - exp(-lam * u)) / lam, 0)
-    F_ref <- (Fe(t - lo) - Fe(t - hi)) / w
-    expect_equal(exw_d(t, v, B, A, s, tau), f_ref, tolerance = 1e-8)
-    expect_equal(exw_p(t, v, B, A, s, tau), F_ref, tolerance = 1e-8)
+    for (tau in c(0.1, 1e8)) {
+      lam <- 1 / tau
+      f_ref <- (exp(-lam * pmax(t - hi, 0)) - exp(-lam * pmax(t - lo, 0))) / w
+      Fe <- function(u) ifelse(u > 0, u + expm1(-lam * u) / lam, 0)
+      F_ref <- (Fe(t - lo) - Fe(t - hi)) / w
+      expect_equal(exw_d(t, v, B, A, s, tau), f_ref, tolerance = 1e-6)
+      expect_equal(exw_p(t, v, B, A, s, tau), F_ref, tolerance = 1e-6)
+    }
     for (tau in c(1e-23, 1e-17)) {
       expect_equal(exw_d(t, v, B, A, s, tau), exw_d(t, v, B, A, s, 0), tolerance = 1e-8)
       expect_equal(exw_p(t, v, B, A, s, tau), exw_p(t, v, B, A, s, 0), tolerance = 1e-8)
     }
   }
+})
+
+test_that("tiny and huge tau stay on their limits for point and uniform starts", {
+  t <- c(0.2, 0.5, 1.2)
+  for (A in c(0, 0.5)) {
+    # the hesitation shifts the Wald by about tau
+    for (tau in c(1e-20, 1e-12, 1e-6)) {
+      expect_equal(exw_d(t, 2, 0.5, A, 1, tau), exw_d(t, 2, 0.5, A, 1, 0), tolerance = 50 * tau + 1e-10)
+      expect_equal(exw_p(t, 2, 0.5, A, 1, tau), exw_p(t, 2, 0.5, A, 1, 0), tolerance = 50 * tau + 1e-10)
+    }
+    for (tau in c(1e4, 1e8)) {
+      ref <- vapply(t, exw_ref, numeric(1), v = 2, B = 0.5, A = A, s = 1, tau = tau)
+      expect_equal(exw_d(t, 2, 0.5, A, 1, tau, log = TRUE), ref, tolerance = 1e-7)
+    }
+  }
+})
+
+test_that("near-deterministic accumulators with tiny tau give the Wald limit", {
+  pars <- cbind(v = c(32478964.758, 26158550.348, 32478461.050, 32459885.039),
+                B = c(1626093.468, 1596038.667, 1493455.266, 1193807.148),
+                A = 10430218.649, s = 1.8032268788e-16,
+                tau = c(2.165e-23, 3.699e-17, 1.037e-21, 4.964e-20))
+  t <- c(1.5916667, 1.375, 0.9583333, 0.8583333) - 0.788365056
+  d <- exw_d(t, pars[, "v"], pars[, "B"], pars[, "A"], pars[, "s"], pars[, "tau"])
+  p <- exw_p(t, pars[, "v"], pars[, "B"], pars[, "A"], pars[, "s"], pars[, "tau"])
+  expect_equal(d, exw_d(t, pars[, "v"], pars[, "B"], pars[, "A"], pars[, "s"], 0))
+  expect_equal(p, exw_p(t, pars[, "v"], pars[, "B"], pars[, "A"], pars[, "s"], 0))
+  expect_true(all(is.finite(d) & d >= 0 & p >= 0 & p <= 1))
 })

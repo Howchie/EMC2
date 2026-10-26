@@ -117,6 +117,19 @@ inline signed_log antideriv(double t, double a, double v, const Tilt& k, double&
   return signed_log_add(pos, neg);
 }
 
+// log of the integral of exp(lf) over [lo, hi], with the panelled rule applied
+// separately between the cut points that fall inside the interval, so that a
+// step or kink of the integrand at a cut is resolved.
+template <class LF>
+inline double log_int_cut(double lo, double hi, double c1, double c2, LF lf) {
+  double x[4] = {lo, std::fmin(c1, c2), std::fmax(c1, c2), hi};
+  for (int i = 1; i < 3; ++i) x[i] = std::fmin(std::fmax(x[i], lo), hi);
+  double out = R_NegInf;
+  for (int i = 0; i < 3; ++i)
+    if (x[i + 1] > x[i]) out = log_sum_exp(out, wald_k0_log_avg_over_d(x[i], x[i + 1], lf));
+  return out;
+}
+
 // log f_X (s = 1 units), distance uniform on [B, B + A]
 inline double exwald_log_pdf_s1(double t, double v, double B, double A, double lam) {
   const Tilt k = make_tilt(v, lam);
@@ -128,9 +141,11 @@ inline double exwald_log_pdf_s1(double t, double v, double B, double A, double l
   if (total.sign > 0 && !ISNAN(total.log_abs) &&
       total.log_abs > max_log + EMC2_LOG_CANCEL_MIN)
     return total.log_abs - std::log(A);
-  // The bracket cancelled (narrow A, or lambda t small at early times): average
-  // the positive point density over the distance by panelled quadrature.
-  return wald_k0_log_avg_over_d(B, B + A, [&](double a) {
+  // The bracket cancelled (narrow A, or lambda t small): average the positive
+  // point density over the distance by quadrature, cut where it falls from its
+  // arrived to its not-yet-arrived level (a near v t, width sqrt(t)).
+  const double w = 10.0 * std::sqrt(t);
+  return log_int_cut(B, B + A, v * t - w, v * t + w, [&](double a) {
     return point_log_pdf(t, a, v, k);
   }) - std::log(A);
 }
@@ -166,11 +181,14 @@ inline double exwald_log(double tt, double v, double B, double A, double s, doub
   if (lFD == R_NegInf) return R_NegInf;
   const double ratio = l_tf - lFD;  // log(tau f_X / F_D) < 0
   if (ratio < -1e-6) return lFD + log1m_exp(ratio);
-  // F_D - tau f_X lost its digits (lambda tt small):
-  //   F_X = int_0^tt f_D(u) (1 - e^(-lambda (tt - u))) du <= F_D.
-  return std::fmin(lFD, wald_k0_log_avg_over_d(0.0, tt, [&](double u) {
-    if (!(u > 0.0) || !(u < tt)) return R_NegInf;
-    return wald_log(u, vs, Bs, As, 'f') + log1m_exp(-lam * (tt - u));
+  // F_D - tau f_X lost its digits (lambda tt small).  By parts,
+  //   F_X = lambda int_0^tt F_D(u) e^(-lambda (tt - u)) du <= F_D,
+  // whose integrand is continuous; its kinks as D becomes deterministic sit at
+  // the arrival times of the two ends of the distance range.
+  return std::fmin(lFD, std::log(lam) + log_int_cut(0.0, tt, Bs / vs, (Bs + As) / vs,
+                                                     [&](double u) {
+    if (!(u > 0.0)) return R_NegInf;
+    return wald_log(u, vs, Bs, As, 'F') - lam * (tt - u);
   }));
 }
 
