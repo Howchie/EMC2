@@ -824,6 +824,13 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #'   [BAwLcorr()]. `"drifts"` requires `sv > 0` on the correlated rows.
 #' @param drift_dist Between-trial drift law: `"normal"` (default; truncated
 #'   at zero when `posdrift = TRUE`) or `"gamma"` (mean `v`, SD `sv`).
+#' @param exwald Logical. If `TRUE`, each accumulator's finishing time is the
+#'   Wald first passage plus an independent exponential hesitation with mean
+#'   `tau` (the ex-Wald). The parameters are `v`, `B`, `A`, `t0`, `s` and
+#'   `tau` (log/exp, default `log(0)`, where `tau = 0` is the Wald); there is
+#'   no `sv`. Clocks, `drift_dist = "gamma"`, `posdrift = FALSE` and
+#'   `correlated = TRUE` are rejected. The density, survivor and start-point
+#'   average are closed form. The compiled model name is `RDMSWTN_EXWALD`.
 #' @return A model list compatible with [design()].
 #'
 #' @references Steingroever, H., Wabersich, D., & Wagenmakers, E.-J. (2021).
@@ -834,10 +841,21 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #'
 RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
                     correlated = FALSE, correlate = c("times", "drifts"),
-                    drift_dist = c("normal", "gamma")) {
+                    drift_dist = c("normal", "gamma"), exwald = FALSE) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
   correlate <- match.arg(correlate)
   drift_dist <- match.arg(drift_dist)
+  if (isTRUE(exwald)) {
+    if (drift_dist != "normal")
+      stop("RDMSWTN(exwald = TRUE) supports no drift variability, so drift_dist = \"gamma\" does not apply.")
+    if (erlang_type != "none" || !identical(as.integer(erlang_shape), 1L))
+      stop("RDMSWTN(exwald = TRUE) does not support guess or kill clocks.")
+    if (!isTRUE(posdrift))
+      stop("RDMSWTN(exwald = TRUE) requires posdrift = TRUE (v > 0).")
+    if (correlated)
+      stop("RDMSWTN(exwald = TRUE) does not support correlated = TRUE.")
+    return(.RDMSWTN_exwald())
+  }
   if (drift_dist == "gamma") {
     if (erlang_type != "none" || !identical(as.integer(erlang_shape), 1L))
       stop("RDMSWTN(drift_dist = \"gamma\") does not support guess or kill clocks.")
@@ -1024,6 +1042,78 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
+}
+
+# RDMSWTN with an Exp(mean tau) hesitation added to each Wald finishing time
+# (ex-Wald), start uniform on [0, A] below b = B + A, sv = 0, no clocks.
+# Kernel: src/model_RDMSWTN_exwald.cpp.
+.RDMSWTN_exwald <- function() {
+  p_types <- c(v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1), tau = log(0))
+  transform <- c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", tau = "exp")
+  minmax <- cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf), t0 = c(0.05, Inf),
+                  s = c(0, Inf), tau = c(0, Inf))
+  exception <- c(A = 0, t0 = 0, tau = 0)
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  list(
+    type = "RACE",
+    c_name = "RDMSWTN_EXWALD",
+    correlated = FALSE,
+    p_types = .nuis$p_types,
+    p_types_canonical = names(p_types),
+    transform = list(func = .nuis$transform),
+    bound = list(minmax = .nuis$minmax, exception = .nuis$exception),
+    Ttransform = function(pars, dadm) cbind(pars, b = pars[, "B"] + pars[, "A"]),
+    rfun = function(data = NULL, pars) {
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      rRDMSWTN_exwald(data$lR, pars, ok = ok)
+    },
+    dfun = function(rt, pars) dRDMSWTN_exwald(rt, pars),
+    pfun = function(rt, pars) pRDMSWTN_exwald(rt, pars),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+
+.exwald_cols <- function(pars) {
+  p <- .gdrift_cols(cbind(pars, sv = 0))
+  p$tau <- pars[, "tau"]
+  p
+}
+
+dRDMSWTN_exwald <- function(rt, pars) {
+  rp <- .gdrift_recycle(rt, pars)
+  p <- .exwald_cols(rp$pars)
+  out <- dRDMSWTN_exwald_cpp(rp$rt, p$v, p$B, p$A, p$t0, p$s, p$tau)
+  out[is.na(out)] <- 0
+  out
+}
+
+pRDMSWTN_exwald <- function(rt, pars) {
+  rp <- .gdrift_recycle(rt, pars)
+  p <- .exwald_cols(rp$pars)
+  out <- pRDMSWTN_exwald_cpp(rp$rt, p$v, p$B, p$A, p$t0, p$s, p$tau)
+  out[is.na(out)] <- 0
+  out
+}
+
+rRDMSWTN_exwald <- function(lR, pars, ok = rep(TRUE, nrow(pars))) {
+  if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
+  p <- .exwald_cols(pars)
+  nr <- length(levels(lR))
+  n_trials <- nrow(pars) / nr
+  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
+  n <- sum(ok)
+  dt[ok] <- rWald(n, B = pmax(p$B[ok], 0), v = p$v[ok], A = pmax(p$A[ok], 0), s = p$s[ok],
+                  posdrift = FALSE) + rexp(n) * p$tau[ok] + p$t0[ok]
+  bad_col <- colSums(!is.infinite(dt)) == 0
+  R <- max.col(-t(dt), ties.method = "first")
+  rt <- dt[cbind(R, seq_len(n_trials))]
+  R <- factor(levels(lR)[R], levels = levels(lR))
+  R[bad_col] <- NA
+  rt[bad_col] <- Inf
+  .apply_timed_guess_winner(data.frame(R = R, rt = rt), levels(lR))
 }
 
 .gdrift_cols <- function(pars) {

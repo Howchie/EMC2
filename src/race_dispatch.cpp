@@ -12,6 +12,7 @@
 #include "model_OPR.h"
 #include "model_RSUB.h"
 #include "model_RDMSWTN_gamma.h"
+#include "model_RDMSWTN_exwald.h"
 #include "time_clock.h"
 #include <cmath>
 #include <memory>
@@ -174,6 +175,16 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.logS_at_t_ptr  = &rdmswtn_gdrift_logS_at_t;
     out.col_spec       = emc2col::rdmswtn_gamma::spec();
     out.ctx.t0_index   = emc2col::rdmswtn_gamma::t0;
+  } else if (type_std.find("RDMSWTN_EXWALD") != std::string::npos) {
+    // Ex-Wald (exponential hesitation): own kernels and column contract, no
+    // clocks or drift variability; RDMSWTN() refuses those combinations.
+    out.pdf1_ptr       = &drdmswtn_exwald_scalar;
+    out.cdf1_ptr       = &prdmswtn_exwald_scalar;
+    out.model_dfun_raw = &drdmswtn_exwald_raw;
+    out.model_pfun_raw = &prdmswtn_exwald_raw;
+    out.logS_at_t_ptr  = &rdmswtn_exwald_logS_at_t;
+    out.col_spec       = emc2col::rdmswtn_exwald::spec();
+    out.ctx.t0_index   = emc2col::rdmswtn_exwald::t0;
   } else if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM".
     // RDMSWTN_TT (finite exhaustion clock) and RDMSWTN_UT (accelerating

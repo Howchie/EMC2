@@ -625,6 +625,16 @@ namespace rdmswtn_gamma {
   }
 }
 
+// R/model_RDM.R — RDMSWTN(exwald = TRUE): the Wald plus an Exp(mean tau)
+// hesitation, start uniform on [B, B + A] in distance, sv = 0, no clocks.
+namespace rdmswtn_exwald {
+  enum : int { v = 0, B, A, t0, s, tau, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "A", "t0", "s", "tau"};
+    return {n, N_REQ, "RDMSWTN_EXWALD"};
+  }
+}
+
 // R/model_ROU.R — ROU, the racing Ornstein-Uhlenbeck (leaky accumulator).
 // Identical to RDM apart from the leak k, so an RDM design converts by adding
 // k~1; k = 0 is the Wiener race, reached through the PDE rather than by

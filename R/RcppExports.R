@@ -479,6 +479,14 @@ pRDMSWTN_clock_cpp <- function(t, v, b, A, s, t0, sv, p, clock, log_out = FALSE,
     .Call(`_EMC2_pRDMSWTN_clock_cpp`, t, v, b, A, s, t0, sv, p, clock, log_out, posdrift)
 }
 
+dRDMSWTN_exwald_cpp <- function(t, v, B, A, t0, s, tau, log_out = FALSE) {
+    .Call(`_EMC2_dRDMSWTN_exwald_cpp`, t, v, B, A, t0, s, tau, log_out)
+}
+
+pRDMSWTN_exwald_cpp <- function(t, v, B, A, t0, s, tau, log_out = FALSE, lower_tail = TRUE) {
+    .Call(`_EMC2_pRDMSWTN_exwald_cpp`, t, v, B, A, t0, s, tau, log_out, lower_tail)
+}
+
 dRDMSWTN_gdrift_cpp <- function(t, v, B, A, t0, s, sv, log_out = FALSE) {
     .Call(`_EMC2_dRDMSWTN_gdrift_cpp`, t, v, B, A, t0, s, sv, log_out)
 }
