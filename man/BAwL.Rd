@@ -9,7 +9,7 @@ BAwL(
   erlang_shape = 1L,
   erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
   correlated = FALSE,
-  drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull"),
+  drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull", "gamma"),
   parameterization = c("rate", "ratio")
 )
 }
@@ -36,7 +36,8 @@ split-normal \verb{log V} with widths
 In the split variant \code{mu} is the exact median and \code{delta} is unbounded;
 \code{delta = 0} is exactly the lognormal launch. \code{"weibull"} uses
 \code{V ~ Weibull(shape, scale)} on the positive launch scale; the public
-parameters are \code{shape} and its arithmetic \code{mean}.}
+parameters are \code{shape} and its arithmetic \code{mean}. \code{"gamma"} uses a gamma
+\code{V} parameterized by its arithmetic \code{mean} and \code{sd}.}
 
 \item{parameterization}{Leak coordinate. \code{"rate"} (the default) samples the
 leak rate \code{k}; \code{"ratio"} samples \code{r = k / v}, the leak per unit mean drift,
@@ -112,11 +113,18 @@ With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} wit
 positive shape and arithmetic \code{mean}. The conventional Weibull scale is derived as
 \code{mean / Gamma(1 + 1 / shape)}. Weibull launches are also incompatible with the
 Gaussian \code{correlated} path.
+With \code{drift_distribution = "gamma"}, \code{v} and \code{sv} are replaced by \code{mean} and
+\code{sd} (both log, default \code{log(1)}), the arithmetic mean and SD of a gamma
+launch strength with shape \code{(mean / sd)^2} and scale \code{sd^2 / mean}
+(Terry et al., 2015). The \code{k = 0} member is their gamma LBA. Gamma
+launches are positive by construction and incompatible with the Gaussian
+\code{correlated} path.
 
 \strong{Fixing the evidence scale.} The evidence axis is defined only up to a
 scale: \verb{(V, b, A) -> (cV, cb, cA)} leaves every crossing time unchanged, so
 exactly one parameter must be fixed. With \code{drift_distribution = "normal"}
-the usual \code{constants = c(sv = log(1))} does it. With
+the usual \code{constants = c(sv = log(1))} does it, and with \code{"gamma"}
+\code{constants = c(sd = log(1))} does the same. With
 \code{drift_distribution = "lognormal"} it does \strong{not}: \code{sigma} is
 dimensionless, and on the sampled scale the rescaling is the single
 direction \verb{mu -> mu + log c}, \verb{B -> B + log c}, \verb{A -> A + log c}, leaving
@@ -149,7 +157,7 @@ recoordinatisation is nonlinear; with the lognormal and Weibull launches
 full-covariance group level already absorbs it.
 
 The divisor is the natural-scale mean launch strength — \code{v} for the normal
-launch and \code{mean} for the lognormal and Weibull ones. The split-lognormal
+launch and \code{mean} for the lognormal, Weibull and gamma ones. The split-lognormal
 launch samples the log-scale median instead of a mean and is refused, as is
 \code{correlated = TRUE}. Because the normal launch's \code{v} is unbounded, a
 non-positive mean drift clamps the leak to \code{k = 0} rather than producing a
@@ -222,4 +230,10 @@ design_BAwL_ratio <- design(
   contrasts = list(v = list(lM = ADmat)),
   constants = c(sv = log(1)))
 
+}
+\references{
+Terry, A., Marley, A. A. J., Barnwal, A., Wagenmakers, E.-J.,
+Heathcote, A., & Brown, S. D. (2015). Generalising the drift rate
+distribution for linear ballistic accumulators. \emph{Journal of Mathematical
+Psychology, 68-69}, 49-58.
 }

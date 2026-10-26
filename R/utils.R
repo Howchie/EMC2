@@ -492,6 +492,7 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
          lognormal = 1L,
          splitlognormal = 2L,
          weibull = 3L,
+         gamma = 4L,
          stop("Unknown ", caller, " drift_distribution: ", drift_distribution))
 }
 
@@ -505,6 +506,7 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   if (launch == 1L) if (meancv) c("mean", "cv") else c("mu", "sigma")
   else if (launch == 2L) c("mu", "sigma", "delta")
   else if (launch == 3L) c("shape", "mean")
+  else if (launch == 4L) c("mean", "sd")
   else c("v", "sv")
 }
 
@@ -518,4 +520,10 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
 
 .rweibull_mean <- function(n, shape, mean) {
   rweibull(n, shape, .weibull_scale_from_mean(shape, mean))
+}
+
+# Gamma launch parameters are the arithmetic mean and SD: shape (mean/sd)^2,
+# scale sd^2/mean, as in gamma_launch_pars() in src/wald_functions.h.
+.rgamma_meansd <- function(n, mean, sd) {
+  rgamma(n, shape = (mean / sd)^2, scale = sd^2 / mean)
 }

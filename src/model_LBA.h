@@ -8,6 +8,7 @@
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 #include "composite_functions.h"  // clamp_pos, safe_log
 #include "gaussian.h"
+#include "gl_quad.h"
 #include "gsl_utils.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
@@ -49,6 +50,7 @@ constexpr int BAWL_LAUNCH_NORMAL = 0;
 constexpr int BAWL_LAUNCH_LOGNORMAL = 1;
 constexpr int BAWL_LAUNCH_SPLITLOGNORMAL = 2;
 constexpr int BAWL_LAUNCH_WEIBULL = 3;
+constexpr int BAWL_LAUNCH_GAMMA = 4;
 // Acceptance modes for the guarded natural-space evaluators.
 //   STRICT: value must stand on its own (feeds std::log directly).
 //   RAW:    underflow to 0 is fine (caller floors at min_ll), but near-1
@@ -558,9 +560,11 @@ inline double log_bawl_cdf_weib(double t, double A, double b, double shape,
   if (!weibull_valid(shape, mean)) return R_NegInf;
   const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
   if (!g.ok) return R_NegInf;
-  // Near one, compute the CDF as the complement of the stable survivor.
+  // Past the median, compute the CDF as the complement of the stable
+  // survivor; before it the stop-loss difference below keeps the early tail,
+  // where the survivor rounds to one.
   const double lsurv = log_bawl_surv_weib(t, A, b, shape, mean, k);
-  if (lsurv < 0.0 && emc2_isfinite(lsurv))
+  if (lsurv < -M_LN2 && emc2_isfinite(lsurv))
     return std::log(-std::expm1(lsurv));
   if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
     return std::fmin(log_weibull_survivor(g.frozen ? k * b : g.w_hi,
@@ -1004,10 +1008,305 @@ inline bool bawl_natural_pdf_weib(double t, double A, double b, double shape,
   return true;
 }
 
-// Launch-distribution dispatch.  `p1`/`p2` are (v, sv) for the normal launch
-// and (mu, sigma) for the lognormal one; they occupy the same kernel columns,
-// exactly as in BAwD.  posdrift and the normalizer floor are meaningless for
-// the lognormal launch (V > 0 by construction, so nothing is truncated).
+// --------------------------------------------------------------------------
+// Gamma launch strength, V ~ Gamma with arithmetic mean m and SD sd (shape
+// (m/sd)^2, scale sd^2/m).  Same w-space reduction as the lognormal and
+// Weibull launches, with the stop-loss, put and partial moments of
+// gamma_launch_pars() in wald_functions.h.  The truncated-mean form of
+// Terry et al. (2015, Eq. 3) is the first-moment interval divided by the mass
+// interval; the k = 0 member is their gamma LBA.
+// --------------------------------------------------------------------------
+// The closed forms difference stop-losses, puts or partial moments at the two
+// ends of [w_lo, w_hi], and lose digits in proportion to how little the
+// launch density varies across it; the density bracket additionally cancels
+// by about exp(k t), because its weight w - k b is tiny late in a leaky race.
+// Where log g varies by less than BAWL_GAMMA_GL_VAR across the interval, the
+// launch CDF, survivor and density are all smooth on it, and the start-point
+// integral is instead evaluated directly with a Gauss-Legendre rule over a in
+// [0, A], whose error there is far below the closed forms' cancellation.
+constexpr double BAWL_GAMMA_GL_VAR = 0.5;
+constexpr int BAWL_GAMMA_GL_N = 6;
+constexpr int BAWL_GAMMA_GL_N_WIDE = 16;
+
+// Bound on the variation of log g across [w_lo, w_hi]: d log g / dw =
+// (alpha - 1) / w - 1 / theta is monotone in w, so its endpoint values bound it.
+inline double bawl_gamma_log_density_variation(const BawlLaunchGeom &g,
+                                               const GammaLaunch &G) {
+  const double inv_scale = std::exp(-G.log_scale);
+  return g.width * std::fmax(std::fabs((G.shape - 1.0) / g.w_lo - inv_scale),
+                             std::fabs((G.shape - 1.0) / g.w_hi - inv_scale));
+}
+
+// log (1/A) int_0^A exp(lf(W(a), a)) da, with W(a) = w_hi - (a / A) width.
+template <class F>
+inline double bawl_startpoint_log_gl(const BawlLaunchGeom &g, double A, int n,
+                                     F lf) {
+  const GLRule &rule = gl_get_rule(n);
+  double l[BAWL_GAMMA_GL_N_WIDE];
+  double M = R_NegInf;
+  for (int i = 0; i < n; ++i) {
+    const double a = 0.5 * A * (1.0 + rule.x[i]);
+    const double w = g.w_hi - (a / A) * g.width;
+    l[i] = std::log(0.5 * rule.w[i]) + lf(w, a);
+    if (l[i] > M) M = l[i];
+  }
+  if (!(M > R_NegInf) || !emc2_isfinite(M)) return M;
+  double sum = 0.0;
+  for (int i = 0; i < n; ++i) sum += std::exp(l[i] - M);
+  return M + std::log(sum);
+}
+
+inline double log_bawl_surv_gamma(double t, double A, double b, double mean,
+                                  double sd, double k) {
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
+    return log_gamma_launch_cdf(g.frozen ? k * b : g.w_hi, G);
+  if (bawl_gamma_log_density_variation(g, G) < BAWL_GAMMA_GL_VAR) {
+    return std::fmin(bawl_startpoint_log_gl(g, A, BAWL_GAMMA_GL_N,
+      [&G](double w, double) { return log_gamma_launch_cdf(w, G); }), 0.0);
+  }
+  const double lp_hi = log_gamma_launch_put(g.w_hi, G);
+  const double lp_lo = log_gamma_launch_put(g.w_lo, G);
+  if (lp_hi - lp_lo > BAWL_WEIB_MIN_SPAN) {
+    const double ld = log_diff_exp(lp_hi, lp_lo);
+    if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
+  }
+  return log_gamma_launch_cdf(0.5 * (g.w_lo + g.w_hi), G);
+}
+
+inline double log_bawl_cdf_gamma(double t, double A, double b, double mean,
+                                 double sd, double k) {
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
+    return log_gamma_launch_survivor(g.frozen ? k * b : g.w_hi, G);
+  if (bawl_gamma_log_density_variation(g, G) < BAWL_GAMMA_GL_VAR) {
+    return std::fmin(bawl_startpoint_log_gl(g, A, BAWL_GAMMA_GL_N,
+      [&G](double w, double) { return log_gamma_launch_survivor(w, G); }), 0.0);
+  }
+  // Past the median, compute the CDF as the complement of the stable
+  // survivor; before it the stop-loss difference below keeps the early tail,
+  // where the survivor rounds to one.
+  const double lsurv = log_bawl_surv_gamma(t, A, b, mean, sd, k);
+  if (lsurv < -M_LN2 && emc2_isfinite(lsurv))
+    return std::log(-std::expm1(lsurv));
+  const double lc_lo = log_gamma_launch_stoploss(g.w_lo, G);
+  const double lc_hi = log_gamma_launch_stoploss(g.w_hi, G);
+  if (lc_lo - lc_hi > BAWL_WEIB_MIN_SPAN) {
+    const double ld = log_diff_exp(lc_lo, lc_hi);
+    if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
+  }
+  return log_gamma_launch_survivor(0.5 * (g.w_lo + g.w_hi), G);
+}
+
+inline double log_bawl_pdf_gamma(double t, double A, double b, double mean,
+                                 double sd, double k) {
+  if (t == R_PosInf) return R_NegInf;
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) return R_NegInf;
+  const double log_jac = bawl_geom_log_jacobian(g);
+  if (A <= BAWL_A_EPS || !(g.width > 0.0)) {
+    const double ld = log_gamma_launch_density(g.w_hi, G);
+    return ld > R_NegInf ? log_jac + std::log(b) + ld : R_NegInf;
+  }
+  // f = jac (1/A) int_0^A (b - a) g(W(a)) da.
+  const auto startpoint = [&](int n) {
+    const double li = bawl_startpoint_log_gl(g, A, n, [&G, b](double w, double a) {
+      return std::log(b - a) + log_gamma_launch_density(w, G);
+    });
+    return li > R_NegInf ? log_jac + li : R_NegInf;
+  };
+  if (bawl_gamma_log_density_variation(g, G) < BAWL_GAMMA_GL_VAR)
+    return startpoint(BAWL_GAMMA_GL_N);
+  const double lm = log_gamma_launch_mass_interval(g.w_lo, g.w_hi, G);
+  const double l1 = log_gamma_launch_first_interval(g.w_lo, g.w_hi, G);
+  if (lm > R_NegInf && l1 > R_NegInf) {
+    const signed_log t1 = make_signed_log(l1, 1);
+    const signed_log t2 = make_signed_log(
+      (k > BAWL_K_EPS) ? std::log(k * b) + lm : R_NegInf, 1);
+    const signed_log br = signed_log_sub(t1, t2);
+    if (br.sign > 0 && br.log_abs > std::fmax(t1.log_abs, t2.log_abs) +
+        BAWL_LOG_BRACKET_MIN)
+      return br.log_abs - std::log(A) - g.log_E;
+  }
+  return startpoint(BAWL_GAMMA_GL_N_WIDE);
+}
+
+inline bool bawl_natural_cdf_gamma(double t, double A, double b, double mean,
+                                   double sd, double k, int accept_mode,
+                                   double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok || G.shape < inc_gamma::A_MIN || G.shape > inc_gamma::A_MAX)
+    return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) {
+    cdf = 0.0;
+    return lenient;
+  }
+  const double a = G.shape;
+  const double scale = std::exp(G.log_scale);
+  // Survivor of the launch at a single crossing threshold w.
+  const auto point_surv = [&](double w) {
+    const double lz = std::log(w) - G.log_scale;
+    double P, Q, pref;
+    gamma_pq_pref_nat(a, std::exp(lz), lz, G.lgamma_shape, P, Q, pref);
+    return Q;
+  };
+
+  if (g.frozen) {
+    if (k <= BAWL_K_EPS) {
+      cdf = 1.0;
+      return accept_mode == BA_ACCEPT_CLAMP;
+    }
+    cdf = point_surv(g.w_hi);
+    return accept(cdf);
+  }
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    if (!(w > 0.0)) return false;
+    cdf = point_surv(w);
+  } else {
+    if (!(g.w_lo > 0.0)) return false;
+    const double lz_lo = std::log(g.w_lo) - G.log_scale;
+    const double lz_hi = std::log(g.w_hi) - G.log_scale;
+    const double z_lo = std::exp(lz_lo), z_hi = std::exp(lz_hi);
+    if (!(z_hi > z_lo)) return false;
+    if (bawl_gamma_log_density_variation(g, G) < BAWL_GAMMA_GL_VAR) {
+      // Narrow interval: integrate the survivor over the start point (see
+      // log_bawl_cdf_gamma).
+      const GLRule &rule = gl_get_rule(BAWL_GAMMA_GL_N);
+      cdf = 0.0;
+      for (int i = 0; i < BAWL_GAMMA_GL_N; ++i)
+        cdf += 0.5 * rule.w[i] *
+          point_surv(g.w_hi - 0.5 * (1.0 + rule.x[i]) * g.width);
+      if (!R_FINITE(cdf)) return false;
+      return accept(cdf);
+    }
+    double P_lo, Q_lo, f_lo, P_hi, Q_hi, f_hi;
+    gamma_pq_pref_nat(a, z_lo, lz_lo, G.lgamma_shape, P_lo, Q_lo, f_lo);
+    gamma_pq_pref_nat(a, z_hi, lz_hi, G.lgamma_shape, P_hi, Q_hi, f_hi);
+    // C(w_lo) - C(w_hi), C(w) = theta [(a - z) Q + pref].
+    const double t_lo = (a - z_lo) * Q_lo + f_lo;
+    const double t_hi = (a - z_hi) * Q_hi + f_hi;
+    const double diff_C = scale * (t_lo - t_hi);
+    if (!(diff_C > 0.0)) {
+      if (!lenient) return false;
+      cdf = 0.0;
+      return true;
+    }
+    const double mag = scale * (std::fabs(a - z_lo) * Q_lo + f_lo +
+                                std::fabs(a - z_hi) * Q_hi + f_hi);
+    if (!lenient && diff_C <= BAWL_NATURAL_REL_TOL * std::max(1.0, mag))
+      return false;
+    cdf = (g.s / A) * diff_C;
+  }
+
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
+}
+
+inline bool bawl_natural_pdf_gamma(double t, double A, double b, double mean,
+                                   double sd, double k, int accept_mode,
+                                   double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (t == R_PosInf) return false;
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok || G.shape < inc_gamma::A_MIN || G.shape > inc_gamma::A_MAX)
+    return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) {
+    pdf = 0.0;
+    return lenient;
+  }
+  const double a = G.shape;
+  const double scale = std::exp(G.log_scale);
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    const double eff_b = (A <= BAWL_A_EPS) ? b : b - 0.5 * A;
+    if (!(w > 0.0)) return false;
+    const double dens = std::exp(log_gamma_launch_density(w, G));
+    if (!emc2_isfinite(dens) || dens <= 0.0) return false;
+    const double jac = (g.s > 0.0 && g.E > 0.0) ? 1.0 / (g.s * g.s * g.E) : 0.0;
+    if (!(jac > 0.0)) return false;
+    pdf = jac * eff_b * dens;
+  } else {
+    if (!(g.E > 0.0) || !(g.w_lo > 0.0)) return false;
+    if (bawl_gamma_log_density_variation(g, G) < BAWL_GAMMA_GL_VAR) {
+      // Narrow interval, where the bracket below cancels by about exp(k t):
+      // integrate (b - a) g(W(a)) over the start point (see
+      // log_bawl_pdf_gamma).
+      const double jac = (g.s > 0.0 && g.E > 0.0) ? 1.0 / (g.s * g.s * g.E) : 0.0;
+      if (!(jac > 0.0)) return false;
+      const GLRule &rule = gl_get_rule(BAWL_GAMMA_GL_N);
+      double acc = 0.0;
+      for (int i = 0; i < BAWL_GAMMA_GL_N; ++i) {
+        const double u = 0.5 * (1.0 + rule.x[i]);
+        acc += 0.5 * rule.w[i] * (b - u * A) *
+          std::exp(log_gamma_launch_density(g.w_hi - u * g.width, G));
+      }
+      pdf = jac * acc;
+      if (!R_FINITE(pdf) || !(pdf > 0.0)) return false;
+      return true;
+    }
+    const double lz_lo = std::log(g.w_lo) - G.log_scale;
+    const double lz_hi = std::log(g.w_hi) - G.log_scale;
+    const double z_lo = std::exp(lz_lo), z_hi = std::exp(lz_hi);
+    if (!(z_hi > z_lo)) return false;
+    double P_lo, Q_lo, f_lo, P_hi, Q_hi, f_hi;
+    gamma_pq_pref_nat(a, z_lo, lz_lo, G.lgamma_shape, P_lo, Q_lo, f_lo);
+    gamma_pq_pref_nat(a, z_hi, lz_hi, G.lgamma_shape, P_hi, Q_hi, f_hi);
+    // E[V 1{w_lo<=V<w_hi}] - k b P(w_lo<=V<w_hi), with
+    // m P(a+1, z) = m P(a, z) - theta pref.  The mass is differenced on
+    // whichever tail keeps its digits.
+    const double mass = (P_lo < 0.5) ? P_hi - P_lo : Q_lo - Q_hi;
+    const double term1 = mean * mass - scale * (f_hi - f_lo);
+    const double term2 = k * b * mass;
+    const double num = term1 - term2;
+    if (!(num > 0.0)) {
+      if (!lenient) return false;
+      pdf = 0.0;
+      return true;
+    }
+    const double mag = mean * std::fabs(mass) + scale * (f_hi + f_lo) +
+      std::fabs(term2);
+    if (num <= BAWL_NATURAL_REL_TOL * std::max(1.0, mag)) return false;
+    pdf = num / (A * g.E);
+  }
+
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
+}
+
+// Launch-distribution dispatch.  `p1`/`p2` are (v, sv) for the normal launch,
+// (mean, cv) for the lognormal, (shape, mean) for the Weibull and (mean, sd)
+// for the gamma one; they occupy the same kernel columns, exactly as in BAwD.
+// posdrift and the normalizer floor are meaningless for the positive launches
+// (V > 0 by construction, so nothing is truncated).
 inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
                                   double p2, double k, bool posdrift,
                                   double denom_floor, int accept_mode,
@@ -1021,6 +1320,8 @@ inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
   }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return bawl_natural_cdf_weib(t, A, b, p1, p2, k, accept_mode, cdf);
+  if (launch == BAWL_LAUNCH_GAMMA)
+    return bawl_natural_cdf_gamma(t, A, b, p1, p2, k, accept_mode, cdf);
   return ba_natural_cdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, cdf);
 }
@@ -1038,6 +1339,8 @@ inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
   }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return bawl_natural_pdf_weib(t, A, b, p1, p2, k, accept_mode, pdf);
+  if (launch == BAWL_LAUNCH_GAMMA)
+    return bawl_natural_pdf_gamma(t, A, b, p1, p2, k, accept_mode, pdf);
   return ba_natural_pdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, pdf);
 }
@@ -1054,6 +1357,8 @@ inline double log_ba_cdf_launch(double t, double A, double b, double p1,
   }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_cdf_weib(t, A, b, p1, p2, k);
+  if (launch == BAWL_LAUNCH_GAMMA)
+    return log_bawl_cdf_gamma(t, A, b, p1, p2, k);
   return log_ba_cdf(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 
@@ -1069,6 +1374,8 @@ inline double log_ba_surv_launch(double t, double A, double b, double p1,
   }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_surv_weib(t, A, b, p1, p2, k);
+  if (launch == BAWL_LAUNCH_GAMMA)
+    return log_bawl_surv_gamma(t, A, b, p1, p2, k);
   return log_bawl_surv_normal(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 
@@ -1084,6 +1391,8 @@ inline double log_ba_pdf_launch(double t, double A, double b, double p1,
   }
   if (launch == BAWL_LAUNCH_WEIBULL)
     return log_bawl_pdf_weib(t, A, b, p1, p2, k);
+  if (launch == BAWL_LAUNCH_GAMMA)
+    return log_bawl_pdf_gamma(t, A, b, p1, p2, k);
   return log_ba_pdf(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 inline double bawl_cdf_norm(double t, double A, double b, double v,
@@ -1101,7 +1410,8 @@ inline double bawl_cdf_norm(double t, double A, double b, double v,
   if (t == R_PosInf && std::fabs(k) <= BAWL_K_EPS &&
       (posdrift || launch == BAWL_LAUNCH_LOGNORMAL ||
        launch == BAWL_LAUNCH_SPLITLOGNORMAL ||
-       launch == BAWL_LAUNCH_WEIBULL) && sv > 0.0 &&
+       launch == BAWL_LAUNCH_WEIBULL || launch == BAWL_LAUNCH_GAMMA) &&
+      sv > 0.0 &&
       A >= 0.0 && b >= A && b > 0.0)
     return log_out ? 0.0 : 1.0;
 

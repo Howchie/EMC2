@@ -38,7 +38,7 @@ double dbawl_scalar(double t, const double* par, void* ctx_) {
   const int imK = emc2col::select_index(split, emc2col::bawlsplit::mK, emc2col::bawl::mK);
   const double delta = split ? par[emc2col::bawlsplit::delta] : 0.0;
   // The ratio chart divides by the launch MEAN: column 0 for the normal (v)
-  // and lognormal (mean) launches, column 1 for the Weibull pair (shape, mean).
+  // lognormal (mean) and gamma (mean) launches, column 1 for the Weibull pair.
   const int imean = (lau == BAWL_LAUNCH_WEIBULL) ? isv : iv;
   if (R_IsNA(par[iv])) return 0.0;
   const double t0_val = par[it0];
@@ -81,7 +81,7 @@ double pbawl_scalar(double t, const double* par, void* ctx_) {
   const int imK = emc2col::select_index(split, emc2col::bawlsplit::mK, emc2col::bawl::mK);
   const double delta = split ? par[emc2col::bawlsplit::delta] : 0.0;
   // The ratio chart divides by the launch MEAN: column 0 for the normal (v)
-  // and lognormal (mean) launches, column 1 for the Weibull pair (shape, mean).
+  // lognormal (mean) and gamma (mean) launches, column 1 for the Weibull pair.
   const int imean = (lau == BAWL_LAUNCH_WEIBULL) ? isv : iv;
   if (R_IsNA(par[iv])) return 0.0;
   const double t0_val = par[it0];
@@ -142,7 +142,7 @@ void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
   // The ratio chart divides by the launch MEAN: v_ for the normal and
-  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  // lognormal and gamma launches, the second column for the Weibull pair.
   const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
     // Exact LBA member: retain the shared numerical kernel, but skip the
@@ -257,7 +257,7 @@ void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
   // The ratio chart divides by the launch MEAN: v_ for the normal and
-  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  // lognormal and gamma launches, the second column for the Weibull pair.
   const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
     // Exact LBA member; pfun writes the log-survivor expected by the raw
@@ -372,7 +372,7 @@ void bawl_logS_at_t(double t, const double* const* cols,
   const double* t0_ = cols[it0];
   const double* delta_ = split ? cols[emc2col::bawlsplit::delta] : nullptr;
   // The ratio chart divides by the launch MEAN: v_ for the normal and
-  // lognormal launches, the second column for the Weibull pair (shape, mean).
+  // lognormal and gamma launches, the second column for the Weibull pair.
   const double* mean_ = (lau == BAWL_LAUNCH_WEIBULL) ? sv_ : v_;
   const double* k_ = (ctx && ctx->bawl_k_fixed_zero) ? nullptr : cols[ik];
   const double* lg_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[imG];

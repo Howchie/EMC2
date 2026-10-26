@@ -358,10 +358,11 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
 
 # 0 = normal launch strength (v, sv); 1 = lognormal launch strength
 # (mu, sigma); 2 = median-parameterised continuous split-lognormal launch
-# (mu, sigma, delta); 3 = Weibull launch (shape, mean). Must match
+# (mu, sigma, delta); 3 = Weibull launch (shape, mean); 4 = gamma launch
+# (mean, sd). Must match
 # BAWL_LAUNCH_* in src/model_LBA.h, the
 # `launch` argument of the compiled kernels, and the value the adapter derives
-# from the `_LOGN`/`_SPLIT` c_name suffix.  Deliberately the same convention as
+# from the `_LOGN`/`_SPLIT`/`_WEIB`/`_GAMMA` c_name suffix.  Deliberately the same convention as
 # BAwD.
 
 # The launch pair occupies the same leading kernel columns; split-lognormal
@@ -498,7 +499,9 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   if (is.null(.drifts)) {
     # A lognormal launch strength is positive by construction, so posdrift
     # never applies to it.
-    drifts <- if (launch == 3L) {
+    drifts <- if (launch == 4L) {
+      .rgamma_meansd(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    } else if (launch == 3L) {
       .rweibull_mean(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 1L) {
       .ba_rlnorm_meancv(nrow(pars), pars[, nm[1]], pars[, nm[2]])
@@ -722,11 +725,18 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' positive shape and arithmetic `mean`. The conventional Weibull scale is derived as
 #' `mean / Gamma(1 + 1 / shape)`. Weibull launches are also incompatible with the
 #' Gaussian `correlated` path.
+#' With `drift_distribution = "gamma"`, `v` and `sv` are replaced by `mean` and
+#' `sd` (both log, default `log(1)`), the arithmetic mean and SD of a gamma
+#' launch strength with shape `(mean / sd)^2` and scale `sd^2 / mean`
+#' (Terry et al., 2015). The `k = 0` member is their gamma LBA. Gamma
+#' launches are positive by construction and incompatible with the Gaussian
+#' `correlated` path.
 #'
 #' **Fixing the evidence scale.** The evidence axis is defined only up to a
 #' scale: `(V, b, A) -> (cV, cb, cA)` leaves every crossing time unchanged, so
 #' exactly one parameter must be fixed. With `drift_distribution = "normal"`
-#' the usual `constants = c(sv = log(1))` does it. With
+#' the usual `constants = c(sv = log(1))` does it, and with `"gamma"`
+#' `constants = c(sd = log(1))` does the same. With
 #' `drift_distribution = "lognormal"` it does **not**: `sigma` is
 #' dimensionless, and on the sampled scale the rescaling is the single
 #' direction `mu -> mu + log c`, `B -> B + log c`, `A -> A + log c`, leaving
@@ -761,7 +771,7 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' full-covariance group level already absorbs it.
 #'
 #' The divisor is the natural-scale mean launch strength — `v` for the normal
-#' launch and `mean` for the lognormal and Weibull ones. The split-lognormal
+#' launch and `mean` for the lognormal, Weibull and gamma ones. The split-lognormal
 #' launch samples the log-scale median instead of a mean and is refused, as is
 #' `correlated = TRUE`. Because the normal launch's `v` is unbounded, a
 #' non-positive mean drift clamps the leak to `k = 0` rather than producing a
@@ -830,13 +840,18 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   In the split variant `mu` is the exact median and `delta` is unbounded;
 #'   `delta = 0` is exactly the lognormal launch. `"weibull"` uses
 #'   `V ~ Weibull(shape, scale)` on the positive launch scale; the public
-#'   parameters are `shape` and its arithmetic `mean`.
+#'   parameters are `shape` and its arithmetic `mean`. `"gamma"` uses a gamma
+#'   `V` parameterized by its arithmetic `mean` and `sd`.
 #' @param parameterization Leak coordinate. `"rate"` (the default) samples the
 #'   leak rate `k`; `"ratio"` samples `r = k / v`, the leak per unit mean drift,
 #'   in the same position, with the leak rebuilt as `k = r * v`. See the
 #'   leak-ratio chart section above. Not available for
 #'   `drift_distribution = "splitlognormal"` or `correlated = TRUE`.
 #' @return A model list defining the BAwL race model.
+#' @references Terry, A., Marley, A. A. J., Barnwal, A., Wagenmakers, E.-J.,
+#'   Heathcote, A., & Brown, S. D. (2015). Generalising the drift rate
+#'   distribution for linear ballistic accumulators. *Journal of Mathematical
+#'   Psychology, 68-69*, 49-58.
 #' @examples
 #' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
 #' # scale, which sigma no longer does; B and the lM effect stay free.
@@ -863,7 +878,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
                  correlated = FALSE,
-                 drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull"),
+                 drift_distribution = c("normal", "lognormal", "splitlognormal",
+                                        "weibull", "gamma"),
                  parameterization = c("rate", "ratio")) {
   erlang_type <- match.arg(erlang_type)
   drift_distribution <- match.arg(drift_distribution)
@@ -872,12 +888,14 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   launch <- .ba_launch_code(drift_distribution, "BAwL")
   lognormal <- launch %in% c(1L, 2L)
   weibull <- launch == 3L
+  gamma_launch <- launch == 4L
   splitlognormal <- launch == 2L
-  if ((lognormal || weibull) && !isTRUE(posdrift)) {
-    stop("BAwL: posdrift only applies to drift_distribution = \"normal\"; a ",
-         "lognormal and Weibull launch strengths are positive by construction.")
+  positive_launch <- lognormal || weibull || gamma_launch
+  if (positive_launch && !isTRUE(posdrift)) {
+    stop("BAwL: posdrift only applies to drift_distribution = \"normal\"; ",
+         "lognormal, Weibull and gamma launch strengths are positive by construction.")
   }
-  if ((lognormal || weibull) && correlated) {
+  if (positive_launch && correlated) {
     # The correlated path is a one-factor decomposition of the Gaussian drift
     # vector (drift_factor.h); a lognormal analogue is a different model, not
     # a swapped marginal, so refuse rather than silently ignore one of them.
@@ -891,7 +909,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     stop("BAwL: parameterization = \"ratio\" needs a natural-scale mean launch ",
          "column, which the split-lognormal launch does not have (mu is the ",
          "log-scale median).  Use drift_distribution = \"normal\", ",
-         "\"lognormal\", or \"weibull\".")
+         "\"lognormal\", \"weibull\", or \"gamma\".")
   }
   if (ratio_chart && correlated) {
     stop("BAwL: parameterization = \"ratio\" is not implemented for ",
@@ -903,7 +921,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
 
-  # "_SPLIT" follows "_LOGN"; neither lognormal variant is combined with IO.
+  # "_SPLIT" follows "_LOGN"; no positive launch is combined with IO.
   # The ratio-chart infix is "RAT", NOT "RATIO": resolve_race_model_adapter()
   # detects the untruncated launch with an unanchored find("IO"), which
   # "RATIO" would match, silently turning posdrift off.  The infix must also
@@ -912,7 +930,8 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   # src/race_dispatch.cpp.
   base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
                     if (ratio_chart) "RAT" else "",
-                    if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
+                    if (gamma_launch) "_GAMMA" else if (weibull) "_WEIB"
+                    else if (lognormal) "_LOGN" else "",
                     if (splitlognormal) "_SPLIT" else "",
                     if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
   type_suffix <- if (erlang_type == "local_guess") "_LOCAL_GUESS"
@@ -922,7 +941,14 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                     else ""
 
   # The launch pair occupies the leading two kernel columns either way; only
-  if (weibull) {
+  if (gamma_launch) {
+    # Arithmetic mean and SD of the launch strength; the kernels derive shape
+    # (mean/sd)^2 and scale sd^2/mean (gamma_launch_pars() in
+    # src/wald_functions.h).
+    p_types <- c(mean = log(1), sd = log(1))
+    transform <- c(mean = "exp", sd = "exp")
+    minmax <- cbind(mean = c(1e-4, Inf), sd = c(1e-4, Inf))
+  } else if (weibull) {
     p_types <- c(shape = log(1), mean = log(1))
     transform <- c(shape = "exp", mean = "exp")
     minmax <- cbind(shape = c(1e-4, Inf), mean = c(1e-4, Inf))
@@ -959,8 +985,9 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   minmax <- cbind(minmax, `colnames<-`(matrix(c(1e-4, Inf), ncol = 1), leak_par))
   exception[[leak_par]] <- 0
   launch_pars <- .ba_par_names(launch)
-  # The launch mean is the first column for the normal (v) and lognormal (mean)
-  # launches, but the SECOND for the Weibull one, whose pair is (shape, mean).
+  # The launch mean is the first column for the normal (v), lognormal and gamma
+  # (mean) launches, but the SECOND for the Weibull one, whose pair is
+  # (shape, mean).
   mean_par <- if (weibull) launch_pars[2] else launch_pars[1]
   
   p_types <- c(p_types, mG = log(1))

@@ -688,20 +688,30 @@ inline double log_weibull_mass_interval(double lo, double hi,
   return -zlo + log1m_exp(-(zhi - zlo));
 }
 
-inline double log_weibull_gamma_interval(double s, double zlo, double zhi,
-                                         double log_zlo, double log_zhi) {
+// log[P(s,zhi) - P(s,zlo)], the regularized incomplete-gamma mass between two
+// standardized endpoints.  The difference is taken on whichever tail keeps
+// its digits.
+inline double log_gamma_reg_interval(double s, double zlo, double zhi,
+                                     double log_zlo, double log_zhi,
+                                     double lgamma_s) {
   if (!(s > 0.0) || !(zhi > zlo)) return R_NegInf;
   if (zhi < 1e-8) {
     const double a = s * log_zhi;
     const double b = (zlo > 0.0) ? s * log_zlo : R_NegInf;
-    if (a > b) return log_diff_exp(a, b) - std::log(s);
+    if (a > b) return log_diff_exp(a, b) - std::log(s) - lgamma_s;
   }
   double lp_lo, lq_lo, lp_hi, lq_hi;
-  gamma_log_pq_fast(s, zlo, log_zlo, &lp_lo, &lq_lo);
-  gamma_log_pq_fast(s, zhi, log_zhi, &lp_hi, &lq_hi);
+  gamma_log_pq_fast(s, zlo, log_zlo, lgamma_s, &lp_lo, &lq_lo);
+  gamma_log_pq_fast(s, zhi, log_zhi, lgamma_s, &lp_hi, &lq_hi);
   const double lower = (lp_hi > lp_lo) ? log_diff_exp(lp_hi, lp_lo) : R_NegInf;
   const double upper = (lq_lo > lq_hi) ? log_diff_exp(lq_lo, lq_hi) : R_NegInf;
-  return lgammafn_cached(s) + std::fmax(lower, upper);
+  return std::fmax(lower, upper);
+}
+
+inline double log_weibull_gamma_interval(double s, double zlo, double zhi,
+                                         double log_zlo, double log_zhi) {
+  const double lg = lgammafn_cached(s);
+  return lg + log_gamma_reg_interval(s, zlo, zhi, log_zlo, log_zhi, lg);
 }
 
 inline double log_weibull_first_interval(double lo, double hi,
@@ -749,6 +759,219 @@ inline double log_weibull_logratio_stoploss(double v, double shape,
   const double deriv = (lp - lm) / (2.0 * h);
   const double coeff = -deriv - log_ell;
   return (coeff > 0.0 && emc2_isfinite(coeff)) ? l0 + std::log(coeff) : R_NegInf;
+}
+
+// --------------------------------------------------------------------------
+// Gamma launch primitives.  V ~ Gamma with arithmetic mean m and SD sd, so
+// shape alpha = (m / sd)^2 and scale theta = sd^2 / m.  In standardized units
+// z = w / theta (U = V / theta ~ Gamma(alpha, 1)) every ballistic quantity is
+// an incomplete gamma of order alpha or alpha + 1:
+//   S(w) = Q(alpha, z),                F(w) = P(alpha, z),
+//   E[V 1{V < w}] = m P(alpha + 1, z)  (Terry et al., 2015, Eq. 3),
+//   C(w) = E[(V - w)_+] = theta [(alpha - z) Q(alpha, z) + pref],
+//   Put(w) = E[(w - V)_+] = theta [(z - alpha) P(alpha, z) + pref],
+// with pref = z^alpha exp(-z) / Gamma(alpha).  Both bracketed forms cancel
+// on one side of the mean, so the stop-loss and put are instead evaluated
+// from expansions whose terms are all positive (see log_gamma_std_stoploss).
+// --------------------------------------------------------------------------
+struct GammaLaunch {
+  double shape = R_NaN;
+  double log_scale = R_NaN;
+  double lgamma_shape = R_NaN;
+  bool ok = false;
+};
+
+inline GammaLaunch gamma_launch_pars(double mean, double sd) {
+  GammaLaunch G;
+  if (!(mean > 0.0) || !(sd > 0.0) || !emc2_isfinite(mean) ||
+      !emc2_isfinite(sd)) return G;
+  const double cv = sd / mean;
+  G.shape = 1.0 / (cv * cv);
+  G.log_scale = 2.0 * std::log(sd) - std::log(mean);
+  if (!(G.shape > 0.0) || !emc2_isfinite(G.shape) ||
+      !emc2_isfinite(G.log_scale)) return G;
+  G.lgamma_shape = lgammafn_cached(G.shape);
+  G.ok = emc2_isfinite(G.lgamma_shape);
+  return G;
+}
+
+inline double rgamma_meansd(double mean, double sd) {
+  const GammaLaunch G = gamma_launch_pars(mean, sd);
+  if (!G.ok) return R_NaN;
+  return R::rgamma(G.shape, std::exp(G.log_scale));
+}
+
+// Natural-scale P(a,z), Q(a,z) and pref = z^a exp(-z) / Gamma(a), each from
+// the expansion that computes it directly.  Only for a in the inc_gamma band.
+inline void gamma_pq_pref_nat(double a, double z, double log_z,
+                              double lgamma_a, double& P, double& Q,
+                              double& pref) {
+  if (!(z > 0.0)) { P = 0.0; Q = 1.0; pref = 0.0; return; }
+  if (!emc2_isfinite(z)) { P = 1.0; Q = 0.0; pref = 0.0; return; }
+  pref = std::exp(inc_gamma::log_prefactor(a, z, log_z, lgamma_a));
+  if (z < a + 1.0) {
+    P = std::fmin(pref * inc_gamma::lower_series(a, z), 1.0);
+    Q = 1.0 - P;
+  } else {
+    Q = std::fmin(pref * inc_gamma::upper_cf(a, z), 1.0);
+    P = 1.0 - Q;
+  }
+}
+
+// log Q(alpha, z) and log P(alpha, z) at w.
+inline void gamma_launch_log_pq(double w, const GammaLaunch& G,
+                                double* log_p, double* log_q) {
+  if (!(w > 0.0)) {
+    if (log_p) *log_p = R_NegInf;
+    if (log_q) *log_q = 0.0;
+    return;
+  }
+  if (!emc2_isfinite(w)) {
+    if (log_p) *log_p = 0.0;
+    if (log_q) *log_q = R_NegInf;
+    return;
+  }
+  const double lz = std::log(w) - G.log_scale;
+  gamma_log_pq_fast(G.shape, std::exp(lz), lz, G.lgamma_shape, log_p, log_q);
+}
+
+inline double log_gamma_launch_survivor(double w, const GammaLaunch& G) {
+  double lq;
+  gamma_launch_log_pq(w, G, nullptr, &lq);
+  return std::fmin(lq, 0.0);
+}
+
+inline double log_gamma_launch_cdf(double w, const GammaLaunch& G) {
+  double lp;
+  gamma_launch_log_pq(w, G, &lp, nullptr);
+  return std::fmin(lp, 0.0);
+}
+
+inline double log_gamma_launch_density(double w, const GammaLaunch& G) {
+  if (!(w > 0.0) || !emc2_isfinite(w)) return R_NegInf;
+  const double lz = std::log(w) - G.log_scale;
+  return (G.shape - 1.0) * lz - std::exp(lz) - G.lgamma_shape - G.log_scale;
+}
+
+// Standardized stop-loss and put, log c(z) = log E[(U - z)_+] and
+// log p(z) = log E[(z - U)_+], related by c - p = alpha - z.
+//   z < alpha + 1:  p = pref * sum_{n>=1} n z^n / (alpha (alpha+1)...(alpha+n)),
+//     which is (z - alpha) P + pref expanded through the lower series of P;
+//   z >= alpha + 1: c = pref (1 - r) / (z + 1 - alpha - r), r = (1 - alpha) / T,
+//     T the tail of the Legendre continued fraction of Q (so that
+//     Q = pref / (z + 1 - alpha - r)), which is (alpha - z) Q + pref with the
+//     cancelling leading terms removed analytically.
+// The complementary quantity is then a sum of positive terms on that side of
+// the mean.  The expansions need O(sqrt(alpha)) terms near z = alpha, so a
+// very large order that exhausts them there falls back to the bracketed forms
+// with R::pgamma, which only cancel mildly that close to the mean.
+inline void log_gamma_std_stoploss_put(double z, double log_z, double alpha,
+                                       double lgamma_alpha, double* log_c,
+                                       double* log_put) {
+  if (!(z > 0.0)) {
+    if (log_c) *log_c = std::log(alpha);
+    if (log_put) *log_put = R_NegInf;
+    return;
+  }
+  const double lpref = inc_gamma::log_prefactor(alpha, z, log_z, lgamma_alpha);
+  double lc = R_NaN, lp = R_NaN;
+  bool done = false;
+  if (z < alpha + 1.0) {
+    double term = 1.0 / alpha, sum = 0.0;
+    for (int n = 1; n < inc_gamma::MAX_ITER; ++n) {
+      term *= z / (alpha + n);
+      const double add = n * term;
+      sum += add;
+      if (add <= sum * inc_gamma::REL_EPS) { done = true; break; }
+    }
+    if (done) {
+      lp = lpref + std::log(sum);
+      if (z <= alpha) {
+        lc = log_sum_exp(lp, std::log(alpha - z));
+      } else {
+        const double lgap = std::log(z - alpha);
+        lc = (lp > lgap) ? log_diff_exp(lp, lgap) : R_NegInf;
+      }
+    }
+  } else {
+    double f = z + 3.0 - alpha;
+    if (std::fabs(f) < inc_gamma::TINY) f = inc_gamma::TINY;
+    double C = f, D = 0.0;
+    for (int j = 2; j < inc_gamma::MAX_ITER; ++j) {
+      const double an = -j * (j - alpha);
+      const double bn = z + 2.0 * j + 1.0 - alpha;
+      D = bn + an * D;  if (std::fabs(D) < inc_gamma::TINY) D = inc_gamma::TINY;
+      C = bn + an / C;  if (std::fabs(C) < inc_gamma::TINY) C = inc_gamma::TINY;
+      D = 1.0 / D;
+      const double del = C * D;
+      f *= del;
+      if (std::fabs(del - 1.0) <= inc_gamma::CF_EPS) { done = true; break; }
+    }
+    const double r = (1.0 - alpha) / f;
+    const double den = z + 1.0 - alpha - r;
+    if (done && 1.0 - r > 0.0 && den > 0.0) {
+      lc = lpref + std::log1p(-r) - std::log(den);
+      lp = log_sum_exp(lc, std::log(z - alpha));
+    } else {
+      done = false;
+    }
+  }
+  if (!done) {
+    const double lq = R::pgamma(z, alpha, 1.0, false, true);
+    const double lP = R::pgamma(z, alpha, 1.0, true, true);
+    const signed_log c = signed_log_add(
+      make_signed_log(std::log(std::fabs(alpha - z)) + lq, alpha >= z ? 1 : -1),
+      make_signed_log(lpref, 1));
+    const signed_log p = signed_log_add(
+      make_signed_log(std::log(std::fabs(z - alpha)) + lP, z >= alpha ? 1 : -1),
+      make_signed_log(lpref, 1));
+    lc = c.sign > 0 ? c.log_abs : R_NegInf;
+    lp = p.sign > 0 ? p.log_abs : R_NegInf;
+  }
+  if (log_c) *log_c = lc;
+  if (log_put) *log_put = lp;
+}
+
+inline double log_gamma_launch_stoploss(double w, const GammaLaunch& G) {
+  if (!(w > 0.0)) return std::log(G.shape) + G.log_scale;  // log E[V]
+  if (!emc2_isfinite(w)) return R_NegInf;
+  const double lz = std::log(w) - G.log_scale;
+  double lc;
+  log_gamma_std_stoploss_put(std::exp(lz), lz, G.shape, G.lgamma_shape,
+                             &lc, nullptr);
+  return G.log_scale + lc;
+}
+
+inline double log_gamma_launch_put(double w, const GammaLaunch& G) {
+  if (!(w > 0.0)) return R_NegInf;
+  if (!emc2_isfinite(w)) return R_PosInf;
+  const double lz = std::log(w) - G.log_scale;
+  double lp;
+  log_gamma_std_stoploss_put(std::exp(lz), lz, G.shape, G.lgamma_shape,
+                             nullptr, &lp);
+  return G.log_scale + lp;
+}
+
+// log P(lo <= V < hi) and log E[V 1{lo <= V < hi}].
+inline double log_gamma_launch_mass_interval(double lo, double hi,
+                                             const GammaLaunch& G) {
+  if (!(hi > lo) || !(lo >= 0.0)) return R_NegInf;
+  const double lzlo = (lo > 0.0) ? std::log(lo) - G.log_scale : R_NegInf;
+  const double lzhi = std::log(hi) - G.log_scale;
+  return log_gamma_reg_interval(G.shape, std::exp(lzlo), std::exp(lzhi),
+                                lzlo, lzhi, G.lgamma_shape);
+}
+
+inline double log_gamma_launch_first_interval(double lo, double hi,
+                                              const GammaLaunch& G) {
+  if (!(hi > lo) || !(lo >= 0.0)) return R_NegInf;
+  const double lzlo = (lo > 0.0) ? std::log(lo) - G.log_scale : R_NegInf;
+  const double lzhi = std::log(hi) - G.log_scale;
+  const double a1 = G.shape + 1.0;
+  // log m = log alpha + log theta; lgamma(alpha + 1) = lgamma(alpha) + log alpha.
+  return std::log(G.shape) + G.log_scale +
+    log_gamma_reg_interval(a1, std::exp(lzlo), std::exp(lzhi), lzlo, lzhi,
+                           G.lgamma_shape + std::log(G.shape));
 }
 
 

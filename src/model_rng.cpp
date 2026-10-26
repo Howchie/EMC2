@@ -575,17 +575,18 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
   const int n_rows = pars.nrow();
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  // Lognormal and Weibull launches occupy the shared first two slots; only
-  // their parameter names and draw functions differ from the normal path.
+  // Lognormal, Weibull and gamma launches occupy the shared first two slots;
+  // only their parameter names and draw functions differ from the normal path.
   const bool logn = (launch == 1 || launch == 2);
   const bool weib = (launch == 3);
+  const bool gam = (launch == 4);
   const bool split = (launch == 2);
   if (split && !ci.count("delta"))
     Rcpp::stop("rbawl_cpp: the split-lognormal launch requires a 'delta' column.");
   const int iv = ci.at(weib ? "shape"
-                          : (split ? "mu" : (logn ? "mean" : "v"))),
+                          : (split ? "mu" : ((logn || gam) ? "mean" : "v"))),
             isv = ci.at(weib ? "mean"
-                             : (split ? "sigma" : (logn ? "cv" : "sv"))),
+                             : (split ? "sigma" : (logn ? "cv" : (gam ? "sd" : "sv")))),
             ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
   const int ieta = ci.count("eta") ? ci.at("eta") : -1;
@@ -623,11 +624,12 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
     const double lo = posdrift ? 0.0 : R_NegInf;
     const double drift = drift_override
       ? (*drift_override)[static_cast<size_t>(r)]
-      : (weib ? rweibull_mean(pars(r, iv), pars(r, isv))
+      : (gam ? rgamma_meansd(pars(r, iv), pars(r, isv))
+         : weib ? rweibull_mean(pars(r, iv), pars(r, isv))
                : (split ? rsplit_lognormal_r(pars(r, iv), pars(r, isv), pars(r, idelta))
                : (logn ? rlnorm_meancv_r(pars(r, iv), pars(r, isv))
                        : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo))));
-    // Lognormal and Weibull launch strengths are positive by construction.
+    // Lognormal, Weibull and gamma launch strengths are positive by construction.
     if (!logn && posdrift && !(drift > 0.0)) {
       dt[r] = R_PosInf;
       continue;
@@ -700,7 +702,8 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
 }
 
 // pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega), or
-// mu, sigma / shape, mean in place of v, sv for lognormal / Weibull launches.
+// mean, cv / shape, mean / mean, sd in place of v, sv for lognormal / Weibull /
+// gamma launches.
 // Matches R's rBAwL (model_LBA.R:347-479).
 // [[Rcpp::export]]
 Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,

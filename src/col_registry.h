@@ -125,6 +125,19 @@ namespace bawl_weib {
     return {n, N_REQ, "BAwL_WEIBRAT"};
   }
 }
+// Gamma launch strength, sampled as its arithmetic mean and SD: same
+// POSITIONS as bawl, with the launch mean in column 0 as for bawl_logn.
+namespace bawl_gamma {
+  enum : int { mean = 0, sd, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
+  inline ColSpec spec() {
+    static const char* n[] = {"mean", "sd", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwL_GAMMA"};
+  }
+  inline ColSpec spec_ratio() {
+    static const char* n[] = {"mean", "sd", "B", "A", "t0", "r"};
+    return {n, N_REQ, "BAwL_GAMMARAT"};
+  }
+}
 namespace bawlsplit {
   enum : int { mu = 0, sigma, delta, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
   inline ColSpec spec() {

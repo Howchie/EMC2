@@ -601,6 +601,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     const bool bawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool bawl_weib = (type_std.find("_WEIB") != std::string::npos);
+    const bool bawl_gamma = (type_std.find("_GAMMA") != std::string::npos);
     // BAwL(parameterization = "ratio").  Two naming hazards meet here.  The
     // infix is "RAT" and NOT "RATIO" because the untruncated launch below is
     // detected with an unanchored find("IO"), which "RATIO" would match,
@@ -612,6 +613,8 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
                              type_std.find("BAwLIORAT") != std::string::npos);
     out.ctx.bawl_ratio_chart = bawl_ratio;
     out.col_spec       = bawl_split ? emc2col::bawlsplit::spec()
+                        : bawl_gamma ? (bawl_ratio ? emc2col::bawl_gamma::spec_ratio()
+                                                   : emc2col::bawl_gamma::spec())
                         : (bawl_weib ? (bawl_ratio ? emc2col::bawl_weib::spec_ratio()
                                                    : emc2col::bawl_weib::spec())
                                      : (bawl_logn ? (bawl_ratio ? emc2col::bawl_logn::spec_ratio()
@@ -628,6 +631,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
       ? (bawl_split ? int(emc2col::bawlsplit::omega) :
          (bawl_weib ? int(emc2col::bawl_weib::omega) : int(emc2col::bawl::omega))) : -1;
     out.ctx.bawl_launch = bawl_split ? BAWL_LAUNCH_SPLITLOGNORMAL
+                        : bawl_gamma ? BAWL_LAUNCH_GAMMA
                         : (bawl_weib ? BAWL_LAUNCH_WEIBULL
                                      : (bawl_logn ? BAWL_LAUNCH_LOGNORMAL
                                                   : BAWL_LAUNCH_NORMAL));
@@ -649,7 +653,8 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
-    if (!bawl_logn && !bawl_weib && type_std.find("IO") != std::string::npos) {
+    if (!bawl_logn && !bawl_weib && !bawl_gamma &&
+        type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
     if (type_std.find("_E2") != std::string::npos) out.ctx.kill_shape = 2;
