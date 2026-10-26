@@ -39,6 +39,14 @@ inline double log_erfcx(double y) {
   return y * y + std::log(2.0 - std::exp(-y * y) * r);
 }
 
+// log(e^E erfcx(y)) given delta = E + y^2 in a cancellation-free form.  For
+// y < 0 both E and y^2 can exceed 1e40 when v / s is large, so their sum is
+// taken from delta and erfcx(y) e^(-y^2) = erfc(y) = 1 + erf(-y).
+inline double log_exp_erfcx(double E, double delta, double y) {
+  if (y >= 0.0) return E + log_erfcx(y);
+  return delta + std::log1p(std::erf(-y));
+}
+
 struct Tilt {
   double lam, log_lam;
   bool cplx;
@@ -61,13 +69,23 @@ inline Tilt make_tilt(double v, double lam) {
   return k;
 }
 
+// E + y(sgn kappa)^2 = (v - c)(2a - (v + c) t) / 2 with c = sgn kappa, real
+// branch; v - kappa is taken from its cancellation-free form.
+inline double kappa_delta(double t, double a, double v, const Tilt& k, int sgn) {
+  const double vmc = (sgn > 0) ? k.v_minus_kap : v + k.kap;
+  const double vpc = (sgn > 0) ? v + k.kap : k.v_minus_kap;
+  return 0.5 * vmc * (2.0 * a - vpc * t);
+}
+
 // log f_X for a point start at distance a >= 0 (s = 1 units)
 inline double point_log_pdf(double t, double a, double v, const Tilt& k) {
   const double st2 = std::sqrt(2.0 * t);
   const double E = -(a - v * t) * (a - v * t) / (2.0 * t);
   if (!k.cplx) {
     const double y1 = (a - k.kap * t) / st2, y2 = (a + k.kap * t) / st2;
-    return k.log_lam + E - M_LN2 + log_sum_exp(log_erfcx(y1), log_erfcx(y2));
+    return k.log_lam - M_LN2 +
+           log_sum_exp(log_exp_erfcx(E, kappa_delta(t, a, v, k, 1), y1),
+                       log_exp_erfcx(E, kappa_delta(t, a, v, k, -1), y2));
   }
   const double re = faddeeva::w(std::complex<double>(k.om * t / st2, a / st2)).real();
   return (re > 0.0) ? k.log_lam + E + std::log(re) : R_NegInf;
@@ -78,11 +96,14 @@ inline double point_log_pdf(double t, double a, double v, const Tilt& k) {
 inline signed_log antideriv(double t, double a, double v, const Tilt& k, double& max_log) {
   const double st2 = std::sqrt(2.0 * t);
   const double E = -(a - v * t) * (a - v * t) / (2.0 * t);
-  const signed_log neg = make_signed_log(E + std::log(0.5 * v) + log_erfcx((a - v * t) / st2), -1);
+  const signed_log neg =
+      make_signed_log(std::log(0.5 * v) + log_exp_erfcx(E, 0.0, (a - v * t) / st2), -1);
   signed_log pos;
   if (!k.cplx) {
-    const double l1 = E + std::log(0.25 * (v + k.kap)) + log_erfcx((a - k.kap * t) / st2);
-    const double l2 = E + std::log(0.25 * k.v_minus_kap) + log_erfcx((a + k.kap * t) / st2);
+    const double l1 = std::log(0.25 * (v + k.kap)) +
+                      log_exp_erfcx(E, kappa_delta(t, a, v, k, 1), (a - k.kap * t) / st2);
+    const double l2 = std::log(0.25 * k.v_minus_kap) +
+                      log_exp_erfcx(E, kappa_delta(t, a, v, k, -1), (a + k.kap * t) / st2);
     pos = make_signed_log(log_sum_exp(l1, l2), 1);
   } else {
     const std::complex<double> w = faddeeva::w(std::complex<double>(k.om * t / st2, a / st2));
@@ -146,11 +167,11 @@ inline double exwald_log(double tt, double v, double B, double A, double s, doub
   const double ratio = l_tf - lFD;  // log(tau f_X / F_D) < 0
   if (ratio < -1e-6) return lFD + log1m_exp(ratio);
   // F_D - tau f_X lost its digits (lambda tt small):
-  //   F_X = int_0^tt f_D(u) (1 - e^(-lambda (tt - u))) du.
-  return wald_k0_log_avg_over_d(0.0, tt, [&](double u) {
+  //   F_X = int_0^tt f_D(u) (1 - e^(-lambda (tt - u))) du <= F_D.
+  return std::fmin(lFD, wald_k0_log_avg_over_d(0.0, tt, [&](double u) {
     if (!(u > 0.0) || !(u < tt)) return R_NegInf;
     return wald_log(u, vs, Bs, As, 'f') + log1m_exp(-lam * (tt - u));
-  });
+  }));
 }
 
 }  // namespace

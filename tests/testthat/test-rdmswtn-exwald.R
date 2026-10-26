@@ -144,3 +144,22 @@ test_that("simulated finishing times follow the ex-Wald CDF", {
     expect_equal(exw_p(unname(qs) - 0.2, 1.8, 0.6, A, 1, 0.4), probs, tolerance = 0.03)
   }
 })
+
+test_that("the ex-Wald stays exact when v / s is very large", {
+  # s -> 0 makes D uniform on [B / v, (B + A) / v], so X = D + Exp(tau) has a
+  # closed form; tau -> 0 must then reproduce the Wald.
+  v <- 3.2e7; B <- 1.5e6; A <- 1.04e7; t <- c(0.17, 0.3, 0.8)
+  lo <- B / v; hi <- (B + A) / v; w <- hi - lo
+  for (s in c(1e-3, 1.8e-16)) {
+    tau <- 0.1; lam <- 1 / tau
+    f_ref <- (exp(-lam * pmax(t - hi, 0)) - exp(-lam * pmax(t - lo, 0))) / w
+    Fe <- function(u) ifelse(u > 0, u - (1 - exp(-lam * u)) / lam, 0)
+    F_ref <- (Fe(t - lo) - Fe(t - hi)) / w
+    expect_equal(exw_d(t, v, B, A, s, tau), f_ref, tolerance = 1e-8)
+    expect_equal(exw_p(t, v, B, A, s, tau), F_ref, tolerance = 1e-8)
+    for (tau in c(1e-23, 1e-17)) {
+      expect_equal(exw_d(t, v, B, A, s, tau), exw_d(t, v, B, A, s, 0), tolerance = 1e-8)
+      expect_equal(exw_p(t, v, B, A, s, tau), exw_p(t, v, B, A, s, 0), tolerance = 1e-8)
+    }
+  }
+})
