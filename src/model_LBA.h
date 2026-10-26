@@ -9,6 +9,7 @@
 #include "composite_functions.h"  // clamp_pos, safe_log
 #include "gaussian.h"
 #include "gl_quad.h"
+#include "ba_narrow_gl.h"
 #include "gsl_utils.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
@@ -1345,10 +1346,146 @@ inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
                         accept_mode, pdf);
 }
 
+// Narrow-interval fallback (src/ba_narrow_gl.h) for the normal, lognormal,
+// split-lognormal and Weibull launches; the gamma launch carries its own.
+// The launch's log S, log F and log g are formed once per call here.
+struct BaLaunchLogs {
+  int launch = BAWL_LAUNCH_NORMAL;
+  double p1 = 0.0, p2 = 0.0, delta = 0.0, log_denom = 0.0, denom_floor = 0.0;
+  bool posdrift = true;
+  LaunchLogNormal L{0.0, 1.0};
+
+  double lg(double w) const {
+    if (launch == BAWL_LAUNCH_WEIBULL) return log_weibull_density(w, p1, p2);
+    if (launch == BAWL_LAUNCH_NORMAL)
+      return dnormP((w - p1) / p2, 0.0, 1.0, true) - std::log(p2) - log_denom;
+    return delta == 0.0 ? dlnorm_std(w, L.mu, L.sigma, true)
+                        : log_split_lognormal_density(w, L.mu, L.sigma, delta);
+  }
+  double lS(double w) const {
+    if (launch == BAWL_LAUNCH_WEIBULL) return log_weibull_survivor(w, p1, p2);
+    if (launch == BAWL_LAUNCH_NORMAL)
+      return pnorm_log_direct((p1 - w) / p2, true) - log_denom;
+    return bawl_logn_log_surv(w, L.mu, L.sigma, delta);
+  }
+  double lF(double w) const {
+    if (launch == BAWL_LAUNCH_WEIBULL) return log_weibull_cdf(w, p1, p2);
+    if (launch == BAWL_LAUNCH_NORMAL)
+      return log_normal_cdf_positive(w, p1, p2, posdrift, denom_floor);
+    return delta == 0.0
+      ? pnorm_log_direct((std::log(w) - L.mu) / L.sigma, true)
+      : log_split_lognormal_cdf(w, L.mu, L.sigma, delta);
+  }
+};
+
+inline BaLaunchLogs ba_launch_logs_normal(double v, double sv, bool posdrift,
+                                          double denom_floor) {
+  BaLaunchLogs D;
+  D.launch = BAWL_LAUNCH_NORMAL; D.p1 = v; D.p2 = sv;
+  D.posdrift = posdrift; D.denom_floor = denom_floor;
+  D.log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
+  return D;
+}
+
+inline BaLaunchLogs ba_launch_logs_logn(double mu, double sigma, double delta) {
+  BaLaunchLogs D;
+  D.launch = delta == 0.0 ? BAWL_LAUNCH_LOGNORMAL : BAWL_LAUNCH_SPLITLOGNORMAL;
+  D.delta = delta;
+  D.L = LaunchLogNormal{mu, sigma};
+  return D;
+}
+
+inline BaLaunchLogs ba_launch_logs_weib(double shape, double mean) {
+  BaLaunchLogs D;
+  D.launch = BAWL_LAUNCH_WEIBULL; D.p1 = shape; D.p2 = mean;
+  return D;
+}
+
+constexpr int BA_NARROW_CDF = 0;
+constexpr int BA_NARROW_SURV = 1;
+constexpr int BA_NARROW_PDF = 2;
+
+// Live start-point integral over a narrow launch interval [w_lo, w_hi]:
+// log_mult + log int h(w) dw with h = S (CDF), F (SURV) or
+// (slope w - offset) g (PDF).  False when the interval is not narrow, which
+// sends the caller to its closed forms.
+inline bool ba_log_narrow_live(int what, double w_lo, double w_hi,
+                               const BaLaunchLogs &D, double log_mult,
+                               double &out, double slope = 1.0,
+                               double offset = 0.0) {
+  if (!(w_lo > 0.0) || !(w_hi > w_lo) || !emc2_isfinite(w_hi)) return false;
+  if (!ba_narrow_interval(w_lo, w_hi, [&D](double w) { return D.lg(w); }))
+    return false;
+  double li;
+  if (what == BA_NARROW_PDF) {
+    li = ba_log_mean_gl(w_lo, w_hi, [&](double w, double) {
+      const double wgt = slope * w - offset;
+      return wgt > 0.0 ? std::log(wgt) + D.lg(w) : R_NegInf;
+    });
+  } else if (what == BA_NARROW_CDF) {
+    li = ba_log_mean_gl(w_lo, w_hi, [&D](double w, double) { return D.lS(w); });
+  } else {
+    li = ba_log_mean_gl(w_lo, w_hi, [&D](double w, double) { return D.lF(w); });
+  }
+  if (ISNAN(li)) return false;
+  out = li > R_NegInf ? log_mult + std::log(w_hi - w_lo) + li : R_NegInf;
+  return true;
+}
+
+// Returns true, with the log CDF, survivor or density in `out`, when the live
+// launch interval at t is narrow; false sends the caller to the closed forms.
+inline bool bawl_log_narrow_launch(int what, double t, double A, double b,
+                                   double p1, double p2, double k,
+                                   bool posdrift, double denom_floor,
+                                   int launch, double delta, double &out) {
+  if (launch == BAWL_LAUNCH_GAMMA || !(A > BAWL_A_EPS) || t == R_PosInf)
+    return false;
+  if (launch == BAWL_LAUNCH_NORMAL) {
+    if (!(p2 > 0.0)) return false;
+  } else if (launch == BAWL_LAUNCH_WEIBULL) {
+    if (!weibull_valid(p1, p2)) return false;
+  } else if (!(p2 > 0.0)) {
+    return false;
+  }
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen || !(g.width > 0.0) || !(g.w_lo > 0.0)) return false;
+  BaLaunchLogs D;
+  if (launch == BAWL_LAUNCH_NORMAL) {
+    D = ba_launch_logs_normal(p1, p2, posdrift, denom_floor);
+  } else if (launch == BAWL_LAUNCH_WEIBULL) {
+    D = ba_launch_logs_weib(p1, p2);
+  } else {
+    const LaunchLogNormal L =
+      launch_lognormal_pair(p1, p2, launch == BAWL_LAUNCH_LOGNORMAL);
+    D = ba_launch_logs_logn(L.mu, L.sigma, delta);
+  }
+  if (!ba_narrow_interval(g.w_lo, g.w_hi,
+                          [&D](double w) { return D.lg(w); }))
+    return false;
+  if (what == BA_NARROW_PDF) {
+    // f = jac (1/A) int_0^A (b - a) g(W(a)) da.
+    const double li = ba_log_mean_gl(g.w_lo, g.w_hi, [&](double w, double u) {
+      return std::log(b - u * A) + D.lg(w);
+    });
+    out = li > R_NegInf ? bawl_geom_log_jacobian(g) + li : R_NegInf;
+  } else if (what == BA_NARROW_CDF) {
+    out = std::fmin(ba_log_mean_gl(g.w_lo, g.w_hi,
+      [&D](double w, double) { return D.lS(w); }), 0.0);
+  } else {
+    out = std::fmin(ba_log_mean_gl(g.w_lo, g.w_hi,
+      [&D](double w, double) { return D.lF(w); }), 0.0);
+  }
+  return !ISNAN(out);
+}
+
 inline double log_ba_cdf_launch(double t, double A, double b, double p1,
                                 double p2, double k, bool posdrift,
                                 double denom_floor, int launch,
                                 double delta = 0.0) {
+  double narrow;
+  if (bawl_log_narrow_launch(BA_NARROW_CDF, t, A, b, p1, p2, k, posdrift, denom_floor,
+                             launch, delta, narrow))
+    return narrow;
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
     const LaunchLogNormal L =
@@ -1366,6 +1503,10 @@ inline double log_ba_surv_launch(double t, double A, double b, double p1,
                                  double p2, double k, bool posdrift,
                                  double denom_floor, int launch,
                                  double delta = 0.0) {
+  double narrow;
+  if (bawl_log_narrow_launch(BA_NARROW_SURV, t, A, b, p1, p2, k, posdrift, denom_floor,
+                             launch, delta, narrow))
+    return narrow;
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
     const LaunchLogNormal L =
@@ -1383,6 +1524,10 @@ inline double log_ba_pdf_launch(double t, double A, double b, double p1,
                                 double p2, double k, bool posdrift,
                                 double denom_floor, int launch,
                                 double delta = 0.0) {
+  double narrow;
+  if (bawl_log_narrow_launch(BA_NARROW_PDF, t, A, b, p1, p2, k, posdrift, denom_floor,
+                             launch, delta, narrow))
+    return narrow;
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL) {
     const LaunchLogNormal L =

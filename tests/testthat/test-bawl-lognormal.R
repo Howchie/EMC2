@@ -408,3 +408,21 @@ test_that("the lognormal launch composes with the kill and guess clocks", {
   expect_gt(mg$pfun(rt, pars_g), m0$pfun(rt, pars))
   expect_equal(mk$pfun(rt, pars), m0$pfun(rt, pars))   # clocks off = base model
 })
+
+test_that("the BAwL log density stays exact when the launch interval is narrow", {
+  # Late in a strongly leaky race the required strengths span an interval far
+  # narrower than the launch spread, where the closed-form brackets cancel.
+  A <- 0.2; b <- 1.5; m <- 1.2; cv <- 0.05
+  s2 <- log1p(cv^2); mu <- log(m) - s2 / 2; sg <- sqrt(s2)
+  for (g in list(c(t = 10, k = 3), c(t = 50, k = 0.5))) {
+    t <- g[["t"]]; k <- g[["k"]]; E <- exp(-k * t)
+    W <- function(x) k * (b - x * E) / (1 - E)
+    lf <- function(x) dlnorm(W(x), mu, sg, log = TRUE) +
+      log(k^2 * E * (b - x) / (1 - E)^2)
+    l0 <- max(lf(c(0, A)))
+    want <- log(integrate(function(x) exp(lf(x) - l0), 0, A,
+                          rel.tol = 1e-12)$value / A) + l0
+    got <- EMC2:::dleakyba_norm(t, A, b, m, cv, k, TRUE, TRUE, 1L)
+    expect_equal(got, want, tolerance = 1e-8, info = paste(t, k))
+  }
+})

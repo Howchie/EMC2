@@ -171,3 +171,28 @@ test_that("Weibull incomplete-gamma primitives hold accuracy across the shape ra
   expect_lt(max(abs(got[keep] - ref[keep]) / ref[keep]), 1e-11)
   expect_lt(max(abs(got[!keep] - ref[!keep])), 1e-12)
 })
+
+test_that("Weibull BAwD/BAwF/BAwR log CDFs keep their digits deep in the early tail", {
+  # Early enough that no start point has saturated, so F is the start-point
+  # average of the launch survivor at the live required strength V*(t, z).
+  shape <- 2; mean <- 1.2; A <- 0.2; b <- 1.5
+  scale <- mean / gamma(1 + 1 / shape)
+  vstar <- list(
+    BAwD = function(t, z) (b - z + 0.05 * t) / (-expm1(-3 * t) / 3),
+    BAwF = function(t, z) (b * exp(3 * t) - z) / t,
+    BAwR = function(t, z) (b - z) / t + 3 * t^2 / 3)
+  kern <- list(
+    BAwD = function(t) EMC2:::pbawd(t, A, b, shape, mean, 3, 0.05, 3L, TRUE, TRUE),
+    BAwF = function(t) EMC2:::pbawf(t, A, b, shape, mean, 3, 3L, TRUE, TRUE),
+    BAwR = function(t) EMC2:::pbawr(t, A, b, shape, mean, 3, 2, 3L, TRUE, TRUE))
+  for (m in names(vstar)) {
+    for (t in seq(0.025, 0.14, length.out = 9)) {
+      lS <- function(z) pweibull(vstar[[m]](t, z), shape, scale,
+                                 lower.tail = FALSE, log.p = TRUE)
+      l0 <- lS(A)
+      want <- log(integrate(function(z) exp(lS(z) - l0), 0, A,
+                            rel.tol = 1e-12)$value / A) + l0
+      expect_equal(kern[[m]](t), want, tolerance = 1e-8, info = paste(m, t))
+    }
+  }
+})

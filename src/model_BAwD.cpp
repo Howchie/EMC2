@@ -589,8 +589,11 @@ double log_bawd_cdf_normal(double u, const BawdGeom& g, double v,
     return std::fmin(out, 0.0);
   }
 
+  const BaLaunchLogs D = ba_launch_logs_normal(v, sv, posdrift, denom_floor);
   double log_live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_CDF, s.w_lo, s.w_hi, D,
+                          std::log(s.q) + D.log_denom, log_live)) {
     const double cl = (v - s.w_hi) / sv;   // c
     const double ch = (v - s.w_lo) / sv;   // c + m Z
     if (!emc2_isfinite(cl) && !emc2_isfinite(ch)) return R_NegInf;
@@ -628,8 +631,11 @@ double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu,
       : log_split_lognormal_survivor(w, mu, sigma, delta);
   };
   if (g.A <= BAWD_A_EPS) return std::fmin(log_gbar(s.w_hi), 0.0);
+  const BaLaunchLogs D = ba_launch_logs_logn(mu, sigma, delta);
   double log_live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_CDF, s.w_lo, s.w_hi, D,
+                          std::log(s.q), log_live)) {
     const double lc_lo = delta == 0.0
       ? log_lognormal_stoploss(s.w_lo, mu, sigma)
       : log_split_lognormal_stoploss(s.w_lo, mu, sigma, delta);
@@ -655,14 +661,18 @@ double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape,
   if (!g.ok || !weibull_valid(shape, mean) || !(u > 0.0)) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok) return R_NegInf;
-  // Avoid cancellation when the CDF is close to one.
+  // Past the median, the complement of the stable survivor; before it the
+  // stop-loss difference below keeps the early tail, where S rounds to one.
   const double lsurv = log_bawd_surv_weib(u, g, shape, mean);
-  if (lsurv < 0.0 && emc2_isfinite(lsurv))
+  if (lsurv < -M_LN2 && emc2_isfinite(lsurv))
     return std::log(-std::expm1(lsurv));
   const auto lg = [&](double w) { return log_weibull_survivor(w, shape, mean); };
   if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
+  const BaLaunchLogs D = ba_launch_logs_weib(shape, mean);
   double live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_CDF, s.w_lo, s.w_hi, D,
+                          std::log(s.q), live)) {
     const double a = log_weibull_stoploss(s.w_lo, shape, mean);
     const double b = log_weibull_stoploss(s.w_hi, shape, mean);
     if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
@@ -749,8 +759,11 @@ double log_bawd_surv_normal(double u, const BawdGeom& g, double v,
   if (g.A <= BAWD_A_EPS)
     return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
                                              denom_floor), 0.0);
+  const BaLaunchLogs D = ba_launch_logs_normal(v, sv, posdrift, denom_floor);
   double log_live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_SURV, s.w_lo, s.w_hi, D,
+                          std::log(s.q) + D.log_denom, log_live)) {
     const double li = log_normal_phi_integral_positive_raw(
       (s.w_lo - v) / sv, (s.w_hi - v) / sv, v, sv, posdrift);
     if (li > R_NegInf) log_live = li + std::log(sv) + std::log(s.q);
@@ -775,8 +788,11 @@ double log_bawd_surv_logn(double u, const BawdGeom& g, double mu,
   };
   if (u == R_PosInf && g.k_zero) return std::fmin(log_g(s.w_hi), 0.0);
   if (g.A <= BAWD_A_EPS) return std::fmin(log_g(s.w_hi), 0.0);
+  const BaLaunchLogs D = ba_launch_logs_logn(mu, sigma, delta);
   double log_live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_SURV, s.w_lo, s.w_hi, D,
+                          std::log(s.q), log_live)) {
     const double pa = delta == 0.0
       ? log_lognormal_put(s.w_hi, mu, sigma)
       : log_split_lognormal_put(s.w_hi, mu, sigma, delta);
@@ -808,8 +824,11 @@ double log_bawd_surv_weib(double u, const BawdGeom& g, double shape,
   const auto lg = [&](double w) { return log_weibull_cdf(w, shape, mean); };
   if (u == R_PosInf && g.k_zero) return std::fmin(lg(s.w_hi), 0.0);
   if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
+  const BaLaunchLogs D = ba_launch_logs_weib(shape, mean);
   double live = R_NegInf;
-  if (s.Z > 0.0) {
+  if (s.Z > 0.0 &&
+      !ba_log_narrow_live(BA_NARROW_SURV, s.w_lo, s.w_hi, D,
+                          std::log(s.q), live)) {
     const double a = log_weibull_put(s.w_hi, shape, mean);
     const double b = log_weibull_put(s.w_lo, shape, mean);
     if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
@@ -840,6 +859,11 @@ double log_bawd_pdf_normal(double u, const BawdGeom& g, double v,
     return dnormP((v - s.w_hi) / sv, 0.0, 1.0, true) + log_wgt -
       std::log(sv) - std::log(s.q) - log_denom;
   }
+  const BaLaunchLogs D = ba_launch_logs_normal(v, sv, posdrift, denom_floor);
+  double narrow;
+  if (ba_log_narrow_live(BA_NARROW_PDF, s.w_lo, s.w_hi, D,
+                         s.log_E_g - std::log(g.A), narrow, s.E_rel, g.ell))
+    return narrow;
   const double cl = (v - s.w_hi) / sv, ch = (v - s.w_lo) / sv;
   const double span = ch - cl;
   const double log_scale = -std::log(g.A) - log_denom;
@@ -893,6 +917,11 @@ double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
       return log_split_lognormal_density(s.w_hi, mu, sigma, delta) +
         log_wgt - std::log(s.q);
     if (!(log_wgt > R_NegInf)) return R_NegInf;
+    const BaLaunchLogs D = ba_launch_logs_logn(mu, sigma, delta);
+    double narrow;
+    if (ba_log_narrow_live(BA_NARROW_PDF, s.w_lo, s.w_hi, D,
+                           s.log_E_g - std::log(g.A), narrow, s.E_rel, g.ell))
+      return narrow;
     const double ls_lo = log_split_lognormal_survivor(s.w_lo, mu, sigma, delta);
     const double ls_hi = log_split_lognormal_survivor(s.w_hi, mu, sigma, delta);
     const double lm_lo = log_split_lognormal_first_partial_moment(
@@ -927,6 +956,11 @@ double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
     if (!(log_wgt > R_NegInf)) return R_NegInf;
     return dlnorm_std(s.w_hi, mu, sigma, true) + log_wgt - std::log(s.q);
   }
+  const BaLaunchLogs D = ba_launch_logs_logn(mu, sigma, delta);
+  double narrow;
+  if (ba_log_narrow_live(BA_NARROW_PDF, s.w_lo, s.w_hi, D,
+                         s.log_E_g - std::log(g.A), narrow, s.E_rel, g.ell))
+    return narrow;
 
   // f A = E * int w g(w) dw - ell * int g(w) dw over [w_lo, w_hi], i.e. the
   // lognormal partial expectation minus its probability -- both closed form.
@@ -971,6 +1005,11 @@ double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape,
     const double ld = log_weibull_density(s.w_hi, shape, mean);
     return (wgt > 0.0 && ld > R_NegInf) ? ld + std::log(wgt) - std::log(s.q) : R_NegInf;
   }
+  const BaLaunchLogs D = ba_launch_logs_weib(shape, mean);
+  double narrow;
+  if (ba_log_narrow_live(BA_NARROW_PDF, s.w_lo, s.w_hi, D,
+                         s.log_E_g - std::log(g.A), narrow, s.E_rel, g.ell))
+    return narrow;
   const double lm = log_weibull_mass_interval(s.w_lo, s.w_hi, shape, mean);
   const double l1 = log_weibull_first_interval(s.w_lo, s.w_hi, shape, mean);
   if (!(lm > R_NegInf) || !(l1 > R_NegInf)) return R_NegInf;

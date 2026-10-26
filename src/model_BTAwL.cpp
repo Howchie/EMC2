@@ -1060,12 +1060,12 @@ double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
                            double k, double tau_s, int launch, bool posdrift,
                            double delta) {
   if (!(p2 > 0.0)) return 0.0;
-  // The Weibull launch uses the log survivor complement to avoid cancellation
-  // near its upper plateau.  Keep legacy normal/lognormal arithmetic intact.
+  // Past the median the Weibull launch uses the log survivor complement to
+  // avoid cancellation near its upper plateau.  Keep legacy normal/lognormal arithmetic intact.
   if (launch == BTAWL_LAUNCH_WEIBULL) {
     const double lsurv = btawl_sustained_log_surv(t, A, b, p1, p2, k, tau_s,
                                                   launch, posdrift, delta);
-    if (lsurv < 0.0 && emc2_isfinite(lsurv))
+    if (lsurv < -M_LN2 && emc2_isfinite(lsurv))
       return std::fmin(std::fmax(-std::expm1(lsurv), 0.0), 1.0);
   }
   if (t == R_PosInf) {
