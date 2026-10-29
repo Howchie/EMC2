@@ -21,7 +21,10 @@
 // When kappa = i omega the erfcx pair is w(xi), conj(w(xi)) with
 // xi = (omega t + i a) / sqrt(2 t) in the upper half plane, so G and f_X are
 // real parts of one Faddeeva evaluation.  Both branches are the same analytic
-// function of kappa^2.  Survivor and CDF follow from the density:
+// function of kappa^2.  Once a has arrived (a < v t), v erfcx(y(v)) e^E / 2 is
+// v - v erfc(-y(v)) / 2; G is taken without that constant, which cancels
+// between the endpoints and would otherwise swamp a right-tail density.
+// Survivor and CDF follow from the density:
 //   S_X = S_D + tau f_X,  F_X = F_D - tau f_X.
 // ============================================================
 
@@ -92,12 +95,16 @@ inline double point_log_pdf(double t, double a, double v, const Tilt& k) {
 }
 
 // G(a) of the start-point average (s = 1 units); max_log collects the
-// largest component for the cancellation test.
-inline signed_log antideriv(double t, double a, double v, const Tilt& k, double& max_log) {
+// largest component for the cancellation test.  When a < v t the result is
+// G(a) + v, and shifted is set.
+inline signed_log antideriv(double t, double a, double v, const Tilt& k, double& max_log,
+                            bool& shifted) {
   const double st2 = std::sqrt(2.0 * t);
   const double E = -(a - v * t) * (a - v * t) / (2.0 * t);
-  const signed_log neg =
-      make_signed_log(std::log(0.5 * v) + log_exp_erfcx(E, 0.0, (a - v * t) / st2), -1);
+  const double yv = (a - v * t) / st2;
+  shifted = yv < 0.0;
+  const signed_log neg = make_signed_log(
+      std::log(0.5 * v) + E + log_erfcx(shifted ? -yv : yv), shifted ? 1 : -1);
   signed_log pos;
   if (!k.cplx) {
     const double l1 = std::log(0.25 * (v + k.kap)) +
@@ -130,14 +137,79 @@ inline double log_int_cut(double lo, double hi, double c1, double c2, LF lf) {
   return out;
 }
 
+// erfcx(y), y >= 0
+inline double erfcx_pos(double y) {
+  return std::sqrt(2.0 / M_PI) * mills_ratio_std(M_SQRT2 * y);
+}
+
+// antideriv() in natural space: G(a) (+ v when shifted), and in mag the sum of
+// the absolute values of its components.  w is the Faddeeva value at a on the
+// complex branch.
+inline double antideriv_nat(double t, double st2, double a, double v, const Tilt& k,
+                            const std::complex<double>& w, double& mag, bool& shifted) {
+  const double d = a - v * t;
+  const double eE = std::exp(-d * d / (2.0 * t));
+  const double yv = d / st2;
+  shifted = yv < 0.0;
+  const double neg = (shifted ? 0.5 : -0.5) * v * erfcx_pos(std::fabs(yv));
+  if (k.cplx) {
+    const double v_re = 0.5 * v * w.real(), om_im = 0.5 * k.om * w.imag();
+    mag = eE * (std::fabs(neg) + std::fabs(v_re) + std::fabs(om_im));
+    return eE * (neg + v_re - om_im);
+  }
+  // e^E erfcx(y) = 2 e^(E + y^2) - e^E erfcx(-y) for y < 0
+  const double cp = 0.25 * (v + k.kap), cm = 0.25 * k.v_minus_kap;
+  const double yp = (a - k.kap * t) / st2, ym = (a + k.kap * t) / st2;
+  const double tm = cm * erfcx_pos(ym);
+  double tp, extra = 0.0;
+  if (yp >= 0.0) {
+    tp = cp * erfcx_pos(yp);
+  } else {
+    tp = -cp * erfcx_pos(-yp);
+    extra = 2.0 * cp * std::exp(kappa_delta(t, a, v, k, 1));
+  }
+  mag = eE * (std::fabs(neg) + std::fabs(tp) + tm) + extra;
+  return eE * (neg + tp + tm) + extra;
+}
+
+// Natural-space f_X (s = 1 units, A > 0); false when it under/overflowed or
+// cancelled, and the log path is then authoritative.
+inline bool exwald_pdf_nat(double t, double v, double B, double A, const Tilt& k,
+                           double& pdf) {
+  const double st2 = std::sqrt(2.0 * t);
+  double mag_hi, mag_lo;
+  bool hi_shifted, lo_shifted;
+  std::complex<double> w_hi, w_lo;
+  if (k.cplx)
+    faddeeva::w2(std::complex<double>(k.om * t / st2, (B + A) / st2),
+                 std::complex<double>(k.om * t / st2, B / st2), w_hi, w_lo);
+  const double g_hi = antideriv_nat(t, st2, B + A, v, k, w_hi, mag_hi, hi_shifted);
+  const double g_lo = antideriv_nat(t, st2, B, v, k, w_lo, mag_lo, lo_shifted);
+  double total = g_hi - g_lo, mag = mag_hi + mag_lo;
+  if (lo_shifted && !hi_shifted) { total += v; mag += v; }
+  if (!emc2_isfinite(total) || !emc2_isfinite(mag) || !(total > 0.0) ||
+      total <= std::exp(EMC2_LOG_CANCEL_MIN) * mag)
+    return false;
+  pdf = total / A;
+  return true;
+}
+
 // log f_X (s = 1 units), distance uniform on [B, B + A]
 inline double exwald_log_pdf_s1(double t, double v, double B, double A, double lam) {
   const Tilt k = make_tilt(v, lam);
   if (A <= 1e-12) return point_log_pdf(t, B, v, k);
+  double pdf;
+  if (exwald_pdf_nat(t, v, B, A, k, pdf)) return std::log(pdf);
   double max_log = R_NegInf;
-  const signed_log hi = antideriv(t, B + A, v, k, max_log);
-  const signed_log lo = antideriv(t, B, v, k, max_log);
-  const signed_log total = signed_log_sub(hi, lo);
+  bool hi_shifted, lo_shifted;
+  const signed_log hi = antideriv(t, B + A, v, k, max_log, hi_shifted);
+  const signed_log lo = antideriv(t, B, v, k, max_log, lo_shifted);
+  signed_log total = signed_log_sub(hi, lo);
+  if (lo_shifted && !hi_shifted) {
+    // v t falls between the endpoints: restore the constant G(B) dropped
+    total = signed_log_add(total, make_signed_log(std::log(v), 1));
+    max_log = std::fmax(max_log, std::log(v));
+  }
   if (total.sign > 0 && !ISNAN(total.log_abs) &&
       total.log_abs > max_log + EMC2_LOG_CANCEL_MIN)
     return total.log_abs - std::log(A);
@@ -161,6 +233,16 @@ inline double wald_log(double t, double v, double B, double A, char what) {
   return (what == 'F') ? wald_k0_log_cdf(t, b, v, A) : wald_k0_log_surv(t, b, v, A);
 }
 
+// Natural Wald survivor (s = 1 units) where the natural CDF resolves it, as in
+// RDMSWTN's k = 0 kernel; false defers to wald_k0_log_surv().
+inline bool wald_surv_nat(double t, double v, double B, double A, double& S) {
+  if (v * t - (B + A) >= WALD_K0_SURV_SAT_X * std::sqrt(t)) return false;
+  const double cdf = std::max(0.0, std::min(1.0, pwald_k0(t, B + A, v, A)));
+  if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) return false;
+  S = 1.0 - cdf;
+  return true;
+}
+
 // what: 'f' density, 'F' CDF, 'S' survivor of the decision time tt.
 inline double exwald_log(double tt, double v, double B, double A, double s, double tau,
                          char what) {
@@ -173,6 +255,12 @@ inline double exwald_log(double tt, double v, double B, double A, double s, doub
   if (!(tau > 0.0) || !R_FINITE(1.0 / tau)) return wald_log(tt, vs, Bs, As, what);
   if (!R_FINITE(tau)) return (what == 'S') ? 0.0 : R_NegInf;
   const double lam = 1.0 / tau;
+  if (what == 'S' && As > 1e-12) {
+    double SD, pdf;
+    if (wald_surv_nat(tt, vs, Bs, As, SD) &&
+        exwald_pdf_nat(tt, vs, Bs, As, make_tilt(vs, lam), pdf))
+      return std::fmin(std::log(SD + tau * pdf), 0.0);
+  }
   const double lf = exwald_log_pdf_s1(tt, vs, Bs, As, lam);
   if (what == 'f') return lf;
   const double l_tf = std::log(tau) + lf;

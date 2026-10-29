@@ -47,6 +47,23 @@ inline std::complex<double> w(std::complex<double> z) {
   return 2.0 * p / (den * den) + 1.0 / (std::sqrt(M_PI) * den);
 }
 
+// w at two points in one pass: the Horner chains are interleaved, so their
+// latencies overlap.  Same arithmetic as w().
+inline void w2(std::complex<double> z1, std::complex<double> z2,
+               std::complex<double>& out1, std::complex<double>& out2) {
+  const WeidemanCoefs& c = weideman_coefs();
+  const std::complex<double> iz1(-z1.imag(), z1.real()), iz2(-z2.imag(), z2.real());
+  const std::complex<double> den1 = c.L - iz1, den2 = c.L - iz2;
+  const std::complex<double> Z1 = (c.L + iz1) / den1, Z2 = (c.L + iz2) / den2;
+  std::complex<double> p1 = c.a[WEIDEMAN_N - 1], p2 = p1;
+  for (int n = WEIDEMAN_N - 2; n >= 0; --n) {
+    p1 = p1 * Z1 + c.a[n];
+    p2 = p2 * Z2 + c.a[n];
+  }
+  out1 = 2.0 * p1 / (den1 * den1) + 1.0 / (std::sqrt(M_PI) * den1);
+  out2 = 2.0 * p2 / (den2 * den2) + 1.0 / (std::sqrt(M_PI) * den2);
+}
+
 }  // namespace faddeeva
 
 #endif
