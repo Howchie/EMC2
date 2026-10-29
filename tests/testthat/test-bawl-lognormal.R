@@ -364,9 +364,12 @@ test_that("the lognormal evidence scale is fixed by mu, B or A but not sigma", {
   # sampled scale that is the single direction mu += log c, B += log c,
   # A += log c; sigma is dimensionless and does NOT identify it, which is why
   # the normal model's constants = c(sv = log(1)) has no lognormal analogue.
+  # The default link adds each bound to exp(x), which breaks the exact shift,
+  # so the invariance is checked on the plain link.
   fx <- suppressMessages(bawl_logn_fixture(
     list(mean ~ lM, cv ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
-    c(mG = log(1), mK = log(1))))
+    c(mG = log(1), mK = log(1)),
+    model = plain_link(function() BAwL(drift_distribution = "lognormal"))))
   p <- c(mean = 0.9, mean_lMTRUE = 0.4, cv = log(0.6), B = log(0.8),
          B_Eneutral = 0.1, B_Eaccuracy = 0.3, A = log(0.3), t0 = log(0.15),
          k = log(0.8))

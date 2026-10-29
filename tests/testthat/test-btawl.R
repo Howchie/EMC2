@@ -870,8 +870,10 @@ test_that("pi = 0 and pi = 1 reproduce the dedicated wrappers exactly", {
   vals <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
             t0 = log(0.15), k = log(1), tau = log(0.6), tau_t = log(0.6),
             tau_s = log(0.6), pi = qnorm(0.5))
+  # The wrappers' k bounds differ (transient 1e-4, full 0), so the shared
+  # sampled values are compared on the plain link.
   ll_of <- function(model, form, consts) {
-    fx <- btawl_mk(model, form, consts, dat)
+    fx <- btawl_mk(plain_link(model), form, consts, dat)
     p <- vals[names(sampled_pars(fx$des))]
     btawl_ll(fx, p)
   }

@@ -61,12 +61,23 @@ context_args <- function(ctx, p) {
   )
 }
 
+# Sampled value of an exp-linked parameter that maps to `natural` under the
+# context's link (lower + exp(x)); 0 stays log(0), the link's exact endpoint.
+link_log <- function(ctx, nm, natural) {
+  lower <- ctx$emc$model()$transform$lower[[nm]]
+  ifelse(natural == 0, -Inf, log(natural - lower))
+}
+
+# With `ctx`, the values are natural under that context's link; without it,
+# they are written on the plain log scale.
 set_bawl_values <- function(p, rho = NULL, v = 1, sv = .8, B = 1.4,
-                            A = .2, t0 = .1, k = 0, mG = 1, mK = 1) {
+                            A = .2, t0 = .1, k = 0, mG = 1, mK = 1,
+                            ctx = NULL) {
   natural <- c(v = v, sv = sv, B = B, A = A, t0 = t0, k = k,
                mG = mG, mK = mK)
   for (nm in names(natural))
-    p[nm] <- if (nm == "v") natural[[nm]] else log(natural[[nm]])
+    p[nm] <- if (nm == "v") natural[[nm]] else if (is.null(ctx))
+      log(natural[[nm]]) else link_log(ctx, nm, natural[[nm]])
   if (!is.null(rho)) {
     rho_cols <- grep("^rho", names(p), value = TRUE)
     p[rho_cols] <- qnorm((rho + 1) / 2)
@@ -682,13 +693,13 @@ test_that("deep correlated tails cannot be clipped out of the LT normalizer", {
     v = 0, sv = 1, B = 1,
     A = 0.030779275315645185,
     t0 = 0.097614715654323642,
-    k = 0
+    k = 0, ctx = ctx
   )
   p[grep("^v_", names(p))] <- c(6.4443723104907464,
                                   13.5940250880196807)
-  p[grep("^sv_", names(p))] <- log(c(1, 0.7378597736000585))
-  p[grep("^B_", names(p))] <- log(c(0.0090435640900871743,
-                                      0.0074128563778103791))
+  p[grep("^sv_", names(p))] <- link_log(ctx, "sv", c(1, 0.7378597736000585))
+  p[grep("^B_", names(p))] <- link_log(ctx, "B", c(0.0090435640900871743,
+                                                   0.0074128563778103791))
 
   mapped <- mapped_pars_for(ctx, p)
   probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
@@ -736,13 +747,13 @@ test_that("exact events are not mixed with numeric tail normalizers", {
     v = 0, sv = 1, B = 1,
     A = 0.0070698181395739794,
     t0 = 0.12401134492672337,
-    k = 0
+    k = 0, ctx = ctx
   )
   p[grep("^v_", names(p))] <- c(-0.04111251202744759,
                                   3.5380510994426686)
-  p[grep("^sv_", names(p))] <- log(c(1, 0.21258668829489819))
-  p[grep("^B_", names(p))] <- log(c(0.00038913264797410112,
-                                      0.00098440384985433969))
+  p[grep("^sv_", names(p))] <- link_log(ctx, "sv", c(1, 0.21258668829489819))
+  p[grep("^B_", names(p))] <- link_log(ctx, "B", c(0.00038913264797410112,
+                                                   0.00098440384985433969))
 
   mapped <- mapped_pars_for(ctx, p)
   probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
@@ -872,9 +883,10 @@ test_that("ordinary pair trials stay on the exact routes", {
             Sys.setenv(EMC2_BAWLCORR_COUNTERS = old), add = TRUE)
   for (rho in c(-.8, .5)) {
     p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = rho,
-                         v = 0, sv = 1, B = .6, A = .5, t0 = .2, k = 0)
+                         v = 0, sv = 1, B = .6, A = .5, t0 = .2, k = 0,
+                         ctx = ctx)
     p[grep("^v_", names(p))] <- c(.5, 1.6)
-    p[grep("^sv_", names(p))] <- log(c(.9, .6))
+    p[grep("^sv_", names(p))] <- link_log(ctx, "sv", c(.9, .6))
     EMC2:::bawl_corr_counters_reset()
     got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
     counts <- EMC2:::bawl_corr_counter_values()

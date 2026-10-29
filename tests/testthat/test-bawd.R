@@ -774,7 +774,10 @@ test_that("omissions, truncation and censoring beyond T_max stay well posed", {
   e_fin_pc <- suppressMessages(make_emc(dat_fin, des_pc, type = "single",
                                         n_chains = 1, compress = FALSE,
                                         rt_resolution = NULL))
-  p_pc <- c(p, pContaminant = qnorm(0.05))[names(sampled_pars(des_pc))]
+  # pContaminant's link runs over its bound, so invert it to land on 0.05.
+  pc_bound <- BAwD()$bound$minmax[, "pContaminant"]
+  p_pc <- c(p, pContaminant = qnorm((0.05 - pc_bound[1]) / diff(pc_bound)))[
+    names(sampled_pars(des_pc))]
   expect_equal(bawd_ll(list(emc = e_fin_pc), p_pc),
                bawd_ll(list(emc = e_fin), p) + nrow(dat_fin) * log(0.95),
                tolerance = 1e-6)

@@ -565,8 +565,7 @@ The counters above only add evidence. An opponent counter also removes it. Accum
  X(u)=N_{+}(u)-N_{-}(u),\qquad X(0)=0,\qquad
  U_K=\inf\{u\geq0:X(u)\geq K\},\quad K=1,2,\ldots\label{eq:opponent}
 \end{equation}
-This is a continuous-time simple random walk, whose first-passage times have a long history \cite{Feller1971,Masuda1988}. Because $X$ is integer valued, Eq.~\eqref{eq:opponent} is a first passage only at integer $K$: for noninteger $K$ it is passage to $\lceil K\rceil$. Real criteria are introduced below through the criterion-indexed law of Eq.~\eqref{eq:opponent-laplace}, not through Eq.~\eqref{eq:opponent}.
-The negative stream acts within its own accumulator; it is not inhibition received from a competitor, and racing accumulators remain independent in the sense of Section~\ref{sec:race}. In an increment $\dd u$, $\E[\dd X]=(a-b)\dd u$ and $\Var(\dd X)=(a+b)\dd u$, so the net rate $v=a-b$ and the variance rate $D=a+b$ satisfy $D\geq|v|$. The difference of the rates sets the mean progress and their sum sets the within-trial fluctuation.
+This is a continuous-time simple random walk, whose first-passage times have a long history \cite{Feller1971,Masuda1988}. Because $X$ is integer valued, Eq.~\eqref{eq:opponent} is a first passage only at integer $K$: for noninteger $K$ it is passage to $\lceil K\rceil$. Real criteria are introduced below through the criterion-indexed law of Eq.~\eqref{eq:opponent-laplace}, not through Eq.~\eqref{eq:opponent}. The negative stream acts within its own accumulator; it is not inhibition received from a competitor, and racing accumulators remain independent in the sense of Section~\ref{sec:race}. In an increment $\dd u$, $\E[\dd X]=(a-b)\dd u$ and $\Var(\dd X)=(a+b)\dd u$, so the net rate $v=a-b$ and the variance rate $D=a+b$ satisfy $D\geq|v|$. The difference of the rates sets the mean progress and their sum sets the within-trial fluctuation.
 
 \subsection{First-passage law for a continuous criterion}
 Let $I_K$ denote the modified Bessel function of the first kind of real order $K>0$. For integer $K$ the first-passage subdensity of Eq.~\eqref{eq:opponent} is, and for real $K>0$ the continuous-criterion subdensity is defined to be,
@@ -636,8 +635,7 @@ so the onset is that of a Gamma counter with rate $a$; the negative stream first
 \begin{equation}
  f(u)\sim\frac{K(a/b)^{K/2}}{\sqrt{4\pi\sqrt{ab}}}\,u^{-3/2}\,\e^{-(\sqrt a-\sqrt b)^2u},\label{eq:opponent-tail}
 \end{equation}
-an exponentially tempered $u^{-3/2}$ tail whose rate $(\sqrt a-\sqrt b)^2$ vanishes at $a=b$.
-Integrating the Hankel expansion $\e^{-z}I_K(z)\sim(2\pi z)^{-1/2}\sum_k(-1)^k\alpha_k(K)z^{-k}$, $\alpha_k(K)=\prod_{j=1}^k\big(4K^2-(2j-1)^2\big)/(k!\,8^k)$, term by term over $(u,\infty)$ gives the survivor
+an exponentially tempered $u^{-3/2}$ tail whose rate $(\sqrt a-\sqrt b)^2$ vanishes at $a=b$. Integrating the Hankel expansion $\e^{-z}I_K(z)\sim(2\pi z)^{-1/2}\sum_k(-1)^k\alpha_k(K)z^{-k}$, $\alpha_k(K)=\prod_{j=1}^k\big(4K^2-(2j-1)^2\big)/(k!\,8^k)$, term by term over $(u,\infty)$ gives the survivor
 \begin{equation}
  S(u)\sim K\left(\frac ab\right)^{K/2}(2\pi z)^{-1/2}\sum_{k\geq0}(-1)^k\alpha_k(K)\,z^{-k}E_{3/2+k}(cu),\qquad z=2u\sqrt{ab},\quad c=(\sqrt a-\sqrt b)^2,\label{eq:opponent-hankel-survivor}
 \end{equation}

@@ -24,9 +24,11 @@ ratio_data <- function(n = 40, seed = 11) {
     rt = round(runif(n, 0.35, 1.4), 3))
 }
 
+# The charts are compared at plain natural values (k = r * mean), so neither
+# side may carry the bound offset of the default link.
 ratio_design <- function(dat, model, formula, constants = NULL) {
   utils::capture.output(des <- suppressMessages(design(
-    data = dat, model = model, matchfun = function(d) d$S == d$lR,
+    data = dat, model = plain_link(model), matchfun = function(d) d$S == d$lR,
     formula = formula, constants = constants)))
   des
 }
@@ -200,7 +202,7 @@ test_that("the ratio chart matches the trend engine's independent k = r * v", {
                    kernels = "poly2", bases = "identity",
                    phase = "posttransform", at = NULL)
   utils::capture.output(d_tr <- suppressMessages(design(
-    data = dat, model = function() BAwD(drift_distribution = "normal"),
+    data = dat, model = plain_link(function() BAwD(drift_distribution = "normal")),
     matchfun = function(d) d$S == d$lR,
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, ell ~ 1, k.d1 ~ 1),
     constants = c(sv = log(1), k = 0, k.d2 = 0),
