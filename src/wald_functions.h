@@ -1560,16 +1560,29 @@ inline bool dwald_k0_natural(double t, double b, double mu, double A, double& pd
   const double t1b = -(b    - t * mu) * (b    - t * mu) / (2.0 * t);
   const double t1  = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
 
-  const double t2a = 2.0 * pnorm_std(-b_lo / sqt + sqt * mu, true, false) - 1.0;
-  const double t2b = 2.0 * pnorm_std( b    / sqt - sqt * mu, true, false) - 1.0;
-  const double t2  = 0.5 * mu * (t2a + t2b);
+  // t2 = mu (Phi(z_hi) - Phi(z_lo)), z(d) = (d - mu t) / sqrt(t), taken as a
+  // difference of the tails on the side both z fall on, so it does not round
+  // to zero when both z are far out in the same tail.
+  const double z_lo = b_lo / sqt - sqt * mu, z_hi = b / sqt - sqt * mu;
+  double p_big, p_small;
+  if (z_lo >= 0.0) {
+    p_big = pnorm_std(-z_lo, true, false);
+    p_small = pnorm_std(-z_hi, true, false);
+  } else if (z_hi <= 0.0) {
+    p_big = pnorm_std(z_hi, true, false);
+    p_small = pnorm_std(z_lo, true, false);
+  } else {
+    p_big = 1.0 - pnorm_std(-z_hi, true, false);
+    p_small = pnorm_std(z_lo, true, false);
+  }
+  const double t2 = mu * (p_big - p_small);
 
   const double sum = t1 + t2;
   if (!emc2_isfinite(sum)) return false;
   pdf = sum * inv_A;
   if (b_lo < 0.0) return true;  // outside supported b >= A regime: legacy value
   if (!(sum > 0.0)) return false;                    // underflow or sign loss
-  if (sum <= EMC2_NAT_REL_CANCEL * (std::fabs(t1) + std::fabs(t2)))
+  if (sum <= EMC2_NAT_REL_CANCEL * (std::fabs(t1) + std::fabs(mu) * p_big))
     return false;                                    // cancellation
   return true;
 }
