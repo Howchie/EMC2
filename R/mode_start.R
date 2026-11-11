@@ -896,14 +896,17 @@
     prior <- .emc_burn_subject_prior(emc[[j]], s)
     key <- .emc_subject_fit_key(emc[[j]], s, prior,
                                 .emc_laplace_prior_scale)
+    warm_start_only <- .emc_subject_fit_cache_warm_start(emc[[j]])
     max_reuses <- .emc_subject_fit_cache_max_reuses(emc[[j]])
     force_refresh <- .emc_subject_fit_refresh_due(
-      emc[[j]], s, key, max_reuses)
+      emc[[j]], s, key, max_reuses) || warm_start_only
     lookup <- .emc_subject_fit_lookup(
-      emc[[j]], s, key, force_refresh = force_refresh)
+      emc[[j]], s, key, force_refresh = force_refresh,
+      warm_start_on_refresh = warm_start_only)
     list(hit = lookup$hit, result = lookup$result,
          warm_start = lookup$warm_start, key = key, prior = prior,
-         reuse_count = lookup$reuse_count)
+         reuse_count = lookup$reuse_count,
+         warm_start_only = warm_start_only)
   })
   # Each refresh checks the Laplace fit under the current group state.
   # Probe draws advance the subject stream before subsequent transitions.
@@ -918,7 +921,8 @@
          current_alpha = as.numeric(
            chain$samples$alpha[, s, chain$samples$idx]),
          proposal_prior_scale = .emc_laplace_prior_scale,
-         check_entries = chain$laplace_check_cache[[s]],
+         check_entries = if (isTRUE(info$warm_start_only)) NULL else
+           chain$laplace_check_cache[[s]],
          config = chain$likelihood_cache_version$config,
          pooled = if (is.null(chain$pooled)) NULL else chain$pooled$value,
          par_names = rownames(chain$samples$alpha),

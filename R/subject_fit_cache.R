@@ -79,6 +79,12 @@
   if (identical(model_name, "REXG")) Inf else 0L
 }
 
+# Refit the exact cached conditioning state, using its previous mode only as
+# the optimizer start. The Laplace diagnostic still runs with fresh draws.
+.emc_subject_fit_cache_warm_start <- function(sampler) {
+  isTRUE(getOption("emc2.subject_fit_cache_warm_start", FALSE))
+}
+
 .emc_subject_fit_key <- function(chain, subject, prior, proposal_prior_scale) {
   version <- chain$likelihood_cache_version
   if (!is.list(version) || is.null(version$config)) return(NULL)
@@ -102,7 +108,8 @@
   reuse_count >= max_reuses
 }
 
-.emc_subject_fit_lookup <- function(chain, subject, key, force_refresh = FALSE) {
+.emc_subject_fit_lookup <- function(chain, subject, key, force_refresh = FALSE,
+                                    warm_start_on_refresh = FALSE) {
   if (is.null(key) || length(chain$subject_fit_cache) < subject)
     return(list(hit = FALSE, result = NULL, warm_start = NULL,
                 reuse_count = 0L))
@@ -123,11 +130,15 @@
                 warm_start = entry$result$alpha,
                 reuse_count = reuse_count))
   }
-  warm_start <- if (!isTRUE(force_refresh) &&
-                    identical(entry$key$config, key$config) &&
-                    .emc_usable_mode(entry$result) &&
-                    length(entry$result$alpha) == length(key$prior_mu))
-    entry$result$alpha else NULL
+  warm_start <- NULL
+  if (isTRUE(force_refresh) && isTRUE(warm_start_on_refresh) && exact) {
+    warm_start <- entry$result$alpha
+  } else if (!isTRUE(force_refresh) &&
+             identical(entry$key$config, key$config) &&
+             .emc_usable_mode(entry$result) &&
+             length(entry$result$alpha) == length(key$prior_mu)) {
+    warm_start <- entry$result$alpha
+  }
   list(hit = FALSE, result = NULL, warm_start = warm_start,
        reuse_count = if (exact) reuse_count else 0L)
 }
