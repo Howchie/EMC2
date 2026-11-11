@@ -148,9 +148,20 @@ replays, all four recorded job batches stayed parallel: they contained 40, 65
 or 120 jobs, and predicted serial work was 2.7–3.9 times the parallel estimate.
 The whole-fit fixture therefore validates the no-regression path but does not
 exercise serial selection. Candidate wall time, CPU and minor faults were also
-within run-to-run variation (raw records in
-`results/step3_dispatch/`). A focused small/uneven likelihood workload is still
-needed to establish a benefit before calling Step 3 complete.
+within run-to-run variation (raw records in `results/step3_dispatch/`).
+
+A targeted cached EXG refresh now exercises the serial route. After one real
+refresh populated the fit/check caches and eight parallel refreshes calibrated
+the fork cost, ten paired measurements per seed compared the same three-chain,
+one-subject state on each route. Median cached-refresh time was 13.5–16 ms
+through forks and 1.5–2 ms serially (6.75–10.67x); the predicted serial cost
+was about 5 ms against a 14 ms parallel makespan. Samples, RNG and all compared
+continuation fields were identical for seeds 101, 202 and 303. This is a
+focused dispatch win of roughly 12–14 ms per cached refresh, not a claim of a
+large whole-fit speedup. The large hierarchical fixture remains on the
+parallel route, where the measured serial estimate was 2.7–3.9 times higher.
+Step 3 passes its no-regression and targeted-benefit gates. Raw timing pairs
+are in `results/step3_dispatch_cached/`.
 
 The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
 warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.
