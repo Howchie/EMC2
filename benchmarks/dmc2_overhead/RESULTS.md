@@ -213,10 +213,25 @@ boundary. On a saved EXG chain, the serialized message was 26,612 bytes versus
 the retained setup reproduced the complete sampler under `all.equal`. A local
 100-round probe took 0.008 s to serialize and 0.015 s to serialize plus
 deserialize the message. These are codec feasibility measurements only; chain
-process persistence and its end-to-end speed or memory effects are not yet
-implemented or measured. The focused worker-pool test selection passed 263
-expectations; two backend-specific tests were skipped and the existing
-intentional recycling-failure test emitted its warning.
+process persistence is now available as the opt-in
+`options(emc2.persistent_chains = TRUE)` for Unix fits with
+`cores_per_chain = 1`. A synthetic three-chain, 30-block replay was 3.12x faster
+at the median than forking on every block, including process-pool startup and
+shutdown, with identical final state.
+
+The end-to-end gate resumed the same saved EXG state for 60 transitions in
+three 20-transition blocks, with three active chains. Across seeds 101, 202
+and 303, fork-per-block times were 1.108, 1.133 and 1.071 s; persistent-chain
+times were 0.755, 0.737 and 0.724 s (mean speedup 1.50x). All samples, RNG
+streams, caller RNG and compared continuation fields were identical in every
+pair. On the seed-101 resource run, whole-tree minor faults fell from 218,884
+to 151,087 (31%), system CPU from 0.93 to 0.60 s (35%), and peak RSS from
+262,128 to 256,888 KiB. The focused worker-pool tests passed 277 expectations;
+two backend-specific tests were skipped and the existing intentional
+recycling-failure test emitted its warning. The feature remains opt-in until
+the persistent worker, allocation, failure-recovery and 50-block memory gates
+below are complete. Raw fits and resource records are under
+`results/step5_chain/`; `chain_persistence.R` runs each fixed-transition arm.
 
 ### Step 2: conditional subject-fit cache
 

@@ -44,6 +44,70 @@ test_that("chain continuation messages retain immutable setup and round-trip", {
                "invalid persistent-chain state")
 })
 
+test_that("chain processes keep their state and obey the active-chain limit", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  runner <- function(sampler, increment = 1L, delay = 0) {
+    sampler$started <- as.numeric(Sys.time())
+    if (delay > 0) Sys.sleep(delay)
+    sampler$ended <- as.numeric(Sys.time())
+    sampler$count <- sampler$count + increment
+    sampler$samples$idx <- sampler$samples$idx + increment
+    sampler
+  }
+  make_sampler <- function(i) structure(
+    list(data = i, model = identity, prior = list(), count = 0L,
+         samples = list(idx = 0L)), class = "pmwgs")
+  pool <- EMC2:::.emc_chain_process_pool_start(
+    list(make_sampler(1L), make_sampler(2L)), runner)
+  skip_if(is.null(pool), "could not start persistent chain processes")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(pool), add = TRUE)
+  pids <- vapply(pool$workers, function(w) w$job$pid, integer(1))
+  expect_true(all(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  first <- EMC2:::.emc_chain_process_pool_run(
+    pool, list(make_sampler(1L), make_sampler(2L)),
+    args = list(increment = 2L, delay = 0.02), max_active = 1L)
+  expect_identical(vapply(first, `[[`, integer(1), "count"), c(2L, 2L))
+  expect_identical(vapply(first, function(x) x$samples$idx, integer(1)),
+                   c(2L, 2L))
+  expect_gte(first[[2L]]$started, first[[1L]]$ended)
+  expect_true(all(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  second <- EMC2:::.emc_chain_process_pool_run(
+    pool, first, args = list(increment = 3L, delay = 0), max_active = 2L)
+  expect_identical(vapply(second, `[[`, integer(1), "count"), c(5L, 5L))
+  expect_true(all(vapply(pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+  expect_true(EMC2:::.emc_chain_process_pool_stop(pool))
+  on.exit(NULL)
+})
+
+test_that("persistent chain execution matches block-fork execution", {
+  skip_on_os("windows")
+  skip_on_cran()
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:2], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR,
+                formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_once <- function(persistent) {
+    RNGkind("L'Ecuyer-CMRG"); set.seed(42)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 2, compress = TRUE))
+    withr::local_options(list(emc2.persistent_chains = persistent))
+    suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
+      cores_per_chain = 1, step_size = 4, max_tries = 1, verbose = FALSE,
+      particle_factor = 10, stop_criteria = list(iter = 8)))
+  }
+  baseline <- fit_once(FALSE)
+  persistent <- fit_once(TRUE)
+  for (j in seq_along(baseline)) {
+    expect_identical(persistent[[j]]$samples$alpha,
+                     baseline[[j]]$samples$alpha)
+    expect_identical(persistent[[j]]$rng, baseline[[j]]$rng)
+    expect_identical(persistent[[j]]$samples$idx,
+                     baseline[[j]]$samples$idx)
+  }
+})
+
 test_that("subject cost proxies the rows the likelihood loops over", {
   d <- list(data.frame(a = 1:10), data.frame(a = 1:3))
   expect_equal(EMC2:::.emc_subject_cost(d), c(10, 3))

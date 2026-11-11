@@ -35,6 +35,212 @@
   out
 }
 
+.emc_chain_process_serve <- function(req, ans, sampler, runner) {
+  if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
+    return(invisible(NULL))
+  rc <- fifo(req, "rb", blocking = TRUE)
+  wc <- fifo(ans, "wb", blocking = TRUE)
+  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
+          add = TRUE)
+  .emc_wpool_send(wc, list(ready = TRUE, pid = Sys.getpid()))
+  repeat {
+    msg <- .emc_wpool_recv(rc)
+    if (is.null(msg)) break
+    if (identical(msg$command, "stop")) {
+      .emc_wpool_send(wc, list(id = msg$id, stopped = TRUE))
+      break
+    }
+    warnings <- character()
+    result <- tryCatch(withCallingHandlers({
+      sampler <- .emc_chain_state_apply(sampler, msg$state)
+      sampler <- do.call(runner, c(list(sampler = sampler), msg$args))
+      list(state = .emc_chain_state_pack(sampler))
+    }, warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }), error = identity)
+    reply <- if (inherits(result, "error")) {
+      list(id = msg$id, error = result, warnings = warnings)
+    } else {
+      list(id = msg$id, state = result$state, warnings = warnings)
+    }
+    sent <- .emc_wpool_send(wc, reply)
+    if (!is.null(msg$done) && sent) {
+      try(file.create(msg$done), silent = TRUE)
+    }
+    if (!sent || inherits(result, "error")) break
+  }
+  invisible(NULL)
+}
+
+.emc_chain_run_stage <- function(sampler, ...) {
+  sampler <- .emc_set_sampler_rng(sampler)
+  run_stages(sampler, ...)
+}
+
+.emc_chain_process_start <- function(sampler, runner = .emc_chain_run_stage,
+                                     slot = NULL) {
+  if (Sys.info()[["sysname"]] == "Windows" || !nzchar(Sys.which("mkfifo")))
+    return(NULL)
+  dir <- tempfile("emc_chain_")
+  if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
+  req <- file.path(dir, "req")
+  ans <- file.path(dir, "ans")
+  made <- tryCatch(system2("mkfifo", shQuote(c(req, ans)),
+                           stdout = FALSE, stderr = FALSE),
+                   warning = function(e) 1L, error = function(e) 1L)
+  if (!identical(as.integer(made), 0L)) {
+    unlink(dir, recursive = TRUE)
+    return(NULL)
+  }
+  wc <- rc <- NULL
+  job <- NULL
+  success <- FALSE
+  on.exit({
+    if (!success) {
+      for (cn in list(wc, rc)) if (!is.null(cn)) try(close(cn), silent = TRUE)
+      if (!is.null(job)) .emc_wpool_terminate_jobs(list(job), wait = TRUE)
+      unlink(dir, recursive = TRUE)
+    }
+  }, add = TRUE)
+
+  old_slot <- .emc_pool_state$session_slot
+  .emc_pool_state$session_slot <- slot
+  on.exit(.emc_pool_state$session_slot <- old_slot, add = TRUE)
+  serve <- .emc_armed(function() .emc_chain_process_serve(req, ans, sampler,
+                                                          runner))
+  job <- tryCatch(parallel::mcparallel(serve(), detached = FALSE),
+                  error = function(e) NULL)
+  .emc_pool_state$session_slot <- old_slot
+  if (is.null(job)) return(NULL)
+
+  f <- NULL
+  deadline <- proc.time()[["elapsed"]] + 20
+  wait <- 0.0002
+  repeat {
+    if (!.emc_wpool_pid_alive(job$pid)) break
+    f <- tryCatch(suppressWarnings(fifo(req, "wb", blocking = FALSE)),
+                  error = function(e) NULL)
+    if (!is.null(f) || proc.time()[["elapsed"]] > deadline) break
+    Sys.sleep(wait)
+    wait <- min(wait * 2, 0.01)
+  }
+  if (is.null(f)) return(NULL)
+  wc <- fifo(req, "wb", blocking = TRUE)
+  close(f)
+  rc <- fifo(ans, "rb", blocking = FALSE)
+  alive <- local({ j <- job; function() .emc_wpool_pid_alive(j$pid) })
+  ready <- .emc_wpool_recv(rc, deadline = 20, alive = alive)
+  if (!isTRUE(ready$ready) || !identical(as.integer(ready$pid), job$pid))
+    return(NULL)
+  success <- TRUE
+  list(dir = dir, job = job, wc = wc, rc = rc, next_id = 0L)
+}
+
+.emc_chain_process_stop <- function(worker) {
+  if (is.null(worker)) return(invisible(NULL))
+  pid <- .emc_wpool_job_pid(worker$job)
+  stopped <- FALSE
+  if (!is.na(pid) && .emc_wpool_pid_alive(pid)) {
+    id <- worker$next_id + 1L
+    if (.emc_wpool_send(worker$wc, list(command = "stop", id = id))) {
+      reply <- .emc_wpool_recv(worker$rc, deadline = 2,
+                               alive = function() .emc_wpool_pid_alive(pid))
+      stopped <- isTRUE(reply$stopped)
+    }
+  }
+  for (cn in list(worker$wc, worker$rc)) try(close(cn), silent = TRUE)
+  .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE, terminate = FALSE)
+  unlink(worker$dir, recursive = TRUE)
+  invisible(stopped)
+}
+
+.emc_chain_process_pool_start <- function(samplers, runner = .emc_chain_run_stage,
+                                          slots = NULL) {
+  if (is.null(slots)) slots <- vector("list", length(samplers))
+  if (length(slots) != length(samplers))
+    stop("one process slot is required per chain", call. = FALSE)
+  workers <- vector("list", length(samplers))
+  ok <- FALSE
+  on.exit(if (!ok) for (w in workers) .emc_chain_process_stop(w), add = TRUE)
+  for (i in seq_along(samplers)) {
+    workers[[i]] <- .emc_chain_process_start(samplers[[i]], runner,
+                                              slot = slots[[i]])
+    if (is.null(workers[[i]])) return(NULL)
+  }
+  ok <- TRUE
+  list(workers = workers, next_id = 0L)
+}
+
+.emc_chain_process_pool_stop <- function(pool) {
+  if (is.null(pool)) return(invisible(NULL))
+  stopped <- vapply(pool$workers, function(w)
+    isTRUE(.emc_chain_process_stop(w)), logical(1))
+  invisible(all(stopped))
+}
+
+.emc_chain_process_pool_run <- function(pool, samplers, args = list(),
+                                        max_active = length(samplers)) {
+  if (is.null(pool) || length(pool$workers) != length(samplers))
+    stop("persistent chain process pool is unavailable", call. = FALSE)
+  max_active <- max(1L, min(length(samplers), as.integer(max_active)))
+  out <- vector("list", length(samplers))
+  pending <- seq_along(samplers)
+  active <- integer()
+  ids <- integer(length(samplers))
+  submit <- function(i) {
+    worker <- pool$workers[[i]]
+    pool$next_id <- pool$next_id + 1L
+    id <- pool$next_id
+    marker <- file.path(worker$dir, paste0("done_", id))
+    unlink(marker)
+    ok <- .emc_wpool_send(worker$wc, list(
+      command = "run", id = id, done = marker,
+      state = .emc_chain_state_pack(samplers[[i]]), args = args))
+    if (!ok) stop(.emc_wpool_transport_error("chain request send failed"),
+                   call. = FALSE)
+    ids[i] <<- id
+    active <<- c(active, i)
+  }
+  while (length(pending) && length(active) < max_active) {
+    i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
+  }
+  while (length(active)) {
+    finished <- active[vapply(active, function(i) {
+      file.exists(file.path(pool$workers[[i]]$dir,
+                            paste0("done_", ids[i])))
+    }, logical(1))]
+    if (!length(finished)) {
+      dead <- active[!vapply(active, function(i)
+        .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
+      if (length(dead)) stop("persistent chain process exited without a reply",
+                             call. = FALSE)
+      Sys.sleep(0.001)
+      next
+    }
+    for (i in finished) {
+      worker <- pool$workers[[i]]
+      reply <- .emc_wpool_recv(
+        worker$rc, deadline = .emc_wpool_deadline(),
+        alive = local({ pid <- worker$job$pid
+          function() .emc_wpool_pid_alive(pid) }))
+      if (is.null(reply) || !identical(as.integer(reply$id), ids[i]))
+        stop(.emc_wpool_transport_error("invalid persistent-chain reply"),
+             call. = FALSE)
+      for (msg in reply$warnings) warning(msg, call. = FALSE)
+      if (inherits(reply$error, "error")) stop(reply$error)
+      if (is.null(reply$state))
+        stop("persistent chain returned no continuation state", call. = FALSE)
+      out[[i]] <- .emc_chain_state_apply(samplers[[i]], reply$state)
+      active <- active[active != i]
+      if (length(pending)) {
+        next_i <- pending[[1L]]; pending <- pending[-1L]; submit(next_i)
+      }
+    }
+  }
+  out
+}
+
 .emc_wpool_degraded <- function(msg) {
   .emc_pool_state$last_error <- msg
   if (!isTRUE(.emc_pool_state$warned)) {

@@ -152,12 +152,25 @@ run_emc <- function(emc, stage, stop_criteria,
   # at once, or one shared when they run one after another.
   pool_slots <- if (cores_for_chains >= length(emc)) length(emc)
                 else if (cores_for_chains <= 1L) 1L else 0L
+  pool_session <- NULL
+  chain_process_pool <- NULL
+  persistent_chain_requested <- isTRUE(getOption("emc2.persistent_chains", FALSE))
+  persistent_chain_supported <- persistent_chain_requested &&
+    .Platform$OS.type == "unix" && cores_per_chain == 1L
+  if (persistent_chain_requested && !persistent_chain_supported) {
+    warning("Persistent chain processes currently require a Unix fit with ",
+            "cores_per_chain = 1; using the existing chain runner.",
+            call. = FALSE)
+  }
+  on.exit({
+    .emc_chain_process_pool_stop(chain_process_pool)
+    .emc_wpool_session_stop(pool_session)
+  }, add = TRUE)
   pool_session <- if (cores_per_chain > 1L && pool_slots > 0L) {
     .emc_wpool_session_start(
       list(data = emc[[1L]]$data,
            model = .emc_wpool_slim_model(emc[[1L]]$model)), pool_slots)
   } else NULL
-  on.exit(.emc_wpool_session_stop(pool_session), add = TRUE)
   block_no <- 0L
   while(!progress$done){
     block_no <- block_no + 1L
@@ -205,20 +218,42 @@ run_emc <- function(emc, stage, stop_criteria,
       attr(sub_emc[[j]], "emc_pool_slot") <-
         .emc_wpool_session_slot(pool_session, min(j, pool_slots))
     }
-    sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
-                             outer_slot <- .emc_pool_state$session_slot
-                             on.exit(.emc_pool_state$session_slot <- outer_slot,
-                                     add = TRUE)
-                             .emc_pool_state$session_slot <- attr(sampler, "emc_pool_slot")
-                             attr(sampler, "emc_pool_slot") <- NULL
-                             sampler <- .emc_set_sampler_rng(sampler)
-                             run_stages(sampler, ...)
-                           }, stage = stage, iter= stage_iter,
-                             verbose=verbose,  verboseProgress = verboseProgress,
-                             particle_factor=particle_factor,search_width=search_width,
-                             n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                             r_cores = r_cores, core_ctl = core_ctl,
-                             mc.preschedule = FALSE, mc.set.seed = FALSE)
+    if (persistent_chain_supported) {
+      for (j in seq_along(sub_emc)) attr(sub_emc[[j]], "emc_pool_slot") <- NULL
+      if (is.null(chain_process_pool)) {
+        chain_process_pool <- .emc_chain_process_pool_start(sub_emc)
+        if (is.null(chain_process_pool)) {
+          warning("Could not start persistent chain processes; using the ",
+                  "existing chain runner for this fit.", call. = FALSE)
+          persistent_chain_supported <- FALSE
+        }
+      }
+    }
+    if (persistent_chain_supported) {
+      sub_emc <- .emc_chain_process_pool_run(
+        chain_process_pool, sub_emc,
+        args = list(stage = stage, iter = stage_iter,
+                    verbose = verbose, verboseProgress = verboseProgress,
+                    particle_factor = particle_factor,
+                    search_width = search_width, n_cores = cores_per_chain,
+                    r_cores = r_cores, core_ctl = core_ctl),
+        max_active = cores_for_chains)
+    } else {
+      sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
+                               outer_slot <- .emc_pool_state$session_slot
+                               on.exit(.emc_pool_state$session_slot <- outer_slot,
+                                       add = TRUE)
+                               .emc_pool_state$session_slot <- attr(sampler, "emc_pool_slot")
+                               attr(sampler, "emc_pool_slot") <- NULL
+                               sampler <- .emc_set_sampler_rng(sampler)
+                               run_stages(sampler, ...)
+                             }, stage = stage, iter= stage_iter,
+                               verbose=verbose,  verboseProgress = verboseProgress,
+                               particle_factor=particle_factor,search_width=search_width,
+                               n_cores=cores_per_chain, mc.cores = cores_for_chains,
+                               r_cores = r_cores, core_ctl = core_ctl,
+                               mc.preschedule = FALSE, mc.set.seed = FALSE)
+    }
     if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
     sample_elapsed <- proc.time()[["elapsed"]] - sample_started
     concat_started <- proc.time()[["elapsed"]]
