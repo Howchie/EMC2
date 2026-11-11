@@ -1,0 +1,61 @@
+# Overhead baseline and PSIS warming, 2026-11-11
+
+Baseline `7e161f75`; warming candidate `0c4d5112`. Frozen isolated R
+installations, R 4.6.1, GCC 13, CPU affinity 0–26, OMP/OpenBLAS/MKL thread
+counts 1, machine benchmark lock. Build logs, session information, raw fitted
+objects and profiles are retained in the ignored `results/` directory. Data
+are generated with seed 123; sampler seeds are 101, 202 and 303. See
+`PROTOCOL.md` for exact stopping criteria and the proposed later-step gates.
+
+| Fixture | Baseline elapsed (s) | Warmed elapsed (s) | Comparison |
+|---|---:|---:|---|
+| EXG default fit, 3 seeds | 21.797, 22.554, 23.058 | 17.025, 17.029, 17.042 | Samples, RNG and compared continuation fields identical |
+| LNR default fit, 3 seeds | 104.929, 105.700, 107.337 | 101.444, 102.699, 101.955 | Samples, RNG and compared continuation fields identical |
+| EXG fixed transitions, 3 seeds | 20.556, 20.538, 20.802 | 16.774, 16.539, 16.782 | Samples, chain/caller RNG and compared continuation fields identical |
+| LNR fixed transitions, 3 seeds | 134.651, 133.838, 135.893 | 131.864, 132.119, 132.900 | Samples, chain/caller RNG and compared continuation fields identical |
+| EXG precision target, 3 seeds | 21.313, 21.070, 21.064 | 16.785, 17.031, 16.785 | Target reached at 400 draws/chain for every run |
+| LNR precision target, 3 seeds | 148.668, 134.675, 134.609 | 145.943, 131.603, 131.334 | Target reached at 500, 400, 400 draws/chain in both arms |
+| Single-subject likelihood pool | 60.795 | 56.989 | Samples, RNG and compared continuation fields identical |
+| Hierarchical forced rebuild, partial concurrency | 81.975 | 82.126 | Draws and RNG identical; cost state differs |
+| Pooled, ordinary allocator | 91.577 | 88.083 | Draws, RNG and allocator state differ |
+| Pooled, fixed allocation | 126.176 | 120.488 | Draws and RNG identical; cost state differs |
+
+The fixed-transition runs use 50 preburn, 200 burn, 200 adapt, and 400 sample
+iterations. The precision target requires minimum alpha ESS above 800 and at
+least 400 sample iterations. Paired precision runs stopped at the same draw
+counts with the same ESS. Individual quantiles, quantile MCSE, minimum bulk and
+tail ESS per draw, and ESS per second are in `results/comparison.txt`; the default-fit equivalents
+are in `results/default_comparison.txt`. The EXG baseline default fit reproduces
+the plan's approximately 22.5 s starting measurement.
+
+A pooled baseline-versus-baseline repeat also changed all chains' samples and
+RNG streams. Holding the allocation fixed restored baseline/candidate draw and
+RNG identity. The hierarchical baseline also differs from itself in allocator
+and HMC cost fields, even when draws and RNG are identical. Thus the plan's
+literal continuation-state identity gate is **not met**: these timing inputs
+are mutable and affect future allocation. The fixed-allocation experiment
+isolates the transition comparison but does not validate ordinary allocation.
+Do not treat this as an accepted Step 1 gate or start further optimization on
+the assumption that it passed. The warming change was reverted from the working
+branch in `0388ad22`; the measured candidate remains at `0c4d5112`.
+
+The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
+warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.
+The separate instrumented EXG runs each had 913 likelihood batch calls (12,786
+rows), 21 optimizations, 773 objective and 115 gradient evaluations. An
+`strace` run counted 87 `clone` calls in each arm; traced startup timing is not
+comparable to ordinary timings. `/usr/bin/time` recorded 2.65–2.66 million minor
+faults in the three baseline EXG fixed runs and 1.33–1.37 million warmed.
+Sampled process-tree peaks were about 977 MiB PSS / 833 MiB private before and
+879 MiB / 696 MiB after; 0.1 s sampling misses short-lived processes and bins
+are approximate. These patterns are consistent with less child startup and
+copy-on-write work, not proof of a causal breakdown.
+
+The analytic two-mode target has exact right-mode probability 0.5. A short
+custom-model fit produced identical paired draws and RNG, with 0.463 of draws
+in the right mode (indicator MCSE 0.024, bulk ESS 416, rank R-hat 1.008);
+this is a coverage probe, not evidence of accurate mode weights. The target is
+an analytic test distribution, not a generative model for the supplied data. The custom-model initialization fallback and the one-subject pool also
+matched in the paired checks. Hierarchical profiles showed worker growth above
+the initial allocation, but the sampled profile is not a proof of peak total
+core usage or reclamation at a subsequent block.
