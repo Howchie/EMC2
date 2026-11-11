@@ -180,6 +180,21 @@ resource records and the reproducible runner/analyzer are in
 `results/step4b_simd_live/`, `results/step4b_simd_fit_live/`,
 `run_step4b_simd_fit_gate.sh` and `analyse_step4b_simd_fit_gate.R`.
 
+A follow-up gathered the common density rows into a separate compute loop and
+used GCC 13's vectorization report to verify actual SIMD generation (64-byte
+and 32-byte vectors). Kernel outputs differed by at most 4.55e-13, but median
+time rose from 11 ms to 12 ms on the 704-row by 256-particle fixture. The
+six-seed fit gate also regressed: baseline/candidate elapsed times were
+8.993/9.004, 8.997/9.020, 8.743/9.257, 8.750/9.248, 8.746/9.248 and
+8.754/9.249 seconds. Geometric speedup was 0.963x [0.935, 0.991]. Quantile
+differences remained negligible (largest 2.83e-6 combined MCSE), and bulk and
+tail ESS ratios were approximately 1. The gather/compute/scatter candidate was
+therefore reverted; the prepared one-tuple path above remains, since its
+separate six-seed gate showed a 1.097x fit speedup. In the current source, the
+SIMD pragma on that prepared loop does not make GCC vectorize the density or
+survivor loop. Raw records and compiler diagnostics are under
+`results/step4b_true_simd_{kernel,direct_kernel,fit}/`.
+
 An exploratory prepared log-survivor formula (`log S(t) - log S(0)`) was also
 checked against the current stable `ptexg` path. It differed by at most
 2.27e-13 in the raw likelihood vector, tied in the 704-row kernel call (11 ms
