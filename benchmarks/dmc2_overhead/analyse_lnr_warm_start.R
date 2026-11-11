@@ -30,7 +30,8 @@ summarise_fit <- function(fit) {
   list(chains = chains, n = n, stats = stats)
 }
 
-base_times <- new_times <- time_ratios <- bulk_ratios <- tail_ratios <- numeric()
+base_times <- new_times <- time_ratios <- bulk_ratios <- tail_ratios <-
+  bulk_sec_ratios <- tail_sec_ratios <- numeric()
 for (seed in seeds) {
   prefix <- file.path(root, paste0("LNR_", seed))
   base <- readRDS(paste0(prefix, "_base_precision.rds"))
@@ -60,6 +61,12 @@ for (seed in seeds) {
   tail_ratios <- c(tail_ratios,
     (min(sn$stats$ess_tail) / (sn$n * length(sn$chains))) /
       (min(sb$stats$ess_tail) / (sb$n * length(sb$chains))))
+  bulk_sec_ratios <- c(bulk_sec_ratios,
+    (min(sn$stats$ess_bulk) / new$timing[["elapsed"]]) /
+      (min(sb$stats$ess_bulk) / base$timing[["elapsed"]]))
+  tail_sec_ratios <- c(tail_sec_ratios,
+    (min(sn$stats$ess_tail) / new$timing[["elapsed"]]) /
+      (min(sb$stats$ess_tail) / base$timing[["elapsed"]]))
   base_times <- c(base_times, base$timing[["elapsed"]])
   new_times <- c(new_times, new$timing[["elapsed"]])
   time_ratios <- c(time_ratios, base$timing[["elapsed"]] /
@@ -96,8 +103,9 @@ time_ci <- exp(mean(log(time_ratios)) + c(-1, 1) *
 cat("paired time speedup geometric mean", exp(mean(log(time_ratios))),
     "95% t interval", time_ci[[1L]], time_ci[[2L]],
     "seed ratios", time_ratios, "\n")
-for (kind in c("bulk", "tail")) {
-  x <- if (kind == "bulk") bulk_ratios else tail_ratios
+for (kind in c("bulk", "tail", "bulk_s", "tail_s")) {
+  x <- switch(kind, bulk = bulk_ratios, tail = tail_ratios,
+              bulk_s = bulk_sec_ratios, tail_s = tail_sec_ratios)
   ci <- exp(mean(log(x)) + c(-1, 1) *
     qt(.975, df = length(x) - 1L) * sd(log(x)) / sqrt(length(x)))
   cat(kind, "ESS minimum ratio geometric mean", exp(mean(log(x))),

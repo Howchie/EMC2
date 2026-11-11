@@ -28,10 +28,13 @@ options(emc2.fit_host = Sys.getenv('HOST', '1') == '1',
 emc <- make_emc(dat, des, type = 'single', n_chains = 3, rt_resolution = .001)
 initial_seed <- .Random.seed
 start <- proc.time()
+rprof_out <- Sys.getenv('RPROF_OUT', '')
+if (nzchar(rprof_out)) utils::Rprof(rprof_out, interval = .01)
 fit_result <- suppressWarnings(fit(emc, verbose = FALSE, cores_per_chain = 1,
   cores_for_chains = as.integer(Sys.getenv('CHAINS', '3')), step_size = 100,
   stop_criteria = list(preburn = list(iter = 50), burn = list(iter = 200),
                        adapt = list(iter = 200, min_unique = 1), sample = list(iter = 400))))
+if (nzchar(rprof_out)) utils::Rprof(NULL)
 timing <- proc.time() - start
 blocks <- EMC2:::.emc_block_profile()
 iterations <- EMC2:::.emc_iteration_profile()
@@ -40,3 +43,10 @@ saveRDS(list(blocks = blocks, iterations = iterations, fit = fit_result, initial
              session = sessionInfo(), options = options()[c('emc2.fit_host','emc2.sampler_profile')]),
         Sys.getenv('OUT'))
 cat('case', kind, 'seed', seed, 'timing', timing, '\n')
+if (nzchar(rprof_out)) {
+  profile <- summaryRprof(rprof_out, memory = 'none')
+  cat('Rprof by self:\n')
+  print(utils::head(profile$by.self, 30L))
+  cat('Rprof by total:\n')
+  print(utils::head(profile$by.total, 30L))
+}

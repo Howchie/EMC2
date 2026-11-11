@@ -478,6 +478,9 @@ streams; caller RNG differed in two of the fourteen pairs. One pair ran in
 reverse arm order as a timing-order check. Raw fits are in
 `results/step2_lnr_warm_start_precision/`; run
 `analyse_lnr_warm_start.R` with the same seed list to reproduce the summary.
+Minimum ESS-per-second ratios were 0.982 [0.888, 1.085] for bulk and
+1.035 [0.874, 1.226] for tail; these also include no change and miss the 0.90
+lower-bound gate, so they do not support promoting the option.
 
 The analytic bimodal probe, with exact right-mode mass 0.5 and 400 draws per
 chain, gave right-mode fractions 0.463 (baseline) and 0.519 (candidate), a
@@ -551,6 +554,25 @@ The EXG resource differences are small and mixed; LNR improved on these three
 measures. Raw profiles, fits and `/usr/bin/time -v` records are in
 `results/step6a_profiles/`, `results/step6a_end_to_end/` and
 `results/step6a_reverse_order/`.
+
+An Rprof follow-up found that the Laplace optimizer and its diagnostic probes
+still validated the likelihood partition on every `.emc_burn_ll_batch()` call.
+Mode starts now prepare data once before their parallel fits; refresh and
+rebuild contexts pass that validated state through optimization and diagnostic
+calls. Standalone batches default to validation, and custom R likelihoods
+continue to validate inside `calc_ll_manager()`. The focused cache and mode
+start tests passed 92 expectations. Fixed-transition EXG and LNR profiles
+used seed 101, the same generated data, three serial chains, `HOST=0`, and one
+BLAS/OpenMP thread. Samples and chain RNG states matched exactly in all six
+chains. EXG took 17.364 s before and 17.253 s after. LNR took 359.606 s before
+and 361.029 s after; this single timing pair shows no end-to-end speedup.
+However, the prior LNR profile attributed 0.94 s self time to
+`.is_valid_ll_cache()` (1.93 s total) during repeated optimizer calls; the
+candidate profile measured 0.01 s self time (0.04 s total), with remaining
+samples at data-preparation boundaries. That removes about 1.9 s of sampled
+validation work, but not enough to move this likelihood-dominated whole-fit
+timing. Raw profiles, fits and resource records are in `results/step6c_rprof/` and
+`results/step6c_laplace_validation/`.
 
 ## Step 6b: likelihood-context cost gate
 
