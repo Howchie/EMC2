@@ -156,11 +156,9 @@ run_emc <- function(emc, stage, stop_criteria,
   chain_process_pool <- NULL
   persistent_chain_requested <- isTRUE(getOption("emc2.persistent_chains", FALSE))
   persistent_chain_supported <- persistent_chain_requested &&
-    .Platform$OS.type == "unix" &&
-    (cores_per_chain == 1L || cores_for_chains >= length(emc))
-  if (persistent_chain_requested && !persistent_chain_supported) {
-    warning("Persistent chain processes currently require Unix and, when ",
-            "cores_per_chain > 1, all chains active together; using the ",
+    .Platform$OS.type == "unix"
+  if (persistent_chain_requested && .Platform$OS.type != "unix") {
+    warning("Persistent chain processes currently require Unix; using the ",
             "existing chain runner.",
             call. = FALSE)
   }

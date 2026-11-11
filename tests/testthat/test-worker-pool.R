@@ -172,6 +172,36 @@ test_that("persistent chains retain subject pools at full concurrency", {
   }
 })
 
+test_that("persistent chains preserve partial multi-core concurrency", {
+  skip_on_os("windows")
+  skip_on_cran()
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR,
+                formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_once <- function(persistent) {
+    RNGkind("L'Ecuyer-CMRG"); set.seed(93)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 3, compress = TRUE))
+    withr::local_options(list(emc2.persistent_chains = persistent,
+                              emc2.persistent_chain_restart_blocks = 25L))
+    suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
+      cores_per_chain = 2, step_size = 4, max_tries = 1, verbose = FALSE,
+      particle_factor = 10,
+      stop_criteria = list(iter = 8, max_gd = Inf, min_unique = 0,
+                           min_es = 0)))
+  }
+  baseline <- fit_once(FALSE)
+  persistent <- fit_once(TRUE)
+  expect_length(persistent, 3L)
+  for (j in seq_along(baseline)) {
+    expect_identical(persistent[[j]]$samples$alpha,
+                     baseline[[j]]$samples$alpha)
+    expect_identical(persistent[[j]]$samples$idx,
+                     baseline[[j]]$samples$idx)
+    expect_identical(persistent[[j]]$rng, baseline[[j]]$rng)
+  }
+})
+
 test_that("retained workers refresh context, grow, and reclaim donated workers", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
