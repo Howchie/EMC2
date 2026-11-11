@@ -69,6 +69,18 @@ bool rexg_logS_truncation_caches(const double* mu, const double* sigma,
   return caches.size > 0;
 }
 
+const ExgTruncationCache* rexg_scalar_truncation_cache(
+    double mu, double sigma, double tau, double lower, double upper,
+    void* ctx_) {
+  if (ctx_ == nullptr)
+    return exg_scalar_truncation_memo().get(mu, sigma, tau, lower, upper);
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (!ctx->exg_truncation_cache)
+    ctx->exg_truncation_cache = std::make_shared<ExgTruncationCache>();
+  return exg_truncation_cache_get(*ctx->exg_truncation_cache,
+                                  mu, sigma, tau, lower, upper);
+}
+
 }  // namespace
 
 void drexg_raw(const double* rt, const double* const* cols, int n_rows,
@@ -172,18 +184,22 @@ void rexg_logS_at_t(double t, const double* const* cols,
   }
 }
 
-double dexg_scalar(double x, const double* par, void* /*ctx*/) {
+double dexg_scalar(double x, const double* par, void* ctx) {
   const double t0 = par[3];
   if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
   const double tt = x - t0;
   if (tt <= 0.0) return 0.0;
-  return dtexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, false);
+  const ExgTruncationCache* cache = rexg_scalar_truncation_cache(
+      par[0], par[1], par[2], 0.0, R_PosInf, ctx);
+  return dtexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, false, cache);
 }
 
-double pexg_scalar(double x, const double* par, void* /*ctx*/) {
+double pexg_scalar(double x, const double* par, void* ctx) {
   const double t0 = par[3];
   if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
   const double tt = x - t0;
   if (tt <= 0.0) return 0.0;
-  return ptexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, true, false);
+  const ExgTruncationCache* cache = rexg_scalar_truncation_cache(
+      par[0], par[1], par[2], 0.0, R_PosInf, ctx);
+  return ptexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, true, false, cache);
 }

@@ -10,10 +10,20 @@ dat$subjects <- droplevels(dat$subjects)
 replicate_data <- as.integer(Sys.getenv('DATA_REPS', '2'))
 dat <- do.call(rbind, replicate(replicate_data, dat, simplify = FALSE))
 rownames(dat) <- NULL
+n_racers <- as.integer(Sys.getenv('N_RACERS', '2'))
+response_levels <- levels(dat$R)
+if (length(response_levels) < n_racers) {
+  response_levels <- c(response_levels,
+    paste0('extra', seq_len(n_racers - length(response_levels))))
+  dat$R <- factor(as.character(dat$R), levels = response_levels)
+  dat$S <- factor(as.character(dat$S), levels = response_levels)
+}
+upper_bound <- if (identical(Sys.getenv('NONUNIFORM_UT', '0'), '1'))
+  rep(c(1.5, 2), length.out = nrow(dat)) else 2
 des <- design(
-  data = dat, model = REXG, matchfun = matchfun,
+  data = dat, model = REXG, matchfun = matchfun, Rlevels = response_levels,
   formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
-  functions = list(lI = lI_fun), UT = 2
+  functions = list(lI = lI_fun), UT = upper_bound
 )
 
 seed <- as.integer(Sys.getenv('SEED', '101'))

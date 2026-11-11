@@ -12,11 +12,21 @@ if (!is.finite(replicate_data) || replicate_data < 1L)
   stop('DATA_REPS must be a positive integer')
 dat <- do.call(rbind, replicate(replicate_data, dat, simplify = FALSE))
 rownames(dat) <- NULL
+n_racers <- as.integer(Sys.getenv('N_RACERS', '2'))
+response_levels <- levels(dat$R)
+if (length(response_levels) < n_racers) {
+  response_levels <- c(response_levels,
+    paste0('extra', seq_len(n_racers - length(response_levels))))
+  dat$R <- factor(as.character(dat$R), levels = response_levels)
+  dat$S <- factor(as.character(dat$S), levels = response_levels)
+}
+upper_bound <- if (identical(Sys.getenv('NONUNIFORM_UT', '0'), '1'))
+  rep(c(1.5, 2), length.out = nrow(dat)) else 2
 
 des <- design(
-  data = dat, model = REXG, matchfun = matchfun,
+  data = dat, model = REXG, matchfun = matchfun, Rlevels = response_levels,
   formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
-  functions = list(lI = lI_fun), UT = 2)
+  functions = list(lI = lI_fun), UT = upper_bound)
 emc <- make_emc(dat, des, type = 'single', n_chains = 1, compress = FALSE)
 dadm <- emc[[1L]]$data[[1L]]
 model <- emc[[1L]]$model()
@@ -54,6 +64,6 @@ if (nzchar(output)) {
                rows = nrow(dadm), particles = particle_count,
                session = sessionInfo()), output)
 }
-cat('rows', nrow(dadm), 'particles', particle_count,
+cat('rows', nrow(dadm), 'racers', n_racers, 'particles', particle_count,
     'median_seconds', median(timing), 'timings', paste(timing, collapse = ','),
     'data_md5', data_md5, '\n')

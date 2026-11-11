@@ -247,6 +247,36 @@ inline ExgTruncationCache make_exg_truncation_cache(
   return cache;
 }
 
+// GSL scalar callbacks revisit the same distribution parameters at many
+// integration points. Keep one exact, thread-local truncation context for
+// these routes; the full parameter and bound key makes reuse safe across
+// particles, models and forked workers without a separate invalidation hook.
+inline const ExgTruncationCache* exg_truncation_cache_get(
+    ExgTruncationCache& cache, double mu, double sigma, double tau,
+    double lower, double upper) {
+  if (!R_FINITE(mu) || !R_FINITE(sigma) || !R_FINITE(tau) ||
+      sigma <= 0.0 || tau <= 0.0 || ISNAN(lower) || ISNAN(upper) ||
+      !(lower < upper) ||
+      (lower == R_NegInf && upper == R_PosInf)) return nullptr;
+  if (!cache.matches(mu, sigma, tau, lower, upper))
+    cache = make_exg_truncation_cache(mu, sigma, tau, lower, upper);
+  return &cache;
+}
+
+struct ExgTruncationMemo {
+  ExgTruncationCache cache;
+
+  const ExgTruncationCache* get(double mu, double sigma, double tau,
+                                double lower, double upper) {
+    return exg_truncation_cache_get(cache, mu, sigma, tau, lower, upper);
+  }
+};
+
+inline ExgTruncationMemo& exg_scalar_truncation_memo() {
+  static thread_local ExgTruncationMemo memo;
+  return memo;
+}
+
 // cumulative distribution function of ex-Gaussian distribution
 inline double pexg(
     const double q,
@@ -492,12 +522,18 @@ inline double ptexg(
 // Scalar versions for GSL integration
 inline double dtexg_scalar(double x, const double* par, void* /*ctx*/) {
   // par: mu, sigma, tau, ..., lb=8
-  return dtexg(x, par[0], par[1], par[2], par[8], R_PosInf, false);
+  const double lower = par[8];
+  const ExgTruncationCache* cache =
+    exg_scalar_truncation_memo().get(par[0], par[1], par[2], lower, R_PosInf);
+  return dtexg(x, par[0], par[1], par[2], lower, R_PosInf, false, cache);
 }
 
 inline double ptexg_scalar(double x, const double* par, void* /*ctx*/) {
   // par: mu, sigma, tau, ..., lb=8
-  return ptexg(x, par[0], par[1], par[2], par[8], R_PosInf, true, false);
+  const double lower = par[8];
+  const ExgTruncationCache* cache =
+    exg_scalar_truncation_memo().get(par[0], par[1], par[2], lower, R_PosInf);
+  return ptexg(x, par[0], par[1], par[2], lower, R_PosInf, true, false, cache);
 }
 
 double dexg_scalar(double x, const double* par, void* /*ctx*/);

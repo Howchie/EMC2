@@ -24,6 +24,7 @@ namespace btawl {
 struct SolveCache;
 }
 struct FrqCache;
+struct ExgTruncationCache;
 
 // Finite data-time queries that a PDE-backed likelihood may request after its
 // raw RT pass.  The model adapters convert these absolute times to their
@@ -157,6 +158,10 @@ double log_race_integrand_scalar(double t, const gsl_race_params_scalar* P);
 // --------------------------------------------------------------------------
 struct ContextForRaceModels {
     const EndpointQueryPlan* endpoint_queries = nullptr;
+    // A scalar ex-Gaussian endpoint normalizer is reused across accumulator
+    // callbacks within this likelihood context. Exact keys allow the context
+    // to survive particle changes without a separate reset requirement.
+    std::shared_ptr<ExgTruncationCache> exg_truncation_cache;
     double min_lik_for_pdf = 1e-10;
     bool use_posdrift = true;
     bool gng = false;
