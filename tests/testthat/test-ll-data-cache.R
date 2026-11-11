@@ -137,6 +137,43 @@ test_that("registered likelihoods reuse block validation while custom ones do no
   expect_identical(actual, expected)
 })
 
+test_that("Laplace likelihood batches propagate block validation", {
+  seen <- logical()
+  local_mocked_bindings(calc_ll_manager = function(
+      proposals, dadm, model, component = NULL, r_cores = 1L,
+      marginalise = NULL, varying = NULL, ll_cache_validated = FALSE) {
+    seen <<- c(seen, ll_cache_validated)
+    rep(-1, nrow(proposals))
+  }, .package = "EMC2")
+
+  proposal <- matrix(0, nrow = 1L, dimnames = list(NULL, "a"))
+  data <- data.frame(x = 1)
+  model <- identity
+  EMC2:::.emc_burn_ll_batch(proposal, data, model, "a")
+  EMC2:::.emc_burn_ll_batch(
+    proposal, data, model, "a", ll_cache_validated = TRUE)
+  expect_identical(seen, c(FALSE, TRUE))
+
+  sampler <- list(
+    samples = list(idx = 1L,
+                   alpha = array(0, dim = c(1L, 1L, 1L),
+                                 dimnames = list("a", NULL, NULL))),
+    n_pars = 1L, type = "single",
+    prior = list(theta_mu_mean = c(a = 0),
+                 theta_mu_var = matrix(1, 1L, 1L,
+                                       dimnames = list("a", "a"))),
+    data = list(data), model = model)
+  local_mocked_bindings(.emc_optimize_subject = function(
+      x0, prior, ll_batch, proposal_prior_scale = 1, blocks = NULL,
+      start_covariance = FALSE) {
+    ll_batch(proposal)
+    list(ok = TRUE)
+  }, .package = "EMC2")
+  EMC2:::.emc_burn_subject_mode(
+    sampler, 1L, ll_cache_validated = TRUE)
+  expect_true(tail(seen, 1L))
+})
+
 test_that("retained likelihood workers inherit the block validation state", {
   seen <- NULL
   local_mocked_bindings(calc_ll_manager = function(proposals, dadm, model,

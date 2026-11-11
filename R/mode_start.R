@@ -31,7 +31,8 @@
 }
 
 .emc_burn_ll_batch <- function(x, data, model, par_names, batch_size = 256L,
-                               component = NULL) {
+                               component = NULL,
+                               ll_cache_validated = FALSE) {
   if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
   out <- numeric(nrow(x))
   for (first in seq.int(1L, nrow(x), by = batch_size)) {
@@ -40,7 +41,7 @@
     colnames(proposals) <- par_names
     out[first:last] <- as.numeric(calc_ll_manager(
       proposals, dadm = data, model = model, component = component,
-      r_cores = 1L))
+      r_cores = 1L, ll_cache_validated = ll_cache_validated))
   }
   out
 }
@@ -433,7 +434,8 @@
 
 .emc_burn_subject_mode <- function(sampler, s, proposal_prior_scale = 1,
                                    x0 = NULL, start_covariance = FALSE,
-                                   prior = NULL) {
+                                   prior = NULL,
+                                   ll_cache_validated = FALSE) {
   store <- sampler$samples
   i <- store$idx
   p <- sampler$n_pars
@@ -445,17 +447,19 @@
       any(!is.finite(prior$mu)) || any(!is.finite(prior$var))) return(NULL)
   par_names <- rownames(store$alpha)
   ll_batch <- function(x) .emc_burn_ll_batch(
-    x, sampler$data[[s]], sampler$model, par_names)
+    x, sampler$data[[s]], sampler$model, par_names,
+    ll_cache_validated = ll_cache_validated)
   .emc_optimize_subject(x0, prior, ll_batch,
                         proposal_prior_scale = proposal_prior_scale,
-                        blocks = .emc_joint_ll_blocks(sampler, s),
+                        blocks = .emc_joint_ll_blocks(
+                          sampler, s, ll_cache_validated = ll_cache_validated),
                         start_covariance = start_covariance)
 }
 
 # One block per model of a joint fit, each with that model's likelihood on its
 # own parameters (shared_ll_idx is the model index of every parameter). NULL
 # when there is a single likelihood.
-.emc_joint_ll_blocks <- function(sampler, s) {
+.emc_joint_ll_blocks <- function(sampler, s, ll_cache_validated = FALSE) {
   shared <- attr(sampler$data, "shared_ll_idx")
   if (is.null(shared) || length(unique(shared)) < 2L ||
       length(shared) != sampler$n_pars) return(NULL)
@@ -463,7 +467,8 @@
   lapply(unique(shared), function(k) {
     idx <- which(shared == k)
     list(idx = idx, ll = function(x) .emc_burn_ll_batch(
-      x, sampler$data[[s]], sampler$model, par_names[idx], component = k))
+      x, sampler$data[[s]], sampler$model, par_names[idx], component = k,
+      ll_cache_validated = ll_cache_validated))
   })
 }
 
@@ -560,7 +565,8 @@
     out <- .emc_quiet_fork(tryCatch({
       subject_data <- .emc_pooled_set_one(ctx$data[[task$subject]], task$pooled)
       ll_batch <- function(x) .emc_burn_ll_batch(
-        x, subject_data, ctx$model, task$par_names)
+        x, subject_data, ctx$model, task$par_names,
+        ll_cache_validated = isTRUE(ctx$ll_cache_validated))
       check_from_cache <- function(key) {
         if (is.null(key) || !is.list(task$check_entries)) return(NULL)
         for (i in rev(seq_along(task$check_entries))) {
@@ -595,7 +601,8 @@
           .emc_burn_subject_mode(
             mode_sampler, 1L,
             proposal_prior_scale = task$proposal_prior_scale,
-            x0 = task$x0, start_covariance = TRUE, prior = task$prior)
+            x0 = task$x0, start_covariance = TRUE, prior = task$prior,
+            ll_cache_validated = isTRUE(ctx$ll_cache_validated))
         check_key <- check <- NULL
         if (.emc_usable_mode(result)) {
           covariance <- .emc_start_cov(result)
@@ -629,6 +636,10 @@
   emc <- .emc_prepare_subject_fit_cache(emc)
   # Subject modes are conditional on each chain's current pooled values.
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
+  # This path runs before the first sampling block. Validate once here, then
+  # let the optimizer and its finite-difference probes share the prepared data.
+  for (j in seq_along(emc))
+    emc[[j]]$data <- .emc_prepare_sampling_ll_data(emc[[j]]$data)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
   cores <- min(nrow(jobs), n_cores)
@@ -655,7 +666,8 @@
           .emc_burn_subject_mode(
             emc[[jobs$chain[k]]], jobs$subject[k],
             proposal_prior_scale = .emc_laplace_prior_scale,
-            x0 = info$warm_start, start_covariance = TRUE)
+            x0 = info$warm_start, start_covariance = TRUE,
+            ll_cache_validated = TRUE)
         list(result = result)
       })
     }, mc.cores = cores, mc.set.seed = FALSE))
@@ -673,7 +685,8 @@
       check_key <- check <- NULL
       if (.emc_usable_mode(result)) {
         ll_batch <- function(x) .emc_burn_ll_batch(
-          x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
+          x, sampler$data[[s]], sampler$model,
+          rownames(sampler$samples$alpha), ll_cache_validated = TRUE)
         # Diagnostic probes consume the subject stream before the start draw.
         prior <- cache_info[[k]]$prior
         covariance <- .emc_start_cov(result)
@@ -767,7 +780,8 @@
 
 .emc_laplace_rebuild_context <- function(chain) {
   list(data = chain$data, model = chain$model,
-       n_pars = chain$n_pars, par_names = rownames(chain$samples$alpha))
+       n_pars = chain$n_pars, par_names = rownames(chain$samples$alpha),
+       ll_cache_validated = TRUE)
 }
 
 # Tasks use the chain process's retained workers when it exists; initial
