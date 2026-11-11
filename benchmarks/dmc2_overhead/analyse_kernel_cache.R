@@ -1,8 +1,9 @@
 args <- commandArgs(TRUE)
-if (length(args) != 1L) stop('usage: analyse_kernel_cache.R results-dir')
+if (length(args) < 1L) stop('usage: analyse_kernel_cache.R results-dir [prefix]')
 root <- args[[1L]]
-a <- readRDS(file.path(root, 'rexg_cache_base.rds'))
-b <- readRDS(file.path(root, 'rexg_cache_candidate.rds'))
+prefix <- if (length(args) > 1L) args[[2L]] else 'rexg_cache'
+a <- readRDS(file.path(root, paste0(prefix, '_base.rds')))
+b <- readRDS(file.path(root, paste0(prefix, '_candidate.rds')))
 stopifnot(identical(a$data_md5, b$data_md5), length(a$result) == length(b$result))
 d <- abs(a$result - b$result)
 cat('data hash equal:', identical(a$data_md5, b$data_md5), a$data_md5, '\n')
