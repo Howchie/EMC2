@@ -313,9 +313,9 @@ chains (4.71x). Samples, RNG, caller RNG, and continuation fields matched
 exactly. In the trace, the later chain received four likelihood workers after
 the earlier chains completed, then returned to its two-worker baseline at the
 next block. This validates the queued-chain donation/reclamation path on this
-fixture. Uneven-cost donation while multiple chains remain active and a live
-interrupt of persistent execution remain open Step 5 gates; worker/task retry,
-chain failure/kill cleanup, and retained-worker rebuilds are covered below.
+fixture. The final uneven-cost active-chain donation and live-interrupt gates
+are recorded below; worker/task retry, chain failure/kill cleanup, and
+retained-worker rebuilds are covered in the following sections.
 Raw runs are in
 `results/step5_chain/worker_retention_final_pairs/`,
 `worker_retention_60blocks/`, `worker_retention_60blocks_restart25/`, and
@@ -348,11 +348,34 @@ At rebuild entry, the seed-303 trace measured combined chain-plus-worker PSS
 across two rebuilds per chain. PSS increased by 2.3–8.3 MiB and private memory
 by 2.2–9.4 MiB; each chain retained the same worker PIDs. One chain had four
 workers after receiving queued-chain capacity. This is a short repeated-rebuild
-check, not a long-run memory-growth bound. Uneven-cost donation while multiple
-chains remain active and a live interrupt of persistent execution remain open
-Step 5 gates. Focused worker-pool tests cover task retry, chain failure and
-kill cleanup. Raw fits, timings and the memory trace are in
-`results/step5_retained_rebuild_fixed/`.
+check, not a long-run memory-growth bound. The final uneven-cost donation and
+live-interrupt gates are recorded below. Focused worker-pool tests cover task
+retry, chain failure and kill cleanup. Raw fits, timings and the memory trace
+are in `results/step5_retained_rebuild_fixed/`.
+
+### Step 5: uneven donation and live interrupt cleanup
+
+The uneven-block integration test starts two persistent chains with two
+retained subject workers each. One chain completes first and releases its
+allocation; the still-running chain observes the new budget, grows from two to
+four workers, then shrinks to its two-worker base before releasing the next
+block. Both donated worker PIDs are gone at release, the original workers stay
+alive, and both chains enter the following block with two workers. The focused
+test passed all nine expectations. The paired partial-concurrency fit above
+provides the end-to-end throughput check for this allocation path: persistent
+execution with dynamic worker growth was 4.71x faster than block forks on the
+three-chain fixture, with identical samples and continuation state. The
+uneven-block test itself is a correctness and lifecycle fixture, not a
+separate likelihood-throughput estimate.
+
+A live SIGINT was sent while a persistent chain was inside a block with two
+nested retained workers. The test used the same on-exit pool cleanup registered
+by `run_emc()`; it confirmed the interrupted R process caught the signal and
+both the chain and subject-worker PIDs were reaped. The focused test passed all
+six expectations. Together with the failure/restart tests and the bounded
+restart memory run above, this closes the Step 5 interrupt and allocation
+lifecycle gates for the tested fork backend. These checks do not exercise the
+separate clean-spawn backend on this Unix configuration.
 
 ### Step 2: conditional subject-fit cache
 
