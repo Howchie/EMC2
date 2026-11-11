@@ -43,29 +43,31 @@ assesses the resulting schedule variation directly.
 
 ### Ordinary pooled allocation posterior check
 
-Seven paired seeds used the same pooled LBA data (hash
+Fourteen paired seeds used the same pooled LBA data (hash
 `d3650406e44a8b6307adab451250714a`) and 400 production draws in each of three
-chains. Five pairs had every parameter's 5%, 50% and 95% quantiles within four
-combined MCSEs; seed 404 had one exceedance and seed 606 had five, with the
-largest at 5.99. Combining the 21 independent chains per arm, all 75 quantile
-comparisons were within four combined MCSEs (largest 2.07). This supports
-posterior agreement at the aggregate level, though some pooled coordinates
-remain weakly mixed (maximum rank R-hat 1.14 baseline, 1.18 candidate).
+chains (42 chains per arm). Per-seed checks found six quantile exceedances out
+of 1,050 comparisons, all from seeds 404 and 606; the largest was 5.99 combined
+MCSE. Combining all 42 chains, all 75 parameter quantiles were within four
+combined MCSEs (largest 1.85). Maximum rank R-hat was 1.166 baseline and 1.156
+candidate, so both arms remain weakly mixed on some coordinates; aggregate
+quantile agreement is not evidence of convergence by itself.
 
-Mean elapsed time was 94.28 s baseline and 91.19 s candidate, a 3.28% paired
-reduction. Aggregate minimum bulk ESS per draw was 0.01198 baseline and 0.00905
-candidate; minimum tail ESS per draw was 0.03317 and 0.01964. The corresponding
-minimum bulk ESS/s was 0.152 and 0.119, and minimum tail ESS/s was 0.422 and
-0.259. Across-seed
-candidate/baseline minimum ESS ratios were highly variable: the geometric mean
-and 95% t interval were 1.11 [0.48, 2.58] for bulk and 1.19 [0.40, 3.52] for
-tail ESS. The interval is too wide to establish the proposed 10% ESS
-non-inferiority margin, and the pooled run is too short to make a precise
-minimum-ESS comparison. Treat the time gain as measured, posterior quantiles
-as consistent in aggregate, and pooled efficiency as inconclusive. Full
-per-seed summaries and aggregate diagnostics are in
-`results/pooled_posterior_comparison.txt` and
-`results/pooled_aggregate_comparison.txt`.
+Mean elapsed time was 93.924 s baseline and 90.226 s candidate, a 3.93% paired
+reduction. The paired geometric speedup was 1.041 [1.029, 1.053] (95% t
+interval). Aggregate minimum bulk ESS per draw was 0.01097 baseline and 0.01114
+candidate; minimum tail ESS per draw was 0.02461 and 0.01591. Minimum bulk
+ESS/s was 0.1402 and 0.1481, while minimum tail ESS/s was 0.3144 and 0.2116.
+Across-seed candidate/baseline minimum ESS ratios remained wide: geometric mean
+1.370 [0.728, 2.581] for bulk and 1.241 [0.661, 2.329] for tail ESS. The
+per-variable median aggregate ESS ratios were 1.043 bulk and 1.059 tail, but
+the 10th-percentile tail ratio was 0.667 and 12 of 25 variables fell below 0.90.
+The minimum-ESS interval therefore does not establish non-inferiority, and the
+per-variable spread leaves a real tail-efficiency question. Since both arms
+have R-hat above 1.15 at 400 draws, this short-chain minimum is too noisy to
+decide the optimization by itself. A paired 1,200-draw-per-chain extension is
+underway to test whether the tail-ESS pattern persists at longer runs. The
+14-seed summaries are in `results/pooled14_posterior.txt` and
+`results/pooled14_aggregate.txt`.
 
 ### Step 4a: shared-tuple REXG truncation cache
 
