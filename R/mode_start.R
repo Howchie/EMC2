@@ -550,37 +550,67 @@
 
 .emc_burn_mode_start <- function(emc, n_cores) {
   if (any(emc[[1L]]$nuisance)) return(emc)
+  emc <- .emc_prepare_subject_fit_cache(emc)
   # Subject modes are conditional on each chain's current pooled values.
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
   cores <- min(nrow(jobs), n_cores)
+  cache_info <- lapply(seq_len(nrow(jobs)), function(k) {
+    j <- jobs$chain[k]
+    s <- jobs$subject[k]
+    prior <- .emc_burn_subject_prior(emc[[j]], s)
+    key <- .emc_subject_fit_key(emc[[j]], s, prior,
+                                .emc_laplace_prior_scale)
+    max_reuses <- .emc_subject_fit_cache_max_reuses(emc[[j]])
+    force_refresh <- .emc_subject_fit_refresh_due(
+      emc[[j]], s, key, max_reuses)
+    lookup <- .emc_subject_fit_lookup(
+      emc[[j]], s, key, force_refresh = force_refresh)
+    list(hit = lookup$hit, result = lookup$result,
+         warm_start = lookup$warm_start, key = key, prior = prior)
+  })
   # 1. Every chain's own conditional mode for every subject (no RNG used).
-  results <- .emc_with_preserved_rng(auto_mclapply(
+  mode_jobs <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
-      .emc_quiet_fork(.emc_burn_subject_mode(
-        emc[[jobs$chain[k]]], jobs$subject[k],
-        proposal_prior_scale = .emc_laplace_prior_scale,
-        start_covariance = TRUE))
+      .emc_quiet_fork({
+        info <- cache_info[[k]]
+        result <- if (isTRUE(info$hit)) info$result else
+          .emc_burn_subject_mode(
+            emc[[jobs$chain[k]]], jobs$subject[k],
+            proposal_prior_scale = .emc_laplace_prior_scale,
+            x0 = info$warm_start, start_covariance = TRUE)
+        list(result = result)
+      })
     }, mc.cores = cores, mc.set.seed = FALSE))
+  mode_results <- lapply(mode_jobs, function(x)
+    if (is.list(x) && !is.null(x$result)) x$result else NULL)
   # 2. Start draws, each on its chain's subject RNG stream.
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
       j <- jobs$chain[k]
       s <- jobs$subject[k]
       sampler <- emc[[j]]
-      result <- results[[k]]
+      result <- mode_results[[k]]
       assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
+      fit_result <- NULL
+      check_key <- check <- NULL
       if (.emc_usable_mode(result)) {
         ll_batch <- function(x) .emc_burn_ll_batch(
           x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
         # Diagnostic probes consume the subject stream before the start draw.
-        prior <- .emc_burn_subject_prior(sampler, s)
-        is_start <- tryCatch(.emc_laplace_is_start(
-          result$alpha, .emc_start_cov(result), prior, ll_batch),
-          error = function(e) NULL)
-        result[c("pareto_k", "outside", "laplace_status")] <-
-          unname(.emc_laplace_check(is_start))
+        prior <- cache_info[[k]]$prior
+        covariance <- .emc_start_cov(result)
+        check_key <- .emc_laplace_check_key(
+          sampler, s, result$alpha, covariance, prior)
+        check <- .emc_laplace_check_lookup(sampler, s, check_key)
+        if (is.null(check)) {
+          is_start <- tryCatch(.emc_laplace_is_start(
+            result$alpha, covariance, prior, ll_batch), error = function(e) NULL)
+          check <- .emc_laplace_check(is_start)
+        }
+        result[c("pareto_k", "outside", "laplace_status")] <- unname(check)
+        fit_result <- result
         # Spread the chains across the local posterior neighbourhood. Reject
         # proposals outside the likelihood support.
         start <- NULL
@@ -599,7 +629,9 @@
         result$start <- start$start
         result$start_ll <- start$start_ll
       }
-      list(result = result, seed = get(".Random.seed", envir = globalenv()))
+      list(result = result, fit_result = fit_result,
+           key = cache_info[[k]]$key, check_key = check_key, check = check,
+           seed = get(".Random.seed", envir = globalenv()))
     }, mc.cores = cores, mc.set.seed = FALSE))
   for (j in seq_along(emc)) {
     emc[[j]]$burn_mode_stats <- list(
@@ -624,6 +656,10 @@
     if (!is.null(result$converged))
       emc[[j]]$burn_mode_stats$converged[s] <- result$converged
     if (is.null(result$covariance) || !is.matrix(result$covariance)) next
+    emc[[j]] <- .emc_subject_fit_store(
+      emc[[j]], s, job_result$key, job_result$fit_result)
+    emc[[j]] <- .emc_laplace_check_store(
+      emc[[j]], s, job_result$check_key, job_result$check)
     if (!is.null(result$laplace_status)) {
       emc[[j]]$burn_mode_stats$pareto_k[s] <- result$pareto_k
       emc[[j]]$burn_mode_stats$outside[s] <- result$outside
@@ -659,6 +695,7 @@
   has_fits <- vapply(emc, function(chain)
     any(vapply(chain$lik_laplace, is.list, logical(1))), logical(1))
   if (!any(has_fits)) return(emc)
+  emc <- .emc_prepare_subject_fit_cache(emc)
   emc <- .emc_prepare_chain_rng(emc)
   jobs <- expand.grid(chain = seq_along(emc), subject = seq_len(emc[[1]]$n_subjects))
   present <- vapply(seq_len(nrow(jobs)), function(k) {
@@ -668,31 +705,60 @@
   jobs <- jobs[present, , drop = FALSE]
   if (!nrow(jobs)) return(emc)
   cost <- .emc_subject_cost(emc[[1L]]$data)
-  results <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_len(nrow(jobs)), function(k) {
-    chain <- emc[[jobs$chain[k]]]
-    s <- jobs$subject[k]
-    fit <- chain$lik_laplace[[s]]
-    .emc_quiet_fork(.emc_with_preserved_rng({
-      check <- tryCatch({
-        assign(".Random.seed", chain$rng$subjects[[s]], envir = globalenv())
-        prior <- .emc_burn_subject_prior(chain, s)
-        gaussian <- .emc_laplace_conditional(structure(numeric(chain$n_pars), lik = fit), prior)
-        if (is.null(gaussian)) stop("unusable likelihood approximation")
-        ll <- function(x) .emc_burn_ll_batch(x, chain$data[[s]], chain$model, chain$par_names)
-        .emc_laplace_is_start(gaussian$mu, gaussian$var, prior, ll)
-      }, error = function(e) NULL)
-      list(check = .emc_laplace_check(check),
-           seed = get(".Random.seed", envir = globalenv()))
-    }))
-  }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE),
-  cost_key = "laplace_check"))
+  priors <- gaussians <- check_keys <- checks <- vector("list", nrow(jobs))
+  pending <- logical(nrow(jobs))
   for (k in seq_len(nrow(jobs))) {
-    result <- results[[k]]
-    check <- if (is.list(result)) result$check else NULL
+    j <- jobs$chain[k]
+    s <- jobs$subject[k]
+    chain <- emc[[j]]
+    priors[k] <- list(.emc_burn_subject_prior(chain, s))
+    fit <- chain$lik_laplace[[s]]
+    gaussians[k] <- list(.emc_laplace_conditional(
+      structure(numeric(chain$n_pars), lik = fit), priors[[k]]))
+    if (is.null(gaussians[[k]])) {
+      checks[k] <- list(.emc_laplace_check(NULL))
+      next
+    }
+    check_keys[k] <- list(.emc_laplace_check_key(
+      chain, s, gaussians[[k]]$mu, gaussians[[k]]$var, priors[[k]]))
+    checks[k] <- list(.emc_laplace_check_lookup(chain, s, check_keys[[k]]))
+    pending[k] <- is.null(checks[[k]])
+  }
+  run_idx <- which(pending)
+  results <- if (length(run_idx)) .emc_with_preserved_rng(.emc_rebuild_lapply(
+    run_idx, function(k) {
+      chain <- emc[[jobs$chain[k]]]
+      s <- jobs$subject[k]
+      .emc_quiet_fork(.emc_with_preserved_rng({
+        assign(".Random.seed", chain$rng$subjects[[s]], envir = globalenv())
+        checked <- tryCatch({
+          ll <- function(x) .emc_burn_ll_batch(
+            x, chain$data[[s]], chain$model, chain$par_names)
+          .emc_laplace_is_start(gaussians[[k]]$mu, gaussians[[k]]$var,
+                                priors[[k]], ll)
+        }, error = function(e) NULL)
+        list(check = .emc_laplace_check(checked),
+             seed = get(".Random.seed", envir = globalenv()))
+      }))
+    }, n_cores = n_cores,
+    order = order(cost[jobs$subject[run_idx]], decreasing = TRUE),
+    cost_key = "laplace_check")) else vector("list", 0L)
+  for (i in seq_along(run_idx)) {
+    k <- run_idx[i]
+    result <- results[[i]]
+    checks[[k]] <- if (is.list(result)) result$check else NULL
+    if (is.null(checks[[k]])) checks[[k]] <- .emc_laplace_check(NULL)
+    j <- jobs$chain[k]
+    s <- jobs$subject[k]
+    emc[[j]] <- .emc_laplace_check_store(
+      emc[[j]], s, check_keys[[k]], checks[[k]])
+    if (is.list(result) && !is.null(result$seed))
+      emc[[j]]$rng$subjects[[s]] <- result$seed
+  }
+  for (k in seq_len(nrow(jobs))) {
+    check <- checks[[k]]
     if (!is.list(check)) check <- .emc_laplace_check(NULL)
     emc[[jobs$chain[k]]]$lik_laplace[[jobs$subject[k]]]$check <- check
-    if (is.list(result) && !is.null(result$seed))
-      emc[[jobs$chain[k]]]$rng$subjects[[jobs$subject[k]]] <- result$seed
   }
   emc
 }
@@ -703,11 +769,27 @@
 # state is not moved. create_chain_proposals() consumes these once.
 .emc_laplace_refresh <- function(emc, n_cores) {
   if (any(emc[[1L]]$nuisance)) return(emc)
+  emc <- .emc_prepare_subject_fit_cache(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
   emc <- .emc_prepare_chain_rng(emc)
   jobs <- expand.grid(chain = seq_along(emc),
                       subject = seq_len(emc[[1L]]$n_subjects))
   cost <- .emc_subject_cost(emc[[1L]]$data)
+  cache_info <- lapply(seq_len(nrow(jobs)), function(k) {
+    j <- jobs$chain[k]
+    s <- jobs$subject[k]
+    prior <- .emc_burn_subject_prior(emc[[j]], s)
+    key <- .emc_subject_fit_key(emc[[j]], s, prior,
+                                .emc_laplace_prior_scale)
+    max_reuses <- .emc_subject_fit_cache_max_reuses(emc[[j]])
+    force_refresh <- .emc_subject_fit_refresh_due(
+      emc[[j]], s, key, max_reuses)
+    lookup <- .emc_subject_fit_lookup(
+      emc[[j]], s, key, force_refresh = force_refresh)
+    list(hit = lookup$hit, result = lookup$result,
+         warm_start = lookup$warm_start, key = key, prior = prior,
+         reuse_count = lookup$reuse_count)
+  })
   # Each refresh checks the Laplace fit under the current group state.
   # Probe draws advance the subject stream before subsequent transitions.
   results <- .emc_with_preserved_rng(.emc_rebuild_lapply(
@@ -715,23 +797,34 @@
       .emc_quiet_fork({
         sampler <- emc[[jobs$chain[k]]]
         s <- jobs$subject[k]
+        info <- cache_info[[k]]
         assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
+        check_key <- check <- NULL
         r <- tryCatch({
-          r <- .emc_burn_subject_mode(sampler, s,
-                                      proposal_prior_scale = .emc_laplace_prior_scale,
-                                      start_covariance = TRUE)
+          r <- if (isTRUE(info$hit)) info$result else
+            .emc_burn_subject_mode(
+              sampler, s, proposal_prior_scale = .emc_laplace_prior_scale,
+              x0 = info$warm_start, start_covariance = TRUE)
           if (.emc_usable_mode(r)) {
-            ll_batch <- function(x) .emc_burn_ll_batch(
-              x, sampler$data[[s]], sampler$model, rownames(sampler$samples$alpha))
-            is_check <- tryCatch(.emc_laplace_is_start(
-              r$alpha, .emc_start_cov(r), .emc_burn_subject_prior(sampler, s),
-              ll_batch), error = function(e) NULL)
-            r[c("pareto_k", "outside", "laplace_status")] <-
-              unname(.emc_laplace_check(is_check))
+            prior <- info$prior
+            covariance <- .emc_start_cov(r)
+            check_key <- .emc_laplace_check_key(
+              sampler, s, r$alpha, covariance, prior)
+            check <- .emc_laplace_check_lookup(sampler, s, check_key)
+            if (is.null(check)) {
+              ll_batch <- function(x) .emc_burn_ll_batch(
+                x, sampler$data[[s]], sampler$model,
+                rownames(sampler$samples$alpha))
+              is_check <- tryCatch(.emc_laplace_is_start(
+                r$alpha, covariance, prior, ll_batch), error = function(e) NULL)
+              check <- .emc_laplace_check(is_check)
+            }
+            r[c("pareto_k", "outside", "laplace_status")] <- unname(check)
           }
           r
         }, error = function(e) NULL)
-        list(result = r, seed = get(".Random.seed", envir = globalenv()))
+        list(result = r, key = info$key, check_key = check_key, check = check,
+             seed = get(".Random.seed", envir = globalenv()))
       })
     }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE),
     cost_key = "laplace_refresh"))
@@ -744,6 +837,14 @@
       emc[[j]]$rng$subjects[[s]] <- job_result$seed
     n_sub <- emc[[j]]$n_subjects
     usable <- is.list(result) && is.matrix(result$covariance)
+    if (usable) {
+      emc[[j]] <- .emc_subject_fit_store(
+        emc[[j]], s, job_result$key, result,
+        reuse_count = if (cache_info[[k]]$hit)
+          cache_info[[k]]$reuse_count + 1L else 0L)
+      emc[[j]] <- .emc_laplace_check_store(
+        emc[[j]], s, job_result$check_key, job_result$check)
+    }
     if (is.null(emc[[j]]$burn_mode_var))
       emc[[j]]$burn_mode_var <- vector("list", n_sub)
     if (is.null(emc[[j]]$burn_mode_mu))

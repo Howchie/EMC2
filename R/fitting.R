@@ -112,6 +112,14 @@ run_emc <- function(emc, stage, stop_criteria,
                     thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc, warn = TRUE)
+  # Validate the immutable likelihood configuration once at the fit boundary;
+  # per-subject lookup uses the saved fingerprint and small exact keys.
+  has_lik_cache <- any(vapply(emc, function(chain)
+    !is.null(chain$likelihood_cache_version) ||
+      !is.null(chain$subject_fit_cache) ||
+      !is.null(chain$laplace_check_cache), logical(1)))
+  if (has_lik_cache)
+    emc <- .emc_prepare_subject_fit_cache(emc, validate = TRUE)
   emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
   if (stage != "preburn" && cores_per_chain * cores_for_chains > 1L &&
