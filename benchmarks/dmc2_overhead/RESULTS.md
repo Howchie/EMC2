@@ -161,6 +161,25 @@ alpha arrays differ only at floating-point scale (maximum absolute difference
 3.30e-9). Raw timings, fits, and the posterior-gate report are in the ignored
 `results/step4b_final/` directory.
 
+The common one-tuple REXG raw path now reuses prepared density parameters and
+skips per-row cache-key matching. Multi-tuple and invalid-row cases retain the
+general path. On the same 704-row by 256-particle likelihood fixture, the
+likelihood-vector difference from the frozen Step 4b build was at most
+4.55e-13; median call time fell from 12.5 ms to 11.0 ms (1.136x). Six paired
+default-host fits, with 400 sample draws per chain and seeds 101, 202, 303, 404,
+505 and 606, took 10.247/8.767, 9.498/8.995, 9.751/8.755, 9.748/9.284,
+9.748/8.996 and 9.747/8.759 seconds (baseline/candidate). The geometric mean
+speedup was 1.097x, with a paired-seed 95% t interval of 1.052–1.144x.
+Chain and caller RNG states matched. Sample arrays were not bit-identical, but
+all paired 5%, 50% and 95% quantiles differed by less than 5.6e-7 combined
+MCSEs overall and 4.5e-7 MCSEs within any chain. Across-seed minimum bulk
+ESS-per-draw ratio was 0.9998 [0.9993, 1.000]; minimum tail ESS-per-draw was
+1.000 in all pairs. Mean user CPU fell from 22.05 to 19.80 seconds; system
+CPU, minor faults and peak RSS were effectively unchanged. Raw calls, fits,
+resource records and the reproducible runner/analyzer are in
+`results/step4b_simd_live/`, `results/step4b_simd_fit_live/`,
+`run_step4b_simd_fit_gate.sh` and `analyse_step4b_simd_fit_gate.R`.
+
 ### Step 3: adaptive rebuild dispatch
 
 The rebuild queue now times keyed Laplace refresh/check jobs and estimates a
@@ -648,8 +667,32 @@ context prototype) report `new_particle` self time of 0.52 s in EXG and 0.99 s
 in LNR, about 0.20 and 0.39 ms per iteration. Its inclusive time (14.97 s
 EXG, 332.51 s LNR) is dominated by likelihood evaluation (`calc_ll_oo`:
 13.13 s and 349.18 s). The context prototype does not change `new_particle`.
-The plan's materiality gate is about 1.5 ms of R overhead for 15 ms of
-likelihood work; measured exclusive particle-step time is below that
-threshold. The C++ port is therefore not justified by these profiles. The
-fresh iteration records are in `results/step6c_particle_gate_live/`; the
-function profiles are in `results/step6c_rprof/`.
+The plan's materiality marker is about 1.5 ms of R overhead for 15 ms of
+likelihood work. The fresh iteration records are in
+`results/step6c_particle_gate_live/`; the function profiles are in
+`results/step6c_rprof/`.
+
+A corrected one-chain in-process profile, which does not lose forked children,
+recorded 14.49 s inclusive in `new_particle` over 2,550 transitions, including
+13.08 s in the likelihood manager. This leaves about 1.41 s (0.55 ms per
+transition) in the enclosing particle phase beyond likelihood evaluation,
+roughly 8% of the full fit. That is below the plan's 1.5 ms materiality marker,
+but close enough to test a narrow R-to-C++ weight calculation before ruling
+out a broader port.
+
+The first opt-in C++ prototype covers only the common non-marginalized,
+single-component weight calculation. Proposal generation, likelihood calls,
+selection RNG, adaptation and EMC2's independent/local composition remain in
+R. Twelve focused seeded transitions matched proposal state and RNG exactly;
+86 particle, adaptation and transition expectations passed. On three EXG
+seeds, full fits took 7.865/7.709, 7.710/7.873 and 7.893/7.801 seconds
+(R/C++), for a 1.004x geometric mean. One LNR seed took 124.687/123.596
+seconds (1.009x). All draw arrays, stages, likelihood samples and RNG states
+matched exactly; the analyzer ignores only `pm_settings` metadata, which
+records the different option value. This slice does not show a useful fit
+speedup. It remains opt-in as a measured prototype while the rest of the
+particle-step overhead is considered; these results do not decide the value
+of a complete transition-preserving port. Raw fits and timings are in
+`results/step6c_particle_fit_live/`, with
+`run_step6c_particle_weights_gate.sh` and
+`analyse_step6c_particle_weights_gate.R`.
