@@ -1,4 +1,4 @@
-# Overhead baseline and PSIS warming, 2026-11-11
+# Overhead baseline and optimization gates, 2026-11-11
 
 Baseline `7e161f75`; warming candidate `0c4d5112`. Frozen isolated R
 installations, R 4.6.1, GCC 13, CPU affinity 0–26, OMP/OpenBLAS/MKL thread
@@ -84,10 +84,24 @@ test was skipped. See `results/rexg_cache_comparison.txt`,
 `results/rexg_cells_comparison.txt`, `results/rexg_kernel_fit_comparison.txt`,
 and `results/rexg_kernel_tests.log`.
 
-This completes the repeated-normalization cache for the raw REXG kernel's
-zero-truncated density and survivor routes when a batch has at most 16 distinct
-parameter tuples. Configurable lower bounds in SSEXG/RDEX and scalar contexts
-remain to be measured and covered before claiming the full plan's Step 4a.
+The configurable-bound stop-success routes in SSEXG and SSRDEX now cache the
+stop EXG normalization terms per integral; SSEXG also caches each go EXG
+survivor normalization. Both use the model's actual `exg_lb` and `exgS_lb`
+values. With two distinct go parameter tuples and nonzero lower bounds, 500
+128-node integrations produced identical results before and after. Median
+SSEXG time was 0.031 s versus 0.014 s (2.21x); SSRDEX was 0.021 s versus
+0.015 s (1.40x). A full raw SSEXG likelihood fixture (542 rows, 271 unique
+trials, 32 particles, 64-node stop integration) had the same data checksum
+(`81f548b49a7896402c189b5bcf21e98a`) and bit-identical likelihood outputs;
+median `calc_ll_oo` time was 0.066 s versus 0.033 s (2.00x). The focused
+stop-signal tests passed 91 expectations. See `results/ss_cache_base.log`,
+`results/ss_cache_candidate.log`, `results/ss_likelihood_base.log`,
+`results/ss_likelihood_candidate.log`, and `results/ss_cache_tests.log`.
+
+This completes the measured configurable-bound stop-success paths in
+`model_SS_EXG.h`, `model_SS_RDEX.h` and the live raw adapter. Scalar contexts
+that supply a stable parameter tuple remain to be measured before claiming the
+full plan's Step 4a.
 
 The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
 warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.
