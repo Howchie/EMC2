@@ -3,8 +3,10 @@ set -euo pipefail
 : "${BASE_LIB:?}" "${NEW_LIB:?}" "${OUT_DIR:?}"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 read -r -a seed_values <<< "${POOLED_SEEDS:-202 303}"
-for seed_value in "${seed_values[@]}"; do
-  for arm in base new; do
+for index in "${!seed_values[@]}"; do
+  seed_value=${seed_values[$index]}
+  if (( index % 2 == 0 )); then arms=(base new); else arms=(new base); fi
+  for arm in "${arms[@]}"; do
     if [[ "$arm" == base ]]; then lib=$BASE_LIB; else lib=$NEW_LIB; fi
     label="pooled_${seed_value}_${arm}"
     echo "Running $label"

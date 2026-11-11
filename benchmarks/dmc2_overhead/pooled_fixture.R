@@ -17,7 +17,12 @@ out <- suppressWarnings(fit(emc, verbose = FALSE, cores_per_chain = 2, cores_for
   step_size = 100, stop_criteria = list(preburn = list(iter = 50), burn = list(iter = 200),
     adapt = list(iter = 200, min_unique = 1), sample = list(iter = 400))))
 timing <- proc.time() - start
+profile <- function(name) {
+  ns <- asNamespace('EMC2')
+  if (!exists(name, envir = ns, inherits = FALSE)) return(NULL)
+  get(name, envir = ns, inherits = FALSE)()
+}
 saveRDS(list(fit = out, seed = .Random.seed, timing = timing, data_md5 = hash,
-             blocks = EMC2:::.emc_block_profile(), iterations = EMC2:::.emc_iteration_profile(),
+             blocks = profile('.emc_block_profile'), iterations = profile('.emc_iteration_profile'),
              session = sessionInfo()), Sys.getenv('OUT'))
 cat('timing', timing, '\n')

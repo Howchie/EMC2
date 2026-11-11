@@ -3,7 +3,8 @@ args <- commandArgs(TRUE)
 if (length(args) != 1L) stop('usage: analyse_pooled_aggregate.R results-dir')
 suppressPackageStartupMessages(library(posterior))
 root <- args[[1L]]
-seeds <- c(101L, 202L, 303L, 404L, 505L, 606L, 707L)
+seeds <- as.integer(strsplit(Sys.getenv(
+  "POOLED_SEEDS", "101 202 303 404 505 606 707"), "\\s+")[[1L]])
 probs <- c(.05, .5, .95)
 chain_matrix <- function(ch) {
   a <- aperm(ch$samples$alpha, c(3L, 1L, 2L))
