@@ -684,7 +684,8 @@
       list(check = .emc_laplace_check(check),
            seed = get(".Random.seed", envir = globalenv()))
     }))
-  }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE)))
+  }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE),
+  cost_key = "laplace_check"))
   for (k in seq_len(nrow(jobs))) {
     result <- results[[k]]
     check <- if (is.list(result)) result$check else NULL
@@ -732,7 +733,8 @@
         }, error = function(e) NULL)
         list(result = r, seed = get(".Random.seed", envir = globalenv()))
       })
-    }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE)))
+    }, n_cores = n_cores, order = order(cost[jobs$subject], decreasing = TRUE),
+    cost_key = "laplace_refresh"))
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
     result <- if (is.list(job_result)) job_result$result else NULL

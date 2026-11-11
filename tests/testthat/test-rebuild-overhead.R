@@ -35,6 +35,83 @@ test_that("single-core and short rebuilds keep the serial path", {
   expect_identical(.emc_rebuild_lapply(1:3, identity, 1L), as.list(1:3))
 })
 
+test_that("measured rebuild costs select serial only when it has a margin", {
+  old_costs <- .emc_rebuild_queue$costs
+  old_decision <- .emc_rebuild_queue$last_decision
+  on.exit({
+    .emc_rebuild_queue$costs <- old_costs
+    .emc_rebuild_queue$last_decision <- old_decision
+  }, add = TRUE)
+  .emc_rebuild_queue$costs <- list()
+  cheap_id <- .emc_rebuild_cost_id("dispatch_test", 2L)
+  expensive_id <- .emc_rebuild_cost_id("dispatch_expensive", 2L)
+  .emc_rebuild_queue$costs[[cheap_id]] <- list(
+    job_seconds = rep(.001, 8L), startup_seconds = .05)
+  .emc_rebuild_queue$costs[[expensive_id]] <- list(
+    job_seconds = rep(.2, 8L), startup_seconds = .005)
+
+  cheap <- .emc_rebuild_prediction("dispatch_test", 8L, 2L)
+  expensive <- .emc_rebuild_prediction("dispatch_expensive", 8L, 2L)
+  expect_lt(cheap$serial, .9 * cheap$parallel)
+  expect_gt(expensive$serial, .9 * expensive$parallel)
+
+  local_mocked_bindings(
+    auto_mclapply = function(...) stop("unexpected parallel dispatch"),
+    .package = "EMC2")
+  seen <- integer()
+  X <- stats::setNames(as.list(seq_len(8L)), paste0("job", seq_len(8L)))
+  set.seed(108)
+  before <- .Random.seed
+  result <- .emc_rebuild_lapply(X, function(i) {
+    seen <<- c(seen, i)
+    runif(1)
+    i
+  }, 2L, order = 8:1, cost_key = "dispatch_test")
+  expect_identical(result, X)
+  expect_identical(seen, 8:1)
+  expect_identical(.Random.seed, before)
+  expect_identical(.emc_rebuild_queue$last_decision$route, "serial")
+})
+
+test_that("serial rebuild errors propagate and restore the caller RNG", {
+  old_costs <- .emc_rebuild_queue$costs
+  on.exit(.emc_rebuild_queue$costs <- old_costs, add = TRUE)
+  .emc_rebuild_queue$costs <- list()
+  .emc_rebuild_queue$costs[[.emc_rebuild_cost_id("dispatch_error", 2L)]] <-
+    list(job_seconds = rep(.001, 8L), startup_seconds = .05)
+  set.seed(109)
+  before <- .Random.seed
+  expect_error(.emc_rebuild_lapply(1:8, function(i) {
+    runif(1)
+    if (i == 3L) stop("serial rebuild failed")
+    i
+  }, 2L, cost_key = "dispatch_error"), "serial rebuild failed")
+  expect_identical(.Random.seed, before)
+  expect_false(isTRUE(.emc_rebuild_queue$busy))
+})
+
+test_that("parallel rebuild timing calibrates job and startup costs", {
+  skip_on_os("windows")
+  old_costs <- .emc_rebuild_queue$costs
+  old_decision <- .emc_rebuild_queue$last_decision
+  on.exit({
+    .emc_rebuild_queue$costs <- old_costs
+    .emc_rebuild_queue$last_decision <- old_decision
+  }, add = TRUE)
+  .emc_rebuild_queue$costs <- list()
+  result <- .emc_rebuild_lapply(1:12, function(i) {
+    Sys.sleep(.002)
+    i
+  }, 2L, order = 12:1, cost_key = "dispatch_calibration")
+  expect_identical(result, as.list(1:12))
+  model <- .emc_rebuild_queue$costs[[
+    .emc_rebuild_cost_id("dispatch_calibration", 2L)]]
+  expect_length(model$job_seconds, 12L)
+  expect_true(all(is.finite(model$job_seconds) & model$job_seconds >= 0))
+  expect_true(is.finite(model$startup_seconds) && model$startup_seconds >= 0)
+  expect_identical(.emc_rebuild_queue$last_decision$route, "parallel")
+})
+
 
 test_that("direct array slices match the split index implementation", {
   previous <- function(a, n) setNames(lapply(
