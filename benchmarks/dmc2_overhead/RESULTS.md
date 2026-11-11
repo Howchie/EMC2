@@ -424,3 +424,40 @@ not establish uncertainty intervals for an efficiency or non-inferiority
 claim. Frozen reference build logs, saved fits, timing records and shared raw
 inputs are retained in the ignored `results_optimized/` directory. See the
 protocol for compiler and legacy-validation qualifications.
+
+## Step 6a: block-scoped likelihood cache validation
+
+`run_stage()` now prepares the likelihood partition once at block entry and
+passes a validated-context flag through particle, marginal, pooled, ensemble,
+HMC and retained-worker likelihood routes. Public likelihood calls still
+validate on entry, and custom R likelihoods keep that path inside the manager.
+All-finite data are rebuilt at each block entry because their fast cache form
+cannot detect response-column mutation; censored/non-finite data validate the
+cached partition once at that boundary. Focused tests cover stale partitions,
+list attributes, registered/custom dispatch and worker context propagation.
+
+The controlled seed-101 profiles (`HOST=0`, sampler profiler enabled) took
+9.795 s baseline and 9.112 s candidate for EXG, and 135.238 s and 126.310 s
+for LNR. Both pairs had identical samples and RNG states. The end-to-end gate
+used the frozen Step 5 install at `a10dc96d`, default fit host, fixed
+transitions (50 preburn, 200 burn, 200 adapt and 400 sample iterations), data
+generation seed 123, sampler seeds 101/202/303, CPUs 0–26, and single-threaded
+OMP/OpenBLAS/MKL. All six pairs had identical data checksums, samples, chain
+and caller RNG, and continuation fields.
+
+| Model | Baseline elapsed (s), seeds 101/202/303 | Candidate elapsed (s) | Mean speedup |
+|---|---|---|---:|
+| EXG | 9.504, 10.009, 9.250 | 9.250, 9.248, 8.999 | 1.046x |
+| LNR | 129.880, 130.651, 130.175 | 128.382, 125.370, 125.845 | 1.029x |
+
+A same-seed reverse-order pair also favored the candidate: EXG took 9.003 s
+candidate versus 9.502 s baseline, and LNR took 127.111 s versus 129.857 s.
+Those reverse-order fits had identical samples and RNG. The default-host
+speedups are smaller than in the controlled profiles, so the measured fit
+gains are 4.6% for EXG and 2.9% for LNR. Mean system CPU, minor faults and peak
+RSS were 3.75 s / 905k / 319 MiB baseline versus 3.92 s / 950k / 319 MiB for
+EXG, and 9.50 s / 2.72m / 364 MiB versus 8.12 s / 2.32m / 356 MiB for LNR.
+The EXG resource differences are small and mixed; LNR improved on these three
+measures. Raw profiles, fits and `/usr/bin/time -v` records are in
+`results/step6a_profiles/`, `results/step6a_end_to_end/` and
+`results/step6a_reverse_order/`.
