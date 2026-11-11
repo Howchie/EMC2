@@ -148,8 +148,8 @@ run_emc <- function(emc, stage, stop_criteria,
     frozen_tries <- integer(length(emc))
     last_snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
   }
-  # Worker templates kept across blocks: one per chain when every chain runs
-  # at once, or one shared when they run one after another.
+  # Non-persistent chain runners can share clean templates across blocks.
+  # Persistent chain processes own their retained subject workers directly.
   pool_slots <- if (cores_for_chains >= length(emc)) length(emc)
                 else if (cores_for_chains <= 1L) 1L else 0L
   pool_session <- NULL
@@ -168,7 +168,8 @@ run_emc <- function(emc, stage, stop_criteria,
     .emc_chain_process_pool_stop(chain_process_pool)
     .emc_wpool_session_stop(pool_session)
   }, add = TRUE)
-  pool_session <- if (cores_per_chain > 1L && pool_slots > 0L) {
+  pool_session <- if (!persistent_chain_supported &&
+                      cores_per_chain > 1L && pool_slots > 0L) {
     .emc_wpool_session_start(
       list(data = emc[[1L]]$data,
            model = .emc_wpool_slim_model(emc[[1L]]$model)), pool_slots)
@@ -225,8 +226,7 @@ run_emc <- function(emc, stage, stop_criteria,
         attr(sampler, "emc_pool_slot") <- NULL
         sampler
       })
-      chain_slots <- lapply(seq_along(sub_emc), function(j)
-        .emc_wpool_session_slot(pool_session, min(j, pool_slots)))
+      chain_slots <- rep(list(NULL), length(sub_emc))
       if (is.null(chain_process_pool)) {
         chain_process_pool <- .emc_chain_process_pool_start(
           chain_samplers, slots = chain_slots)
@@ -1601,6 +1601,7 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
 }
 
 .emc_core_release <- function(core_ctl) {
+  .emc_wpool_reclaim_persistent()
   if (!is.null(core_ctl)) {
     file.create(file.path(core_ctl$dir, paste0("done_", Sys.getpid())),
                 showWarnings = FALSE)

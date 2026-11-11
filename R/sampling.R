@@ -786,35 +786,77 @@ run_stage <- function(pmwgs,
   startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
   n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
   wpool_part <- NULL
-  wpool <- .emc_wpool_start(n_workers, wpool_ctx, persistent = TRUE)
-  if (!is.null(wpool)) {
-    on.exit(.emc_wpool_stop(wpool), add = TRUE)
-  } else if (n_workers <= 1L) {
-    wpool <- list(n = 1L, dir = NULL, jobs = list(), wcs = list(),
-                  rcs = list(), alive = FALSE)
+  persistent_workers <- isTRUE(.emc_pool_state$chain_persistent)
+  wpool <- NULL
+  llpool <- NULL
+  pool_success <- FALSE
+  outer_ll <- list(pool = .emc_pool_state$ll_pool,
+                   s = .emc_pool_state$ll_subject,
+                   route = .emc_pool_state$ll_route)
+  if (persistent_workers) {
+    on.exit({
+      .emc_pool_state$ll_pool <- outer_ll$pool
+      .emc_pool_state$ll_subject <- outer_ll$s
+      .emc_pool_state$ll_route <- outer_ll$route
+      if (pool_success) {
+        .emc_pool_state$subject_pool <- wpool
+        .emc_pool_state$subject_ll_pool <- llpool
+      } else {
+        .emc_wpool_stop(wpool)
+        .emc_wpool_stop(llpool)
+        .emc_pool_state$subject_pool <- NULL
+        .emc_pool_state$subject_ll_pool <- NULL
+      }
+    }, add = TRUE)
+    wpool <- .emc_wpool_reconfigure(.emc_pool_state$subject_pool,
+                                    wpool_ctx, n_workers)
+    .emc_pool_state$subject_pool <- NULL
+  } else {
+    wpool <- .emc_wpool_start(n_workers, wpool_ctx, persistent = TRUE)
+    if (!is.null(wpool)) {
+      on.exit(.emc_wpool_stop(wpool), add = TRUE)
+    } else if (n_workers <= 1L) {
+      wpool <- list(n = 1L, dir = NULL, jobs = list(), wcs = list(),
+                    rcs = list(), alive = FALSE)
+    }
   }
   if (!is.null(wpool)) {
     wpool_cost <- .emc_subject_cost(data)
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
 
-  llpool <- NULL
-  if (pmwgs$n_subjects == 1L && pool_budget$likelihood > 1L &&
-      isTRUE(getOption("emc2.ll_pool", TRUE))) {
-    llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx,
-                               persistent = TRUE)
-    if (!is.null(llpool)) {
-      outer_ll <- list(pool = .emc_pool_state$ll_pool,
-                       s = .emc_pool_state$ll_subject,
-                       route = .emc_pool_state$ll_route)
-      .emc_ll_pool_set(llpool, 1L, reset = is.null(outer_ll$route))
-      on.exit({
-        .emc_wpool_stop(llpool)
-        .emc_pool_state$ll_pool <- outer_ll$pool
-        .emc_pool_state$ll_subject <- outer_ll$s
-        .emc_pool_state$ll_route <- outer_ll$route
-      }, add = TRUE)
+  if (pmwgs$n_subjects == 1L && isTRUE(getOption("emc2.ll_pool", TRUE))) {
+    if (persistent_workers) {
+      llpool <- .emc_wpool_reconfigure(
+        .emc_pool_state$subject_ll_pool, wpool_ctx,
+        pool_budget$likelihood)
+      .emc_pool_state$subject_ll_pool <- NULL
+    } else if (pool_budget$likelihood > 1L) {
+      llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx,
+                                 persistent = TRUE)
     }
+    if (!is.null(llpool)) {
+      .emc_ll_pool_set(llpool, 1L, reset = is.null(outer_ll$route))
+      if (!persistent_workers) {
+        on.exit({
+          .emc_wpool_stop(llpool)
+          .emc_pool_state$ll_pool <- outer_ll$pool
+          .emc_pool_state$ll_subject <- outer_ll$s
+          .emc_pool_state$ll_route <- outer_ll$route
+        }, add = TRUE)
+      }
+    }
+  } else if (persistent_workers &&
+             !is.null(.emc_pool_state$subject_ll_pool)) {
+    .emc_wpool_stop(.emc_pool_state$subject_ll_pool)
+    .emc_pool_state$subject_ll_pool <- NULL
+  }
+  if (persistent_workers) {
+    trace_block <- if (is.null(.emc_pool_state$worker_stage_blocks)) 1L else
+      as.integer(.emc_pool_state$worker_stage_blocks) + 1L
+    .emc_pool_state$worker_stage_blocks <- trace_block
+    .emc_wpool_trace_retained(wpool, "subject", trace_block, stage)
+    .emc_wpool_trace_retained(llpool, "likelihood", trace_block, stage)
   }
 
   startup_elapsed <- if (sampler_profile) {
@@ -825,11 +867,16 @@ run_stage <- function(pmwgs,
   pmwgs <- extend_sampler(pmwgs, iter, stage)
   if(any(nuisance)) pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
 
-  recycle_default <- .emc_wpool_recycle_default(wpool)
+  recycle_default <- if (persistent_workers) 50L else
+    .emc_wpool_recycle_default(wpool)
   recycle_every <- as.integer(getOption("emc2.worker_recycle", recycle_default))
   if (length(recycle_every) != 1L || is.na(recycle_every)) {
     recycle_every <- recycle_default
   }
+  pool_iteration <- if (persistent_workers) {
+    max(c(0L, if (is.null(wpool$iterations)) 0L else wpool$iterations,
+          if (is.null(llpool$iterations)) 0L else llpool$iterations))
+  } else 0L
 
   profile_rows <- if (sampler_profile) vector("list", iter) else NULL
   gibbs_rejects <- .emc_reject_counts("gibbs")
@@ -854,6 +901,7 @@ run_stage <- function(pmwgs,
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
   for (i in 1:iter) {
+    if (persistent_workers) pool_iteration <- pool_iteration + 1L
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     if (verboseProgress) {
       accRate <- mean(accept_rate(pmwgs))
@@ -964,14 +1012,19 @@ run_stage <- function(pmwgs,
     part_started <- proc.time()[["elapsed"]]
     part_cpu_share <- 1
     if (!is.null(llpool)) {
-      llpool <- .emc_wpool_recycle(llpool, i, recycle_every, wpool_ctx)
+      llpool <- .emc_wpool_recycle(
+        llpool, if (persistent_workers) pool_iteration else i,
+        recycle_every, wpool_ctx)
       llpool <- .emc_wpool_grow(llpool, .emc_cores_now(core_ctl, n_cores),
                                 wpool_ctx)
+      if (persistent_workers) llpool$iterations <- pool_iteration
       .emc_ll_pool_set(llpool, 1L, reset = FALSE)
     }
     if (!is.null(wpool)) {
       recycle_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-      wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
+      wpool <- .emc_wpool_recycle(
+        wpool, if (persistent_workers) pool_iteration else i,
+        recycle_every, wpool_ctx)
       if (sampler_profile) {
         recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
       }
@@ -983,6 +1036,7 @@ run_stage <- function(pmwgs,
       n_before <- wpool$n
       grow_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
       wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
+      if (persistent_workers) wpool$iterations <- pool_iteration
       if (sampler_profile) {
         grow_elapsed <- proc.time()[["elapsed"]] - grow_started
       }
@@ -1312,6 +1366,7 @@ run_stage <- function(pmwgs,
     attr(pmwgs$samples, "sampler_profile") <- .emc_profile_bind(profile_rows)
   }
   if (verboseProgress) close(pb)
+  pool_success <- TRUE
   return(pmwgs)
 }
 

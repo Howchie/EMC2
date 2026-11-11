@@ -130,17 +130,20 @@ test_that("persistent chain execution matches block-fork execution", {
   }
 })
 
-test_that("persistent chains preserve template slots at full concurrency", {
+test_that("persistent chains retain subject pools at full concurrency", {
   skip_on_os("windows")
   skip_on_cran()
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:2], ]
   dat$subjects <- droplevels(dat$subjects)
   des <- design(data = dat, model = LNR,
                 formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  trace <- tempfile("emc-worker-trace-")
   fit_once <- function(persistent) {
     RNGkind("L'Ecuyer-CMRG"); set.seed(82)
     emc <- suppressMessages(make_emc(dat, des, n_chains = 2, compress = TRUE))
-    withr::local_options(list(emc2.persistent_chains = persistent))
+    withr::local_options(list(emc2.persistent_chains = persistent,
+                              emc2.worker_trace_file = trace,
+                              emc2.persistent_chain_restart_blocks = 25L))
     suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
       cores_per_chain = 2, step_size = 4, max_tries = 1, verbose = FALSE,
       particle_factor = 10, stop_criteria = list(iter = 8)))
@@ -154,6 +157,53 @@ test_that("persistent chains preserve template slots at full concurrency", {
     expect_identical(persistent[[j]]$samples$idx,
                      baseline[[j]]$samples$idx)
   }
+  traces <- list.files(dirname(trace),
+                       pattern = paste0("^", basename(trace), "-[0-9]+\\.tsv$"),
+                       full.names = TRUE)
+  expect_length(traces, 2L)
+  for (path in traces) {
+    rows <- utils::read.delim(path, stringsAsFactors = FALSE)
+    expect_equal(nrow(rows), 2L)
+    expect_true(all(rows$role == "subject"))
+    expect_true(all(rows$alive))
+    expect_true(all(rows$workers >= 2L))
+    expect_identical(rows$epoch, c(0L, 1L))
+    expect_identical(rows$pids[1L], rows$pids[2L])
+  }
+})
+
+test_that("retained workers refresh context, grow, and reclaim donated workers", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  ctx <- list(data = list(data.frame(x = 1:3)), model = identity,
+              type = "single", n_pars = 1L, pooled = 1L)
+  pool <- EMC2:::.emc_wpool_start(
+    2L, ctx, backend = "fork", retain_across_blocks = TRUE)
+  skip_if(is.null(pool), "could not start retained workers")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  original_pids <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
+
+  next_ctx <- ctx
+  next_ctx$pooled <- 2L
+  pool <- EMC2:::.emc_wpool_reconfigure(pool, next_ctx, 4L)
+  expect_equal(pool$n, 4L)
+  expect_identical(pool$context_epoch, 1L)
+  expect_identical(vapply(pool$jobs[1:2], EMC2:::.emc_wpool_job_pid,
+                          integer(1)), original_pids)
+  expect_true(all(vapply(pool$jobs, function(job)
+    EMC2:::.emc_wpool_pid_alive(EMC2:::.emc_wpool_job_pid(job)), logical(1))))
+
+  donated_pids <- vapply(pool$jobs[3:4], EMC2:::.emc_wpool_job_pid, integer(1))
+  pool <- EMC2:::.emc_wpool_reconfigure(pool, next_ctx, 2L)
+  expect_equal(pool$n, 2L)
+  expect_identical(pool$context_epoch, 2L)
+  expect_identical(vapply(pool$jobs, EMC2:::.emc_wpool_job_pid, integer(1)),
+                   original_pids)
+  deadline <- Sys.time() + 5
+  while (any(vapply(donated_pids, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
+         Sys.time() < deadline) Sys.sleep(0.05)
+  expect_false(any(vapply(donated_pids, EMC2:::.emc_wpool_pid_alive,
+                          logical(1))))
 })
 
 test_that("subject cost proxies the rows the likelihood loops over", {
