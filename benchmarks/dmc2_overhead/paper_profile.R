@@ -24,7 +24,8 @@ if (kind == 'EXG') {
 data_file <- tempfile(); saveRDS(dat, data_file); data_md5 <- unname(tools::md5sum(data_file)); unlink(data_file)
 set.seed(seed)
 options(emc2.fit_host = Sys.getenv('HOST', '1') == '1',
-        emc2.sampler_profile = Sys.getenv('PROFILE', '0') == '1')
+        emc2.sampler_profile = Sys.getenv('PROFILE', '0') == '1',
+        emc2.native_pt_context = Sys.getenv('NATIVE_CONTEXT', '1') == '1')
 emc <- make_emc(dat, des, type = 'single', n_chains = 3, rt_resolution = .001)
 initial_seed <- .Random.seed
 start <- proc.time()
@@ -40,7 +41,8 @@ blocks <- EMC2:::.emc_block_profile()
 iterations <- EMC2:::.emc_iteration_profile()
 saveRDS(list(blocks = blocks, iterations = iterations, fit = fit_result, initial_seed = initial_seed, final_seed = .Random.seed,
              timing = timing, case = kind, seed = seed, data_md5 = data_md5,
-             session = sessionInfo(), options = options()[c('emc2.fit_host','emc2.sampler_profile')]),
+             session = sessionInfo(), options = options()[c(
+               'emc2.fit_host', 'emc2.sampler_profile', 'emc2.native_pt_context')]),
         Sys.getenv('OUT'))
 cat('case', kind, 'seed', seed, 'timing', timing, '\n')
 if (nzchar(rprof_out)) {

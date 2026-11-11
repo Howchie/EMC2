@@ -58,6 +58,13 @@ particles <- particles_all
 native <- function() EMC2:::calc_ll_oo(
   particles, dadm, constants, designs, model$c_name, model$bound,
   model$transform, model$pre_transform, p_types, log(1e-10), model$trend)
+mapper_context <- EMC2:::emc2_create_pt_mapper_context(
+  particles_all[1L, , drop = FALSE], dadm, constants, designs,
+  model$bound, model$transform, model$pre_transform, p_types)
+native_context <- function() EMC2:::calc_ll_oo(
+  particles, dadm, constants, designs, model$c_name, model$bound,
+  model$transform, model$pre_transform, p_types, log(1e-10), model$trend,
+  pt_mapper_context = mapper_context)
 manager <- function() EMC2:::calc_ll_manager(particles, dadm, model_fn, r_cores = 1L)
 manager_validated <- function() EMC2:::calc_ll_manager(
   particles, dadm, model_fn, r_cores = 1L, ll_cache_validated = TRUE)
@@ -68,9 +75,11 @@ prologue <- function() EMC2:::pt_prologue_oo(
 # Warm each path before recording batches. Batched timings keep sub-millisecond
 # prologue calls above the system clock's resolution.
 ll_native <- native()
+ll_context <- native_context()
 ll_manager <- manager()
 mapped <- prologue()
 stopifnot(isTRUE(all.equal(ll_native, ll_manager, tolerance = 0)),
+          identical(ll_native, ll_context),
           length(mapped$n_ok) == n_particles)
 
 measure <- function(fun, reps) {
@@ -90,12 +99,14 @@ timings <- lapply(particle_grid, function(n) {
   particles <<- particles_all[seq_len(n), , drop = FALSE]
   list(n_particles = n,
        native_ms = measure(native, full_reps),
+       context_native_ms = measure(native_context, full_reps),
        prologue_ms = measure(prologue, prologue_reps))
 })
 names(timings) <- as.character(particle_grid)
 summary <- lapply(timings, function(x) {
   c(n_particles = x$n_particles,
     native_ms = summarise(x$native_ms),
+    context_native_ms = summarise(x$context_native_ms),
     prologue_ms = summarise(x$prologue_ms),
     prologue_share_pct = 100 * median(x$prologue_ms) / median(x$native_ms),
     native_remainder_ms = median(x$native_ms) - median(x$prologue_ms))
@@ -132,6 +143,9 @@ for (i in seq_along(summary)) {
               x[["n_particles"]], x[["native_ms.median"]],
               x[["prologue_ms.median"]], x[["prologue_share_pct"]],
               x[["native_remainder_ms"]]))
+  cat(sprintf("    retained mapper %.3f ms (speedup %.3fx)\n",
+              x[["context_native_ms.median"]],
+              x[["native_ms.median"]] / x[["context_native_ms.median"]]))
 }
 cat(sprintf("linear prologue intercept %.3f ms, slope %.5f ms/particle\n",
             out$prologue_intercept_ms, out$prologue_slope_ms_per_particle))

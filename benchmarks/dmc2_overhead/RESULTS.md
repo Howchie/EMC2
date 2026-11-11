@@ -606,3 +606,50 @@ clouds, CPU affinity 0–26 and one OMP/OpenBLAS/MKL thread. Raw logs, RDS timin
 vectors, and `/usr/bin/time -v` records are in
 `results/step6b_prologue_scaling/`; the reproducible runner is
 `run_step6b_prologue.sh`.
+
+The retained-mapper prototype was then tested as an explicit, process-local
+context. It caches the parameter-table layout and transform plan; particle
+values, data, and likelihood scratch stay call-local. The manager only selects
+it for validated internal calls to registered native models. Its cache key
+covers trial count, model type, proposal columns, parameter types, constant
+values, designs, bounds and transforms. A PID change rebuilds the context, so
+forked workers and checkpoint restarts do not reuse native pointers. Custom
+R likelihoods and trend models use the existing path. The focused tests passed
+12 expectations, including bit-identical likelihoods after changing proposal
+values and rejection of stale proposal columns, trial counts, and constants.
+
+In a repeated prologue probe, the 256-particle EXG native call was 12.0 ms both
+with and without the context. LNR was 265.8 ms without it and 263.8 ms with it
+(1.008x); at 128 particles the medians both rounded to 133.0 ms. Likelihoods
+were bit-identical. The manager medians were 12.2/12.0 ms (public/validated)
+for EXG and 268.2/264.2 ms for LNR. This points to a small possible LNR gain,
+not a meaningful EXG gain.
+
+The fixed-transition fit gate used seed 101, three serial chains, `HOST=0`,
+identical generated data within each pair, and one BLAS/OpenMP thread. Context
+off/on elapsed times were 7.755/7.873 s for EXG and 123.485/123.622 s for LNR.
+All six chains had identical samples and RNG states, and caller RNG states
+matched. One timing pair per model is descriptive; it does not establish a
+small speed difference. The context remains available with
+`options(emc2.native_pt_context = TRUE)`, but is off by default because these
+fit timings show no end-to-end gain. Raw prologue and fit records are in
+`results/step6b_context_prologue_live/` and
+`results/step6b_context_fit_live/`; runners and the fit-pair analyzer are
+`run_step6b_prologue.sh`, `run_step6b_context_fit_gate.sh` and
+`analyse_step6b_context_fit_gate.R`.
+
+## Step 6c: particle-step materiality gate
+
+A fresh fixed-transition EXG run on the current code recorded 2,550 iteration
+rows. Median particle-phase time was 6 ms in burn/adapt/sample and 11 ms in
+preburn; these phase timings include likelihood work. The latest available
+worker-side function profiles for this sampler path (seed 101, before the
+context prototype) report `new_particle` self time of 0.52 s in EXG and 0.99 s
+in LNR, about 0.20 and 0.39 ms per iteration. Its inclusive time (14.97 s
+EXG, 332.51 s LNR) is dominated by likelihood evaluation (`calc_ll_oo`:
+13.13 s and 349.18 s). The context prototype does not change `new_particle`.
+The plan's materiality gate is about 1.5 ms of R overhead for 15 ms of
+likelihood work; measured exclusive particle-step time is below that
+threshold. The C++ port is therefore not justified by these profiles. The
+fresh iteration records are in `results/step6c_particle_gate_live/`; the
+function profiles are in `results/step6c_rprof/`.
