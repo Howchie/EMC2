@@ -23,7 +23,10 @@ are generated with seed 123; sampler seeds are 101, 202 and 303. See
 The fixed-transition runs use 50 preburn, 200 burn, 200 adapt, and 400 sample
 iterations. The precision target requires minimum alpha ESS above 800 and at
 least 400 sample iterations. Paired precision runs stopped at the same draw
-counts with the same ESS. Individual quantiles, quantile MCSE, minimum bulk and
+counts with the same ESS. Two additional seed-101 fixed-transition timing pairs, run candidate first,
+took 20.041 and 20.287 s baseline versus 16.305 and 15.784 s warmed for EXG,
+and 132.555 and 133.071 s versus 130.566 and 130.830 s for LNR.
+Individual quantiles, quantile MCSE, minimum bulk and
 tail ESS per draw, and ESS per second are in `results/comparison.txt`; the default-fit equivalents
 are in `results/default_comparison.txt`. The EXG baseline default fit reproduces
 the plan's approximately 22.5 s starting measurement.
@@ -59,3 +62,21 @@ an analytic test distribution, not a generative model for the supplied data. The
 matched in the paired checks. Hierarchical profiles showed worker growth above
 the initial allocation, but the sampled profile is not a proof of peak total
 core usage or reclamation at a subsequent block.
+
+A separate expensive-profile run of the hierarchical worker pool covered 60
+chain iterations. It recorded 11,748,842 serialized bytes in total (maximum
+196,272 in one recorded iteration), including 11,683,080 shared bytes and
+43,053 private-message bytes; remaining bytes are shared-file path traffic.
+Twelve sampled private-memory readings peaked at 805,711,872 bytes. These
+counts describe this short fixture and its profiler's measured transport, not
+all serialization in the process tree.
+
+In a separate short hierarchical role-instrumented replay, direct Linux
+`smaps_rollup` snapshots identified one master, six block-chain processes,
+three templates and sixteen workers. The largest observed RSS / PSS / private
+MiB were respectively 229.6 / 224.0 / 223.4 for the master, 402.3 / 252.0 /
+188.0 for chains, 229.7 / 214.3 / 210.5 for templates, and 214.1 / 76.4 / 1.6
+for workers. Templates and workers were sampled at launch; these are not
+worker peak or steady-state measurements. Chain snapshots were at block start
+and end. The external tree sampler alone missed reparented workers and
+therefore must not be used as a complete role breakdown.
