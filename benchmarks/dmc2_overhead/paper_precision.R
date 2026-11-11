@@ -25,6 +25,9 @@ data_file <- tempfile(); saveRDS(dat, data_file); data_md5 <- unname(tools::md5s
 set.seed(seed)
 options(emc2.fit_host = Sys.getenv('HOST', '1') == '1',
         emc2.sampler_profile = Sys.getenv('PROFILE', '0') == '1')
+cache_max_reuses <- Sys.getenv('CACHE_MAX_REUSES', 'default')
+if (cache_max_reuses != 'default')
+  options(emc2.subject_fit_cache_max_reuses = as.numeric(cache_max_reuses))
 emc <- make_emc(dat, des, type = 'single', n_chains = 3, rt_resolution = .001)
 initial_seed <- .Random.seed
 start <- proc.time()
@@ -35,6 +38,7 @@ fit_result <- suppressWarnings(fit(emc, verbose = FALSE, cores_per_chain = 1,
 timing <- proc.time() - start
 saveRDS(list(fit = fit_result, initial_seed = initial_seed, final_seed = .Random.seed,
              timing = timing, case = kind, seed = seed, data_md5 = data_md5,
-             session = sessionInfo(), options = options()[c('emc2.fit_host','emc2.sampler_profile')]),
+             session = sessionInfo(), options = options()[c('emc2.fit_host',
+               'emc2.sampler_profile', 'emc2.subject_fit_cache_max_reuses')]),
         Sys.getenv('OUT'))
 cat('case', kind, 'seed', seed, 'timing', timing, '\n')
