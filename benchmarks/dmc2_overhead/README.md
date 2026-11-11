@@ -44,3 +44,11 @@ statistics from GNU time; peak RSS is the maximum of an individual process,
 not the aggregate tree. The separately sampled tree profile and traced fork
 counts are diagnostic runs, not direct timings. Save the full output and build
 logs outside version control, as fits can contain private data.
+
+The Step 2 conditional-fit cache uses `run_likelihood_cache.sh` and
+`analyse_likelihood_cache.R`. Set `CACHE_MAX_REUSES=Inf` to benchmark full mode
+reuse or a finite value (such as `2`) to force fresh fits periodically. With no
+override, production defaults enable reuse only for REXG, whose end-to-end
+efficiency gate passed; other models remain on fresh fits while their gates
+are evaluated. The override is the R option
+`emc2.subject_fit_cache_max_reuses`.

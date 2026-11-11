@@ -178,6 +178,49 @@ The focused worker-pool, core-budget and rebuild-overhead test selection passed
 backend and one warning emitted by the intentional worker-recycling failure
 test. The earlier focused rebuild test passed 68 expectations.
 
+### Step 2: conditional subject-fit cache
+
+The durable per-chain fit/check cache passed 258 focused expectations with no
+failures or warnings; one optional development-validation test was skipped.
+This includes exact-conditioning reuse, changed-prior refits, checkpoint/RDS
+durability, duplicate stripping, and a configurable fresh-fit cadence.
+
+Full mode reuse was compared against the pre-cache build on seven EXG and
+fourteen LNR seeds, with 1,000 draws in each of three chains. Raw data hashes
+matched within every pair. The cache intentionally changes chain RNG and
+draws; the caller RNG remained identical. No seed had a 5%, 50% or 95%
+quantile outside four combined MCSEs. In the combined chains, the largest
+standardized quantile difference was 1.02 for EXG and 1.78 for LNR.
+
+For EXG, mean fit elapsed fell from 13.56 s to 11.73 s (13.5%). Across-seed
+minimum ESS ratios were 1.025 [0.988, 1.064] for bulk and 1.053 [0.981, 1.131]
+for tail ESS; both intervals clear the 0.90 margin. Combined minimum bulk
+ESS/draw was 0.931 baseline and 0.920 candidate; tail ESS/draw was 0.919 and
+0.921. The EXG cache is enabled by default.
+
+For LNR, mean fit elapsed fell from 103.60 s to 95.20 s (8.1%), but combined
+minimum bulk ESS/draw fell from 0.772 to 0.689 and tail ESS/draw from 0.593 to
+0.512. Across-seed minimum ESS ratios were 0.919 [0.832, 1.014] for bulk and
+0.867 [0.683, 1.102] for tail; neither interval establishes the required
+non-inferiority margin. The posterior quantiles agree, but full LNR mode reuse
+does not pass the efficiency gate. A seven-seed policy that refit after two
+cache hits saved 4.0% elapsed time, with aggregate bulk ESS/draw 0.750 versus
+0.722 and tail ESS/draw 0.595 versus 0.514; periodic refitting did not resolve
+the tail-ESS loss. A diagnostic-only LNR replay had exactly the same samples
+and RNG as full reuse, pointing to cached mode reuse as the cause. Therefore,
+default fit reuse is limited to the measured REXG model; other models can opt
+in with `options(emc2.subject_fit_cache_max_reuses = Inf)` while their gates
+are evaluated. The production-default LNR replay matched baseline samples and
+all RNG states exactly (103.98 s baseline, 105.02 s candidate).
+
+The analytic bimodal probe, with exact right-mode mass 0.5 and 400 draws per
+chain, gave right-mode fractions 0.463 (baseline) and 0.519 (candidate), a
+1.57 combined-MCSE difference. Both arms visited both modes; this short probe
+checks coverage but does not establish precise mode weights. Per-seed
+quantiles, ESS and times are in `results/step2_likelihood_cache/`; reusable
+fit and multimodal analyzers are `analyse_likelihood_cache.R` and
+`analyse_multimodal_cache.R`.
+
 ## Frozen reference on common raw data
 
 For seeds 101, 202 and 303, both libraries read the same exported raw data;
