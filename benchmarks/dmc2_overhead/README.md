@@ -21,3 +21,10 @@ collect tree CPU, forks, faults and memory separately. This runner alone does
 not satisfy Step 0: the specified fixtures, repeated measurements, precision
 and posterior gates, and process-level instrumentation still need to be built
 and recorded before accepting optimizations.
+
+`psis_probe.R cold|warm` measures three concurrent child PSIS calls, launched
+from a fresh parent. Run each observation under the benchmark lock with BLAS
+threads fixed. On 2026-11-11, three cold process runs took 0.306–0.341 s wall;
+three parent-warmed runs took 0.013–0.014 s. Each child returned the same
+Pareto k (-0.2286573658) and the parent RNG state was unchanged. This isolates
+startup; it is not a rebuild-block or full-fit benchmark.
