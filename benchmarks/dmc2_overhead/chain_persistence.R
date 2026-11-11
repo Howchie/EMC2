@@ -22,7 +22,8 @@ out <- suppressWarnings(EMC2:::run_emc(
   stop_criteria = list(iter = as.integer(Sys.getenv("ITER", "60"))),
   step_size = as.integer(Sys.getenv("STEP_SIZE", "20")),
   trim = FALSE, verbose = FALSE,
-  cores_per_chain = 1L, cores_for_chains = length(emc)))
+  cores_per_chain = as.integer(Sys.getenv("CORES_PER_CHAIN", "1")),
+  cores_for_chains = as.integer(Sys.getenv("CHAINS", as.character(length(emc))))))
 elapsed <- proc.time() - started
 saveRDS(list(fit = out, caller_seed = .Random.seed, elapsed = elapsed,
              persistent = arm, input_md5 = input_md5,

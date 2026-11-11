@@ -156,10 +156,12 @@ run_emc <- function(emc, stage, stop_criteria,
   chain_process_pool <- NULL
   persistent_chain_requested <- isTRUE(getOption("emc2.persistent_chains", FALSE))
   persistent_chain_supported <- persistent_chain_requested &&
-    .Platform$OS.type == "unix" && cores_per_chain == 1L
+    .Platform$OS.type == "unix" &&
+    (cores_per_chain == 1L || cores_for_chains >= length(emc))
   if (persistent_chain_requested && !persistent_chain_supported) {
-    warning("Persistent chain processes currently require a Unix fit with ",
-            "cores_per_chain = 1; using the existing chain runner.",
+    warning("Persistent chain processes currently require Unix and, when ",
+            "cores_per_chain > 1, all chains active together; using the ",
+            "existing chain runner.",
             call. = FALSE)
   }
   on.exit({
@@ -219,15 +221,26 @@ run_emc <- function(emc, stage, stop_criteria,
         .emc_wpool_session_slot(pool_session, min(j, pool_slots))
     }
     if (persistent_chain_supported) {
-      for (j in seq_along(sub_emc)) attr(sub_emc[[j]], "emc_pool_slot") <- NULL
+      chain_samplers <- lapply(sub_emc, function(sampler) {
+        attr(sampler, "emc_pool_slot") <- NULL
+        sampler
+      })
+      chain_slots <- lapply(seq_along(sub_emc), function(j)
+        .emc_wpool_session_slot(pool_session, min(j, pool_slots)))
       if (is.null(chain_process_pool)) {
-        chain_process_pool <- .emc_chain_process_pool_start(sub_emc)
+        chain_process_pool <- .emc_chain_process_pool_start(
+          chain_samplers, slots = chain_slots)
         if (is.null(chain_process_pool)) {
           warning("Could not start persistent chain processes; using the ",
                   "existing chain runner for this fit.", call. = FALSE)
           persistent_chain_supported <- FALSE
         }
+      } else {
+        .emc_chain_process_pool_refresh_slots(chain_process_pool,
+                                              chain_samplers, chain_slots)
       }
+      if (persistent_chain_supported)
+        for (j in seq_along(sub_emc)) attr(sub_emc[[j]], "emc_pool_slot") <- NULL
     }
     if (persistent_chain_supported) {
       sub_emc <- .emc_chain_process_pool_run(

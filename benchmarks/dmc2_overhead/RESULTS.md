@@ -215,7 +215,8 @@ the retained setup reproduced the complete sampler under `all.equal`. A local
 deserialize the message. These are codec feasibility measurements only; chain
 process persistence is now available as the opt-in
 `options(emc2.persistent_chains = TRUE)` for Unix fits with
-`cores_per_chain = 1`. A synthetic three-chain, 30-block replay was 3.12x faster
+`cores_per_chain = 1`, and for higher `cores_per_chain` when all chains stay
+active together. A synthetic three-chain, 30-block replay was 3.12x faster
 at the median than forking on every block, including process-pool startup and
 shutdown, with identical final state.
 
@@ -232,6 +233,19 @@ recycling-failure test emitted its warning. The feature remains opt-in until
 the multi-core worker-retention, allocation and failure-recovery gates are
 complete. Raw fits and resource records are under
 `results/step5_chain/`; `chain_persistence.R` runs each fixed-transition arm.
+
+The full-concurrency path also supports `cores_per_chain = 2`. On the same
+saved EXG fixture, three paired runs with three chains and 60 transitions took
+3.136, 3.232 and 3.055 s with block forks, versus 2.891, 3.022 and 2.908 s
+with persistent chains (1.05–1.09x per-seed speedup). Samples, chain and caller
+RNG states, and compared continuation fields matched exactly. The current
+worker-pool test selection passed 287 expectations; two backend-specific tests
+were skipped and the intentional worker-recycling failure test emitted its
+expected warning. This smaller gain is consistent with subject likelihood
+workers still being restarted at block boundaries. The feature remains opt-in
+while retained subject-worker, partial-concurrency, allocation and
+failure-recovery gates are outstanding. Raw pairs are in
+`results/step5_chain/{base,candidate}_cpc2_{101,202,303}.rds`.
 
 An initial 100-block run without process recycling showed continued private
 memory growth: chain PSS rose from about 76–78 MiB initially to 261 MiB for

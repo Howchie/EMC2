@@ -35,9 +35,17 @@
   out
 }
 
-.emc_chain_process_serve <- function(req, ans, sampler, runner) {
+.emc_chain_process_serve <- function(req, ans, sampler, runner, slot,
+                                     other_slots) {
   if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
     return(invisible(NULL))
+  for (other in other_slots) {
+    if (is.null(other$template)) next
+    for (cn in list(other$template$wc, other$template$rc))
+      if (!is.null(cn)) try(close(cn), silent = TRUE)
+  }
+  .emc_pool_state$session_slot <- slot
+  .emc_pool_state$session_in_use <- FALSE
   rc <- fifo(req, "rb", blocking = TRUE)
   wc <- fifo(ans, "wb", blocking = TRUE)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
@@ -79,7 +87,7 @@
 }
 
 .emc_chain_process_start <- function(sampler, runner = .emc_chain_run_stage,
-                                     slot = NULL) {
+                                     slot = NULL, other_slots = list()) {
   if (Sys.info()[["sysname"]] == "Windows" || !nzchar(Sys.which("mkfifo")))
     return(NULL)
   dir <- tempfile("emc_chain_")
@@ -107,8 +115,8 @@
   old_slot <- .emc_pool_state$session_slot
   .emc_pool_state$session_slot <- slot
   on.exit(.emc_pool_state$session_slot <- old_slot, add = TRUE)
-  serve <- .emc_armed(function() .emc_chain_process_serve(req, ans, sampler,
-                                                          runner))
+  serve <- .emc_armed(function() .emc_chain_process_serve(
+    req, ans, sampler, runner, slot, other_slots))
   job <- tryCatch(parallel::mcparallel(serve(), detached = FALSE),
                   error = function(e) NULL)
   .emc_pool_state$session_slot <- old_slot
@@ -134,7 +142,15 @@
   if (!isTRUE(ready$ready) || !identical(as.integer(ready$pid), job$pid))
     return(NULL)
   success <- TRUE
-  list(dir = dir, job = job, wc = wc, rc = rc, next_id = 0L)
+  slot_pid <- if (is.null(slot$template$job)) NA_integer_ else
+    .emc_wpool_job_pid(slot$template$job)
+  list(dir = dir, job = job, wc = wc, rc = rc, next_id = 0L,
+       slot_pid = slot_pid)
+}
+
+.emc_chain_slot_pid <- function(slot) {
+  if (is.null(slot$template$job)) NA_integer_ else
+    .emc_wpool_job_pid(slot$template$job)
 }
 
 .emc_chain_process_stop <- function(worker) {
@@ -167,8 +183,8 @@
   ok <- FALSE
   on.exit(if (!ok) for (w in workers) .emc_chain_process_stop(w), add = TRUE)
   for (i in seq_along(samplers)) {
-    workers[[i]] <- .emc_chain_process_start(samplers[[i]], runner,
-                                              slot = slots[[i]])
+    workers[[i]] <- .emc_chain_process_start(
+      samplers[[i]], runner, slot = slots[[i]], other_slots = slots[-i])
     if (is.null(workers[[i]])) return(NULL)
   }
   ok <- TRUE
@@ -186,6 +202,26 @@
   stopped <- vapply(pool$workers, function(w)
     isTRUE(.emc_chain_process_stop(w)), logical(1))
   invisible(all(stopped))
+}
+
+.emc_chain_process_pool_refresh_slots <- function(pool, samplers, slots) {
+  if (is.null(pool) || length(pool$workers) != length(samplers) ||
+      length(slots) != length(samplers))
+    stop("persistent chain slots do not match the active chains", call. = FALSE)
+  for (i in seq_along(samplers)) {
+    new_pid <- .emc_chain_slot_pid(slots[[i]])
+    if (identical(pool$workers[[i]]$slot_pid, new_pid)) next
+    .emc_chain_process_stop(pool$workers[[i]])
+    replacement <- .emc_chain_process_start(
+      samplers[[i]], pool$runner, slot = slots[[i]], other_slots = slots[-i])
+    if (is.null(replacement))
+      stop(sprintf("could not refresh persistent chain process %d", i),
+           call. = FALSE)
+    pool$workers[[i]] <- replacement
+    pool$slots[[i]] <- slots[[i]]
+    pool$blocks[[i]] <- 0L
+  }
+  invisible(pool)
 }
 
 .emc_chain_process_memory_record <- function(pool) {
@@ -289,7 +325,8 @@
       if (pool$blocks[i] < restart_blocks) next
       slot <- pool$slots[[i]]
       .emc_chain_process_stop(pool$workers[[i]])
-      replacement <- .emc_chain_process_start(out[[i]], pool$runner, slot)
+      replacement <- .emc_chain_process_start(
+        out[[i]], pool$runner, slot = slot, other_slots = pool$slots[-i])
       if (is.null(replacement))
         stop(sprintf("could not restart persistent chain process %d", i),
              call. = FALSE)

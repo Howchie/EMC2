@@ -130,6 +130,32 @@ test_that("persistent chain execution matches block-fork execution", {
   }
 })
 
+test_that("persistent chains preserve template slots at full concurrency", {
+  skip_on_os("windows")
+  skip_on_cran()
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:2], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR,
+                formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_once <- function(persistent) {
+    RNGkind("L'Ecuyer-CMRG"); set.seed(82)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 2, compress = TRUE))
+    withr::local_options(list(emc2.persistent_chains = persistent))
+    suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
+      cores_per_chain = 2, step_size = 4, max_tries = 1, verbose = FALSE,
+      particle_factor = 10, stop_criteria = list(iter = 8)))
+  }
+  baseline <- fit_once(FALSE)
+  persistent <- fit_once(TRUE)
+  for (j in seq_along(baseline)) {
+    expect_identical(persistent[[j]]$samples$alpha,
+                     baseline[[j]]$samples$alpha)
+    expect_identical(persistent[[j]]$rng, baseline[[j]]$rng)
+    expect_identical(persistent[[j]]$samples$idx,
+                     baseline[[j]]$samples$idx)
+  }
+})
+
 test_that("subject cost proxies the rows the likelihood loops over", {
   d <- list(data.frame(a = 1:10), data.frame(a = 1:3))
   expect_equal(EMC2:::.emc_subject_cost(d), c(10, 3))
