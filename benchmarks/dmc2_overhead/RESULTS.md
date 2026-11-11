@@ -262,6 +262,42 @@ chain process memory bound only; retained subject workers and full allocation
 reclamation are still open. The 100-block trace and fits are in
 `results/step5_chain/memory_100_restart25.csv` and the sibling RDS/log files.
 
+### Step 5: retain sampling workers across blocks
+
+Persistent chains now retain their forked subject and one-subject likelihood
+workers across block boundaries, refresh mutable context with acknowledged
+epochs, grow pools when cores are donated, and reclaim excess workers before
+the next block. A focused integration test confirms worker PID stability and
+context advancement; another exercises context refresh, growth from two to
+four workers, and reclamation back to two. The worker-pool selection passed
+308 expectations, with two backend-specific skips and the expected warning
+from the deliberate recycling-failure test.
+
+Three paired two-core-per-chain runs (60 transitions in three blocks) took a
+mean 3.007 s inside `run_emc` with block workers and 1.501 s with retained
+workers (2.00x). Samples, chain RNG, caller RNG, and compared continuation
+fields matched exactly for all three seeds. Likelihood worker PIDs stayed
+constant and their context epochs advanced 0, 1, 2. Whole-process peak RSS was
+about 256 MiB baseline and 246 MiB candidate; system CPU rose from a mean 1.19
+to 2.06 s and minor faults from 249k to 314k. The elapsed-time win therefore
+comes with more system activity on this short two-core fixture. Forcing a
+full collection before these two-worker forks increased faults and peak RSS
+further, so that extra collection was removed; the existing collection gate
+for larger fork batches remains unchanged.
+
+A 60-block, one-transition-per-block paired run with the normal 25-block chain
+restart policy took 12.631 s baseline and 8.396 s candidate. Fits remained
+identical. Candidate peak RSS was 250 MiB versus 267 MiB, system CPU 10.92 s
+versus 13.20 s, and minor faults 969k versus 1,991k. Chain and worker PSS rose
+within each 25-block process lifetime and reset when the chain restarted; the
+largest chain PSS was 217,196 KiB. With chain restarts disabled for 60 blocks,
+candidate peak RSS reached 350,328 KiB, so the restart policy is necessary to
+bound this retained-worker path. Partial-concurrency donation/reclamation,
+failure and interrupt recovery, and rebuild jobs on the retained workers
+remain open Step 5 gates. Raw runs are in
+`results/step5_chain/worker_retention_final_pairs/`,
+`worker_retention_60blocks/`, and `worker_retention_60blocks_restart25/`.
+
 ### Step 2: conditional subject-fit cache
 
 The durable per-chain fit/check cache passed 258 focused expectations with no
