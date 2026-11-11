@@ -835,6 +835,10 @@ gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }
 
+emc2_particle_log_weights <- function(proposals, log_likelihood, group_log_density, mix, components, means, rootis, log_constants, auxiliary_components, reference_log_likelihood) {
+    .Call(`_EMC2_emc2_particle_log_weights`, proposals, log_likelihood, group_log_density, mix, components, means, rootis, log_constants, auxiliary_components, reference_log_likelihood)
+}
+
 #' Ask the kernel to signal this process when its parent dies, and let
 #' SIGTERM terminate it
 #'

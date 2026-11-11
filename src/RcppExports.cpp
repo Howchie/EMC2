@@ -3529,6 +3529,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc2_particle_log_weights
+Rcpp::NumericVector emc2_particle_log_weights(const arma::mat& proposals, Rcpp::NumericVector log_likelihood, Rcpp::NumericVector group_log_density, Rcpp::NumericVector mix, Rcpp::IntegerVector components, Rcpp::List means, Rcpp::List rootis, Rcpp::NumericVector log_constants, Rcpp::IntegerVector auxiliary_components, double reference_log_likelihood);
+RcppExport SEXP _EMC2_emc2_particle_log_weights(SEXP proposalsSEXP, SEXP log_likelihoodSEXP, SEXP group_log_densitySEXP, SEXP mixSEXP, SEXP componentsSEXP, SEXP meansSEXP, SEXP rootisSEXP, SEXP log_constantsSEXP, SEXP auxiliary_componentsSEXP, SEXP reference_log_likelihoodSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type proposals(proposalsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type log_likelihood(log_likelihoodSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type group_log_density(group_log_densitySEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type mix(mixSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type components(componentsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type means(meansSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type rootis(rootisSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type log_constants(log_constantsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type auxiliary_components(auxiliary_componentsSEXP);
+    Rcpp::traits::input_parameter< double >::type reference_log_likelihood(reference_log_likelihoodSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_particle_log_weights(proposals, log_likelihood, group_log_density, mix, components, means, rootis, log_constants, auxiliary_components, reference_log_likelihood));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_arm_parent_death
 int emc_arm_parent_death();
 RcppExport SEXP _EMC2_emc_arm_parent_death() {
@@ -4199,6 +4219,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_time_geometry_probe", (DL_FUNC) &_EMC2_bawl_time_geometry_probe, 5},
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
+    {"_EMC2_emc2_particle_log_weights", (DL_FUNC) &_EMC2_emc2_particle_log_weights, 10},
     {"_EMC2_emc_arm_parent_death", (DL_FUNC) &_EMC2_emc_arm_parent_death, 0},
     {"_EMC2_emc_host_detach", (DL_FUNC) &_EMC2_emc_host_detach, 0},
     {"_EMC2_emc_kill_group", (DL_FUNC) &_EMC2_emc_kill_group, 1},

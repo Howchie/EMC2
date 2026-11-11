@@ -1941,31 +1941,40 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
             emc_class = "numerical", emc_source = "particle"))
         prior_density <- lp
       }
-      log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = length(ks))
-      for (j in seq_along(ks)) {
-        k <- ks[j]
-        log_mix_comps[, j] <- log(mix_i[k]) + if (k == 1L) lp else if (p_idx > 0) {
-          fast_dmvnorm_rooti(
+      particle_weights <- NULL
+      if (isTRUE(getOption("emc2.particle_weights_cpp", FALSE)) &&
+          is.null(marginalise) && length(unq_components) == 1L && p_idx > 0L) {
+        particle_weights <- emc2_particle_log_weights(
+          proposals_idx, lw, lp, mix_i, as.integer(ks), mus_i, rootis,
+          log_consts, as.integer(aux_k), ref_ll)
+      }
+      if (is.null(particle_weights)) {
+        log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = length(ks))
+        for (j in seq_along(ks)) {
+          k <- ks[j]
+          log_mix_comps[, j] <- log(mix_i[k]) + if (k == 1L) lp else if (p_idx > 0) {
+            fast_dmvnorm_rooti(
+              x = proposals_idx, mean = mus_i[[k]],
+              rooti = rootis[[k]], log_const = log_consts[[k]])
+          } else 0
+        }
+        max_log <- log_mix_comps[, 1L]
+        if (ncol(log_mix_comps) > 1L) {
+          for (j in 2L:ncol(log_mix_comps))
+            max_log <- pmax(max_log, log_mix_comps[, j])
+        }
+        lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
+        infnt_idx <- is.infinite(lm) | is.na(lm)
+        if (any(infnt_idx)) {
+          fin_vals <- lm[!infnt_idx]
+          lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
+        }
+        aux_density <- numeric(nrow(proposals))
+        for (k in aux_k) {
+          aux_density <- aux_density + fast_dmvnorm_rooti(
             x = proposals_idx, mean = mus_i[[k]],
             rooti = rootis[[k]], log_const = log_consts[[k]])
-        } else 0
-      }
-      max_log <- log_mix_comps[, 1L]
-      if (ncol(log_mix_comps) > 1L) {
-        for (j in 2L:ncol(log_mix_comps))
-          max_log <- pmax(max_log, log_mix_comps[, j])
-      }
-      lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
-      infnt_idx <- is.infinite(lm) | is.na(lm)
-      if (any(infnt_idx)) {
-        fin_vals <- lm[!infnt_idx]
-        lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
-      }
-      aux_density <- numeric(nrow(proposals))
-      for (k in aux_k) {
-        aux_density <- aux_density + fast_dmvnorm_rooti(
-          x = proposals_idx, mean = mus_i[[k]],
-          rooti = rootis[[k]], log_const = log_consts[[k]])
+        }
       }
       if (!is.null(marginalise)) {
         # The rest of each particle's log weight lets the quadrature leave
@@ -1981,9 +1990,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         marg_seen[[length(marg_seen) + 1L]] <- list(
           mode = marg_grid$mode, sd = marg_grid$sd, x = proposals)
       }
-      lw_total <- lw + ref_ll - lw[1]
-      l <- lw_total + prior_density + aux_density - lm
-      weights <- exp(l - max(l))
+      if (is.null(particle_weights)) {
+        lw_total <- lw + ref_ll - lw[1]
+        l <- lw_total + prior_density + aux_density - lm
+        weights <- exp(l - max(l))
+      } else {
+        weights <- particle_weights
+      }
       idx_ll <- sample(x = nrow(proposals), size = 1, prob = weights)
       if (!is.null(marginalise)) {
         # A rejected step keeps the current state, as if the reference
