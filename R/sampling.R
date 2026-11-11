@@ -49,10 +49,11 @@ resolve_marginalise_prior <- function(marginalise, prior) {
 }
 
 compute_marginal_grid <- function(proposals, data, model, marginalise,
-                                  r_cores = 1) {
+                                  r_cores = 1,
+                                  ll_cache_validated = FALSE) {
   model_spec <- if (is.function(model)) model() else model
   set_stop_method_from_model(model_spec)
-  data <- .cache_ll_data_attrs(data)
+  if (!isTRUE(ll_cache_validated)) data <- .cache_ll_data_attrs(data)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA
   designs <- .oo_expanded_designs(data, expand = FALSE)
@@ -236,7 +237,8 @@ marginal_ll_from_grid <- function(log_terms) {
 # complete log-likelihood. Returns whether to move, with the new value and
 # complete log-likelihood.
 .marginal_delayed_accept <- function(proposals, j, grid, q, cond, t_cur,
-                                     ll_cur, data, model) {
+                                     ll_cur, data, model,
+                                     ll_cache_validated = FALSE) {
   k <- cond$k
   m <- .marginal_cond_mean(cond, proposals[c(1L, j), , drop = FALSE])
   g_cur <- .marginal_g(m[1L], cond$sd, grid$mode[1L], grid$sd[1L])
@@ -244,7 +246,9 @@ marginal_ll_from_grid <- function(log_terms) {
   t_new <- stats::rnorm(1L, g_new$mean, g_new$sd)
   row <- proposals[j, , drop = FALSE]
   row[, k] <- t_new
-  ll_new <- as.numeric(calc_ll_manager(row, dadm = data, model))
+  ll_new <- as.numeric(calc_ll_manager(
+    row, dadm = data, model,
+    ll_cache_validated = ll_cache_validated))
   log_a <- .marginal_log_ratio(ll_new, t_new, m[2L], cond$sd, q[j], g_new) -
     .marginal_log_ratio(ll_cur, t_cur, m[1L], cond$sd, q[1L], g_cur)
   list(accept = !is.na(log_a) && log(stats::runif(1L)) < log_a,
@@ -752,7 +756,8 @@ run_stage <- function(pmwgs,
     pb <- accept_progress_bar(min = 0, max = iter)
   }
 
-  data <- pmwgs$data
+  data <- .emc_prepare_sampling_ll_data(pmwgs$data)
+  pmwgs$data <- data
   nuisance <- pmwgs$nuisance
   wpool_streams <- pmwgs$rng$subjects
 
@@ -780,7 +785,8 @@ run_stage <- function(pmwgs,
     r_cores = pool_budget$likelihood, n_pars = pmwgs$n_pars,
     eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
     chains_var = chains_var, chol_caches = chol_caches,
-    hmc = hmc_plan, par_names = par_names
+    hmc = hmc_plan, par_names = par_names,
+    ll_cache_validated = TRUE
   )
   sampler_profile <- .emc_profile_enabled()
   startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
@@ -1090,11 +1096,12 @@ run_stage <- function(pmwgs,
         model = pmwgs$model, stage = stage, type = pmwgs$type, tune = tune,
         marginalise = pmwgs$marginalise,
         r_cores = core_budget$likelihood, chol_cache = chol_caches[[s]],
-        group_chol = group_chol_it)
+        group_chol = group_chol_it, ll_cache_validated = TRUE)
       out$rng_seed <- get(".Random.seed", envir = globalenv())
       if (!is.null(ens_pools))
         out$extra_ll <- .emc_ensemble_ll_candidate(ens_pools$rows[[s]], data[[s]],
-                                                   pmwgs$model)
+                                                   pmwgs$model,
+                                                   ll_cache_validated = TRUE)
       out
     }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
     if (!is.null(ens_pools)) {
@@ -1135,7 +1142,8 @@ run_stage <- function(pmwgs,
     # group Gibbs rounds and the final reselection close the sweep.
     ens_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
-                              wpool_part, ens_pools)
+                              wpool_part, ens_pools,
+                              ll_cache_validated = TRUE)
     ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
     # Then the shear (R/shear_move.R): the non-centred move of the same
     # group state.
@@ -1205,7 +1213,8 @@ run_stage <- function(pmwgs,
     if (!is.null(pmwgs$pooled)) {
       pmv <- .emc_pooled_move(pmwgs, proposals, stage, pars, group_chol_it,
                               pm_settings, wpool_streams, wpool, wpool_ctx,
-                              wpool_part, n_cores = n_cores)
+                              wpool_part, n_cores = n_cores,
+                              ll_cache_validated = TRUE)
       pmwgs <- pmv$sampler
       proposals <- pmv$proposals
       pars <- pmv$pars
@@ -1230,7 +1239,8 @@ run_stage <- function(pmwgs,
       hr <- .emc_hmc_round(hmc_plan, proposals, pars, pmwgs$type, wpool_streams,
                            data, pmwgs$model, wpool = wpool,
                            n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
-                           par_names = par_names, pick = hmc_pick)
+                           par_names = par_names, pick = hmc_pick,
+                           ll_cache_validated = TRUE)
       proposals <- hr$proposals
       wpool_streams <- hr$streams
       hmc_tasks <- hr$tasks
@@ -1496,7 +1506,8 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                type, tune, marginalise = NULL, r_cores = 1,
                                chol_cache = NULL, group_chol = NULL,
                                current_alpha = NULL, population_mu = NULL,
-                               population_var = NULL) {
+                               population_var = NULL,
+                               ll_cache_validated = FALSE) {
   attempt <- tryCatch(
     new_particle(
       s = s, data = data, pm_settings = pm_settings,
@@ -1506,7 +1517,8 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       stage = stage, type = type, tune = tune, marginalise = marginalise,
       r_cores = r_cores, chol_cache = chol_cache, group_chol = group_chol,
       current_alpha = current_alpha, population_mu = population_mu,
-      population_var = population_var
+      population_var = population_var,
+      ll_cache_validated = ll_cache_validated
     ),
     error = identity
   )
@@ -1532,14 +1544,16 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 # that depends on the state, which is not invariant; a zero-density candidate
 # is. The reference particle is the current state, so if it fails the error is
 # not a property of the candidates and is raised (the caller keeps the state).
-.emc_particle_ll_rowwise <- function(err, proposals, data, model, component) {
+.emc_particle_ll_rowwise <- function(err, proposals, data, model, component,
+                                     ll_cache_validated = FALSE) {
   cls <- if (inherits(err, "emc_failure") && !is.null(err$emc_class))
     err$emc_class else .emc_classify_failure(err)
   if (identical(.emc_failure_action(cls), "abort")) stop(err)
   ll <- vapply(seq_len(nrow(proposals)), function(r) {
     v <- tryCatch(as.numeric(calc_ll_manager(
       proposals[r, , drop = FALSE], dadm = data, model = model,
-      component = component, r_cores = 1L)), error = function(e) NA_real_)
+      component = component, r_cores = 1L,
+      ll_cache_validated = ll_cache_validated)), error = function(e) NA_real_)
     if (length(v) != 1L || is.na(v) || v == Inf) -Inf else v
   }, numeric(1))
   if (!is.finite(ll[1L])) stop(err)
@@ -1694,7 +1708,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           type, tune, marginalise = NULL, r_cores = 1,
                           chol_cache = NULL, group_chol = NULL,
                           current_alpha = NULL, population_mu = NULL,
-                          population_var = NULL)
+                          population_var = NULL,
+                          ll_cache_validated = FALSE)
 {
   direct_state <- !is.null(current_alpha) && !is.null(population_mu) &&
     !is.null(population_var)
@@ -1882,11 +1897,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         lw <- tryCatch(
           calc_ll_pooled(proposals[, is_shared, drop = FALSE], dadm = data, model,
                          component = comp_arg, r_cores = r_cores, s = s,
-                         varying = idx[is_shared]),
+                         varying = idx[is_shared],
+                         ll_cache_validated = ll_cache_validated),
           error = identity)
         if (inherits(lw, "error"))
           lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
-                                         data, model, comp_arg)
+                                         data, model, comp_arg,
+                                         ll_cache_validated = ll_cache_validated)
         lw[!is.finite(lw)] <- -Inf
       }
 
@@ -1958,7 +1975,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         marg_spec$log_offset <- prior_density + aux_density - lm
         marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
                                            data, model, marg_spec,
-                                           r_cores = r_cores)
+                                           r_cores = r_cores,
+                                           ll_cache_validated = ll_cache_validated)
         lw <- marginal_ll_from_grid(marg_grid)
         marg_seen[[length(marg_seen) + 1L]] <- list(
           mode = marg_grid$mode, sd = marg_grid$sd, x = proposals)
@@ -1972,7 +1990,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         # particle had been selected.
         proposals[, marginal_idx] <- t_cur
         da <- .marginal_delayed_accept(proposals, idx_ll, marg_grid, lw,
-                                       marg_cond, t_cur, ll_cur, data, model)
+                                       marg_cond, t_cur, ll_cur, data, model,
+                                       ll_cache_validated = ll_cache_validated)
         if (da$accept) {
           t_cur <- da$t
           ll_cur <- da$ll
@@ -2355,7 +2374,8 @@ check_prop_performance <- function(prop_performance, stage){
 }
 
 calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1,
-                           s = NULL, varying = NULL){
+                           s = NULL, varying = NULL,
+                           ll_cache_validated = FALSE){
   have_pool <- !is.null(s) && !is.null(.emc_pool_state$ll_subject) &&
     identical(s, .emc_pool_state$ll_subject) &&
     isTRUE(.emc_pool_state$ll_pool$alive)
@@ -2364,7 +2384,8 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
       proc.time()[["elapsed"]] else NA_real_
     out <- calc_ll_manager(proposals, dadm = dadm, model = model,
                            component = component, r_cores = r_cores,
-                           varying = varying)
+                           varying = varying,
+                           ll_cache_validated = ll_cache_validated)
     if (is.finite(route_started)) {
       .emc_ll_route_record(FALSE,
                            proc.time()[["elapsed"]] - route_started,
@@ -2390,7 +2411,8 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   if (!pooled) {
     out <- calc_ll_manager(proposals, dadm = dadm, model = model,
                            component = component, r_cores = 1L,
-                           varying = varying)
+                           varying = varying,
+                           ll_cache_validated = ll_cache_validated)
   }
   el <- proc.time()[["elapsed"]] - started
   actual_route <- if (pooled) "persistent_pool" else "serial"
@@ -2414,15 +2436,21 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
 }
 
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
-                            marginalise = NULL, varying = NULL){
+                            marginalise = NULL, varying = NULL,
+                            ll_cache_validated = FALSE){
   model <- .restore_custom_model_container(model, quiet = TRUE)
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component,
                                 r_cores = r_cores, marginalise = marginalise,
-                                varying = varying)
+                                varying = varying,
+                                ll_cache_validated = ll_cache_validated)
   } else{
     model <- model()
-    dadm <- .cache_ll_data_attrs(dadm)
+    # Custom R likelihoods keep the public validation path: they may have
+    # application-specific data behavior. Registered kernels can trust the
+    # block-local preparation performed by run_stage().
+    if (!isTRUE(ll_cache_validated) || is.null(model$c_name))
+      dadm <- .cache_ll_data_attrs(dadm)
     pc <- .emc_pooled_columns(proposals, dadm, varying)
     proposals <- pc$proposals
     varying <- pc$varying

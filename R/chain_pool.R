@@ -1977,7 +1977,8 @@
       ll <- lapply(seq_along(msg$subs), function(k) {
         tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]],
                                          .emc_pooled_set_one(ctx$data[[msg$subs[k]]], msg$pooled),
-                                         ctx$model),
+                                         ctx$model,
+                                         ll_cache_validated = isTRUE(ctx$ll_cache_validated)),
           error = function(e) {
             failures[[length(failures) + 1L]] <<- e
             rep(-Inf, nrow(msg$rows[[k]]))
@@ -2009,7 +2010,8 @@
         ll[[length(ll) + 1L]] <- tryCatch(
           .emc_ensemble_ll_checked(b$rows[[s]],
                                    .emc_pooled_set_one(ctx$data[[s]], b$pooled),
-                                   ctx$model),
+                                   ctx$model,
+                                   ll_cache_validated = isTRUE(ctx$ll_cache_validated)),
           error = function(e) {
             failures[[length(failures) + 1L]] <<- e
             rep(-Inf, nrow(b$rows[[s]]))
@@ -2025,7 +2027,8 @@
   if (identical(msg$kind, "ll")) {
     return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
                                      model = ctx$model, component = msg$component,
-                                     r_cores = 1L, varying = msg$varying)))
+                                     r_cores = 1L, varying = msg$varying,
+                                     ll_cache_validated = isTRUE(ctx$ll_cache_validated))))
   }
   if (identical(msg$kind, "loo")) {
     loo_warnings <- character()
@@ -2321,7 +2324,9 @@
       props[, k] <- c(msg$alpha[, k], msg$prev_ll[k])
       pm[[k]] <- msg$pm[[k]]
       seeds[[k]] <- msg$seeds[[k]]
-      extra_ll[[k]] <- .emc_pooled_rows_ll(msg$extra[[k]], data_s, ctx$model)
+      extra_ll[[k]] <- .emc_pooled_rows_ll(
+        msg$extra[[k]], data_s, ctx$model,
+        ll_cache_validated = isTRUE(ctx$ll_cache_validated))
       next
     }
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
@@ -2340,7 +2345,8 @@
       chol_cache = ctx$chol_caches[[s]], group_chol = group_chol,
       current_alpha = .emc_subject_col(msg$alpha, k),
       population_mu = msg$population_mu[, k],
-      population_var = shared$group_var
+      population_var = shared$group_var,
+      ll_cache_validated = isTRUE(ctx$ll_cache_validated)
     )
     times[k] <- sum(proc.time()[c("user.self", "sys.self")]) - t0
     props[, k] <- c(out$proposal, out$ll)
@@ -2349,7 +2355,7 @@
     # Ensemble pool members for this subject (no RNG use).
     if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
       extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], data_s,
-                                                  ctx$model)
+        ctx$model, ll_cache_validated = isTRUE(ctx$ll_cache_validated))
   }
   w_spent <- proc.time() - w_started
   ensemble_delta <- .emc_reject_delta(ensemble_rejects_before, "ensemble")

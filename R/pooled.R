@@ -116,7 +116,8 @@
 # the wrong length are failures too, not silent -Inf. This may run in a forked
 # worker, so the failures travel back as an attribute and are counted by
 # .emc_pooled_record() in the master.
-.emc_pooled_rows_ll <- function(rows, dadm, model) {
+.emc_pooled_rows_ll <- function(rows, dadm, model,
+                                ll_cache_validated = FALSE) {
   K <- nrow(rows)
   failures <- list()
   fail <- function(cond) {
@@ -132,7 +133,8 @@
   eval_rows <- function(r) {
     varying <- if (nrow(r) > 1L) apply(r, 2L, function(x) any(x != x[1L])) else NULL
     v <- as.numeric(calc_ll_manager(r, dadm = dadm, model = model,
-                                    varying = varying))
+                                    varying = varying,
+                                    ll_cache_validated = ll_cache_validated))
     if (length(v) != nrow(r))
       stop(bad_value(sprintf("pooled likelihood returned %d values for %d rows",
                              length(v), nrow(r)), "programming"))
@@ -328,7 +330,7 @@
 # transport as the particle step, rows_only mode).
 .emc_pooled_score <- function(pmwgs, rows, alpha, wpool, wpool_ctx, wpool_part,
                               pars, group_chol, pm_settings, prev_ll, streams,
-                              n_cores) {
+                              n_cores, ll_cache_validated = FALSE) {
   n <- pmwgs$n_subjects
   if (!is.null(wpool)) {
     pars$alpha <- alpha
@@ -339,7 +341,8 @@
     alive <- it$alive
   } else {
     ll <- auto_mclapply(seq_len(n), function(s) {
-      .emc_pooled_rows_ll(rows[[s]], pmwgs$data[[s]], pmwgs$model)
+      .emc_pooled_rows_ll(rows[[s]], pmwgs$data[[s]], pmwgs$model,
+                          ll_cache_validated = ll_cache_validated)
     }, mc.cores = max(1L, min(n, n_cores)))
     alive <- NULL
   }
@@ -347,14 +350,15 @@
   bad <- vapply(ll, function(x) !is.numeric(x) || length(x) != K, logical(1))
   # A failed worker reply is recomputed here, where a strict abort is raised.
   for (s in which(bad))
-    ll[[s]] <- .emc_pooled_rows_ll(rows[[s]], pmwgs$data[[s]], pmwgs$model)
+    ll[[s]] <- .emc_pooled_rows_ll(rows[[s]], pmwgs$data[[s]], pmwgs$model,
+                                   ll_cache_validated = ll_cache_validated)
   ll <- lapply(ll, .emc_pooled_record)
   list(ll = matrix(unlist(ll), nrow = K), alive = alive)
 }
 
 .emc_pooled_move <- function(pmwgs, proposals, stage, pars, group_chol,
                              pm_settings, streams, wpool, wpool_ctx, wpool_part,
-                             n_cores = 1L) {
+                             n_cores = 1L, ll_cache_validated = FALSE) {
   st <- pmwgs$pooled
   nm <- names(st$value)
   p <- length(nm)
@@ -366,7 +370,8 @@
   prev_ll <- proposals[n_pars + 1L, ]
   score <- function(rows) {
     sc <- .emc_pooled_score(pmwgs, rows, alpha, wpool, wpool_ctx, wpool_part,
-                            pars, group_chol, pm_settings, prev_ll, streams, n_cores)
+                            pars, group_chol, pm_settings, prev_ll, streams,
+                            n_cores, ll_cache_validated = ll_cache_validated)
     if (!is.null(wpool) && !is.null(sc$alive)) wpool$alive <<- sc$alive
     sc$ll
   }

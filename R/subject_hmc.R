@@ -233,7 +233,8 @@
 
 # One transition of subject s from (a0, ll0) given the group state.
 .emc_hmc_run <- function(a0, ll0, data, model, group_mu, group_var, plan_s,
-                         r_cores = 1L, par_names) {
+                         r_cores = 1L, par_names,
+                         ll_cache_validated = FALSE) {
   started <- proc.time()
   task <- list(attempted = TRUE, rows = 0L, status = "frame")
   fr <- .emc_hmc_frame(plan_s$prec, group_mu, as.matrix(group_var))
@@ -241,7 +242,8 @@
     ll_fn <- function(X) {
       colnames(X) <- par_names
       tryCatch(as.numeric(calc_ll_manager(X, dadm = data, model = model,
-                                          r_cores = r_cores)),
+                                          r_cores = r_cores,
+                                          ll_cache_validated = ll_cache_validated)),
         error = function(e) {
           cls <- .emc_reject_record(e, "particle")
           if (identical(.emc_failure_action(cls), "abort"))
@@ -274,7 +276,8 @@
     data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
     tasks[[k]] <- .emc_hmc_run(msg$alpha[, k], msg$ll[k], data_s, ctx$model,
                                msg$mu[, k], msg$var, plan_s, ctx$r_cores,
-                               ctx$par_names)
+                               ctx$par_names,
+                               ll_cache_validated = isTRUE(ctx$ll_cache_validated))
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
   }
   list(tasks = tasks, seeds = seeds)
@@ -289,7 +292,7 @@
 # draws its own selection).
 .emc_hmc_round <- function(plan, proposals, pars, type, streams, data, model,
                            wpool = NULL, n_cores = 1L, r_cores = 1L, par_names,
-                           pick = NULL) {
+                           pick = NULL, ll_cache_validated = FALSE) {
   n <- length(streams)
   p <- nrow(proposals) - 1L
   tasks <- vector("list", n)
@@ -349,13 +352,14 @@
           wpool$alive <- FALSE
         }
         res <- .emc_hmc_compute(msg_for(part[[w]]), list(
-          data = data, model = model, hmc = plan, r_cores = r_cores, par_names = par_names))
+          data = data, model = model, hmc = plan, r_cores = r_cores,
+          par_names = par_names, ll_cache_validated = ll_cache_validated))
       }
       results[[length(results) + 1L]] <- list(subs = part[[w]], res = res)
     }
   } else {
     ctx <- list(data = data, model = model, hmc = plan, r_cores = r_cores,
-                par_names = par_names)
+                par_names = par_names, ll_cache_validated = ll_cache_validated)
     out <- auto_mclapply(subs, function(s) .emc_hmc_compute(msg_for(s), ctx),
                          mc.cores = max(1L, min(n_cores, length(subs))),
                          mc.set.seed = FALSE)

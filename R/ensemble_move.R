@@ -241,9 +241,11 @@
 # Log-likelihoods of a matrix of candidate states for one subject. A failure
 # is a zero-density candidate: it is counted under the failure policy and
 # returned as -Inf (strict mode stops instead).
-.emc_ensemble_ll_checked <- function(props, data, model) {
+.emc_ensemble_ll_checked <- function(props, data, model,
+                                     ll_cache_validated = FALSE) {
   ll <- tryCatch(as.numeric(calc_ll_manager(props, dadm = data, model = model,
-                                             r_cores = 1L)),
+                                             r_cores = 1L,
+                                             ll_cache_validated = ll_cache_validated)),
     error = function(e) {
       cls <- .emc_classify_failure(e)
       stop(errorCondition(paste("Subject likelihood evaluation failed:",
@@ -260,8 +262,10 @@
   ll
 }
 
-.emc_ensemble_ll_candidate <- function(props, data, model) {
-  tryCatch(.emc_ensemble_ll_checked(props, data, model),
+.emc_ensemble_ll_candidate <- function(props, data, model,
+                                      ll_cache_validated = FALSE) {
+  tryCatch(.emc_ensemble_ll_checked(props, data, model,
+                                    ll_cache_validated = ll_cache_validated),
     error = function(e) {
       cls <- if (inherits(e, "emc_failure") && !is.null(e$emc_class))
         e$emc_class else .emc_classify_failure(e)
@@ -274,17 +278,20 @@
 
 # Pool log-likelihoods. The subject step normally returns them with its
 # particles; any subject it did not cover is evaluated here.
-.emc_ensemble_pool_ll <- function(sampler, pools) {
+.emc_ensemble_pool_ll <- function(sampler, pools,
+                                 ll_cache_validated = FALSE) {
   n <- sampler$n_subjects
   M1 <- nrow(pools$rows[[1L]])
   ll <- pools$ll
   if (is.null(ll)) ll <- vector("list", n)
   for (s in seq_len(n)) if (is.null(ll[[s]]) || length(ll[[s]]) != M1) {
     ll[[s]] <- tryCatch(
-      .emc_ensemble_ll_checked(pools$rows[[s]], sampler$data[[s]], sampler$model),
+      .emc_ensemble_ll_checked(pools$rows[[s]], sampler$data[[s]], sampler$model,
+                               ll_cache_validated = ll_cache_validated),
       error = function(e) vapply(seq_len(M1), function(i)
         .emc_ensemble_ll_candidate(pools$rows[[s]][i, , drop = FALSE],
-                                   sampler$data[[s]], sampler$model), numeric(1)))
+                                   sampler$data[[s]], sampler$model,
+                                   ll_cache_validated = ll_cache_validated), numeric(1)))
   }
   ll_new <- matrix(unlist(ll), nrow = M1)
   if (anyNA(ll_new) || any(ll_new == Inf))
@@ -363,11 +370,13 @@
 }
 
 .emc_ensemble_move <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
-                               wpool_part, pools) {
+                               wpool_part, pools,
+                               ll_cache_validated = FALSE) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
   if (is.null(pools)) return(keep)
   out <- tryCatch(.emc_ensemble_move_impl(sampler, pars, proposals, stage,
-                                          wpool, wpool_ctx, wpool_part, pools),
+                                          wpool, wpool_ctx, wpool_part, pools,
+                                          ll_cache_validated = ll_cache_validated),
                   error = identity)
   if (!inherits(out, "error")) return(out)
   cls <- if (inherits(out, "emc_failure") && length(out$emc_class))
@@ -383,7 +392,8 @@
 }
 
 .emc_ensemble_move_impl <- function(sampler, pars, proposals, stage, wpool, wpool_ctx,
-                                    wpool_part, pools) {
+                                    wpool_part, pools,
+                                    ll_cache_validated = FALSE) {
   keep <- list(sampler = sampler, pars = pars, proposals = proposals, wpool = wpool)
   if (is.null(pools)) return(keep)
   cfg <- .emc_ensemble_options()
@@ -391,7 +401,8 @@
   n_pars <- sampler$n_pars
   M <- cfg$pool
   pn <- sampler$par_names
-  ll_new <- .emc_ensemble_pool_ll(sampler, pools)
+  ll_new <- .emc_ensemble_pool_ll(sampler, pools,
+                                  ll_cache_validated = ll_cache_validated)
 
   if (!is.null(sampler$rng$gibbs))
     assign(".Random.seed", sampler$rng$gibbs, envir = globalenv())

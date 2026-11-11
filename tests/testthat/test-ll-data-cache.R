@@ -6,7 +6,7 @@
 # These tests pin both halves of the rewrite: it must still reject every
 # corruption the loop rejected, and it must stay linear.
 
-make_censored_dadm <- function(n_trials = 200, omit_every = 7L) {
+make_censored_dadm <- function(n_trials = 200, omit_every = 7L, details = FALSE) {
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
   des <- design(factors = list(subjects = 1, S = c("left", "right")),
                 Rlevels = c("left", "right"), matchfun = matchfun, model = LBA(),
@@ -23,7 +23,9 @@ make_censored_dadm <- function(n_trials = 200, omit_every = 7L) {
   # compress = FALSE so the row count tracks n_trials: compression collapses
   # duplicate rt/R rows, which would otherwise saturate the size sweep below.
   emc <- suppressMessages(make_emc(dat, des, type = "single", compress = FALSE))
-  EMC2:::.cache_ll_data_attrs(emc[[1]]$data[[1]], force_rebuild = TRUE)
+  dadm <- EMC2:::.cache_ll_data_attrs(emc[[1]]$data[[1]], force_rebuild = TRUE)
+  if (details) return(list(dadm = dadm, model = emc[[1]]$model, params = p))
+  dadm
 }
 
 valid <- function(dadm) {
@@ -93,4 +95,83 @@ test_that("validation is linear in trials, not quadratic", {
   # The bound is generous because these are sub-millisecond timings on a shared
   # machine, but it still sits far below the quadratic cost.
   expect_lt(tm(big), 4 * growth * max(tm(small), 1e-4))
+})
+
+test_that("sampling setup rebuilds stale likelihood partitions and keeps list attributes", {
+  dadm <- make_censored_dadm()
+  first_finite <- attr(dadm, "finite_rt_unique_trial_indices")[[1L]]
+  n_lR <- length(unique(as.integer(dadm[["lR"]])))
+  changed <- dadm
+  changed$rt[1L + first_finite * n_lR] <- Inf
+
+  bundle <- structure(list(changed), class = "sampling_data", marker = 17L)
+  prepared <- EMC2:::.emc_prepare_sampling_ll_data(bundle)
+
+  expect_identical(attributes(prepared), attributes(bundle))
+  expect_true(valid(prepared[[1L]]))
+  expect_false(first_finite %in%
+                 attr(prepared[[1L]], "finite_rt_unique_trial_indices"))
+
+  finite <- dadm
+  omitted <- which(!is.finite(finite$rt))
+  finite$rt[omitted] <- 1
+  finite$R[omitted] <- levels(finite$R)[[1L]]
+  finite <- EMC2:::.cache_ll_data_attrs(finite, force_rebuild = TRUE)
+  expect_true(attr(finite, "emc2_all_finite_trials"))
+  finite$rt[[1L]] <- Inf
+  refreshed <- EMC2:::.emc_prepare_sampling_ll_data(finite)
+  expect_false(attr(refreshed, "emc2_all_finite_trials"))
+  expect_true(valid(refreshed))
+})
+
+test_that("registered likelihoods reuse block validation while custom ones do not", {
+  fx <- make_censored_dadm(details = TRUE)
+  proposals <- matrix(fx$params, nrow = 1L,
+                      dimnames = list(NULL, names(fx$params)))
+  expected <- EMC2:::calc_ll_manager(proposals, fx$dadm, fx$model)
+  local_mocked_bindings(.cache_ll_data_attrs = function(...) {
+    stop("unexpected likelihood cache validation")
+  }, .package = "EMC2")
+  actual <- EMC2:::calc_ll_manager(proposals, fx$dadm, fx$model,
+                                   ll_cache_validated = TRUE)
+  expect_identical(actual, expected)
+})
+
+test_that("retained likelihood workers inherit the block validation state", {
+  seen <- NULL
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, model,
+                                                   component = NULL, r_cores = 1L,
+                                                   varying = NULL,
+                                                   ll_cache_validated = FALSE) {
+    seen <<- ll_cache_validated
+    rep(-1, nrow(proposals))
+  }, .package = "EMC2")
+  ctx <- list(data = list(data.frame(x = 1)), model = identity,
+              ll_cache_validated = TRUE)
+  msg <- list(kind = "ll", proposals = matrix(0, nrow = 2L, ncol = 1L), s = 1L)
+
+  result <- EMC2:::.emc_wpool_compute(msg, ctx)
+
+  expect_identical(result$ll, c(-1, -1))
+  expect_true(seen)
+})
+
+test_that("custom R likelihoods keep cache validation inside the manager", {
+  dadm <- make_censored_dadm()
+  original_cache <- EMC2:::.cache_ll_data_attrs
+  cache_calls <- 0L
+  local_mocked_bindings(.cache_ll_data_attrs = function(dadm, force_rebuild = FALSE) {
+    cache_calls <<- cache_calls + 1L
+    original_cache(dadm, force_rebuild = force_rebuild)
+  }, .package = "EMC2")
+
+  custom <- function() list(c_name = NULL, log_likelihood = function(pars, dadm, model) {
+    -sum(pars^2)
+  })
+  out <- EMC2:::calc_ll_manager(
+    matrix(c(0.2, -0.4), nrow = 1L, dimnames = list(NULL, c("a", "b"))),
+    dadm, custom, ll_cache_validated = TRUE)
+
+  expect_equal(cache_calls, 1L)
+  expect_length(out, 1L)
 })

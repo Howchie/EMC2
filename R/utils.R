@@ -452,6 +452,23 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   dadm
 }
 
+# Validate the likelihood partition once when a sampler block takes ownership
+# of its data. Internal registered-model calls in that block can then reuse it;
+# public likelihood entry points continue to validate on every call. A cached
+# all-finite flag is rebuilt here because those data take a fast path that cannot
+# otherwise detect changed response columns.
+.emc_prepare_sampling_ll_data <- function(x) {
+  if (is.data.frame(x)) {
+    return(.cache_ll_data_attrs(
+      x, force_rebuild = isTRUE(attr(x, "emc2_all_finite_trials"))))
+  }
+  if (!is.list(x)) return(x)
+  old_attributes <- attributes(x)
+  for (i in seq_along(x)) x[[i]] <- .emc_prepare_sampling_ll_data(x[[i]])
+  attributes(x) <- old_attributes
+  x
+}
+
 #
 # augment <- function(s,da,design)
 #   # Adds attributes to augmented data
