@@ -82,6 +82,28 @@ test_that("chain processes keep their state and obey the active-chain limit", {
   on.exit(NULL)
 })
 
+test_that("persistent chains restart only from acknowledged state", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  withr::local_options(list(emc2.persistent_chain_restart_blocks = 1L))
+  runner <- function(sampler) {
+    sampler$count <- sampler$count + 1L
+    sampler
+  }
+  sampler <- structure(list(data = 1L, model = identity, prior = list(),
+                            count = 0L), class = "pmwgs")
+  pool <- EMC2:::.emc_chain_process_pool_start(list(sampler), runner)
+  skip_if(is.null(pool), "could not start persistent chain process")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(pool), add = TRUE)
+  old_dir <- pool$workers[[1L]]$dir
+  out <- EMC2:::.emc_chain_process_pool_run(pool, list(sampler))
+  expect_identical(out[[1L]]$count, 1L)
+  expect_false(identical(pool$workers[[1L]]$dir, old_dir))
+  expect_true(EMC2:::.emc_wpool_pid_alive(pool$workers[[1L]]$job$pid))
+  expect_true(EMC2:::.emc_chain_process_pool_stop(pool))
+  on.exit(NULL)
+})
+
 test_that("persistent chain execution matches block-fork execution", {
   skip_on_os("windows")
   skip_on_cran()

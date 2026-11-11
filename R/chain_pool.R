@@ -150,7 +150,8 @@
     }
   }
   for (cn in list(worker$wc, worker$rc)) try(close(cn), silent = TRUE)
-  .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE, terminate = FALSE)
+  .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE,
+                            terminate = !stopped)
   unlink(worker$dir, recursive = TRUE)
   invisible(stopped)
 }
@@ -160,6 +161,8 @@
   if (is.null(slots)) slots <- vector("list", length(samplers))
   if (length(slots) != length(samplers))
     stop("one process slot is required per chain", call. = FALSE)
+  if (!is.null(getOption("emc2.chain_process_memory_file", NULL)))
+    .emc_pool_state$chain_process_blocks <- 0L
   workers <- vector("list", length(samplers))
   ok <- FALSE
   on.exit(if (!ok) for (w in workers) .emc_chain_process_stop(w), add = TRUE)
@@ -169,7 +172,13 @@
     if (is.null(workers[[i]])) return(NULL)
   }
   ok <- TRUE
-  list(workers = workers, next_id = 0L)
+  pool <- new.env(parent = emptyenv())
+  pool$workers <- workers
+  pool$next_id <- 0L
+  pool$blocks <- integer(length(workers))
+  pool$runner <- runner
+  pool$slots <- slots
+  pool
 }
 
 .emc_chain_process_pool_stop <- function(pool) {
@@ -177,6 +186,33 @@
   stopped <- vapply(pool$workers, function(w)
     isTRUE(.emc_chain_process_stop(w)), logical(1))
   invisible(all(stopped))
+}
+
+.emc_chain_process_memory_record <- function(pool) {
+  path <- getOption("emc2.chain_process_memory_file", NULL)
+  if (!is.character(path) || length(path) != 1L || !nzchar(path) ||
+      !dir.exists(dirname(path))) return(invisible(NULL))
+  block <- if (is.null(.emc_pool_state$chain_process_blocks)) 1L else
+    as.integer(.emc_pool_state$chain_process_blocks) + 1L
+  .emc_pool_state$chain_process_blocks <- block
+  rows <- lapply(seq_along(pool$workers), function(i) {
+    pid <- .emc_wpool_job_pid(pool$workers[[i]]$job)
+    file <- file.path("/proc", pid, "smaps_rollup")
+    lines <- if (file.exists(file))
+      tryCatch(suppressWarnings(readLines(file, warn = FALSE)),
+               error = function(e) character()) else character()
+    value <- function(key) {
+      hit <- grep(paste0("^", key, ":"), lines, value = TRUE)
+      if (!length(hit)) return(NA_real_)
+      suppressWarnings(as.numeric(sub("^[^:]+:\\s*([0-9]+).*$", "\\1", hit[1L])))
+    }
+    data.frame(block = block, chain = i, pid = pid,
+               rss_kb = value("Rss"), pss_kb = value("Pss"),
+               private_kb = value("Private_Clean") + value("Private_Dirty"))
+  })
+  write.table(do.call(rbind, rows), path, sep = ",", row.names = FALSE,
+              col.names = !file.exists(path), append = file.exists(path))
+  invisible(NULL)
 }
 
 .emc_chain_process_pool_run <- function(pool, samplers, args = list(),
@@ -236,6 +272,29 @@
       if (length(pending)) {
         next_i <- pending[[1L]]; pending <- pending[-1L]; submit(next_i)
       }
+    }
+  }
+  .emc_chain_process_memory_record(pool)
+  restart_blocks <- getOption("emc2.persistent_chain_restart_blocks", 25L)
+  if (identical(restart_blocks, FALSE) || is.null(restart_blocks)) {
+    restart_blocks <- Inf
+  } else {
+    restart_blocks <- suppressWarnings(as.numeric(restart_blocks)[1L])
+    if (!length(restart_blocks) || !is.finite(restart_blocks) ||
+        restart_blocks < 1) restart_blocks <- Inf
+  }
+  if (is.finite(restart_blocks)) {
+    for (i in seq_along(samplers)) {
+      pool$blocks[i] <- pool$blocks[i] + 1L
+      if (pool$blocks[i] < restart_blocks) next
+      slot <- pool$slots[[i]]
+      .emc_chain_process_stop(pool$workers[[i]])
+      replacement <- .emc_chain_process_start(out[[i]], pool$runner, slot)
+      if (is.null(replacement))
+        stop(sprintf("could not restart persistent chain process %d", i),
+             call. = FALSE)
+      pool$workers[[i]] <- replacement
+      pool$blocks[i] <- 0L
     }
   }
   out

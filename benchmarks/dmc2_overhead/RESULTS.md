@@ -229,9 +229,24 @@ to 151,087 (31%), system CPU from 0.93 to 0.60 s (35%), and peak RSS from
 262,128 to 256,888 KiB. The focused worker-pool tests passed 277 expectations;
 two backend-specific tests were skipped and the existing intentional
 recycling-failure test emitted its warning. The feature remains opt-in until
-the persistent worker, allocation, failure-recovery and 50-block memory gates
-below are complete. Raw fits and resource records are under
+the multi-core worker-retention, allocation and failure-recovery gates are
+complete. Raw fits and resource records are under
 `results/step5_chain/`; `chain_persistence.R` runs each fixed-transition arm.
+
+An initial 100-block run without process recycling showed continued private
+memory growth: chain PSS rose from about 76–78 MiB initially to 261 MiB for
+one chain by block 90, while RSS reached 293 MiB. The process now restarts
+after each 25 acknowledged blocks, reconstructing from the returned sampler
+state. In the 100-block, 1-transition-per-block check, each chain used four
+processes; within each 25-block segment PSS rose from roughly 82–100 MiB to
+126–133 MiB and then reset. The final block also triggered the scheduled
+proposal refresh, briefly reaching 228 MiB PSS / 261 MiB RSS before the
+acknowledged restart. A paired fork-per-block run took 10.408 s versus 7.264 s
+with persistent chains and 25-block restarts (1.43x); all three chains had
+identical samples, RNG streams and compared continuation state. This tests the
+chain process memory bound only; retained subject workers and full allocation
+reclamation are still open. The 100-block trace and fits are in
+`results/step5_chain/memory_100_restart25.csv` and the sibling RDS/log files.
 
 ### Step 2: conditional subject-fit cache
 
