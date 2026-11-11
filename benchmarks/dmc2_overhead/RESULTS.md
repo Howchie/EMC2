@@ -292,11 +292,21 @@ versus 13.20 s, and minor faults 969k versus 1,991k. Chain and worker PSS rose
 within each 25-block process lifetime and reset when the chain restarted; the
 largest chain PSS was 217,196 KiB. With chain restarts disabled for 60 blocks,
 candidate peak RSS reached 350,328 KiB, so the restart policy is necessary to
-bound this retained-worker path. Partial-concurrency donation/reclamation,
-failure and interrupt recovery, and rebuild jobs on the retained workers
-remain open Step 5 gates. Raw runs are in
+bound this retained-worker path.
+
+Persistent execution now also supports partial multi-core concurrency. Three
+paired runs used two active chain slots out of three with two cores per chain;
+mean in-`run_emc` time was 9.953 s with block forks and 2.113 s with persistent
+chains (4.71x). Samples, RNG, caller RNG, and continuation fields matched
+exactly. In the trace, the later chain received four likelihood workers after
+the earlier chains completed, then returned to its two-worker baseline at the
+next block. This validates the queued-chain donation/reclamation path on this
+fixture. Uneven-cost donation while multiple chains remain active, failure and
+interrupt recovery, and rebuild jobs on retained workers remain open Step 5
+gates. Raw runs are in
 `results/step5_chain/worker_retention_final_pairs/`,
-`worker_retention_60blocks/`, and `worker_retention_60blocks_restart25/`.
+`worker_retention_60blocks/`, `worker_retention_60blocks_restart25/`, and
+`worker_retention_partial_cpc2_cfc2/`.
 
 ### Step 2: conditional subject-fit cache
 
