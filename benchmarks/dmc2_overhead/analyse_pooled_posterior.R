@@ -27,13 +27,17 @@ collect <- function(x) {
 }
 ratios <- matrix(NA_real_, length(seeds), 2L,
                  dimnames = list(seeds, c('bulk', 'tail')))
+time_speedups <- numeric(length(seeds))
 for (i in seq_along(seeds)) {
   seed <- seeds[i]
   a <- readRDS(file.path(root, if (seed == 101) 'pooled_base.rds' else paste0('pooled_', seed, '_base.rds')))
   b <- readRDS(file.path(root, if (seed == 101) 'pooled_new.rds' else paste0('pooled_', seed, '_new.rds')))
   stopifnot(identical(a$data_md5, b$data_md5))
+  time_speedups[i] <- a$timing[['elapsed']] / b$timing[['elapsed']]
   sa <- collect(a); sb <- collect(b)
   stopifnot(identical(sa$variable, sb$variable))
+  draws_per_chain <- dim(a$fit[[1L]]$samples$alpha)[3L]
+  total_draws <- draws_per_chain * length(a$fit)
   for (kind in c('bulk', 'tail')) {
     col <- paste0('ess_', kind)
     ratios[i, kind] <- min(sb[[col]]) / min(sa[[col]])
@@ -42,11 +46,12 @@ for (i in seq_along(seeds)) {
                  abs(sa$q50 - sb$q50) / sqrt(sa$mcse_q50^2 + sb$mcse_q50^2),
                  abs(sa$q95 - sb$q95) / sqrt(sa$mcse_q95^2 + sb$mcse_q95^2))
   colnames(diffs) <- c('q05', 'q50', 'q95')
-  cat('\nseed', seed, 'elapsed base/candidate', a$timing[['elapsed']], b$timing[['elapsed']],
+  cat('\nseed', seed, 'draws per chain', draws_per_chain,
+      'elapsed base/candidate', a$timing[['elapsed']], b$timing[['elapsed']],
       'data hash', a$data_md5, '\n')
-  cat('minimum bulk ESS/draw base/candidate', min(sa$ess_bulk) / (400 * 3),
-      min(sb$ess_bulk) / (400 * 3), 'minimum tail ESS/draw', min(sa$ess_tail) / 1200,
-      min(sb$ess_tail) / 1200, '\n')
+  cat('minimum bulk ESS/draw base/candidate', min(sa$ess_bulk) / total_draws,
+      min(sb$ess_bulk) / total_draws, 'minimum tail ESS/draw', min(sa$ess_tail) / total_draws,
+      min(sb$ess_tail) / total_draws, '\n')
   cat('minimum bulk ESS/s base/candidate', min(sa$ess_bulk) / a$timing[['elapsed']],
       min(sb$ess_bulk) / b$timing[['elapsed']], 'minimum tail ESS/s',
       min(sa$ess_tail) / a$timing[['elapsed']], min(sb$ess_tail) / b$timing[['elapsed']], '\n')
@@ -61,15 +66,22 @@ for (kind in colnames(ratios)) {
   z <- log(ratios[, kind]); ci <- exp(mean(z) + c(-1, 1) * qt(.975, df = length(z) - 1) * sd(z) / sqrt(length(z)))
   cat(kind, 'geometric mean ratio', exp(mean(z)), '95% t interval', ci, '\n')
 }
+z <- log(time_speedups)
+time_ci <- exp(mean(z) + c(-1, 1) * qt(.975, df = length(z) - 1) * sd(z) / sqrt(length(z)))
+cat('elapsed-time geometric speedup', exp(mean(z)), '95% t interval', time_ci,
+    'mean paired elapsed reduction percent',
+    100 * mean(1 - 1 / time_speedups), '\n')
 # Same-code repeat is a useful control for timing-driven allocator variation.
-a <- readRDS(file.path(root, 'pooled_base.rds'))
-r <- readRDS(file.path(root, 'pooled_audit_base_repeat.rds'))
-sa <- collect(a); sr <- collect(r)
-stopifnot(identical(a$data_md5, r$data_md5))
-repeat_diff <- cbind(abs(sa$q5 - sr$q5) / sqrt(sa$mcse_q05^2 + sr$mcse_q05^2),
-                     abs(sa$q50 - sr$q50) / sqrt(sa$mcse_q50^2 + sr$mcse_q50^2),
-                     abs(sa$q95 - sr$q95) / sqrt(sa$mcse_q95^2 + sr$mcse_q95^2))
-cat('\nSame-baseline seed-101 repeat: data hash', a$data_md5,
-    'draws identical', identical(a$fit[[1]]$samples$alpha, r$fit[[1]]$samples$alpha),
-    'max quantile difference in combined MCSE', max(repeat_diff),
-    'quantile checks beyond 4 combined MCSE', sum(repeat_diff > 4), '/', length(repeat_diff), '\n')
+repeat_files <- file.path(root, c('pooled_base.rds', 'pooled_audit_base_repeat.rds'))
+if (all(file.exists(repeat_files))) {
+  a <- readRDS(repeat_files[[1L]]); r <- readRDS(repeat_files[[2L]])
+  sa <- collect(a); sr <- collect(r)
+  stopifnot(identical(a$data_md5, r$data_md5))
+  repeat_diff <- cbind(abs(sa$q5 - sr$q5) / sqrt(sa$mcse_q05^2 + sr$mcse_q05^2),
+                       abs(sa$q50 - sr$q50) / sqrt(sa$mcse_q50^2 + sr$mcse_q50^2),
+                       abs(sa$q95 - sr$q95) / sqrt(sa$mcse_q95^2 + sr$mcse_q95^2))
+  cat('\nSame-baseline seed-101 repeat: data hash', a$data_md5,
+      'draws identical', identical(a$fit[[1]]$samples$alpha, r$fit[[1]]$samples$alpha),
+      'max quantile difference in combined MCSE', max(repeat_diff),
+      'quantile checks beyond 4 combined MCSE', sum(repeat_diff > 4), '/', length(repeat_diff), '\n')
+}

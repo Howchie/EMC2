@@ -11,11 +11,12 @@ dat <- make_data(re, des, n_trials = 80)
 file <- tempfile(); saveRDS(dat, file); hash <- unname(tools::md5sum(file)); unlink(file)
 set.seed(as.integer(Sys.getenv('SEED', '101')))
 options(emc2.fit_host = FALSE, emc2.sampler_profile = TRUE)
+sample_iter <- as.integer(Sys.getenv('SAMPLE_ITER', '400'))
 emc <- make_emc(dat, des, n_chains = 3)
 start <- proc.time()
 out <- suppressWarnings(fit(emc, verbose = FALSE, cores_per_chain = 2, cores_for_chains = 2,
   step_size = 100, stop_criteria = list(preburn = list(iter = 50), burn = list(iter = 200),
-    adapt = list(iter = 200, min_unique = 1), sample = list(iter = 400))))
+    adapt = list(iter = 200, min_unique = 1), sample = list(iter = sample_iter))))
 timing <- proc.time() - start
 profile <- function(name) {
   ns <- asNamespace('EMC2')
@@ -23,6 +24,7 @@ profile <- function(name) {
   get(name, envir = ns, inherits = FALSE)()
 }
 saveRDS(list(fit = out, seed = .Random.seed, timing = timing, data_md5 = hash,
+             sample_iter = sample_iter,
              blocks = profile('.emc_block_profile'), iterations = profile('.emc_iteration_profile'),
              session = sessionInfo()), Sys.getenv('OUT'))
 cat('timing', timing, '\n')

@@ -60,6 +60,22 @@ for (kind in c('bulk', 'tail')) {
 }
 cat('pooled-chain quantile checks beyond four combined MCSE', sum(diff > 4), '/', length(diff),
     'largest standardized difference', max(diff), '\n')
+ess_ratios <- data.frame(variable = sa$variable,
+  bulk = sb$ess_bulk / sa$ess_bulk,
+  tail = sb$ess_tail / sa$ess_tail,
+  bulk_per_second = (sb$ess_bulk / sum(candidate$times)) /
+    (sa$ess_bulk / sum(base$times)),
+  tail_per_second = (sb$ess_tail / sum(candidate$times)) /
+    (sa$ess_tail / sum(base$times)))
+for (metric in names(ess_ratios)[-1L]) {
+  x <- ess_ratios[[metric]]
+  cat(metric, 'per-variable ratio median / 10th percentile / minimum / count below 0.90:',
+      median(x), unname(quantile(x, .1)), min(x), sum(x < .90), '/', length(x), '\n')
+}
+cat('maximum rank R-hat base/candidate', max(sa$rhat, na.rm = TRUE),
+    max(sb$rhat, na.rm = TRUE), '\n')
+cat('Per-variable ESS and ESS/s ratios:\n')
+print(ess_ratios, row.names = FALSE, digits = 3)
 cat('largest per-variable quantile differences:\n')
 print(data.frame(variable = sa$variable, max_mcse = apply(diff, 1L, max)), row.names = FALSE)
 cat('\nBaseline aggregate diagnostics:\n'); print(sa, width = Inf)
