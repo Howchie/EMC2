@@ -180,6 +180,14 @@ resource records and the reproducible runner/analyzer are in
 `results/step4b_simd_live/`, `results/step4b_simd_fit_live/`,
 `run_step4b_simd_fit_gate.sh` and `analyse_step4b_simd_fit_gate.R`.
 
+An exploratory prepared log-survivor formula (`log S(t) - log S(0)`) was also
+checked against the current stable `ptexg` path. It differed by at most
+2.27e-13 in the raw likelihood vector, tied in the 704-row kernel call (11 ms
+in both arms), and gave a 1.001x fit speedup across three seeds with a 95% t
+interval of 0.997–1.005x. It did not demonstrate a cost reduction; the existing
+stable survivor path is retained. The probe records are in
+`results/step4b_logsurv_live/` and `results/step4b_logsurv_fit_live/`.
+
 ### Step 3: adaptive rebuild dispatch
 
 The rebuild queue now times keyed Laplace refresh/check jobs and estimates a
