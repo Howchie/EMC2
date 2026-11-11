@@ -140,6 +140,61 @@ test_that("a failed persistent chain shuts down its retained workers", {
                           logical(1))))
 })
 
+test_that("a dead persistent chain cannot leave retained workers orphaned", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  pid_file <- tempfile("emc-killed-chain-workers-")
+  wpool_start <- EMC2:::.emc_wpool_start
+  wpool_pid <- EMC2:::.emc_wpool_job_pid
+  runner <- function(sampler, pid_file) {
+    ctx <- list(data = list(data.frame(x = 1L)), model = identity,
+                type = "single", n_pars = 1L)
+    workers <- wpool_start(
+      2L, ctx, backend = "fork", retain_across_blocks = TRUE)
+    if (is.null(workers)) stop("test workers could not start")
+    writeLines(c(as.character(Sys.getpid()),
+                 as.character(vapply(workers$jobs, wpool_pid, integer(1)))),
+               pid_file)
+    Sys.sleep(30)
+    sampler
+  }
+  sampler <- structure(list(data = list(data.frame(x = 1L)),
+                            model = identity, prior = list()), class = "pmwgs")
+  pool <- EMC2:::.emc_chain_process_pool_start(list(sampler), runner)
+  skip_if(is.null(pool), "could not start persistent chain process")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(pool), add = TRUE)
+  killer <- parallel::mcparallel({
+    deadline <- Sys.time() + 5
+    while (!file.exists(pid_file) && Sys.time() < deadline) Sys.sleep(0.01)
+    if (file.exists(pid_file)) {
+      ids <- as.integer(readLines(pid_file))
+      tools::pskill(ids[1L], signal = 9L)
+    }
+  })
+  killer_collected <- FALSE
+  on.exit({
+    if (!killer_collected) {
+      try(tools::pskill(killer$pid), silent = TRUE)
+      try(suppressWarnings(parallel::mccollect(killer, wait = TRUE)),
+          silent = TRUE)
+    }
+  }, add = TRUE)
+
+  expect_error(EMC2:::.emc_chain_process_pool_run(
+    pool, list(sampler), args = list(pid_file = pid_file)),
+    "persistent chain process exited without a reply")
+  suppressWarnings(parallel::mccollect(killer, wait = TRUE))
+  killer_collected <- TRUE
+  expect_true(file.exists(pid_file))
+  pids <- as.integer(readLines(pid_file))
+  worker_pids <- pids[-1L]
+  deadline <- Sys.time() + 5
+  while (any(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
+         Sys.time() < deadline) Sys.sleep(0.05)
+  expect_false(any(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive,
+                          logical(1))))
+})
+
 test_that("persistent chain execution matches block-fork execution", {
   skip_on_os("windows")
   skip_on_cran()
