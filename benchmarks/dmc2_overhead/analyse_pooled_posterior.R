@@ -60,3 +60,15 @@ for (kind in colnames(ratios)) {
   z <- log(ratios[, kind]); ci <- exp(mean(z) + c(-1, 1) * qt(.975, df = length(z) - 1) * sd(z) / sqrt(length(z)))
   cat(kind, 'geometric mean ratio', exp(mean(z)), '95% t interval', ci, '\n')
 }
+# Same-code repeat is a useful control for timing-driven allocator variation.
+a <- readRDS(file.path(root, 'pooled_base.rds'))
+r <- readRDS(file.path(root, 'pooled_audit_base_repeat.rds'))
+sa <- collect(a); sr <- collect(r)
+stopifnot(identical(a$data_md5, r$data_md5))
+repeat_diff <- cbind(abs(sa$q5 - sr$q5) / sqrt(sa$mcse_q05^2 + sr$mcse_q05^2),
+                     abs(sa$q50 - sr$q50) / sqrt(sa$mcse_q50^2 + sr$mcse_q50^2),
+                     abs(sa$q95 - sr$q95) / sqrt(sa$mcse_q95^2 + sr$mcse_q95^2))
+cat('\nSame-baseline seed-101 repeat: data hash', a$data_md5,
+    'draws identical', identical(a$fit[[1]]$samples$alpha, r$fit[[1]]$samples$alpha),
+    'max quantile difference in combined MCSE', max(repeat_diff),
+    'quantile checks beyond 4 combined MCSE', sum(repeat_diff > 4), '/', length(repeat_diff), '\n')
