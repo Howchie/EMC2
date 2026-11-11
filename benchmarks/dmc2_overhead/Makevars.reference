@@ -1,0 +1,5 @@
+# Match the main benchmark's compiler and optimization settings as closely as
+# the archived package's own OpenMP configuration permits.
+CXX = g++-13
+CXX17 = g++-13
+CXX17FLAGS = -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno
