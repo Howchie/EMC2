@@ -94,6 +94,33 @@ void drexg_raw(const double* rt, const double* const* cols, int n_rows,
   RexgTruncationCacheSet norm_caches;
   const bool have_norm_caches = rexg_truncation_caches(
       mu_, sigma_, tau_, t0_, n_rows, mask, isok, norm_caches);
+  if (have_norm_caches && norm_caches.size == 1) {
+    const ExgTruncationCache& cache = norm_caches.entries[0];
+#pragma omp simd
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
+          !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0 ||
+          !R_FINITE(t0_[i]) || t0_[i] < 0.0) {
+        out[i] = raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+      const double tt = rt[i] - t0_[i];
+      if (!(tt > 0.0) || !R_FINITE(tt)) {
+        out[i] = raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+      // A one-entry cache means every valid row shares these distribution
+      // parameters. Hoist tuple matching and preparation out of the density
+      // calculation while retaining dtexg's prepared log arithmetic.
+      const double log_density = dexg_prepared(
+          tt, cache.mu, cache.inverse_sigma, cache.tau_prepared,
+          cache.sigma_tau_ratio, cache.log_sigma_tau_ratio, cache.log_tau,
+          true) - cache.log_normalizer;
+      out[i] = raw_log_value(log_density, min_ll, floor_raw);
+    }
+    return;
+  }
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
@@ -126,6 +153,28 @@ void prexg_raw(const double* rt, const double* const* cols, int n_rows,
   RexgTruncationCacheSet norm_caches;
   const bool have_norm_caches = rexg_truncation_caches(
       mu_, sigma_, tau_, t0_, n_rows, mask, isok, norm_caches);
+  if (have_norm_caches && norm_caches.size == 1) {
+    const ExgTruncationCache& cache = norm_caches.entries[0];
+#pragma omp simd
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
+          !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0 ||
+          !R_FINITE(t0_[i]) || t0_[i] < 0.0) {
+        out[i] = 0.0;
+        continue;
+      }
+      const double tt = rt[i] - t0_[i];
+      const double log_surv = tt <= 0.0
+        ? 0.0
+        : ptexg(tt, cache.mu, cache.sigma, cache.tau, 0.0, R_PosInf,
+                false, true, &cache);
+      out[i] = R_FINITE(log_surv) ? std::fmin(log_surv, 0.0)
+                                  : (log_surv == R_NegInf
+                                       ? raw_log_zero(min_ll, floor_raw) : 0.0);
+    }
+    return;
+  }
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
