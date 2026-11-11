@@ -444,6 +444,24 @@ in with `options(emc2.subject_fit_cache_max_reuses = Inf)` while their gates
 are evaluated. The production-default LNR replay matched baseline samples and
 all RNG states exactly (103.98 s baseline, 105.02 s candidate).
 
+A supplementary same-build LNR comparison used the current package with the
+model-default fresh-fit policy versus `max_reuses = Inf`, isolating cache
+reuse from the surrounding code revision. On three additional seeds with
+1,000 draws per chain, mean elapsed time fell from 98.63 s to 89.43 s (9.3%).
+All 5%, 50% and 95% quantiles were within four combined MCSEs (largest
+standardized difference 1.92). Per-seed minimum bulk ESS/draw was
+0.747/0.793, 0.657/0.668 and 0.461/0.765; minimum tail ESS/draw was
+0.580/0.638, 0.464/0.541 and 0.237/0.583. The three-seed ESS ratios are
+highly variable and do not establish the 0.90 non-inferiority margin. Chain
+RNG changes are expected; caller RNG matched in two pairs and differed in one.
+The same seeds also reached the alpha ESS 800 precision target at the 400-draw
+floor in both arms. Mean time was 126.79 s fresh and 120.00 s with reuse
+(5.4% faster); minimum ESS/s ratios were 1.043, 1.051 and 0.928. This pilot
+supports keeping LNR reuse available as an opt-in, while leaving the default
+unchanged until its across-seed efficiency gate is resolved. Fits and logs are
+in `results/step2_lnr_cache_fixed_same_build/` and
+`results/step2_lnr_cache_precision_same_build/`.
+
 The analytic bimodal probe, with exact right-mode mass 0.5 and 400 draws per
 chain, gave right-mode fractions 0.463 (baseline) and 0.519 (candidate), a
 1.57 combined-MCSE difference. Both arms visited both modes; this short probe
