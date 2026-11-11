@@ -193,12 +193,16 @@ run_emc <- function(emc, stage, stop_criteria,
     } else if (stage %in% c("burn", "adapt") ||
                (stage == "sample" && (is.null(emc[[1L]]$sample_proposals_next) ||
                                       .emc_sample_rebuild_due(emc)))) {
-      emc <- .emc_laplace_refresh(emc, cores_per_chain * cores_for_chains)
+      emc <- .emc_laplace_refresh(
+        emc, cores_per_chain * cores_for_chains,
+        chain_pool = chain_process_pool, max_active = cores_for_chains)
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
     prop_started <- proc.time()[["elapsed"]]
     emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks,
-                         block_iter = progress$step_size * max(1, cur_thin))
+                         block_iter = progress$step_size * max(1, cur_thin),
+                         chain_pool = chain_process_pool,
+                         max_active = cores_for_chains)
     prop_elapsed <- proc.time()[["elapsed"]] - prop_started
     last_stage <- get_last_stage(emc)
     if(stage == "preburn"){
@@ -415,7 +419,8 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   if (n_sample < 100) 100L else 2L * as.integer(n_sample)
 }
 
-add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
+add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L,
+                          chain_pool = NULL, max_active = length(emc)){
   prof <- .emc_profile_enabled()
   split <- c(chain = 0, eff = 0)
   proposal_started <- if (prof) proc.time()[["elapsed"]] else NA_real_
@@ -443,7 +448,8 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
     emc <- create_chain_proposals(
       emc, samples_idx = sample_window, do_block = stage != "sample",
       stage = stage)
-    emc <- .emc_check_likelihood_fits(emc, n_cores)
+    emc <- .emc_check_likelihood_fits(
+      emc, n_cores, chain_pool = chain_pool, max_active = max_active)
     # The shear plan uses only checked fits, so it is built after the checks.
     emc <- .emc_shear_set_plans(emc, sample_window, stage, n_cores)
     emc <- .emc_collapsed_set_plans(emc, sample_window, stage, n_cores)

@@ -104,6 +104,99 @@ test_that("persistent chains restart only from acknowledged state", {
   on.exit(NULL)
 })
 
+test_that("persistent chain rebuilds use retained workers with original subject seeds", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  RNGkind("L'Ecuyer-CMRG"); set.seed(911)
+  ctx <- list(data = list(data.frame(x = 1:10), data.frame(x = 1:4)),
+              model = identity, type = "single", n_pars = 1L,
+              par_names = "x")
+  workers <- EMC2:::.emc_wpool_start(
+    2L, ctx, backend = "fork", retain_across_blocks = TRUE)
+  skip_if(is.null(workers), "could not start retained rebuild workers")
+  pool_state <- EMC2:::.emc_pool_state
+  old_pool <- pool_state$subject_pool
+  pool_state$subject_pool <- workers
+  on.exit({
+    EMC2:::.emc_wpool_stop(workers)
+    pool_state$subject_pool <- old_pool
+  }, add = TRUE)
+  worker_pids <- vapply(workers$jobs, EMC2:::.emc_wpool_job_pid, integer(1))
+  sampler <- structure(list(data = ctx$data, model = ctx$model,
+    prior = list(), n_pars = 1L,
+    samples = list(alpha = matrix(0, 1L, 2L,
+                                  dimnames = list("x", NULL)), idx = 1L)),
+    class = "pmwgs")
+  expect_length(worker_pids, 2L)
+  expect_true(all(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  seed1 <- .Random.seed
+  seed2 <- parallel::nextRNGStream(seed1)
+  tasks <- lapply(seq_len(2L), function(s) {
+    prior <- list(mu = 0, var = matrix(1))
+    mode <- s / 10
+    covariance <- matrix(0.5)
+    check_key <- EMC2:::.emc_laplace_check_key_values(
+      "test-config", s, mode, covariance, prior)
+    list(operation = "refresh", subject = s, prior = prior,
+         hit = TRUE,
+         result = list(alpha = mode, ll = -0.5, covariance = covariance,
+           proposal_mode = mode, start_covariance = covariance,
+           lik = list(prec = matrix(1), lin = mode)),
+         key = list(subject = s), x0 = NULL, current_alpha = 0,
+         proposal_prior_scale = 4,
+         check_entries = list(list(key = check_key,
+           check = list(pareto_k = 0.1, outside = 0, status = "ok"))),
+         config = "test-config", pooled = NULL, par_names = "x",
+         seed = if (s == 1L) seed1 else seed2)
+  })
+  expected <- lapply(tasks, EMC2:::.emc_laplace_rebuild_compute, ctx = ctx)
+  actual <- EMC2:::.emc_chain_process_rebuild(tasks, sampler)
+  expect_identical(actual, expected)
+  expect_true(all(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive, logical(1))))
+
+  process <- EMC2:::.emc_chain_process_pool_start(list(sampler))
+  skip_if(is.null(process), "could not start persistent chain process")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(process), add = TRUE)
+  routed <- EMC2:::.emc_chain_process_pool_rebuild(
+    process, list(sampler), list(tasks), list(ctx))[[1L]]
+  expect_identical(routed, expected)
+})
+
+test_that("a failed persistent chain rebuild retries its original tasks", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  parent_pid <- Sys.getpid()
+  local_mocked_bindings(
+    .emc_laplace_rebuild_compute = function(task, ctx) {
+      if (Sys.getpid() != parent_pid) stop("injected rebuild interruption")
+      list(check = list(pareto_k = 0, outside = 0, status = "ok"),
+           check_key = task$check_key, seed = task$seed)
+    },
+    .package = "EMC2")
+  ctx <- list(data = list(data.frame(x = 1:3)), model = identity,
+              type = "single", n_pars = 1L, par_names = "x")
+  sampler <- structure(list(data = ctx$data, model = ctx$model, prior = list(),
+    n_pars = 1L,
+    samples = list(alpha = matrix(0, 1L, 1L,
+                                  dimnames = list("x", NULL)), idx = 1L)),
+    class = "pmwgs")
+  pool <- EMC2:::.emc_chain_process_pool_start(list(sampler))
+  skip_if(is.null(pool), "could not start persistent chain process")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(pool), add = TRUE)
+  before <- pool$workers[[1L]]$job$pid
+  task <- list(operation = "check", subject = 1L, prior = list(mu = 0,
+    var = matrix(1)), mode = 0, covariance = matrix(1), check_key = NULL,
+    check_entries = list(), config = NULL, pooled = NULL, par_names = "x",
+    seed = c(1L, 2L, 3L, 4L, 5L, 6L, 7L))
+  out <- EMC2:::.emc_chain_process_pool_rebuild(
+    pool, list(sampler), list(list(task)), list(ctx))
+  expect_identical(out[[1L]][[1L]]$seed, task$seed)
+  expect_identical(out[[1L]][[1L]]$check$status, "ok")
+  expect_false(identical(pool$workers[[1L]]$job$pid, before))
+  expect_true(EMC2:::.emc_wpool_pid_alive(pool$workers[[1L]]$job$pid))
+})
+
 test_that("a failed persistent chain shuts down its retained workers", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))

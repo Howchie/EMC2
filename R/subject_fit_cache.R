@@ -144,11 +144,18 @@
 .emc_laplace_check_key <- function(chain, subject, mode, covariance, prior) {
   version <- chain$likelihood_cache_version
   if (!is.list(version) || is.null(version$config)) return(NULL)
-  list(config = version$config, subject = as.integer(subject),
+  .emc_laplace_check_key_values(
+    version$config, subject, mode, covariance, prior,
+    if (is.null(chain$pooled)) NULL else chain$pooled$value)
+}
+
+.emc_laplace_check_key_values <- function(config, subject, mode, covariance,
+                                           prior, pooled = NULL) {
+  list(config = config, subject = as.integer(subject),
        mode = as.numeric(mode), covariance = unname(as.matrix(covariance)),
        prior_mu = as.numeric(prior$mu),
        prior_var = unname(as.matrix(prior$var)),
-       pooled = chain$pooled$value)
+       pooled = pooled)
 }
 
 .emc_laplace_check_lookup <- function(chain, subject, key) {

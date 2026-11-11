@@ -71,6 +71,17 @@
       .emc_wpool_send(wc, list(id = msg$id, stopped = TRUE))
       break
     }
+    if (identical(msg$command, "rebuild")) {
+      result <- tryCatch(.emc_chain_process_rebuild(msg$tasks, sampler),
+                         error = identity)
+      reply <- if (inherits(result, "error")) {
+        list(id = msg$id, error = result)
+      } else list(id = msg$id, results = result)
+      if (!is.null(msg$done)) try(file.create(msg$done), silent = TRUE)
+      sent <- .emc_wpool_send(wc, reply)
+      if (!sent || inherits(result, "error")) break
+      next
+    }
     warnings <- character()
     result <- tryCatch(withCallingHandlers({
       sampler <- .emc_chain_state_apply(sampler, msg$state)
@@ -349,6 +360,150 @@
              call. = FALSE)
       pool$workers[[i]] <- replacement
       pool$blocks[i] <- 0L
+    }
+  }
+  out
+}
+
+# Rebuild jobs run on the same workers retained by this chain's sampling
+# process. A lost worker pool falls back to the owning chain process; each task
+# restores its original subject RNG seed before it computes.
+.emc_chain_process_rebuild <- function(tasks, sampler) {
+  pool_name <- if (!is.null(.emc_pool_state$subject_pool) &&
+                   isTRUE(.emc_pool_state$subject_pool$alive)) {
+    "subject_pool"
+  } else "subject_ll_pool"
+  pool <- .emc_pool_state[[pool_name]]
+  ctx <- if (!is.null(pool) && !is.null(pool$ctx)) pool$ctx else
+    list(data = sampler$data, model = sampler$model,
+         par_names = rownames(sampler$samples$alpha), n_pars = sampler$n_pars)
+  ctx$data <- sampler$data
+  run <- function(task) .emc_laplace_rebuild_compute(task, ctx)
+  if (is.null(pool) || !isTRUE(pool$alive) || !length(pool$jobs))
+    return(lapply(tasks, run))
+
+  costs <- .emc_subject_cost(ctx$data)
+  task_cost <- vapply(tasks, function(task) costs[[task$subject]], numeric(1))
+  partition <- .emc_lpt_partition(task_cost, pool$n)
+  messages <- lapply(partition, function(idx) list(
+    kind = "laplace_rebuild_batch", tasks = tasks[idx]))
+  sent <- vapply(seq_len(pool$n), function(w) {
+    if (!length(partition[[w]])) return(TRUE)
+    .emc_wpool_request(pool, w, messages[[w]])
+  }, logical(1))
+  replies <- vector("list", pool$n)
+  if (all(sent)) replies <- lapply(seq_len(pool$n), function(w) {
+    if (!length(partition[[w]])) return(list(results = list()))
+    .emc_wpool_reply(pool, w)
+  })
+  valid <- all(vapply(seq_len(pool$n), function(w)
+    !length(partition[[w]]) ||
+      (is.list(replies[[w]]) && is.list(replies[[w]]$results) &&
+       length(replies[[w]]$results) == length(partition[[w]]) &&
+       all(vapply(replies[[w]]$results, function(x)
+         is.list(x) && !is.null(x$seed), logical(1)))), logical(1)))
+  if (!valid) {
+    pool$alive <- FALSE
+    .emc_pool_state[[pool_name]] <- pool
+    detail <- if (!all(sent)) "request send failed" else {
+      failed <- vapply(replies, function(reply) {
+        if (!is.list(reply)) return("worker returned no reply")
+        if (!is.null(reply$failed)) return(as.character(reply$failed)[1L])
+        if (!is.list(reply$results)) return("worker reply has no results")
+        "worker result omitted its subject seed"
+      }, character(1))
+      paste(unique(failed[nzchar(failed)]), collapse = "; ")
+    }
+    .emc_wpool_degraded(paste0(
+      "retained rebuild worker failed (", detail,
+      "); retrying in its chain"))
+    return(lapply(tasks, run))
+  }
+  out <- vector("list", length(tasks))
+  for (w in seq_len(pool$n)) if (length(partition[[w]]))
+    out[partition[[w]]] <- replies[[w]]$results
+  out
+}
+
+# Fan one chain's rebuild tasks out over its retained worker pool. Rebuild
+# tasks are independent and carry explicit subject streams, so an LPT batch per
+# worker keeps scheduling overhead low while balancing uneven subjects.
+.emc_chain_process_pool_rebuild <- function(pool, samplers, tasks_by_chain,
+                                           contexts,
+                                           max_active = length(samplers)) {
+  if (is.null(pool) || length(pool$workers) != length(samplers) ||
+      length(tasks_by_chain) != length(samplers) ||
+      length(contexts) != length(samplers)) return(NULL)
+  max_active <- max(1L, min(length(samplers), as.integer(max_active)))
+  out <- vector("list", length(samplers))
+  pending <- which(lengths(tasks_by_chain) > 0L)
+  active <- integer()
+  ids <- integer(length(samplers))
+  recover <- function(i) {
+    worker <- pool$workers[[i]]
+    for (cn in list(worker$wc, worker$rc)) try(close(cn), silent = TRUE)
+    .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE, terminate = TRUE)
+    unlink(worker$dir, recursive = TRUE)
+    replacement <- .emc_chain_process_start(
+      samplers[[i]], pool$runner, slot = pool$slots[[i]],
+      other_slots = pool$slots[-i])
+    if (is.null(replacement))
+      stop(sprintf("could not restart persistent chain process %d after rebuild failure", i),
+           call. = FALSE)
+    pool$workers[[i]] <- replacement
+    lapply(tasks_by_chain[[i]], function(task)
+      .emc_laplace_rebuild_compute(task, contexts[[i]]))
+  }
+  submit <- function(i) {
+    worker <- pool$workers[[i]]
+    pool$next_id <- pool$next_id + 1L
+    id <- pool$next_id
+    marker <- file.path(worker$dir, paste0("done_", id))
+    unlink(marker)
+    ok <- .emc_wpool_send(worker$wc, list(
+      command = "rebuild", id = id, done = marker,
+      tasks = tasks_by_chain[[i]]))
+    if (!ok) {
+      out[[i]] <<- recover(i)
+      return(FALSE)
+    }
+    ids[i] <<- id
+    active <<- c(active, i)
+    TRUE
+  }
+  while (length(pending) && length(active) < max_active) {
+    i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
+  }
+  while (length(active)) {
+    finished <- active[vapply(active, function(i) {
+      file.exists(file.path(pool$workers[[i]]$dir,
+                            paste0("done_", ids[i])))
+    }, logical(1))]
+    if (!length(finished)) {
+      dead <- active[!vapply(active, function(i)
+        .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
+      if (length(dead)) finished <- dead else {
+        Sys.sleep(0.001)
+        next
+      }
+    }
+    for (i in finished) {
+      worker <- pool$workers[[i]]
+      reply <- tryCatch(.emc_wpool_recv(
+        worker$rc, deadline = .emc_wpool_deadline(),
+        alive = local({ pid <- worker$job$pid
+          function() .emc_wpool_pid_alive(pid) })), error = function(e) NULL)
+      if (is.list(reply) && identical(as.integer(reply$id), ids[i]) &&
+          is.list(reply$results) &&
+          length(reply$results) == length(tasks_by_chain[[i]])) {
+        out[[i]] <- reply$results
+      } else {
+        out[[i]] <- recover(i)
+      }
+      active <- active[active != i]
+      if (length(pending)) {
+        next_i <- pending[[1L]]; pending <- pending[-1L]; submit(next_i)
+      }
     }
   }
   out
@@ -1832,6 +1987,10 @@
       list(ll = ll, failures = failures,
            cpu = unname(spent[["user.self"]] + spent[["sys.self"]]))
     }))
+  }
+  if (identical(msg$kind, "laplace_rebuild_batch")) {
+    return(list(results = lapply(
+      msg$tasks, .emc_laplace_rebuild_compute, ctx = ctx)))
   }
   if (identical(msg$kind, "subject_ll_claim")) {
     return(.emc_with_preserved_rng({

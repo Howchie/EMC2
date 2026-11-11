@@ -238,9 +238,8 @@ test_that("an exact likelihood diagnostic is reused but changed inputs are check
 test_that("a hierarchical prior change refits from the cached conditional mode", {
   calls <- list()
   local_mocked_bindings(
-    .emc_burn_subject_mode = function(sampler, s, x0 = NULL, ...) {
+    .emc_burn_subject_mode = function(sampler, s, x0 = NULL, prior = NULL, ...) {
       calls[[length(calls) + 1L]] <<- if (is.null(x0)) "cold" else x0
-      prior <- EMC2:::.emc_burn_subject_prior(sampler, s)
       list(alpha = prior$mu, ll = 0, covariance = diag(2),
            proposal_mode = prior$mu, start_covariance = diag(2),
            lik = list(prec = diag(2), lin = prior$mu))
