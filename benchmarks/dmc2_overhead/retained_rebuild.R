@@ -48,9 +48,32 @@ if (exists(".emc_chain_process_rebuild", envir = asNamespace("EMC2"),
     } else {
       vapply(subject_pool$jobs, function(job) as.integer(job$pid), integer(1))
     }
+    read_smaps <- function(pid) {
+      lines <- tryCatch(readLines(sprintf("/proc/%d/smaps_rollup", pid),
+                                 warn = FALSE), error = function(e) character())
+      value <- function(key) {
+        hit <- grep(paste0("^", key, ":"), lines, value = TRUE)
+        if (!length(hit)) return(NA_real_)
+        suppressWarnings(as.numeric(sub(
+          "^[^:]+:\\s*([0-9]+).*$", "\\1", hit[[1L]])))
+      }
+      c(rss = value("Rss"), pss = value("Pss"),
+        private = value("Private_Clean") + value("Private_Dirty"))
+    }
+    self_mem <- read_smaps(Sys.getpid())
+    worker_mem <- if (length(worker_pids)) {
+      do.call(rbind, lapply(worker_pids, read_smaps))
+    } else matrix(numeric(), nrow = 0L, ncol = 3L,
+                  dimnames = list(NULL, c("rss", "pss", "private")))
+    worker_total <- vapply(colnames(worker_mem), function(nm) {
+      x <- worker_mem[, nm]
+      if (!length(x) || all(!is.finite(x))) NA_real_ else sum(x, na.rm = TRUE)
+    }, numeric(1))
     if (length(trace_path) && nzchar(trace_path)) {
       cat(Sys.getpid(), length(tasks), pool_name,
-          paste(worker_pids, collapse = ","), "\n",
+          paste(worker_pids, collapse = ","),
+          paste(c(round(self_mem), round(worker_total)), collapse = ","),
+          "\n",
           file = trace_path, append = TRUE, sep = " ")
     }
   })

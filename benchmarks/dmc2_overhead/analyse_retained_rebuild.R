@@ -67,7 +67,7 @@ trace <- candidate$rebuild_worker_trace
 trace_parts <- strsplit(trimws(trace), "[[:space:]]+")
 trace_ok <- length(trace_parts) >= 3L && all(vapply(trace_parts, function(x)
   length(x) >= 4L && identical(x[[3L]], "subject_pool") &&
-    length(strsplit(x[[4L]], ",", fixed = TRUE)[[1L]]) == 2L,
+    length(strsplit(x[[4L]], ",", fixed = TRUE)[[1L]]) >= 2L,
   logical(1)))
 worker_pids_stable <- if (trace_ok) {
   grouped <- split(seq_along(trace_parts),
@@ -77,6 +77,25 @@ worker_pids_stable <- if (trace_ok) {
   length(grouped) == 3L && all(lengths(grouped) >= 2L) &&
     all(lengths(worker_sets) == 1L)
 } else FALSE
+memory <- lapply(trace_parts, function(x) {
+  if (length(x) < 5L) return(NULL)
+  values <- suppressWarnings(as.numeric(strsplit(x[[5L]], ",", fixed = TRUE)[[1L]]))
+  if (length(values) != 6L) return(NULL)
+  c(chain_pid = as.numeric(x[[1L]]),
+    total_pss_mib = sum(values[c(2L, 5L)], na.rm = TRUE) / 1024,
+    total_private_mib = sum(values[c(3L, 6L)], na.rm = TRUE) / 1024)
+})
+memory <- Filter(Negate(is.null), memory)
+memory_summary <- if (length(memory)) {
+  memory <- as.data.frame(do.call(rbind, memory))
+  groups <- split(memory, memory$chain_pid)
+  paste(vapply(names(groups), function(pid) {
+    x <- groups[[pid]]
+    sprintf("chain %s PSS %.1f->%.1f MiB, private %.1f->%.1f MiB",
+      pid, x$total_pss_mib[[1L]], x$total_pss_mib[[nrow(x)]],
+      x$total_private_mib[[1L]], x$total_private_mib[[nrow(x)]])
+  }, character(1)), collapse = "; ")
+} else "not recorded"
 mode_failures <- sum(vapply(candidate$fit, function(chain)
   sum(chain$burn_mode_stats$laplace_status == "mode failed", na.rm = TRUE),
   numeric(1)))
@@ -90,6 +109,8 @@ cat(sprintf(paste0("seed %d: baseline %.3f s, candidate %.3f s, speedup %.3fx; "
             same_samples(baseline$fit, candidate$fit), same_rng,
             same_continuation, same_schedule, same_caller_rng, length(trace),
             worker_pids_stable, mode_failures))
+cat("rebuild-entry retained memory (chain + subject workers): ",
+    memory_summary, "\n", sep = "")
 if (!exact) {
   different <- state_fields[!vapply(state_fields, function(nm)
     same_field(baseline$fit, candidate$fit, nm), logical(1))]

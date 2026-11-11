@@ -241,8 +241,9 @@ to 151,087 (31%), system CPU from 0.93 to 0.60 s (35%), and peak RSS from
 262,128 to 256,888 KiB. The focused worker-pool tests passed 277 expectations;
 two backend-specific tests were skipped and the existing intentional
 recycling-failure test emitted its warning. The feature remains opt-in until
-the multi-core worker-retention, allocation and failure-recovery gates are
-complete. Raw fits and resource records are under
+multi-core worker-retention, allocation and failure-recovery gates are
+complete; this initial one-core result did not close them. Raw fits and
+resource records are under
 `results/step5_chain/`; `chain_persistence.R` runs each fixed-transition arm.
 
 The full-concurrency path also supports `cores_per_chain = 2`. On the same
@@ -253,9 +254,9 @@ RNG states, and compared continuation fields matched exactly. The current
 worker-pool test selection passed 287 expectations; two backend-specific tests
 were skipped and the intentional worker-recycling failure test emitted its
 expected warning. This smaller gain is consistent with subject likelihood
-workers still being restarted at block boundaries. The feature remains opt-in
-while retained subject-worker, partial-concurrency, allocation and
-failure-recovery gates are outstanding. Raw pairs are in
+workers still being restarted at block boundaries. At this point, retained
+subject-worker, partial-concurrency, allocation and failure-recovery gates
+were still outstanding. Raw pairs are in
 `results/step5_chain/{base,candidate}_cpc2_{101,202,303}.rds`.
 
 An initial 100-block run without process recycling showed continued private
@@ -312,12 +313,46 @@ chains (4.71x). Samples, RNG, caller RNG, and continuation fields matched
 exactly. In the trace, the later chain received four likelihood workers after
 the earlier chains completed, then returned to its two-worker baseline at the
 next block. This validates the queued-chain donation/reclamation path on this
-fixture. Uneven-cost donation while multiple chains remain active, failure and
-interrupt recovery, and rebuild jobs on retained workers remain open Step 5
-gates. Raw runs are in
+fixture. Uneven-cost donation while multiple chains remain active and a live
+interrupt of persistent execution remain open Step 5 gates; worker/task retry,
+chain failure/kill cleanup, and retained-worker rebuilds are covered below.
+Raw runs are in
 `results/step5_chain/worker_retention_final_pairs/`,
 `worker_retention_60blocks/`, `worker_retention_60blocks_restart25/`, and
 `worker_retention_partial_cpc2_cfc2/`.
+
+### Step 5: rebuilds on retained subject workers
+
+Persistent chain processes now dispatch Laplace refresh and conditional-check
+tasks to their retained subject worker pools. A cache-miss regression was
+caught during the first benchmark attempt: the synthetic sampler's alpha store
+was a matrix although the mode-start code indexes it in three dimensions. The
+worker now constructs the expected `parameter × subject × draw` array, and a
+focused regression test exercises a real cache miss. A worker transport
+failure test also verifies that the original subject tasks and seeds are
+retried once, without committing a partial result.
+
+The fixed-schedule gate resumed the same saved three-chain, 40-subject state
+(fixture MD5 `5311a12528551a748ec0bb76e8564390`) for two 100-transition sample
+blocks, with two active chains and two cores per chain. Across seeds 101, 202
+and 303, baseline elapsed times were 240.744, 242.293 and 242.194 s; retained
+rebuild times were 241.535, 241.373 and 241.557 s. The means were 241.744 and
+241.488 s (1.001x), an effective tie. Every pair had identical samples, chain
+and caller RNG, continuation state after removing measured timing fields, and
+allocation/HMC schedule. All six rebuild batches per candidate used retained
+subject pools, worker PIDs stayed stable within each chain, and there were no
+mode failures. Treat this as a correctness pass with no demonstrated runtime
+gain.
+
+At rebuild entry, the seed-303 trace measured combined chain-plus-worker PSS
+across two rebuilds per chain. PSS increased by 2.3–8.3 MiB and private memory
+by 2.2–9.4 MiB; each chain retained the same worker PIDs. One chain had four
+workers after receiving queued-chain capacity. This is a short repeated-rebuild
+check, not a long-run memory-growth bound. Uneven-cost donation while multiple
+chains remain active and a live interrupt of persistent execution remain open
+Step 5 gates. Focused worker-pool tests cover task retry, chain failure and
+kill cleanup. Raw fits, timings and the memory trace are in
+`results/step5_retained_rebuild_fixed/`.
 
 ### Step 2: conditional subject-fit cache
 
