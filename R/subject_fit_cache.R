@@ -66,9 +66,11 @@
   emc
 }
 
-# Only REXG has cleared the end-to-end efficiency gate. Keep the cache
-# available for other models through an explicit option while more gates are
-# gathered, but avoid changing their default transition behavior meanwhile.
+# REXG is the only registered native model enabled by default. LNR failed the
+# tail-ESS gate. The 18-seed multimodal custom fixture passed, but custom R
+# likelihoods can capture mutable state that the cache key cannot describe, so
+# keep them opt-in through the explicit override while more cache contracts are
+# evaluated.
 .emc_subject_fit_cache_max_reuses <- function(sampler) {
   override <- getOption("emc2.subject_fit_cache_max_reuses", NULL)
   if (is.numeric(override) && length(override) == 1L &&
