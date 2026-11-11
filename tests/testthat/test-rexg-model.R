@@ -114,6 +114,43 @@ test_that("REXG compiled likelihood includes zero-truncation normalizer", {
   expect_equal(as.numeric(ll), expected, tolerance = 1e-10)
 })
 
+test_that("REXG race truncation evaluates shared endpoint tuples", {
+  data("forstmann", package = "EMC2")
+  lI_fun <- function(d) factor(rep(1, nrow(d)), levels = 1)
+  matchfun <- function(d) d$S == d$lR
+  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ,
+                   drop = FALSE]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(
+    data = dat, model = REXG, matchfun = matchfun,
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
+    functions = list(lI = lI_fun), UT = 2
+  )
+  emc <- make_emc(dat, des, type = "single", n_chains = 1, compress = FALSE)
+  dadm <- emc[[1L]]$data[[1L]]
+  model <- emc[[1L]]$model()
+  p_types <- names(model$p_types)
+  designs <- lapply(p_types, function(nm) {
+    d <- attr(dadm, "designs")[[nm]]
+    d[attr(d, "expand"), , drop = FALSE]
+  })
+  names(designs) <- p_types
+  p <- stats::setNames(rep(-5, length(p_types)), p_types)
+  sampled <- rownames(emc[[1L]]$samples$alpha)
+  p[sampled] <- as.numeric(emc[[1L]]$samples$alpha[, 1L, 1L])
+  particles <- matrix(rep(p, each = 4L), nrow = 4L,
+                      dimnames = list(NULL, p_types))
+
+  ll <- EMC2:::calc_ll_oo(
+    particles, dadm, constants = attr(dadm, "constants"), designs = designs,
+    type = model$c_name, bounds = model$bound, transforms = model$transform,
+    pretransforms = model$pre_transform, p_types = p_types,
+    min_ll = log(1e-10), trend = model$trend
+  )
+  expect_true(all(is.finite(ll)))
+  expect_identical(ll, rep(ll[[1L]], length(ll)))
+})
+
 test_that("REXG compiled log density stays accurate through both tails", {
   lI_fun <- function(d) factor(rep(1, nrow(d)), levels = 1)
   model <- plain_link(REXG)()

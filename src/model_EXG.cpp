@@ -43,6 +43,32 @@ bool rexg_truncation_caches(const double* mu, const double* sigma,
   return caches.size > 0;
 }
 
+bool rexg_logS_truncation_caches(const double* mu, const double* sigma,
+                                 const double* tau, const double* t0,
+                                 int n_lR, int n_unique_trials,
+                                 const int* trunc_mask, const int* isok,
+                                 RexgTruncationCacheSet& caches) {
+  caches.size = 0;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    for (int k = 0; k < n_lR; ++k) {
+      const int r = start + k;
+      if (!isok[r] || R_IsNA(mu[r]) || R_IsNA(sigma[r]) || R_IsNA(tau[r]) ||
+          R_IsNA(t0[r]) || sigma[r] <= 0.0 || tau[r] <= 0.0 ||
+          !R_FINITE(t0[r]) || t0[r] < 0.0) continue;
+      if (caches.find(mu[r], sigma[r], tau[r]) != nullptr) continue;
+      if (caches.size == RexgTruncationCacheSet::max_entries) {
+        caches.size = 0;
+        return false;
+      }
+      caches.entries[caches.size++] = make_exg_truncation_cache(
+          mu[r], sigma[r], tau[r], 0.0, R_PosInf);
+    }
+  }
+  return caches.size > 0;
+}
+
 }  // namespace
 
 void drexg_raw(const double* rt, const double* const* cols, int n_rows,
@@ -114,6 +140,10 @@ void rexg_logS_at_t(double t, const double* const* cols,
   const double* sigma_ = cols[emc2col::rexg::sigma];
   const double* tau_   = cols[emc2col::rexg::tau];
   const double* t0_    = cols[emc2col::rexg::t0];
+  RexgTruncationCacheSet norm_caches;
+  const bool have_norm_caches = rexg_logS_truncation_caches(
+      mu_, sigma_, tau_, t0_, n_lR, n_unique_trials, trunc_mask, isok_all,
+      norm_caches);
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -128,7 +158,10 @@ void rexg_logS_at_t(double t, const double* const* cols,
       }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double log_surv = ptexg(tt, mu_[r], sigma_[r], tau_[r], 0.0, R_PosInf, false, true);
+      const ExgTruncationCache* norm_cache = have_norm_caches
+        ? norm_caches.find(mu_[r], sigma_[r], tau_[r]) : nullptr;
+      const double log_surv = ptexg(tt, mu_[r], sigma_[r], tau_[r], 0.0,
+                                    R_PosInf, false, true, norm_cache);
       if (!R_FINITE(log_surv)) {
         if (log_surv == R_NegInf) { bad = true; break; }
         continue;
