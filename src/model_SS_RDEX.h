@@ -202,6 +202,8 @@ static inline SsStopCtx ss_rdex_stop_ctx_from_matrix(const NumericMatrix& pars,
   c.n_go = n;
   c.muS = pars(0, 5); c.sigS = pars(0, 6); c.tauS = pars(0, 7); c.lbS = pars(0, 10);
   c.acc_surv = &ss_rdex_acc_surv_raw;
+  c.stop_cache = make_exg_truncation_cache(c.muS, c.sigS, c.tauS,
+                                            c.lbS, R_PosInf);
   return c;
 }
 

@@ -181,6 +181,14 @@ static inline SsStopCtx ss_texg_stop_ctx_from_matrix(const NumericMatrix& pars,
   c.n_go = n;
   c.muS = pars(0, 3); c.sigS = pars(0, 4); c.tauS = pars(0, 5); c.lbS = pars(0, 9);
   c.acc_surv = &ss_texg_acc_surv_raw;
+  c.stop_cache = make_exg_truncation_cache(c.muS, c.sigS, c.tauS,
+                                            c.lbS, R_PosInf);
+  c.acc_caches.reserve(static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const double* a = acc_buf.data() + SS_ACC_STRIDE * i;
+    c.acc_caches.push_back(make_exg_truncation_cache(
+        a[0], a[1], a[2], a[3], R_PosInf));
+  }
   return c;
 }
 

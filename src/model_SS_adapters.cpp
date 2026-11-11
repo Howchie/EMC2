@@ -780,6 +780,16 @@ static inline SsStopCtx ss_make_stop_ctx(const SsTrialEvalCtx& c) {
   sc.muS = c.stop_g0[0]; sc.sigS = c.stop_g0[1];
   sc.tauS = c.stop_g0[2]; sc.lbS = c.stop_g0[3];
   sc.acc_surv = c.M->acc_surv;
+  sc.stop_cache = make_exg_truncation_cache(
+      sc.muS, sc.sigS, sc.tauS, sc.lbS, R_PosInf);
+  if (c.M->cache_exg_truncation) {
+    sc.acc_caches.reserve(static_cast<size_t>(c.n_go));
+    for (int i = 0; i < c.n_go; ++i) {
+      const double* a = c.acc_go + SS_ACC_STRIDE * i;
+      sc.acc_caches.push_back(make_exg_truncation_cache(
+          a[0], a[1], a[2], a[3], R_PosInf));
+    }
+  }
   return sc;
 }
 

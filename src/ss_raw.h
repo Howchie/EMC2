@@ -50,7 +50,8 @@ using ss_acc_fill_fn  = void (*)(const double* const* cols, int row, double* acc
 using ss_stop_fill_fn = void (*)(const double* const* cols, int row, double* stop4);
 using ss_acc_lpdf_fn  = double (*)(double t, const double* acc4);   // log density
 using ss_acc_lsurv_fn = double (*)(double t, const double* acc4);   // log survivor
-using ss_acc_surv_fn  = double (*)(double t, const double* acc4);   // survivor
+using ss_acc_surv_fn  = double (*)(double t, const double* acc4,
+                                   const ExgTruncationCache* cache); // survivor
 
 struct SsRawModel {
   ss_acc_fill_fn  fill_acc;
@@ -58,6 +59,7 @@ struct SsRawModel {
   ss_acc_lpdf_fn  acc_lpdf;
   ss_acc_lsurv_fn acc_lsurv;
   ss_acc_surv_fn  acc_surv;
+  bool cache_exg_truncation;
   bool clamp_empty_window;  // RDEX: ub -> lo + 1e-12; TEXG: return min_ll
   bool try_analytic1;       // TEXG only: n_go==1, upper==Inf closed form
   int idx_tf;
@@ -74,6 +76,8 @@ struct SsStopCtx {
   int n_go;
   double muS, sigS, tauS, lbS;   // stop block (first GO row, as before)
   ss_acc_surv_fn acc_surv;
+  ExgTruncationCache stop_cache;
+  std::vector<ExgTruncationCache> acc_caches;
   // Shift for the scaled-log fallback integrand (see
   // ss_stop_success_shifted_integrand_raw); unused by the natural routes.
   double log_scale = 0.0;
@@ -83,11 +87,15 @@ struct SsStopCtx {
 // the NumericMatrix versions term for term (same early exits, same order).
 inline double ss_stop_success_integrand_raw(double x, void* p) {
   const SsStopCtx* c = static_cast<const SsStopCtx*>(p);
-  const double fS = dtexg(x, c->muS, c->sigS, c->tauS, c->lbS, R_PosInf, false);
+  const double fS = dtexg(x, c->muS, c->sigS, c->tauS, c->lbS,
+                          R_PosInf, false, &c->stop_cache);
   if (fS <= 0.0) return 0.0;
   double S_go_all = 1.0;
   for (int i = 0; i < c->n_go; ++i) {
-    S_go_all *= c->acc_surv(x + c->SSD, c->acc_go + SS_ACC_STRIDE * i);
+    const ExgTruncationCache* cache = c->acc_caches.empty()
+      ? nullptr : &c->acc_caches[static_cast<size_t>(i)];
+    S_go_all *= c->acc_surv(x + c->SSD,
+                            c->acc_go + SS_ACC_STRIDE * i, cache);
     if (S_go_all <= 0.0) return 0.0;
   }
   return fS * S_go_all;
@@ -97,11 +105,15 @@ inline double ss_stop_success_integrand_raw(double x, void* p) {
 // form and the survivor product is accumulated in log space.  Used by the
 // scaled-log fallbacks below when the natural product underflows.
 inline double ss_stop_success_log_integrand_raw(double x, const SsStopCtx* c) {
-  const double log_fS = dtexg(x, c->muS, c->sigS, c->tauS, c->lbS, R_PosInf, true);
+  const double log_fS = dtexg(x, c->muS, c->sigS, c->tauS, c->lbS,
+                              R_PosInf, true, &c->stop_cache);
   if (log_fS == R_NegInf || ISNAN(log_fS)) return R_NegInf;
   double log_S = 0.0;
   for (int i = 0; i < c->n_go; ++i) {
-    const double S = c->acc_surv(x + c->SSD, c->acc_go + SS_ACC_STRIDE * i);
+    const ExgTruncationCache* cache = c->acc_caches.empty()
+      ? nullptr : &c->acc_caches[static_cast<size_t>(i)];
+    const double S = c->acc_surv(x + c->SSD,
+                                 c->acc_go + SS_ACC_STRIDE * i, cache);
     if (!(S > 0.0)) return R_NegInf;
     log_S += std::log(S);
   }
@@ -287,14 +299,16 @@ inline double ss_texg_acc_lpdf_raw(double t, const double* a) {
 inline double ss_texg_acc_lsurv_raw(double t, const double* a) {
   return ptexg(t, a[0], a[1], a[2], a[3], R_PosInf, false, true);
 }
-inline double ss_texg_acc_surv_raw(double t, const double* a) {
-  return ptexg(t, a[0], a[1], a[2], a[3], R_PosInf, false, false);
+inline double ss_texg_acc_surv_raw(double t, const double* a,
+                                   const ExgTruncationCache* cache) {
+  return ptexg(t, a[0], a[1], a[2], a[3], R_PosInf, false, false, cache);
 }
 
 inline const SsRawModel& ss_texg_raw_model() {
   static const SsRawModel m = {
     &ss_texg_fill_acc_raw, &ss_texg_fill_stop_raw,
     &ss_texg_acc_lpdf_raw, &ss_texg_acc_lsurv_raw, &ss_texg_acc_surv_raw,
+    /*cache_exg_truncation=*/true,
     /*clamp_empty_window=*/false, /*try_analytic1=*/true,
     /*idx_tf=*/emc2col::ss_texg::tf, /*idx_gf=*/emc2col::ss_texg::gf
   };
@@ -331,7 +345,8 @@ inline double ss_rdex_acc_lsurv_raw(double t, const double* a) {
   if (!(dt > 0.)) return 0.0;  // log(1)
   return log1m(pigt_impl(dt, a[0], a[1], a[2]));
 }
-inline double ss_rdex_acc_surv_raw(double t, const double* a) {
+inline double ss_rdex_acc_surv_raw(double t, const double* a,
+                                   const ExgTruncationCache* /*cache*/) {
   const double dt = t - a[3];
   if (!(dt > 0.)) return 1.0;
   return 1.0 - pigt_impl(dt, a[0], a[1], a[2]);
@@ -341,6 +356,7 @@ inline const SsRawModel& ss_rdex_raw_model() {
   static const SsRawModel m = {
     &ss_rdex_fill_acc_raw, &ss_rdex_fill_stop_raw,
     &ss_rdex_acc_lpdf_raw, &ss_rdex_acc_lsurv_raw, &ss_rdex_acc_surv_raw,
+    /*cache_exg_truncation=*/false,
     /*clamp_empty_window=*/true, /*try_analytic1=*/false,
     /*idx_tf=*/emc2col::ss_rdex::tf, /*idx_gf=*/emc2col::ss_rdex::gf
   };
