@@ -103,6 +103,29 @@ This completes the measured configurable-bound stop-success paths in
 that supply a stable parameter tuple remain to be measured before claiming the
 full plan's Step 4a.
 
+### Step 3: adaptive rebuild dispatch
+
+The rebuild queue now times keyed Laplace refresh/check jobs and estimates a
+serial total against an LPT parallel makespan plus observed startup overhead.
+Serial execution is selected only when its prediction is at least 10% lower;
+otherwise the existing parallel route remains in use. Focused dispatcher tests
+cover selection, order, RNG preservation, error propagation and timing
+calibration.
+
+Three paired forced-rebuild replays used the same saved three-chain, 40-subject
+starting state (fixture RDS MD5 `5311a12528551a748ec0bb76e8564390`), with two
+sample blocks and two active chains. Candidate/baseline in-process elapsed
+times were 91.920/93.199 s, 93.405/92.692 s and 93.877/94.012 s. The median
+paired ratio was 0.999; this is effectively tied. Chain samples and subject
+RNG states were identical in all pairs. In the two instrumented, order-reversed
+replays, all four recorded job batches stayed parallel: they contained 40, 65
+or 120 jobs, and predicted serial work was 2.7–3.9 times the parallel estimate.
+The whole-fit fixture therefore validates the no-regression path but does not
+exercise serial selection. Candidate wall time, CPU and minor faults were also
+within run-to-run variation (raw records in
+`results/step3_dispatch/`). A focused small/uneven likelihood workload is still
+needed to establish a benefit before calling Step 3 complete.
+
 The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
 warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.
 The separate instrumented EXG runs each had 913 likelihood batch calls (12,786
