@@ -9,9 +9,10 @@ BASE_CACHE_WARM_START=${BASE_CACHE_WARM_START:-0}
 NEW_CACHE_WARM_START=${NEW_CACHE_WARM_START:-0}
 SEEDS=${SEEDS:-"101 202 303"}
 CASES=${CASES:-"EXG LNR"}
+ARM_ORDER=${ARM_ORDER:-"base new"}
 for case_name in $CASES; do
   for seed_value in $SEEDS; do
-    for arm in base new; do
+    for arm in $ARM_ORDER; do
       if [[ "$arm" == base ]]; then
         lib=$BASE_LIB
         cache_max_reuses=$BASE_CACHE_MAX_REUSES

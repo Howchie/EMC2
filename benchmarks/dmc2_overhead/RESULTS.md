@@ -462,6 +462,23 @@ unchanged until its across-seed efficiency gate is resolved. Fits and logs are
 in `results/step2_lnr_cache_fixed_same_build/` and
 `results/step2_lnr_cache_precision_same_build/`.
 
+A separate 14-seed precision comparison tested exact-key optimizer warm starts
+while still refitting the Laplace approximation on every refresh
+(`emc2.subject_fit_cache_warm_start = TRUE`, with mode reuse disabled in both
+arms). Every run reached the alpha ESS 800 target; all 5%, 50% and 95%
+quantiles were within four combined MCSEs, with a largest standardized
+difference of 2.90. The candidate took a mean 125.72 s versus 128.35 s for
+fresh optimizer starts (2.1% lower elapsed time); the paired geometric
+speedup was 1.020 [0.998, 1.043], which includes a tie. Minimum ESS-per-draw
+ratios were 0.993 [0.892, 1.106] for bulk and 1.047 [0.880, 1.247] for tail.
+The lower bounds narrowly miss the 0.90 non-inferiority gate, so this is not
+enough evidence to enable the option by default. Keep it available as an
+opt-in for further evaluation. This policy intentionally changes chain RNG
+streams; caller RNG differed in two of the fourteen pairs. One pair ran in
+reverse arm order as a timing-order check. Raw fits are in
+`results/step2_lnr_warm_start_precision/`; run
+`analyse_lnr_warm_start.R` with the same seed list to reproduce the summary.
+
 The analytic bimodal probe, with exact right-mode mass 0.5 and 400 draws per
 chain, gave right-mode fractions 0.463 (baseline) and 0.519 (candidate), a
 1.57 combined-MCSE difference. Both arms visited both modes; this short probe
