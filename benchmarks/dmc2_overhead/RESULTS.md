@@ -69,23 +69,25 @@ per-seed summaries and aggregate diagnostics are in
 
 ### Step 4a: shared-tuple REXG truncation cache
 
-The first Step 4a slice caches natural and log truncation terms when all active
-rows in a raw REXG batch share the exact same `(mu, sigma, tau)` tuple. Batches
-with varying tuples retain the prior row-by-row route. On the 704-row,
-256-particle likelihood fixture, all 256 outputs were bit-identical to the
-frozen baseline; median call time over ten repetitions was 0.028 s before and
-0.0135 s after (2.07x). A full EXG fixed-transition fit using the warmed
-pre-cache build versus the cache build took 16.526 s and 11.507 s; every chain's
-samples, RNG, and compared continuation fields were identical. Related EXG
-truncation, tail, stop-signal and raw-path tests passed 113 expectations; one
-optional development-validation test was skipped. See
-`results/rexg_cache_comparison.txt`, `results/rexg_kernel_fit_comparison.txt`,
+The Step 4a cache stores natural and log truncation terms for up to 16 exact
+`(mu, sigma, tau)` tuples per raw REXG batch. Batches with more than 16 tuples
+retain the prior row-by-row route. On the 704-row, 256-particle fixture, all
+256 outputs were bit-identical to the frozen baseline; median call time over
+ten repetitions was 0.028 s before and 0.014 s after (2.00x). A second fixture
+with four parameter cells and 19,492 rows also produced bit-identical outputs,
+with median time 0.934 s before and 0.623 s after (1.50x). A full EXG
+fixed-transition fit using the warmed pre-cache build versus the cache build
+took 16.529 s and 11.255 s; every chain's samples, RNG, and compared
+continuation fields were identical. Related EXG truncation, tail, stop-signal
+and raw-path tests passed 113 expectations; one optional development-validation
+test was skipped. See `results/rexg_cache_comparison.txt`,
+`results/rexg_cells_comparison.txt`, `results/rexg_kernel_fit_comparison.txt`,
 and `results/rexg_kernel_tests.log`.
 
-This is the constant-tuple fast path, not the complete Step 4a coverage. Batches
-with multiple parameter tuples and configurable stop-signal truncation bounds
-still use the old route; those are the next kernel cases to cover before
-claiming Step 4a complete.
+This completes the repeated-normalization cache for the raw REXG kernel's
+zero-truncated density and survivor routes when a batch has at most 16 distinct
+parameter tuples. Configurable lower bounds in SSEXG/RDEX and scalar contexts
+remain to be measured and covered before claiming the full plan's Step 4a.
 
 The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
 warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.
