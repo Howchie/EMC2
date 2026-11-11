@@ -103,6 +103,32 @@ This completes the measured configurable-bound stop-success paths in
 that supply a stable parameter tuple remain to be measured before claiming the
 full plan's Step 4a.
 
+### Step 4b: stable EXG tails and prepared kernel parameters
+
+The REXG raw likelihood now evaluates the density through a scaled normal-tail
+factor, computes the lower CDF from a scaled-tail difference, and forms the
+upper CDF from the direct survivor terms. This removes the earlier `z < -8`
+Mills-series approximation and avoids cancellation in the zero-truncation
+normalizer at large `sigma / tau`. Each exact cached parameter tuple also
+retains inverse sigma, the sigma/tau ratio, and log scales, avoiding repeated
+division and logarithms for every likelihood row.
+
+The focused EXG and stop-success tests passed 134 expectations with no failures
+or warnings. The numerical checks cover the former tail-approximation boundary,
+deep left and right tails, a 100:1 sigma/tau ratio, and scales down to 1e-6.
+Against the frozen pre-Step-4b build, the 704-row by 256-particle native
+likelihood call used identical data and differed by at most 2.27e-12 in log
+likelihood; median time fell from 0.014 s to 0.012 s (1.17x).
+
+Three paired default-host EXG fits (seeds 101, 202 and 303) each reached 1,000
+draws per chain. Mean elapsed time fell from 12.102 s to 11.603 s (4.1%). All
+5%, 50% and 95% quantiles were within four combined MCSEs; the largest
+standardized difference was 3.14e-8. Minimum bulk and tail ESS ratios were
+exactly 1.0 for each seed, with identical caller and chain RNG states. The
+alpha arrays differ only at floating-point scale (maximum absolute difference
+3.30e-9). Raw timings, fits, and the posterior-gate report are in the ignored
+`results/step4b_final/` directory.
+
 ### Step 3: adaptive rebuild dispatch
 
 The rebuild queue now times keyed Laplace refresh/check jobs and estimates a

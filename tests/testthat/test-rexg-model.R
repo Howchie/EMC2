@@ -113,3 +113,118 @@ test_that("REXG compiled likelihood includes zero-truncation normalizer", {
 
   expect_equal(as.numeric(ll), expected, tolerance = 1e-10)
 })
+
+test_that("REXG compiled log density stays accurate through both tails", {
+  lI_fun <- function(d) factor(rep(1, nrow(d)), levels = 1)
+  model <- plain_link(REXG)()
+  des <- design(
+    factors = list(subjects = 1, S = 1), Rlevels = 1,
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
+    functions = list(lI = lI_fun), model = plain_link(REXG)
+  )
+  mu <- 0.4; sigma <- 0.03; tau <- 0.1; t0 <- 0.05
+  # Includes the old z = (x - mu) / sigma - sigma / tau approximation
+  # boundary and points deep enough into the left tail to expose cancellation.
+  x <- c(1e-4, 0.01, 0.03, 0.169, 0.4, 0.55, 1.3, 5)
+  log_sum_exp_R <- function(a, b) {
+    h <- max(a, b)
+    h + log(exp(a - h) + exp(b - h))
+  }
+  log_survival_zero <- log_sum_exp_R(
+    pnorm(-mu / sigma, lower.tail = FALSE, log.p = TRUE),
+    mu / tau + 0.5 * (sigma / tau)^2 +
+      pnorm(-mu / sigma - sigma / tau, log.p = TRUE)
+  )
+  expected <- vapply(x, function(xx) {
+    y <- (xx - mu) / sigma
+    -log(tau) + (mu - xx) / tau + 0.5 * (sigma / tau)^2 +
+      pnorm(y - sigma / tau, log.p = TRUE) - log_survival_zero
+  }, numeric(1))
+
+  p <- c(mu = log(mu), sigma = log(sigma), tau = log(tau), t0 = log(t0))
+  p_types <- names(model$p_types)
+  for (i in seq_along(x)) {
+    dat <- data.frame(subjects = factor(1), S = factor(1),
+                      R = factor(1, levels = 1), rt = t0 + x[i])
+    invisible(capture.output({
+      dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+      model_i <- attr(dadm, "model")()
+      designs <- lapply(p_types, function(nm) {
+        d <- attr(dadm, "designs")[[nm]]
+        d[attr(d, "expand"), , drop = FALSE]
+      })
+      names(designs) <- p_types
+      ll <- EMC2:::calc_ll_oo(
+        matrix(p, nrow = 1, dimnames = list(NULL, names(p))), dadm,
+        constants = attr(dadm, "constants"), designs = designs,
+        type = model_i$c_name, bounds = model_i$bound,
+        transforms = model_i$transform, pretransforms = model_i$pre_transform,
+        p_types = p_types, min_ll = -1000, trend = model_i$trend
+      )
+    }))
+    expect_equal(as.numeric(ll), expected[i], tolerance = 2e-10)
+  }
+})
+
+test_that("REXG compiled density handles small scales and extreme ratios", {
+  lI_fun <- function(d) factor(rep(1, nrow(d)), levels = 1)
+  model_factory <- plain_link(REXG)
+  des <- design(
+    factors = list(subjects = 1, S = 1), Rlevels = 1,
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
+    functions = list(lI = lI_fun), model = model_factory
+  )
+  cases <- list(
+    list(mu = 0.4, sigma = 0.03, tau = 0.1,
+         x = c(0.0001, 0.169, 0.38877, 0.4, 1, 5)),
+    list(mu = 0.4, sigma = 0.1, tau = 0.001,
+         x = c(0.001, 0.1, 0.4, 0.6, 1)),
+    list(mu = 0.4, sigma = 1e-4, tau = 2e-4,
+         x = c(0.0001, 0.3995, 0.4, 0.4005, 0.5)),
+    list(mu = 0.4, sigma = 1e-6, tau = 1e-6,
+         x = c(0.399995, 0.4, 0.400005))
+  )
+  log_sum_exp_R <- function(a, b) {
+    h <- max(a, b)
+    h + log(exp(a - h) + exp(b - h))
+  }
+
+  for (case in cases) {
+    mu <- case$mu; sigma <- case$sigma; tau <- case$tau; t0 <- 0.05
+    log_survival_zero <- log_sum_exp_R(
+      pnorm(-mu / sigma, lower.tail = FALSE, log.p = TRUE),
+      mu / tau + 0.5 * (sigma / tau)^2 +
+        pnorm(-mu / sigma - sigma / tau, log.p = TRUE)
+    )
+    expected <- vapply(case$x, function(xx) {
+      y <- (xx - mu) / sigma
+      -log(tau) + (mu - xx) / tau + 0.5 * (sigma / tau)^2 +
+        pnorm(y - sigma / tau, log.p = TRUE) - log_survival_zero
+    }, numeric(1))
+    p <- c(mu = log(mu), sigma = log(sigma), tau = log(tau), t0 = log(t0))
+    p_types <- names(model_factory()$p_types)
+
+    for (i in seq_along(case$x)) {
+      dat <- data.frame(subjects = factor(1), S = factor(1),
+                        R = factor(1, levels = 1), rt = t0 + case$x[i])
+      invisible(capture.output({
+        dadm <- EMC2:::design_model(dat, des, compress = FALSE,
+                                     rt_resolution = NULL)
+        model_i <- attr(dadm, "model")()
+        designs <- lapply(p_types, function(nm) {
+          d <- attr(dadm, "designs")[[nm]]
+          d[attr(d, "expand"), , drop = FALSE]
+        })
+        names(designs) <- p_types
+        ll <- EMC2:::calc_ll_oo(
+          matrix(p, nrow = 1, dimnames = list(NULL, names(p))), dadm,
+          constants = attr(dadm, "constants"), designs = designs,
+          type = model_i$c_name, bounds = model_i$bound,
+          transforms = model_i$transform, pretransforms = model_i$pre_transform,
+          p_types = p_types, min_ll = -1e20, trend = model_i$trend
+        )
+      }))
+      expect_equal(as.numeric(ll), expected[i], tolerance = 2e-10)
+    }
+  }
+})

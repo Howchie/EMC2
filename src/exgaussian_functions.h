@@ -13,6 +13,128 @@ using namespace Rcpp;
 
 const double SIG_TAU_EPS = 1e-12;
 
+// H(x) = exp(x^2 / 2) Phi(-x), evaluated without forming either a tiny
+// Gaussian tail or the compensating exponential. This is the scaled normal
+// tail used by the fast ex-Gaussian density path. The rational coefficients
+// are Cody's normal-tail approximation (the same coefficients used in the
+// R normal CDF implementation).
+inline double exg_normal_tail_factor(double x, double* derivative = nullptr) {
+  if (emc2_isinf(x)) {
+    if (derivative) *derivative = -0.0;
+    return 0.0;
+  }
+  if (x <= 0.67448975) {
+    const double u = x * x;
+    const double numerator = (((0.065682337918207449113 * u +
+      2.2352520354606839287) * u + 161.02823106855587881) * u +
+      1067.6894854603709582) * u + 18154.981253343561249;
+    const double denominator = (((u + 47.20258190468824187) * u +
+      976.09855173777669322) * u + 10260.932208618978205) * u +
+      45507.789335026729956;
+    const double central = x * numerator / denominator;
+    const double h = std::exp(0.5 * u) * (0.5 - central);
+    if (derivative) *derivative = x * h - 0.39894228040143267794;
+    return h;
+  }
+  if (x <= 5.6568542494923801952) {
+    constexpr double c[] = {1.0765576773720192317e-8, 0.39894151208813466764,
+      8.8831497943883759412, 93.506656132177855979, 597.27027639480026226,
+      2494.5375852903726711, 6848.1904505362823326, 11602.651437647350124,
+      9842.7148383839780218};
+    constexpr double d[] = {1.0, 22.266688044328115691, 235.38790178262499861,
+      1519.377599407554805, 6485.558298266760755, 18615.571640885098091,
+      34900.952721145977266, 38912.003286093271411, 19685.429676859990727};
+    double numerator = c[0], denominator = d[0], dn = 0.0, dd = 0.0;
+    for (int i = 1; i < 9; ++i) {
+      if (derivative) { dn = dn * x + numerator; dd = dd * x + denominator; }
+      numerator = numerator * x + c[i];
+      denominator = denominator * x + d[i];
+    }
+    const double h = numerator / denominator;
+    if (derivative) *derivative = (dn - h * dd) / denominator;
+    return h;
+  }
+  const double inv = 1.0 / x;
+  const double u = inv * inv;
+  constexpr double p[] = {0.02307344176494017303, 0.21589853405795699,
+    0.1274011611602473639, 0.022235277870649807, 0.001421619193227893466,
+    2.9112874951168792e-5};
+  constexpr double q[] = {1.0, 1.28426009614491121, 0.468238212480865118,
+    0.0659881378689285515, 0.00378239633202758244, 7.29751555083966205e-5};
+  double numerator = p[0], denominator = q[0], dn = 0.0, dd = 0.0;
+  for (int i = 1; i < 6; ++i) {
+    if (derivative) { dn = dn * u + numerator; dd = dd * u + denominator; }
+    numerator = numerator * u + p[i];
+    denominator = denominator * u + q[i];
+  }
+  const double r = numerator / denominator;
+  if (derivative) {
+    *derivative = -u * (0.39894228040143267794 - 3.0 * u * r -
+      2.0 * u * u * (dn - r * dd) / denominator);
+  }
+  return (0.39894228040143267794 - u * r) * inv;
+}
+
+inline double exg_normal_tail_difference(double x, double width) {
+  if (!(width > 0.0)) return 0.0;
+  if (width < 0.1 * (1.0 + std::max(0.0, x))) {
+    constexpr double nodes[] = {0.095012509837637440185, 0.28160355077925891323,
+      0.45801677765722738634, 0.61787624440264374845, 0.75540440835500303390,
+      0.86563120238783174388, 0.94457502307323257608, 0.98940093499164993260};
+    constexpr double weights[] = {0.18945061045506849629, 0.18260341504492358887,
+      0.16915651939500238634, 0.14959598881657673208, 0.12462897125553387205,
+      0.09515851168249278481, 0.06225352393864789286, 0.02715245941175409485};
+    double sum = 0.0;
+    for (int i = 0; i < 8; ++i) {
+      const double left = x + width * (0.5 - 0.5 * nodes[i]);
+      const double right = x + width * (0.5 + 0.5 * nodes[i]);
+      double derivative_left, derivative_right;
+      exg_normal_tail_factor(left, &derivative_left);
+      exg_normal_tail_factor(right, &derivative_right);
+      sum += weights[i] * (-derivative_left - derivative_right);
+    }
+    return 0.5 * width * sum;
+  }
+  return exg_normal_tail_factor(x) - exg_normal_tail_factor(x + width);
+}
+
+// log[exp(a^2/2 - a*y) Phi(y-a)]. The scaled-tail branch avoids the
+// cancellation between a large exponential and a tiny Phi in the far-left
+// density tail. Keeping the opposite branch in log space also handles very
+// small scales without multiplying an overflow by an underflow.
+inline double exg_log_weighted_tail(double y, double a, double log_a) {
+  const double w = a - y;
+  if (w >= 0.0) {
+    if (emc2_isinf(w)) {
+      // a can overflow even though log(a) and the final density are finite.
+      // At this scale H(a-y) is 1/(sqrt(2*pi)*(a-y)) to machine precision.
+      const double log_w = log_a + std::log1p(-y * std::exp(-log_a));
+      return -0.5 * y * y - LOG_SQRT_2PI - log_w;
+    }
+    return -0.5 * y * y + std::log(exg_normal_tail_factor(w));
+  }
+  return a * (0.5 * a - y) + pnorm_log_direct(-w, true);
+}
+
+inline double dexg_prepared(const double x, const double mu,
+                            const double inverse_sigma, const double tau,
+                            const double ratio, const double log_ratio,
+                            const double log_tau,
+                            const bool log_d) {
+  if (emc2_isinf(x)) return log_d ? R_NegInf : 0.0;
+  const double y = (x - mu) * inverse_sigma;
+  if (emc2_isinf(y)) return log_d ? R_NegInf : 0.0;
+  const double log_out = exg_log_weighted_tail(y, ratio, log_ratio) - log_tau;
+  if (emc2_isnan(log_out)) return NA_REAL;
+  if (log_d) return log_out;
+
+  const double w = ratio - y;
+  if (w >= 0.0 && !emc2_isinf(ratio) && std::fabs(y) <= 37.0) {
+    return std::exp(-0.5 * y * y) * exg_normal_tail_factor(w) / tau;
+  }
+  return std::exp(log_out);
+}
+
 // probability density function of ex-Gaussian distribution
 inline double dexg(
     const double x,
@@ -26,51 +148,11 @@ inline double dexg(
   if (sigma <= 0. || tau <= 0.) return NA_REAL;
 
   // protect against numerical issues due to extremely small sigma or tau values
-  double tau_p = std::max(tau, SIG_TAU_EPS);
-  double sig_p = std::max(sigma, SIG_TAU_EPS);
-
-  // Numerically stable branch for extreme tails where z = (x-mu)/sigma - sigma/tau is very negative.
-  {
-    double y = (x - mu) / sig_p;
-    double a = sig_p / tau_p;
-    double z = y - a;
-    if (z < -8.0) {
-      // Asymptotic log-density via the Mills-ratio expansion of log Phi(z) as
-      // z -> -inf. The tau-dependent pieces of the exact log-density cancel
-      // exactly, leaving the Gaussian core plus the log-Mills series:
-      //   log Phi(z) = log phi(z) - log(-z) + log(1 - 1/z^2 + 3/z^4 - ...)
-      //              = -0.5 log(2pi) - 0.5 z^2 - log(-z) - 1/z^2 + 2.5/z^4 + ...
-      // so  log f ~ -log(tau) - 0.5 log(2pi) - 0.5 y^2 - log(-z) - 1/z^2 + 2.5/z^4.
-      // Keeping the -1/z^2 + 2.5/z^4 corrections (was: leading term only) makes
-      // this branch match the exact density to ~4e-6 at the z=-8 switch (was
-      // ~1.5%), so the integrate/GL routes agree with the exact analytic
-      // stop-success form and the branch discontinuity is negligible for the
-      // sampler. (Cheap; no extra special functions.)
-      double zi2 = 1.0 / (z * z);
-      double log_out_stable = -std::log(tau_p) - 0.5 * std::log(2.0 * M_PI)
-                              - 0.5 * y * y - std::log(-z)
-                              - zi2 + 2.5 * zi2 * zi2;
-      return log_d ? log_out_stable : std::exp(log_out_stable);
-    }
-  }
-
-  // compute Phi term
-  double z = (x - mu) / sig_p - sig_p / tau_p;
-  double log_phi = pnorm_std(z, true, true);
-  if (emc2_isnan(log_phi)) {
-    return NA_REAL;
-  }
-  if (emc2_isinf(log_phi)) {
-    return log_d ? log_phi : std::exp(log_phi);
-  }
-
-  // compute exp term
-  double log_exp = (mu - x) / tau_p + (sig_p * sig_p) / (2. * tau_p * tau_p);
-
-  // final output: log density of ex-Gaussian
-  double log_out = -std::log(tau_p) + log_exp + log_phi;
-
-  return log_d ? log_out : std::exp(log_out);
+  const double tau_p = std::max(tau, SIG_TAU_EPS);
+  const double sig_p = std::max(sigma, SIG_TAU_EPS);
+  return dexg_prepared(x, mu, 1.0 / sig_p, tau_p, sig_p / tau_p,
+                       std::log(sig_p) - std::log(tau_p),
+                       std::log(tau_p), log_d);
 }
 
 // Direct upper-tail log probability of the ex-Gaussian:
@@ -84,9 +166,9 @@ inline double pexg_log_upper(double q, double mu, double sigma, double tau) {
   const double sig_p = std::max(sigma, SIG_TAU_EPS);
   const double u = (q - mu) / sig_p;
   const double log_q_term = pnorm_log_direct(u, false);
-  const double log_exp_term = (mu - q) / tau_p + (sig_p * sig_p) / (2. * tau_p * tau_p);
-  const double log_phi2 = pnorm_log_direct(u - sig_p / tau_p, true);
-  return std::fmin(0.0, log_sum_exp(log_q_term, log_exp_term + log_phi2));
+  const double log_weighted_tail = exg_log_weighted_tail(
+    u, sig_p / tau_p, std::log(sig_p) - std::log(tau_p));
+  return std::fmin(0.0, log_sum_exp(log_q_term, log_weighted_tail));
 }
 
 inline double pexg(double q, double mu, double sigma, double tau,
@@ -100,6 +182,11 @@ struct ExgTruncationCache {
   double mu = NA_REAL;
   double sigma = NA_REAL;
   double tau = NA_REAL;
+  double inverse_sigma = NA_REAL;
+  double tau_prepared = NA_REAL;
+  double sigma_tau_ratio = NA_REAL;
+  double log_sigma_tau_ratio = NA_REAL;
+  double log_tau = NA_REAL;
   double lower = NA_REAL;
   double upper = NA_REAL;
   double lower_cdf = NA_REAL;
@@ -128,6 +215,12 @@ inline ExgTruncationCache make_exg_truncation_cache(
   cache.mu = mu;
   cache.sigma = sigma;
   cache.tau = tau;
+  const double sigma_p = std::max(sigma, SIG_TAU_EPS);
+  cache.inverse_sigma = 1.0 / sigma_p;
+  cache.tau_prepared = std::max(tau, SIG_TAU_EPS);
+  cache.sigma_tau_ratio = sigma_p / cache.tau_prepared;
+  cache.log_sigma_tau_ratio = std::log(sigma_p) - std::log(cache.tau_prepared);
+  cache.log_tau = std::log(cache.tau_prepared);
   cache.lower = lower;
   cache.upper = upper;
   cache.lower_cdf = lower == R_NegInf ? 0.0
@@ -178,24 +271,20 @@ inline double pexg(
   double tau_p = std::max(tau, SIG_TAU_EPS);
   double sig_p = std::max(sigma, SIG_TAU_EPS);
 
-  // compute the two Phi terms
-  double log_phi_1 = pnorm_std((q - mu) / sig_p, true, true);
-  double log_phi_2 = pnorm_std(
-    (q - mu) / sig_p - sig_p / tau_p, true, true
-  );
-
-  // compute the exp term in log space
-  double log_exp_term = (mu - q) / tau_p + (sig_p * sig_p) / (2. * tau_p * tau_p);
-
-  // combined second term
-  double log_second_term = log_exp_term + log_phi_2;
-
-  // now obtain ex-Gaussian log CDF
   double log_cdf_lower;
-  if (log_phi_1 > log_second_term) {
-    log_cdf_lower = log_diff_exp(log_phi_1, log_second_term);
+  const double y = (q - mu) / sig_p;
+  if (y <= 0.0) {
+    // F(q) = exp(-y^2/2) [H(-y) - H(sigma/tau-y)]. The scaled-tail
+    // difference avoids subtracting two tiny CDF terms after separately
+    // evaluating the cancelling exponential and normal tail.
+    const double difference = exg_normal_tail_difference(-y, sig_p / tau_p);
+    log_cdf_lower = difference > 0.0
+      ? -0.5 * y * y + std::log(difference) : R_NegInf;
   } else {
-    log_cdf_lower = R_NegInf;
+    // Above the Gaussian mean, form F as 1-S from the direct positive
+    // survivor terms. This avoids cancellation between Phi(y) and the
+    // exponentially weighted Phi(y-sigma/tau) term.
+    log_cdf_lower = log1m_exp(pexg_log_upper(q, mu, sig_p, tau_p));
   }
 
   double out;
@@ -239,10 +328,14 @@ inline double dtexg(
   if (lower >= upper) return NA_REAL;
   if (x <= lower || x >= upper) return log_d ? R_NegInf : 0.;
 
-  double x_ld = dexg(x, mu, sigma, tau, true);
+  const bool use_cache = cache != nullptr && cache->matches(mu, sigma, tau, lower, upper);
+  const double x_ld = use_cache
+    ? dexg_prepared(x, mu, cache->inverse_sigma, cache->tau_prepared,
+                    cache->sigma_tau_ratio, cache->log_sigma_tau_ratio,
+                    cache->log_tau, true)
+    : dexg(x, mu, sigma, tau, true);
   if (x_ld == R_NegInf) return log_d ? R_NegInf : 0.;
 
-  const bool use_cache = cache != nullptr && cache->matches(mu, sigma, tau, lower, upper);
   double log_normaliser;
   if (use_cache) {
     log_normaliser = cache->log_normalizer;
