@@ -1,6 +1,40 @@
 
 .emc_pool_state <- new.env(parent = emptyenv())
 
+# A persistent chain keeps these large inputs from its initial fork.  They are
+# immutable during a run_emc() stage; the rest of the sampler is the bounded
+# continuation state exchanged at block boundaries.
+.EMC_CHAIN_RETAINED_FIELDS <- c("data", "model", "prior")
+
+.emc_chain_state_pack <- function(sampler) {
+  fields <- setdiff(names(sampler), .EMC_CHAIN_RETAINED_FIELDS)
+  list(version = 1L,
+       names = names(sampler),
+       attributes = attributes(sampler),
+       fields = sampler[fields])
+}
+
+.emc_chain_state_apply <- function(base, state) {
+  if (!is.list(state) || !identical(state$version, 1L) ||
+      !is.character(state$names) || anyDuplicated(state$names) ||
+      !is.list(state$fields) || is.null(names(state$fields)) ||
+      !is.list(state$attributes) ||
+      !all(setdiff(state$names, .EMC_CHAIN_RETAINED_FIELDS) %in%
+             names(state$fields)) ||
+      !all(intersect(state$names, .EMC_CHAIN_RETAINED_FIELDS) %in%
+             names(base))) {
+    stop("invalid persistent-chain state message", call. = FALSE)
+  }
+  out <- vector("list", length(state$names))
+  names(out) <- state$names
+  retained <- intersect(state$names, .EMC_CHAIN_RETAINED_FIELDS)
+  dynamic <- setdiff(state$names, .EMC_CHAIN_RETAINED_FIELDS)
+  out[retained] <- base[retained]
+  out[dynamic] <- state$fields[dynamic]
+  attributes(out) <- state$attributes
+  out
+}
+
 .emc_wpool_degraded <- function(msg) {
   .emc_pool_state$last_error <- msg
   if (!isTRUE(.emc_pool_state$warned)) {

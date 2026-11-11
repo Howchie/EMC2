@@ -204,6 +204,20 @@ The focused worker-pool, core-budget and rebuild-overhead test selection passed
 backend and one warning emitted by the intentional worker-recycling failure
 test. The earlier focused rebuild test passed 68 expectations.
 
+### Step 5: bounded chain-state message prototype
+
+The first continuation-state schema retains `data`, `model` and `prior` in the
+chain process and sends the remaining sampler fields and attributes at a block
+boundary. On a saved EXG chain, the serialized message was 26,612 bytes versus
+845,898 bytes for the full sampler (3.15%). Applying a serialized message to
+the retained setup reproduced the complete sampler under `all.equal`. A local
+100-round probe took 0.008 s to serialize and 0.015 s to serialize plus
+deserialize the message. These are codec feasibility measurements only; chain
+process persistence and its end-to-end speed or memory effects are not yet
+implemented or measured. The focused worker-pool test selection passed 263
+expectations; two backend-specific tests were skipped and the existing
+intentional recycling-failure test emitted its warning.
+
 ### Step 2: conditional subject-fit cache
 
 The durable per-chain fit/check cache passed 258 focused expectations with no

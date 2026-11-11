@@ -20,6 +20,30 @@ test_that("one worker takes everything", {
   expect_equal(EMC2:::.emc_lpt_partition(c(5, 2, 9), 1), list(1:3))
 })
 
+test_that("chain continuation messages retain immutable setup and round-trip", {
+  data <- raw(1024L * 128L)
+  model <- local({
+    constant <- 7
+    function(x) x + constant
+  })
+  prior <- list(location = 0, scale = 1)
+  sampler <- structure(
+    list(data = data, model = model, prior = prior,
+         samples = list(alpha = matrix(1:6, 2L), idx = 3L),
+         rng = list(chain = 11:17), acceptance = c(0.2, 0.8)),
+    class = "pmwgs", prop_var = 0.25)
+
+  state <- EMC2:::.emc_chain_state_pack(sampler)
+  wire <- unserialize(serialize(state, NULL))
+  restored <- EMC2:::.emc_chain_state_apply(sampler, wire)
+
+  expect_identical(restored, sampler)
+  expect_false(any(c("data", "model", "prior") %in% names(state$fields)))
+  expect_lt(length(serialize(state, NULL)), length(serialize(sampler, NULL)))
+  expect_error(EMC2:::.emc_chain_state_apply(sampler, list()),
+               "invalid persistent-chain state")
+})
+
 test_that("subject cost proxies the rows the likelihood loops over", {
   d <- list(data.frame(a = 1:10), data.frame(a = 1:3))
   expect_equal(EMC2:::.emc_subject_cost(d), c(10, 3))
