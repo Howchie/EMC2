@@ -34,3 +34,25 @@ Three seeds are a pilot, not enough to make a reliable non-inferiority claim;
 add seeds until interval precision supports a decision. Report minimum bulk and
 tail ESS per draw and per second, not just averages. These tolerances are
 specified before evaluating a change that alters the transition stream.
+
+## Frozen DMC2 reference
+
+The external reference is the archive of `/data/work/DMC2` commit `fe8341a5`,
+installed as its historical package name `EMC2` into a separate library. The
+archive must be exported from the commit, not copied from a potentially dirty
+working tree. `Makevars.reference` records the GCC 13 optimization flags used;
+set `R_MAKEVARS_USER` to its absolute path during installation. The archive
+uses `-fopenmp`, while the EMC2 build uses `-fopenmp-simd`. On this machine an
+unversioned Fortran linker name was unavailable, so a temporary directory with
+`libgfortran.so` pointing at the system `libgfortran.so.5` was added to
+`LIBRARY_PATH`. `run_archive_reference.sh` takes `DMC_SRC`, `DMC_LIB`,
+`FORTRAN_LIB`, and `OUT_DIR`; execute it under the same lock and affinity as
+above. `run_shared_legacy.sh` takes `BASE_LIB`, `DMC_LIB`, and `OUT_DIR` and
+exports common data before running both libraries. `analyse_reference.R`
+reads the resulting paired RDS files. The archived validator requires censoring
+bounds in data attributes, so the shared-data runner supplies attributes with
+a 1e-8 boundary tolerance and omits the unused lower-censor attribute when
+there are no lower-censored observations, without modifying the data columns.
+The runner skips existing output files, so use an empty output directory for a
+fresh run. Report package-specific processing differences when interpreting
+results.

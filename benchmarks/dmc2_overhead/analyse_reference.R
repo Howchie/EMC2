@@ -16,7 +16,8 @@ for (case in c('EXG', 'LNR')) for (seed in c(101, 202, 303)) {
                 c('mcse_q05','mcse_q50','mcse_q95')))
     cat(arm, 'elapsed', x$timing[['elapsed']], 'min bulk/draw', min(stats$ess_bulk) / prod(dim(arr)[1:2]),
         'min tail/draw', min(stats$ess_tail) / prod(dim(arr)[1:2]),
-        'min bulk/s', min(stats$ess_bulk) / x$timing[['elapsed']], '\n')
+        'min bulk/s', min(stats$ess_bulk) / x$timing[['elapsed']],
+        'min tail/s', min(stats$ess_tail) / x$timing[['elapsed']], '\n')
     print(stats, width = Inf)
   }
 }

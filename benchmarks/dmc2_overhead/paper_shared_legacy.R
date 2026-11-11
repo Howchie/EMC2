@@ -25,6 +25,11 @@ dat <- readRDS(Sys.getenv('DATA_IN'))
 data_file <- tempfile(); saveRDS(dat, data_file); data_md5 <- unname(tools::md5sum(data_file)); unlink(data_file)
 if (Sys.getenv('ARCHIVE_COMPAT', '0') == '1') {
   for (nm in c('LT', 'UT', 'LC', 'UC')) {
+    # A zero LC column is only a placeholder when there is no lower censoring.
+    if (nm == 'LC' && !any(dat$rt == -Inf, na.rm = TRUE)) {
+      attr(dat, nm) <- NULL
+      next
+    }
     values <- unique(dat[[nm]])
     if (length(values) != 1L) stop('expected a single bound for ', nm)
     value <- values[[1L]]
