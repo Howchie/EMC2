@@ -31,5 +31,6 @@ for (case in c('EXG', 'LNR')) for (seed in c(101, 202, 303)) {
   print(stats, width = Inf)
   cat('minimum bulk ESS per draw', min(stats$ess_bulk) / (dim(arr)[1] * dim(arr)[2]),
       'minimum tail ESS per draw', min(stats$ess_tail) / (dim(arr)[1] * dim(arr)[2]),
-      'minimum bulk ESS/s', min(stats$ess_bulk) / b$timing[['elapsed']], '\n')
+      'minimum bulk ESS/s', min(stats$ess_bulk) / b$timing[['elapsed']],
+      'minimum tail ESS/s', min(stats$ess_tail) / b$timing[['elapsed']], '\n')
 }
