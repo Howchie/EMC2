@@ -461,3 +461,36 @@ The EXG resource differences are small and mixed; LNR improved on these three
 measures. Raw profiles, fits and `/usr/bin/time -v` records are in
 `results/step6a_profiles/`, `results/step6a_end_to_end/` and
 `results/step6a_reverse_order/`.
+
+## Step 6b: likelihood-context cost gate
+
+The prologue probe now materializes the same natural-scale parameter buffer
+as `calc_ll_oo` before returning, so its timing includes mapping, transforms,
+bounds and materialization. On the paper EXG/LNR data, 256 jittered particles
+gave bit-identical likelihoods through `calc_ll_manager()` and direct
+`calc_ll_oo()`, and every row passed the bound check. The manager's block-
+validated path represents Step 6a's internal sampler call; the default manager
+path represents public validation.
+
+| Model | DADM rows | Public manager (ms) | Block-validated manager (ms) | Native call (ms) | Full prologue (ms) | Prologue share |
+|---|---:|---:|---:|---:|---:|---:|
+| EXG | 704 | 12.4 | 12.2 | 12.4 | 0.42 | 3.4% |
+| LNR | 18,639 | 274.8 | 265.0 | 262.6 | 13.47 | 5.1% |
+
+Scaling the particle count from 1 to 256 separated the per-particle work from
+the per-call cost. Linear fits to the prologue timings had intercepts of
+0.067 ms for EXG and 1.083 ms for LNR, with slopes of 0.00137 and 0.04855 ms
+per particle. The intercept is an upper bound on what a retained native plan
+could save: creating a fresh mapper for the first particle and some per-call
+setup also contribute. At 256 particles that upper bound is about 0.5% of the
+LNR native likelihood call; most of its 13.47 ms prologue scales with particle
+count. The block-validated R manager added 2.4 ms over the direct native call
+in LNR, so a context may still save roughly another percent if it avoids that
+dispatch work. This makes a narrowly scoped context prototype worth measuring,
+but does not support assuming that all prologue work can be removed.
+
+The run used the frozen Step 6b probe install, seed 123 data, seed 101 particle
+clouds, CPU affinity 0–26 and one OMP/OpenBLAS/MKL thread. Raw logs, RDS timing
+vectors, and `/usr/bin/time -v` records are in
+`results/step6b_prologue_scaling/`; the reproducible runner is
+`run_step6b_prologue.sh`.
