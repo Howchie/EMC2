@@ -104,6 +104,42 @@ test_that("persistent chains restart only from acknowledged state", {
   on.exit(NULL)
 })
 
+test_that("a failed persistent chain shuts down its retained workers", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  pid_file <- tempfile("emc-failed-chain-workers-")
+  wpool_start <- EMC2:::.emc_wpool_start
+  wpool_pid <- EMC2:::.emc_wpool_job_pid
+  pool_state <- EMC2:::.emc_pool_state
+  runner <- function(sampler, pid_file) {
+    ctx <- list(data = list(data.frame(x = 1L)), model = identity,
+                type = "single", n_pars = 1L)
+    workers <- wpool_start(
+      2L, ctx, backend = "fork", retain_across_blocks = TRUE)
+    if (is.null(workers)) stop("test workers could not start")
+    pool_state$subject_pool <- workers
+    pids <- vapply(workers$jobs, wpool_pid, integer(1))
+    writeLines(as.character(pids), pid_file)
+    stop("injected persistent-chain failure")
+  }
+  sampler <- structure(list(data = list(data.frame(x = 1L)),
+                            model = identity, prior = list()), class = "pmwgs")
+  pool <- EMC2:::.emc_chain_process_pool_start(list(sampler), runner)
+  skip_if(is.null(pool), "could not start persistent chain process")
+  on.exit(EMC2:::.emc_chain_process_pool_stop(pool), add = TRUE)
+
+  expect_error(EMC2:::.emc_chain_process_pool_run(
+    pool, list(sampler), args = list(pid_file = pid_file)),
+    "injected persistent-chain failure")
+  expect_true(file.exists(pid_file))
+  worker_pids <- as.integer(readLines(pid_file))
+  deadline <- Sys.time() + 5
+  while (any(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive, logical(1))) &&
+         Sys.time() < deadline) Sys.sleep(0.05)
+  expect_false(any(vapply(worker_pids, EMC2:::.emc_wpool_pid_alive,
+                          logical(1))))
+})
+
 test_that("persistent chain execution matches block-fork execution", {
   skip_on_os("windows")
   skip_on_cran()

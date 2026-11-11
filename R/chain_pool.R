@@ -85,10 +85,14 @@
     } else {
       list(id = msg$id, state = result$state, warnings = warnings)
     }
-    sent <- .emc_wpool_send(wc, reply)
-    if (!is.null(msg$done) && sent) {
+    # The parent waits on this marker before reading the response. Publish it
+    # before writing: an error condition can serialize to more than a FIFO's
+    # capacity, otherwise leaving the child blocked in write while the parent
+    # waits for the marker that follows the write.
+    if (!is.null(msg$done)) {
       try(file.create(msg$done), silent = TRUE)
     }
+    sent <- .emc_wpool_send(wc, reply)
     if (!sent || inherits(result, "error")) break
   }
   invisible(NULL)
