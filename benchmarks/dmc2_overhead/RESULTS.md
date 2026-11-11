@@ -509,13 +509,27 @@ Minimum ESS-per-second ratios were 0.982 [0.888, 1.085] for bulk and
 1.035 [0.874, 1.226] for tail; these also include no change and miss the 0.90
 lower-bound gate, so they do not support promoting the option.
 
-The analytic bimodal probe, with exact right-mode mass 0.5 and 400 draws per
-chain, gave right-mode fractions 0.463 (baseline) and 0.519 (candidate), a
-1.57 combined-MCSE difference. Both arms visited both modes; this short probe
-checks coverage but does not establish precise mode weights. Per-seed
-quantiles, ESS and times are in `results/step2_likelihood_cache/`; reusable
-fit and multimodal analyzers are `analyse_likelihood_cache.R` and
-`analyse_multimodal_cache.R`.
+The analytic bimodal cache gate was extended from 400 to 5,000 sample draws per
+chain and from one to eighteen paired seeds. Both arms used the same current
+package build; `max_reuses = 0` disabled mode reuse and `Inf` enabled it. Each
+arm therefore contributes 54 chains and 270,000 draws. The target's exact
+right-mode mass is 0.5. Fresh fits estimated 0.4991 (MCSE 0.00168), and cached
+fits estimated 0.5009 (MCSE 0.00172); the difference is 0.75 combined MCSE.
+Both estimates are within 0.6 MCSE of the exact mass. The 5% and 95% quantile
+shifts were 0.85 and 0.25 combined MCSE. The 50% quantile is not informative
+for an exactly balanced bimodal target because its median is non-unique; mode
+mass is the direct coverage measure here.
+
+Across-seed minimum mode-indicator ESS ratios were 0.956 [0.911, 1.002], theta
+bulk ESS ratios 0.979 [0.942, 1.017], and theta tail ESS ratios 0.992
+[0.963, 1.022]. The cache/fresh geometric speedup was 1.013x [1.004, 1.021],
+about a 1.2% reduction on this cheap custom target. This adversarial fixture
+supports opt-in reuse for a pure custom likelihood, but arbitrary custom R
+likelihoods can capture mutable state that the cache key cannot describe, so
+they remain opt-in. LNR remains off by default because its separate tail-ESS
+gate does not pass. Raw fits and timing files are in
+`results/multimodal_precision_live/`; `run_multimodal_precision.sh` and
+`analyse_multimodal_precision.R` reproduce this gate.
 
 ## Frozen reference on common raw data
 
