@@ -587,8 +587,10 @@
           data = mode_data, model = ctx$model,
           n_pars = length(task$par_names),
           samples = list(idx = 1L,
-                         alpha = matrix(task$current_alpha, ncol = 1L,
-                                        dimnames = list(task$par_names, NULL))))
+                         alpha = array(task$current_alpha,
+                                       dim = c(length(task$par_names), 1L, 1L),
+                                       dimnames = list(task$par_names, NULL,
+                                                       NULL))))
         result <- if (isTRUE(task$hit)) task$result else
           .emc_burn_subject_mode(
             mode_sampler, 1L,

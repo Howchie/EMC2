@@ -163,6 +163,36 @@ test_that("persistent chain rebuilds use retained workers with original subject 
   expect_identical(routed, expected)
 })
 
+test_that("a retained rebuild miss supplies a three-dimensional sample store", {
+  RNGkind("L'Ecuyer-CMRG"); set.seed(912)
+  seed <- .Random.seed
+  prior <- list(mu = 0, var = matrix(1))
+  covariance <- matrix(0.5)
+  check_key <- EMC2:::.emc_laplace_check_key_values(
+    "miss-config", 1L, 0, covariance, prior)
+  check <- list(pareto_k = 0.1, outside = 0, status = "ok")
+  task <- list(operation = "refresh", subject = 1L, prior = prior,
+    hit = FALSE, result = NULL, key = "miss-key", x0 = NULL,
+    current_alpha = 0, proposal_prior_scale = 4,
+    check_entries = list(list(key = check_key, check = check)),
+    config = "miss-config", pooled = NULL, par_names = "x", seed = seed)
+  ctx <- list(data = list(data.frame(x = 1)), model = identity)
+  local_mocked_bindings(.emc_burn_subject_mode = function(
+    sampler, s, proposal_prior_scale, x0, start_covariance, prior) {
+      expect_identical(dim(sampler$samples$alpha), c(1L, 1L, 1L))
+      expect_identical(as.numeric(sampler$samples$alpha[, s, 1L]),
+                       task$current_alpha)
+      list(alpha = task$current_alpha, ll = -0.5,
+           covariance = covariance, proposal_mode = task$current_alpha,
+           start_covariance = covariance, lik = NULL)
+    }, .package = "EMC2")
+
+  result <- EMC2:::.emc_laplace_rebuild_compute(task, ctx)
+  expect_true(is.matrix(result$result$covariance))
+  expect_identical(result$check, check)
+  expect_identical(result$seed, seed)
+})
+
 test_that("a failed persistent chain rebuild retries its original tasks", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
