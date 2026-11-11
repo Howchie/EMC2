@@ -17,10 +17,9 @@ scripts should explicitly set `emc2.sampler_profile` and `emc2.fit_host` for
 controlled profiles; use the default fit host for end-to-end runs. Use the
 repository's benchmark lock for timed runs (see `benchmarks/allocator/README.md`).
 R's `system.time` here does **not** account reliably for the whole process tree;
-collect tree CPU, forks, faults and memory separately. This runner alone does
-not satisfy Step 0: the specified fixtures, repeated measurements, precision
-and posterior gates, and process-level instrumentation still need to be built
-and recorded before accepting optimizations.
+collect tree CPU, forks, faults and memory separately. This runner is one harness component. The executed fixtures, posterior checks,
+process-level measurements and current acceptance status are recorded in
+`RESULTS.md`; `PROTOCOL.md` defines the repeated-run gates and qualifications.
 
 `psis_probe.R cold|warm` measures three concurrent child PSIS calls, launched
 from a fresh parent. Run each observation under the benchmark lock with BLAS
