@@ -16,12 +16,18 @@ p_types <- names(model$p_types)
 designs <- lapply(p_types, function(nm) { d <- attr(dadm, 'designs')[[nm]]; d[attr(d, 'expand'), , drop = FALSE] })
 names(designs) <- p_types
 constants <- attr(dadm, 'constants'); if (is.null(constants)) constants <- NA
-particles <- matrix(rep(p, each = 256), nrow = 256, dimnames = list(NULL, names(p)))
+particle_count <- as.integer(Sys.getenv('N_PARTICLES', '256'))
+repeat_count <- as.integer(Sys.getenv('REPS', '10'))
+stopifnot(length(particle_count) == 1L, is.finite(particle_count),
+          particle_count > 0L, length(repeat_count) == 1L,
+          is.finite(repeat_count), repeat_count > 0L)
+particles <- matrix(rep(p, each = particle_count), nrow = particle_count,
+                    dimnames = list(NULL, names(p)))
 fun <- get(if (pkg == 'EMC2') 'calc_ll_oo' else 'calc_ll', ns)
 call <- function() fun(particles, dadm, constants, designs, model$c_name, model$bound,
                        model$transform, model$pre_transform, p_types, log(1e-10), model$trend)
 result <- call()
-timing <- replicate(10L, system.time(invisible(call()))[['elapsed']])
+timing <- replicate(repeat_count, system.time(invisible(call()))[['elapsed']])
 out <- Sys.getenv('OUT')
 if (nzchar(out)) {
   data_file <- tempfile(); saveRDS(dadm, data_file)

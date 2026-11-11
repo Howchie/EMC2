@@ -98,10 +98,27 @@ stop-signal tests passed 91 expectations. See `results/ss_cache_base.log`,
 `results/ss_cache_candidate.log`, `results/ss_likelihood_base.log`,
 `results/ss_likelihood_candidate.log`, and `results/ss_cache_tests.log`.
 
+The shared-tuple cache now also covers `rexg_logS_at_t()`, which evaluates
+truncated race-survival endpoints. A finite-UT two-choice REXG fixture with
+12,960 expanded rows and 512 repeated particles produced bit-identical native
+likelihoods. Across 15 calls, median time fell from 194 ms to 191 ms (1.016x).
+Three paired fixed-transition fits used the same 8x replicated one-subject
+Forstmann data, a finite `UT = 2`, and 10 preburn, 10 burn, 10 adapt and 40
+sample iterations. Fit objects compared equal, and samples, chain RNG, and
+caller RNG states were identical within every pair. Baseline/candidate elapsed
+times were 9.399/9.363 s,
+10.261/10.154 s, and 9.924/9.840 s. This is a small fit-level gain, about
+0.4–1.1% per seed, with no transition or posterior change. The untruncated
+single-accumulator control did not enter this endpoint callback and is not used
+to estimate its effect. Raw runs and exact outputs are in
+`results/step4a_logS_truncated_race/` and
+`results/step4a_logS_truncated_fit/`; runners are
+`run_rexg_logS_cache.sh` and `run_rexg_logS_fit.sh`.
+
 This completes the measured configurable-bound stop-success paths in
 `model_SS_EXG.h`, `model_SS_RDEX.h` and the live raw adapter. Scalar contexts
-that supply a stable parameter tuple remain to be measured before claiming the
-full plan's Step 4a.
+that supply a stable parameter tuple outside the batched race endpoint remain
+to be measured before claiming the full plan's Step 4a.
 
 ### Step 4b: stable EXG tails and prepared kernel parameters
 
