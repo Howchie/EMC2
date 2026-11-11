@@ -28,3 +28,20 @@ threads fixed. On 2026-11-11, three cold process runs took 0.306–0.341 s wall;
 three parent-warmed runs took 0.013–0.014 s. Each child returned the same
 Pareto k (-0.2286573658) and the parent RNG state was unchanged. This isolates
 startup; it is not a rebuild-block or full-fit benchmark.
+
+The paired paper runs use `paper_fixture.R` and `run_paper.sh`. First install
+frozen copies of the two revisions into separate private libraries, then run:
+
+```
+BASE_LIB=/path/to/base-lib NEW_LIB=/path/to/new-lib OUT_DIR=/path/to/results \
+  /data/work/EMC2_workstreams/bench_lock.sh taskset -c 0-26 \
+  benchmarks/dmc2_overhead/run_paper.sh
+Rscript benchmarks/dmc2_overhead/analyse_paper.R /path/to/results
+```
+
+`PROTOCOL.md` defines fixture seeds, fixed-transition and precision targets,
+and the gates. The `.time` files include child CPU and aggregate resource
+statistics from GNU time; peak RSS is the maximum of an individual process,
+not the aggregate tree. The separately sampled tree profile and traced fork
+counts are diagnostic runs, not direct timings. Save the full output and build
+logs outside version control, as fits can contain private data.

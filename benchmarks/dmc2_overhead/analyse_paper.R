@@ -21,10 +21,15 @@ for (case in c('EXG', 'LNR')) for (seed in c(101, 202, 303)) {
   arr <- aperm(arr, c(2, 3, 1))
   dimnames(arr) <- list(NULL, NULL, b$fit[[1]]$par_names)
   stats <- summarise_draws(as_draws_array(arr), 'mean', 'mcse_mean', 'ess_bulk', 'ess_tail',
-                           ~quantile2(.x, probs = c(.05, .5, .95)))
+                           ~quantile2(.x, probs = c(.05, .5, .95)),
+                           ~setNames(vapply(c(.05, .5, .95), function(prob) mcse_quantile(.x, probs = prob), numeric(1)),
+                                     c('mcse_q05', 'mcse_q50', 'mcse_q95')))
   cat('\n', case, seed, 'base elapsed', a$timing[['elapsed']], 'new elapsed', b$timing[['elapsed']],
       'data md5', a$data_md5, '\ndraws:', chain_equal, 'RNG:', rng_equal,
       'caller RNG:', identical(a$final_seed, b$final_seed),
       '\ncontinuation fields differing:', paste(continuation[!same_fields], collapse = ', '), '\n')
-  print(stats)
+  print(stats, width = Inf)
+  cat('minimum bulk ESS per draw', min(stats$ess_bulk) / (dim(arr)[1] * dim(arr)[2]),
+      'minimum tail ESS per draw', min(stats$ess_tail) / (dim(arr)[1] * dim(arr)[2]),
+      'minimum bulk ESS/s', min(stats$ess_bulk) / b$timing[['elapsed']], '\n')
 }
