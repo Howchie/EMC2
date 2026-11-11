@@ -2435,6 +2435,40 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   out
 }
 
+.emc_native_pt_context_state <- new.env(parent = emptyenv())
+.emc_native_pt_context_state$pid <- NA_integer_
+.emc_native_pt_context_state$key <- NULL
+.emc_native_pt_context_state$ptr <- NULL
+
+# Reuse only the immutable parameter-table layout. The key excludes particle
+# values and the data columns consumed by the likelihood; both remain fresh on
+# every call. PID changes invalidate inherited XPtrs after fork.
+.emc_native_pt_context_get <- function(proposals, dadm, model, constants,
+                                       designs, p_types) {
+  if (!isTRUE(getOption("emc2.native_pt_context", FALSE))) return(NULL)
+  if (!is.matrix(proposals) || !nrow(proposals) || is.null(model$c_name) ||
+      !is.null(model$trend)) return(NULL)
+  state <- .emc_native_pt_context_state
+  pid <- Sys.getpid()
+  if (!identical(state$pid, pid)) {
+    state$pid <- pid
+    state$key <- NULL
+    state$ptr <- NULL
+  }
+  key <- list(
+    n_trials = nrow(dadm), type = model$c_name,
+    proposal_names = colnames(proposals), p_types = p_types,
+    constants = constants, designs = designs,
+    bounds = model$bound, transforms = model$transform,
+    pretransforms = model$pre_transform)
+  if (!is.null(state$ptr) && identical(key, state$key)) return(state$ptr)
+  state$ptr <- emc2_create_pt_mapper_context(
+    proposals[1L, , drop = FALSE], dadm, constants, designs,
+    model$bound, model$transform, model$pre_transform, p_types)
+  state$key <- key
+  state$ptr
+}
+
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                             marginalise = NULL, varying = NULL,
                             ll_cache_validated = FALSE){
@@ -2469,11 +2503,15 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
       if (r_cores <= 1L || nrow(proposals) <= r_cores) {
+        pt_context <- if (isTRUE(ll_cache_validated) && is.null(marginalise))
+          .emc_native_pt_context_get(proposals, dadm, model, constants,
+                                     designs, p_types) else NULL
         lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs,
                           type = model$c_name, bounds = model$bound,
                           transforms = model$transform, pretransforms = model$pre_transform,
                           p_types = p_types, min_ll = log(1e-10), trend = model$trend,
-                          marginalise = marginalise, varying = varying)
+                          marginalise = marginalise, varying = varying,
+                          pt_mapper_context = pt_context)
       } else {
         idx <- .split_work_indices(nrow(proposals), r_cores)
         lls <- unlist(auto_mclapply(1:r_cores,function(i) {

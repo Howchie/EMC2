@@ -219,7 +219,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
                          Rcpp::Nullable<Rcpp::List> marginalise,
-                         Rcpp::Nullable<Rcpp::LogicalVector> varying);
+                         Rcpp::Nullable<Rcpp::LogicalVector> varying,
+                         SEXP pt_mapper_context);
 
 
 static void update_pt_only(ParamTable& param_table,
@@ -693,6 +694,18 @@ struct PtMapper {
   }
 };
 
+// Fixed parameter-table structure shared by repeated calls with the same
+// designs and transforms. Particle values, invariance masks, bound verdicts,
+// and likelihood-call buffers stay in a fresh PtMapper per call.
+struct PtMapperContext {
+  ParamTable table_template;
+  std::vector<TransformSpec> transform_specs;
+  Rcpp::CharacterVector keep_names;
+  Rcpp::CharacterVector particle_names;
+  std::vector<int> pm_col_to_base_idx;
+  int n_trials = 0;
+};
+
 static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                NumericVector constants, List designs, List bounds,
                                List transforms, List pretransforms,
@@ -700,7 +713,8 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                CharacterVector p_types,
                                int n_trials, int n_particles,
                                Rcpp::Nullable<Rcpp::LogicalVector> varying =
-                                 R_NilValue) {
+                                 R_NilValue,
+                               const PtMapperContext* cached = nullptr) {
   PtMapper m;
   m.designs = designs;
   m.bounds = bounds;
@@ -717,24 +731,48 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
     m.particle_matrix_pt = add_constants_columns(m.particle_matrix_pt, constants);
   }
 
-  NumericVector p_vector = m.particle_matrix_pt(0, Rcpp::_);
-  p_vector.attr("names") = colnames(m.particle_matrix_pt);
-  m.table = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials, transforms);
-  m.transform_specs = make_transform_specs_for_paramtable(m.table, transforms);
-
   Rcpp::CharacterVector pm_names = colnames(m.particle_matrix_pt);
-  m.pm_col_to_base_idx.assign(pm_names.size(), -1);
-  for (int j = 0; j < pm_names.size(); ++j) {
-    std::string nm = Rcpp::as<std::string>(pm_names[j]);
-    auto it = m.table.name_to_base_idx.find(nm);
-    if (it != m.table.name_to_base_idx.end()) {
-      m.pm_col_to_base_idx[j] = it->second;
+  if (cached) {
+    if (cached->n_trials != n_trials ||
+        cached->particle_names.size() != pm_names.size() ||
+        cached->keep_names.size() != p_types.size()) {
+      Rcpp::stop("calc_ll_oo: stale parameter-mapping context dimensions");
+    }
+    for (int j = 0; j < pm_names.size(); ++j)
+      if (Rcpp::as<std::string>(pm_names[j]) !=
+          Rcpp::as<std::string>(cached->particle_names[j]))
+        Rcpp::stop("calc_ll_oo: stale parameter-mapping context columns");
+    for (int j = 0; j < p_types.size(); ++j)
+      if (Rcpp::as<std::string>(p_types[j]) !=
+          Rcpp::as<std::string>(cached->keep_names[j]))
+        Rcpp::stop("calc_ll_oo: stale parameter-mapping context parameters");
+    m.table = cached->table_template;
+    m.table.base = Rcpp::clone(cached->table_template.base);
+    m.transform_specs = cached->transform_specs;
+    m.pm_col_to_base_idx = cached->pm_col_to_base_idx;
+  } else {
+    NumericVector p_vector = m.particle_matrix_pt(0, Rcpp::_);
+    p_vector.attr("names") = pm_names;
+    m.table = ParamTable::from_p_vector_and_designs(
+      p_vector, designs, n_trials, transforms);
+    m.transform_specs = make_transform_specs_for_paramtable(m.table, transforms);
+
+    m.pm_col_to_base_idx.assign(pm_names.size(), -1);
+    for (int j = 0; j < pm_names.size(); ++j) {
+      std::string nm = Rcpp::as<std::string>(pm_names[j]);
+      auto it = m.table.name_to_base_idx.find(nm);
+      if (it != m.table.name_to_base_idx.end()) {
+        m.pm_col_to_base_idx[j] = it->second;
+      }
     }
   }
 
   // Row-constant column tracking: TrendRuntime::apply_base_for_op, the one
   // writer outside the design/transform pipeline, drops its target's flag.
   m.table.const_init();
+  if (cached)
+    m.table.fill_from_particle_row(m.particle_matrix_pt, 0,
+                                   m.pm_col_to_base_idx);
 
   if (!trend.isNull()) {
     m.trend_plan.reset(new TrendPlan(trend, data));
@@ -824,6 +862,34 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
   return m;
 }
 
+// [[Rcpp::export]]
+SEXP emc2_create_pt_mapper_context(NumericMatrix particle_matrix,
+                                   DataFrame data,
+                                   NumericVector constants,
+                                   List designs,
+                                   List bounds,
+                                   List transforms,
+                                   List pretransforms,
+                                   CharacterVector p_types) {
+  if (particle_matrix.nrow() < 1)
+    Rcpp::stop("parameter-mapping context needs at least one particle");
+  PtMapper mapper = make_pt_mapper(
+    particle_matrix, data, constants, designs, bounds, transforms,
+    pretransforms, R_NilValue, p_types, data.nrow(), 1, R_NilValue);
+  std::unique_ptr<PtMapperContext> context(new PtMapperContext());
+  context->table_template = std::move(mapper.table);
+  context->transform_specs = std::move(mapper.transform_specs);
+  context->keep_names = Rcpp::clone(mapper.keep_names);
+  Rcpp::CharacterVector context_particle_names =
+    colnames(mapper.particle_matrix_pt);
+  context->particle_names = Rcpp::clone(context_particle_names);
+  context->pm_col_to_base_idx = std::move(mapper.pm_col_to_base_idx);
+  context->n_trials = data.nrow();
+  Rcpp::XPtr<PtMapperContext> ptr(context.release(), true);
+  ptr.attr("class") = "EMC2PtMapperContext";
+  return ptr;
+}
+
 // Data-fixed shared state for the mixed (non-raw-fast) race path: partition
 // attrs, censoring/truncation bounds, winner/loser masks, scratch buffers.
 // Leaves shared.valid=false when the partition attributes are absent.
@@ -908,7 +974,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
                          Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue,
-                         Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue) {
+                         Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue,
+                         SEXP pt_mapper_context = R_NilValue) {
   // -------------------------------------------------------------------------
   // Optional coherent marginalization of a shared subject-level parameter
   // (the non-decision time t0 in race/GNG models). When `marginalise`
@@ -963,9 +1030,19 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
   PtMapper pt;
   if (use_pt_mapping) {
+    const PtMapperContext* cached = nullptr;
+    if (!Rf_isNull(pt_mapper_context)) {
+      if (!Rf_inherits(pt_mapper_context, "EMC2PtMapperContext"))
+        Rcpp::stop("calc_ll_oo: invalid parameter-mapping context");
+      if (trend.isNotNull())
+        Rcpp::stop("calc_ll_oo: trend models cannot use a parameter-mapping context");
+      cached = Rcpp::XPtr<PtMapperContext>(pt_mapper_context).get();
+    }
     pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
                         transforms, pretransforms, trend, p_types,
-                        n_trials, n_particles, varying);
+                        n_trials, n_particles, varying, cached);
+  } else if (!Rf_isNull(pt_mapper_context)) {
+    Rcpp::stop("calc_ll_oo: this likelihood path cannot use a parameter-mapping context");
   }
   ParamTable& param_table_template = pt.table;
   Rcpp::CharacterVector& keep_names = pt.keep_names;

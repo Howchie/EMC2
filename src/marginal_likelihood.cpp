@@ -87,7 +87,7 @@ static NumericMatrix marginal_eval_nodes(
     // nothing about which of these vary.
     NumericVector ll = calc_ll_oo(pm, data, constants, designs, type, bounds,
                                   transforms, pretransforms, p_types, min_ll,
-                                  trend, R_NilValue, R_NilValue);
+                                  trend, R_NilValue, R_NilValue, R_NilValue);
     for (int k = 0; k < mk; ++k)
       for (int i = 0; i < np; ++i) out(i, k0 + k) = ll[k * np + i];
   }

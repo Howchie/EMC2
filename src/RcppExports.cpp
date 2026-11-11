@@ -3294,9 +3294,27 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// emc2_create_pt_mapper_context
+SEXP emc2_create_pt_mapper_context(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, List bounds, List transforms, List pretransforms, CharacterVector p_types);
+RcppExport SEXP _EMC2_emc2_create_pt_mapper_context(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type particle_matrix(particle_matrixSEXP);
+    Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
+    Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
+    Rcpp::traits::input_parameter< List >::type bounds(boundsSEXP);
+    Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
+    Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_create_pt_mapper_context(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types));
+    return rcpp_result_gen;
+END_RCPP
+}
 // calc_ll_oo
-NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend, Rcpp::Nullable<Rcpp::List> marginalise, Rcpp::Nullable<Rcpp::LogicalVector> varying);
-RcppExport SEXP _EMC2_calc_ll_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP, SEXP marginaliseSEXP, SEXP varyingSEXP) {
+NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend, Rcpp::Nullable<Rcpp::List> marginalise, Rcpp::Nullable<Rcpp::LogicalVector> varying, SEXP pt_mapper_context);
+RcppExport SEXP _EMC2_calc_ll_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP, SEXP marginaliseSEXP, SEXP varyingSEXP, SEXP pt_mapper_contextSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -3313,7 +3331,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type marginalise(marginaliseSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::LogicalVector> >::type varying(varyingSEXP);
-    rcpp_result_gen = Rcpp::wrap(calc_ll_oo(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise, varying));
+    Rcpp::traits::input_parameter< SEXP >::type pt_mapper_context(pt_mapper_contextSEXP);
+    rcpp_result_gen = Rcpp::wrap(calc_ll_oo(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise, varying, pt_mapper_context));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4167,7 +4186,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_TrendEngine_apply_premap_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_premap_bases, 2},
     {"_EMC2_TrendEngine_apply_pretransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_pretransform_bases, 2},
     {"_EMC2_TrendEngine_apply_posttransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_posttransform_bases, 2},
-    {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 13},
+    {"_EMC2_emc2_create_pt_mapper_context", (DL_FUNC) &_EMC2_emc2_create_pt_mapper_context, 8},
+    {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 14},
     {"_EMC2_pt_prologue_oo", (DL_FUNC) &_EMC2_pt_prologue_oo, 10},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
