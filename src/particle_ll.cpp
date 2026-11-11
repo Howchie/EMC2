@@ -1661,8 +1661,11 @@ Rcpp::List pt_prologue_oo(NumericMatrix particle_matrix, DataFrame data,
     int c = 0;
     for (int j = 0; j < n_trials; ++j) if (ok[j]) ++c;
     n_ok[i] = c;
+    // calc_ll_oo materializes the natural-scale parameter columns before it
+    // calls a model kernel. Do that work in the benchmark-only no-output path
+    // too, so its timing includes the complete per-particle prologue.
+    NumericMatrix m = pt.materialize_reusable();
     if (return_pars) {
-      NumericMatrix m = pt.materialize_reusable();
       std::copy(m.begin(), m.end(),
                 pars_out.begin() + static_cast<R_xlen_t>(i) * n_trials * k);
       for (int j = 0; j < n_trials; ++j) ok_out(j, i) = ok[j];
