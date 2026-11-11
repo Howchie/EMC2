@@ -114,8 +114,6 @@ run_emc <- function(emc, stage, stop_criteria,
   emc <- restore_duplicates(emc, warn = TRUE)
   emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
-  if (stage != "preburn" && cores_per_chain * cores_for_chains > 1L &&
-      .Platform$OS.type == "unix") .emc_warm_psis()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
   total_iters_stage <- chain_n(emc)[,stage][1]

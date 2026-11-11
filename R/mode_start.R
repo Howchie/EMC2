@@ -475,18 +475,6 @@
 # property of the Gaussian-posterior pair, but its estimate from n_draws draws
 # is noisy, and the Gaussian assessed is the conditional Laplace fit, not the
 # widened proposal the burn stage executes: k is a proxy for that proposal.
-.emc_psis_warm_state <- new.env(parent = emptyenv())
-
-# Pay loo's lazy initialization in the process that will fork rebuild jobs.
-# A PID guard also handles an independently forked caller of run_emc.
-.emc_warm_psis <- function() {
-  pid <- Sys.getpid()
-  if (identical(.emc_psis_warm_state$pid, pid)) return(invisible(NULL))
-  .emc_with_preserved_rng(suppressWarnings(loo::psis(seq(-2, 2, length.out = 100), r_eff = 1)))
-  .emc_psis_warm_state$pid <- pid
-  invisible(NULL)
-}
-
 .emc_laplace_is_start <- function(mode, covariance, prior, ll_batch,
                                   n_draws = 256L) {
   p <- length(mode)
