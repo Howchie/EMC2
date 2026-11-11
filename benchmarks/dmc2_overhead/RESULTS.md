@@ -31,16 +31,41 @@ tail ESS per draw, and ESS per second are in `results/comparison.txt`; the defau
 are in `results/default_comparison.txt`. The EXG baseline default fit reproduces
 the plan's approximately 22.5 s starting measurement.
 
-A pooled baseline-versus-baseline repeat also changed all chains' samples and
-RNG streams. Holding the allocation fixed restored baseline/candidate draw and
-RNG identity. The hierarchical baseline also differs from itself in allocator
-and HMC cost fields, even when draws and RNG are identical. Thus the plan's
-literal continuation-state identity gate is **not met**: these timing inputs
-are mutable and affect future allocation. The fixed-allocation experiment
-isolates the transition comparison but does not validate ordinary allocation.
-Do not treat this as an accepted Step 1 gate or start further optimization on
-the assumption that it passed. The warming change was reverted from the working
-branch in `0388ad22`; the measured candidate remains at `0c4d5112`.
+A pooled baseline-versus-baseline repeat changed all chains' samples and RNG
+streams, while all 75 pooled parameter quantiles remained within 2.53 combined
+Monte Carlo errors. Holding allocation fixed restored exact baseline/candidate
+draw and RNG identity. The hierarchical baseline repeat changed allocator and
+HMC cost fields while draws and RNG remained identical. These controls show
+that whole-fit bit identity is not a useful correctness gate for this ordinary
+allocator: timing affects its later schedule even without the optimization.
+The candidate is restored in `50cb57e7`; the pooled posterior comparison below
+assesses the resulting schedule variation directly.
+
+### Ordinary pooled allocation posterior check
+
+Seven paired seeds used the same pooled LBA data (hash
+`d3650406e44a8b6307adab451250714a`) and 400 production draws in each of three
+chains. Five pairs had every parameter's 5%, 50% and 95% quantiles within four
+combined MCSEs; seed 404 had one exceedance and seed 606 had five, with the
+largest at 5.99. Combining the 21 independent chains per arm, all 75 quantile
+comparisons were within four combined MCSEs (largest 2.07). This supports
+posterior agreement at the aggregate level, though some pooled coordinates
+remain weakly mixed (maximum rank R-hat 1.14 baseline, 1.18 candidate).
+
+Mean elapsed time was 94.28 s baseline and 91.19 s candidate, a 3.28% paired
+reduction. Aggregate minimum bulk ESS per draw was 0.01198 baseline and 0.00905
+candidate; minimum tail ESS per draw was 0.03317 and 0.01964. The corresponding
+minimum bulk ESS/s was 0.152 and 0.119, and minimum tail ESS/s was 0.422 and
+0.259. Across-seed
+candidate/baseline minimum ESS ratios were highly variable: the geometric mean
+and 95% t interval were 1.11 [0.48, 2.58] for bulk and 1.19 [0.40, 3.52] for
+tail ESS. The interval is too wide to establish the proposed 10% ESS
+non-inferiority margin, and the pooled run is too short to make a precise
+minimum-ESS comparison. Treat the time gain as measured, posterior quantiles
+as consistent in aggregate, and pooled efficiency as inconclusive. Full
+per-seed summaries and aggregate diagnostics are in
+`results/pooled_posterior_comparison.txt` and
+`results/pooled_aggregate_comparison.txt`.
 
 The controlled EXG profile had seven rebuild blocks around 2.43–2.70 s before
 warming and 1.78–2.11 s after; its no-rebuild sample block took 1.49 and 1.55 s.

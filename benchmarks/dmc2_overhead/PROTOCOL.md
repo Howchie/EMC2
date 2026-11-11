@@ -18,11 +18,16 @@ sampler profiler; time-to-precision and fixed-transition comparisons use the
 default host. `strace` runs are separate from timing runs because tracing
 changes runtime. Repeat arm pairs rather than comparing only best times.
 
-For setup-only changes, compare each stored sample field, subject and chain
-RNG states, and every continuation field, interpreting process pointers and
-closures separately. No draw or RNG differences are accepted. Compare
-paired elapsed times and inspect system CPU, faults and block profiles before
-attributing a gain. Record negative or inconclusive results as such.
+For changes that should leave the transition schedule untouched, compare each
+stored sample field, subject and chain RNG state, and continuation field,
+interpreting process pointers and closures separately. For ordinary runs where
+the baseline allocator uses measured timing to change transition rates, first
+compare fixed-allocation runs for exact transition identity, then use an
+ordinary-allocation same-baseline repeat as a variability control and apply
+the posterior-level quantile and ESS gates below. A seed alone does not pin a
+timing-adaptive allocation schedule. Compare paired elapsed times and inspect
+system CPU, faults and block profiles before attributing a gain. Record
+negative or inconclusive results as such.
 
 For later changes that intentionally alter streams, compare each 5%, 50%,
 and 95% posterior quantile using the combined Monte Carlo standard error of

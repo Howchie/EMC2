@@ -3,7 +3,7 @@ args <- commandArgs(TRUE)
 if (length(args) != 1L) stop('usage: analyse_pooled_posterior.R results-dir')
 suppressPackageStartupMessages(library(posterior))
 root <- args[[1L]]
-seeds <- c(101L, 202L, 303L)
+seeds <- c(101L, 202L, 303L, 404L, 505L, 606L, 707L)
 quantiles <- c(.05, .5, .95)
 collect <- function(x) {
   chains <- lapply(x$fit, function(ch) {
