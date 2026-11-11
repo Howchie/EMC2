@@ -116,9 +116,24 @@ to estimate its effect. Raw runs and exact outputs are in
 `run_rexg_logS_cache.sh` and `run_rexg_logS_fit.sh`.
 
 This completes the measured configurable-bound stop-success paths in
-`model_SS_EXG.h`, `model_SS_RDEX.h` and the live raw adapter. Scalar contexts
-that supply a stable parameter tuple outside the batched race endpoint remain
-to be measured before claiming the full plan's Step 4a.
+`model_SS_EXG.h`, `model_SS_RDEX.h` and the live raw adapter.
+
+The scalar REXG pdf/cdf callbacks now reuse an exact-key truncation context
+across quadrature calls, using the supplied race context when available and a
+thread-local fallback otherwise. The focused 8-racer, 512-particle native
+likelihood probe was bit-identical and tied the direct-callback control at a
+0.587 s median in a reverse-order pair. The fit-level fixture exercised the
+finite, nonuniform `UT` scalar route on two racers and eight replicated
+subjects. Across seeds 101, 202 and 303, the direct-callback control took
+51.836, 55.701 and 55.378 s; the cached version took 38.387, 38.810 and
+39.769 s (1.35–1.44x). Every paired fit object and final RNG state was
+identical. A reverse-order seed-101 pair confirmed the result: 51.709 s
+without the cache and 38.225 s with it, again with identical fit and RNG.
+Raw calls and fit records are in
+`results/step4a_logS_scalar_cache_vs_noop_race8/`,
+`results/step4a_logS_scalar_cache_vs_noop_race8_reverse/`,
+`results/step4a_logS_scalar_fit_cache_vs_noop_2race/` and
+`results/step4a_logS_scalar_fit_cache_vs_noop_2race_reverse/`.
 
 ### Step 4b: stable EXG tails and prepared kernel parameters
 
