@@ -20,7 +20,14 @@ particles <- matrix(rep(p, each = 256), nrow = 256, dimnames = list(NULL, names(
 fun <- get(if (pkg == 'EMC2') 'calc_ll_oo' else 'calc_ll', ns)
 call <- function() fun(particles, dadm, constants, designs, model$c_name, model$bound,
                        model$transform, model$pre_transform, p_types, log(1e-10), model$trend)
-invisible(call())
+result <- call()
 timing <- replicate(10L, system.time(invisible(call()))[['elapsed']])
+out <- Sys.getenv('OUT')
+if (nzchar(out)) {
+  data_file <- tempfile(); saveRDS(dadm, data_file)
+  data_md5 <- unname(tools::md5sum(data_file)); unlink(data_file)
+  saveRDS(list(result = result, timing = timing, data_md5 = data_md5,
+               session = sessionInfo()), out)
+}
 cat('package', pkg, 'rows', nrow(dadm), 'particles', nrow(particles), 'times', timing,
     'seconds per row-particle', median(timing) / (nrow(dadm) * nrow(particles)), '\n')

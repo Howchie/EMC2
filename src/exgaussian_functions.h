@@ -4,6 +4,7 @@
 #include <Rcpp.h>
 using namespace Rcpp;
 #include <cmath>
+#include <cstring>
 #include "composite_functions.h"
 #include "wald_functions.h"
 #ifndef M_PI
@@ -88,6 +89,71 @@ inline double pexg_log_upper(double q, double mu, double sigma, double tau) {
   return std::fmin(0.0, log_sum_exp(log_q_term, log_exp_term + log_phi2));
 }
 
+inline double pexg(double q, double mu, double sigma, double tau,
+                   bool lower_tail, bool log_p);
+
+// Parameter-only values for a truncated ex-Gaussian. Raw likelihood batches
+// can reuse these when every active row in a particle shares the same tuple.
+// Keep both natural and log quantities: ptexg's ordinary path uses natural
+// subtraction where it is well conditioned and its tail fallback uses logs.
+struct ExgTruncationCache {
+  double mu = NA_REAL;
+  double sigma = NA_REAL;
+  double tau = NA_REAL;
+  double lower = NA_REAL;
+  double upper = NA_REAL;
+  double lower_cdf = NA_REAL;
+  double upper_cdf = NA_REAL;
+  double lower_lcdf = NA_REAL;
+  double upper_lcdf = NA_REAL;
+  double lower_lsurv = NA_REAL;
+  double upper_lsurv = NA_REAL;
+  double natural_normalizer = NA_REAL;
+  double log_normalizer = NA_REAL;
+  bool valid = false;
+
+  bool matches(double mu_, double sigma_, double tau_, double lower_,
+               double upper_) const {
+    return valid && std::memcmp(&mu, &mu_, sizeof(double)) == 0 &&
+      std::memcmp(&sigma, &sigma_, sizeof(double)) == 0 &&
+      std::memcmp(&tau, &tau_, sizeof(double)) == 0 &&
+      std::memcmp(&lower, &lower_, sizeof(double)) == 0 &&
+      std::memcmp(&upper, &upper_, sizeof(double)) == 0;
+  }
+};
+
+inline ExgTruncationCache make_exg_truncation_cache(
+    double mu, double sigma, double tau, double lower, double upper) {
+  ExgTruncationCache cache;
+  cache.mu = mu;
+  cache.sigma = sigma;
+  cache.tau = tau;
+  cache.lower = lower;
+  cache.upper = upper;
+  cache.lower_cdf = lower == R_NegInf ? 0.0
+      : pexg(lower, mu, sigma, tau, true, false);
+  cache.upper_cdf = upper == R_PosInf ? 1.0
+      : pexg(upper, mu, sigma, tau, true, false);
+  cache.lower_lcdf = lower == R_NegInf ? R_NegInf
+                                        : pexg(lower, mu, sigma, tau, true, true);
+  cache.upper_lcdf = upper == R_PosInf ? 0.0
+                                        : pexg(upper, mu, sigma, tau, true, true);
+  cache.lower_lsurv = lower == R_NegInf ? 0.0
+      : (lower == R_PosInf ? R_NegInf : pexg_log_upper(lower, mu, sigma, tau));
+  cache.upper_lsurv = upper == R_PosInf ? R_NegInf
+      : (upper == R_NegInf ? 0.0 : pexg_log_upper(upper, mu, sigma, tau));
+  cache.natural_normalizer = cache.upper_cdf - cache.lower_cdf;
+  if (cache.lower_lcdf == R_NegInf) {
+    cache.log_normalizer = cache.upper_lcdf;
+  } else if (cache.lower_lcdf > -M_LN2) {
+    cache.log_normalizer = log_diff_exp(cache.lower_lsurv, cache.upper_lsurv);
+  } else {
+    cache.log_normalizer = log_diff_exp(cache.upper_lcdf, cache.lower_lcdf);
+  }
+  cache.valid = true;
+  return cache;
+}
+
 // cumulative distribution function of ex-Gaussian distribution
 inline double pexg(
     const double q,
@@ -162,7 +228,8 @@ inline double dtexg(
     const double tau = 1.,
     const double lower = R_NegInf,
     const double upper = R_PosInf,
-    const bool log_d = false
+    const bool log_d = false,
+    const ExgTruncationCache* cache = nullptr
 ) {
 
   if (lower == R_NegInf && upper == R_PosInf) {
@@ -175,31 +242,33 @@ inline double dtexg(
   double x_ld = dexg(x, mu, sigma, tau, true);
   if (x_ld == R_NegInf) return log_d ? R_NegInf : 0.;
 
-  double lower_lcdf, upper_lcdf;
-  if (lower == R_NegInf) {
-    lower_lcdf = R_NegInf;
-  } else {
-    lower_lcdf = pexg(lower, mu, sigma, tau, true, true);
-  }
-  if (upper == R_PosInf) {
-    upper_lcdf = 0.;
-  } else {
-    upper_lcdf = pexg(upper, mu, sigma, tau, true, true);
-  }
-
+  const bool use_cache = cache != nullptr && cache->matches(mu, sigma, tau, lower, upper);
   double log_normaliser;
-  if (lower_lcdf == R_NegInf) {
-    log_normaliser = upper_lcdf;
-  } else if (lower_lcdf > -M_LN2) {
-    // Both bounds sit in the upper half: the lower-tail log CDFs are nearly
-    // equal (both ~0) and their log difference cancels.  The same normaliser
-    // as a survivor difference S(lower) - S(upper) keeps its digits.
-    const double ls_lo = pexg_log_upper(lower, mu, sigma, tau);
-    const double ls_up = (upper == R_PosInf) ? R_NegInf
-                                             : pexg_log_upper(upper, mu, sigma, tau);
-    log_normaliser = log_diff_exp(ls_lo, ls_up);
+  if (use_cache) {
+    log_normaliser = cache->log_normalizer;
   } else {
-    log_normaliser = log_diff_exp(upper_lcdf, lower_lcdf);
+    double lower_lcdf, upper_lcdf;
+    if (lower == R_NegInf) {
+      lower_lcdf = R_NegInf;
+    } else {
+      lower_lcdf = pexg(lower, mu, sigma, tau, true, true);
+    }
+    if (upper == R_PosInf) {
+      upper_lcdf = 0.;
+    } else {
+      upper_lcdf = pexg(upper, mu, sigma, tau, true, true);
+    }
+    if (lower_lcdf == R_NegInf) {
+      log_normaliser = upper_lcdf;
+    } else if (lower_lcdf > -M_LN2) {
+      // Both bounds sit in the upper half: log-CDF subtraction loses digits.
+      const double ls_lo = pexg_log_upper(lower, mu, sigma, tau);
+      const double ls_up = (upper == R_PosInf) ? R_NegInf
+                                               : pexg_log_upper(upper, mu, sigma, tau);
+      log_normaliser = log_diff_exp(ls_lo, ls_up);
+    } else {
+      log_normaliser = log_diff_exp(upper_lcdf, lower_lcdf);
+    }
   }
   if (!(log_normaliser > R_NegInf) || ISNAN(log_normaliser)) {
     return log_d ? R_NegInf : 0.;
@@ -218,7 +287,8 @@ inline double ptexg(
     const double lower = R_NegInf,
     const double upper = R_PosInf,
     const bool lower_tail = true,
-    const bool log_p = false
+    const bool log_p = false,
+    const ExgTruncationCache* cache = nullptr
 ) {
 
   if (lower == R_NegInf && upper == R_PosInf) {
@@ -235,23 +305,29 @@ inline double ptexg(
     return log_p ? (out == 0. ? R_NegInf : 0.) : out;
   }
 
+  const bool use_cache = cache != nullptr && cache->matches(mu, sigma, tau, lower, upper);
   double q_cdf = pexg(q, mu, sigma, tau);
 
   double lower_cdf, upper_cdf;
-  if (lower == R_NegInf) {
-    lower_cdf = 0.;
+  if (use_cache) {
+    lower_cdf = cache->lower_cdf;
+    upper_cdf = cache->upper_cdf;
   } else {
-    lower_cdf = pexg(lower, mu, sigma, tau);
-  }
-  if (upper == R_PosInf) {
-    upper_cdf = 1.;
-  } else {
-    upper_cdf = pexg(upper, mu, sigma, tau);
+    if (lower == R_NegInf) {
+      lower_cdf = 0.;
+    } else {
+      lower_cdf = pexg(lower, mu, sigma, tau);
+    }
+    if (upper == R_PosInf) {
+      upper_cdf = 1.;
+    } else {
+      upper_cdf = pexg(upper, mu, sigma, tau);
+    }
   }
 
   // Natural fast path: ordinary bounds where the subtractions keep their
   // digits.  Otherwise fall back to matched log differences below.
-  const double normaliser = upper_cdf - lower_cdf;
+  const double normaliser = use_cache ? cache->natural_normalizer : upper_cdf - lower_cdf;
   if (normaliser > 1e-10 * std::max(upper_cdf, 1e-300)) {
     double out;
     if (lower_tail) {
@@ -271,15 +347,21 @@ inline double ptexg(
   // the better-conditioned side (lower-tail logs on the left, survivor logs
   // on the right of the median).
   auto lcdf = [&](double x) {
+    if (use_cache && x == lower) return cache->lower_lcdf;
+    if (use_cache && x == upper) return cache->upper_lcdf;
     return pexg(x, mu, sigma, tau, true, true);
   };
   auto lsurv = [&](double x) {
+    if (use_cache && x == lower) return cache->lower_lsurv;
+    if (use_cache && x == upper) return cache->upper_lsurv;
     return (x == R_PosInf) ? R_NegInf : pexg_log_upper(x, mu, sigma, tau);
   };
   const double lower_lcdf = (lower == R_NegInf) ? R_NegInf : lcdf(lower);
 
   double log_norm;
-  if (lower_lcdf == R_NegInf) {
+  if (use_cache) {
+    log_norm = cache->log_normalizer;
+  } else if (lower_lcdf == R_NegInf) {
     log_norm = (upper == R_PosInf) ? 0.0 : lcdf(upper);
   } else if (lower_lcdf > -M_LN2) {
     log_norm = log_diff_exp(lsurv(lower), lsurv(upper));

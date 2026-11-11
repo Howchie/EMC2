@@ -5,6 +5,34 @@
 #include "utility_functions.h"
 #include "exgaussian_functions.h"
 #include <cmath>
+#include <cstring>
+
+namespace {
+
+bool rexg_common_truncation_cache(const double* mu, const double* sigma,
+                                 const double* tau, const double* t0,
+                                 int n_rows, const int* mask, const int* isok,
+                                 ExgTruncationCache& cache) {
+  int first = -1;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i] || !isok[i] || R_IsNA(mu[i]) || R_IsNA(sigma[i]) ||
+        R_IsNA(tau[i]) || R_IsNA(t0[i]) || sigma[i] <= 0.0 || tau[i] <= 0.0 ||
+        !R_FINITE(t0[i]) || t0[i] < 0.0) continue;
+    if (first < 0) {
+      first = i;
+      continue;
+    }
+    if (std::memcmp(&mu[first], &mu[i], sizeof(double)) != 0 ||
+        std::memcmp(&sigma[first], &sigma[i], sizeof(double)) != 0 ||
+        std::memcmp(&tau[first], &tau[i], sizeof(double)) != 0) return false;
+  }
+  if (first < 0) return false;
+  cache = make_exg_truncation_cache(mu[first], sigma[first], tau[first],
+                                   0.0, R_PosInf);
+  return true;
+}
+
+}  // namespace
 
 void drexg_raw(const double* rt, const double* const* cols, int n_rows,
                  const int* mask, const int* isok,
@@ -14,6 +42,10 @@ void drexg_raw(const double* rt, const double* const* cols, int n_rows,
   const double* sigma_ = cols[emc2col::rexg::sigma];
   const double* tau_   = cols[emc2col::rexg::tau];
   const double* t0_    = cols[emc2col::rexg::t0];
+  ExgTruncationCache norm_cache;
+  const bool have_norm_cache = rexg_common_truncation_cache(
+      mu_, sigma_, tau_, t0_, n_rows, mask, isok, norm_cache);
+  const ExgTruncationCache* norm_cache_ptr = have_norm_cache ? &norm_cache : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
@@ -27,7 +59,8 @@ void drexg_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    out[i] = raw_log_value(dtexg(tt, mu_[i], sigma_[i], tau_[i], 0.0, R_PosInf, true),
+    out[i] = raw_log_value(dtexg(tt, mu_[i], sigma_[i], tau_[i], 0.0, R_PosInf,
+                                 true, norm_cache_ptr),
                            min_ll, floor_raw);
   }
 }
@@ -40,6 +73,10 @@ void prexg_raw(const double* rt, const double* const* cols, int n_rows,
   const double* sigma_ = cols[emc2col::rexg::sigma];
   const double* tau_   = cols[emc2col::rexg::tau];
   const double* t0_    = cols[emc2col::rexg::t0];
+  ExgTruncationCache norm_cache;
+  const bool have_norm_cache = rexg_common_truncation_cache(
+      mu_, sigma_, tau_, t0_, n_rows, mask, isok, norm_cache);
+  const ExgTruncationCache* norm_cache_ptr = have_norm_cache ? &norm_cache : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) || R_IsNA(t0_[i]) ||
@@ -49,7 +86,8 @@ void prexg_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double log_surv = (rt[i] - t0_[i] <= 0.0)
-      ? 0.0 : ptexg(rt[i] - t0_[i], mu_[i], sigma_[i], tau_[i], 0.0, R_PosInf, false, true);
+      ? 0.0 : ptexg(rt[i] - t0_[i], mu_[i], sigma_[i], tau_[i], 0.0,
+                    R_PosInf, false, true, norm_cache_ptr);
     out[i] = R_FINITE(log_surv) ? std::fmin(log_surv, 0.0)
                                 : (log_surv == R_NegInf ? raw_log_zero(min_ll, floor_raw) : 0.0);
   }
