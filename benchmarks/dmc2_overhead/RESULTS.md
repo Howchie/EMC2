@@ -55,15 +55,18 @@ combined MCSEs (largest 1.85).
 This is a fixed-work comparison, not a comparison of default stopping rules.
 The fixture explicitly requests preburn 50, burn 200, adapt 200 with
 `min_unique = 1`, and sample 400. That bypasses both packages' default burn and
-sample convergence stops. DMC2's current `hardfit()` default instead requires
-at least 1,000 sample draws and checks the 99th-percentile alpha R-hat plus the
-maximum group-mean and `sigma2` R-hats against 1.1; it also requires bulk ESS
-100 on group means and log group SDs, with additional likelihood-gap and
-subject-spread checks. Its hierarchical guidance recommends six chains. The
-14-seed fixture has three chains and does not implement the extra gap/spread
-checks. The logged DMC2-style diagnostics are therefore a partial post-hoc
-check, not a claim that default `hardfit()` passed. Every 400-draw fit fell
-short of its 100 group-mean/log-SD bulk ESS floor.
+sample convergence stops. For standard hierarchical fits, ordinary `fit()` in
+both packages defaults to R-hat checks on subject parameters (`alpha`) and group
+means (`mu`). The additional scale criteria the user flagged belong to DMC2's
+separate `hardfit()` defaults: at least 1,000 sample draws, the 99th-percentile
+alpha and maximum `mu`/`sigma2` R-hats below 1.1, and minimum bulk ESS of 100
+over group means and log group SDs. `hardfit()` also checks likelihood gaps and
+subject spread; its hierarchical guidance recommends six chains. EMC2 `fit()`
+does not apply those `hardfit()` scale/ESS checks by default. The 14-seed
+fixture has three chains and does not implement the extra gap/spread checks, so
+its logged scale diagnostics are partial post-hoc checks, not a claim that
+`hardfit()` passed. Every 400-draw fit fell short of its 100 group-mean/log-SD
+bulk ESS floor.
 
 Mean elapsed time was 93.924 s baseline and 90.226 s candidate, a 3.93% paired
 reduction. The paired geometric speedup was 1.041 [1.029, 1.053] (95% t
@@ -71,10 +74,37 @@ interval). Across-seed minimum group-mean/log-SD ESS ratios were wide: 1.531
 [0.803, 2.919] for bulk and 1.422 [0.892, 2.268] for tail ESS. Across the
 eight group-mean/log-SD coordinates, median bulk and tail ESS ratios were
 1.001 and 0.969; the 10th percentiles were 0.776 and 0.707. The 0.90
-non-inferiority claim is unresolved. A paired 1,200-draw-per-chain extension
-is underway; it uses the same fixed-work criteria and includes the omitted
-scale quantities in its gate. The summaries are in
+non-inferiority claim was unresolved at 400 draws. The summaries are in
 `results/pooled14_posterior.txt` and `results/pooled14_aggregate.txt`.
+
+### Pooled 1,200-draw scale diagnostics and same-build control
+
+Four paired seeds (1506, 1607, 1708 and 1809) extended the same fixed-work
+comparison to 1,200 sample draws per chain. Mean elapsed time was 699.399 s
+baseline versus 651.615 s warmed, a 6.82% reduction; geometric speedup was
+1.073 [1.043, 1.105]. All 111 aggregate parameter quantiles were within four
+combined MCSEs (maximum 3.52). The partial DMC2 `hardfit()` R-hat-plus-ESS
+subset passed on 3/4 baseline fits and 1/4 warmed fits. This omits the
+likelihood-gap and subject-spread checks and uses three chains.
+
+Across the eight DMC2 group-mean/log-SD coordinates and four paired seeds, the
+candidate/baseline ESS ratios had median 0.572 (bulk) and 0.654 (tail); 29/32
+bulk and 22/32 tail ratios were below 0.90. The geometric mean of each run's
+minimum group/log-SD ESS ratio was 0.338 [0.111, 1.027] for bulk and 0.538
+[0.275, 1.052] for tail. These fixed-work results raise an ESS concern despite
+the runtime gain.
+
+To measure schedule noise, two more paired 1,200-draw runs used the frozen
+baseline library in both runner arms. The partial `hardfit()` subset passed on
+0/2 fits in each arm. Same-build per-coordinate ESS ratios had median 1.150
+(bulk) and 1.123 (tail); 5/16 coordinates in each measure were below 0.90,
+with minima 0.395 and 0.155. Thus the fixed-work contrast cannot attribute the
+scale ESS loss to PSIS warming: same-code allocator runs vary substantially,
+and the control is too small to establish non-inferiority. A direct
+time-to-common-stopping-target gate remains open. Raw summaries are in
+`results/pooled_long_posterior.txt`,
+`results/pooled_long_repeat_posterior.txt`, and the corresponding ignored RDS
+files under `results/pooled_long/` and `results/pooled_long_repeat/`.
 
 ### Step 4a: shared-tuple REXG truncation cache
 
