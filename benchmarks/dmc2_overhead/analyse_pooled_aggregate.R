@@ -10,10 +10,18 @@ chain_matrix <- function(ch) {
   a <- aperm(ch$samples$alpha, c(3L, 1L, 2L))
   dim(a) <- c(dim(a)[1L], dim(a)[2L] * dim(a)[3L])
   colnames(a) <- unlist(lapply(dimnames(ch$samples$alpha)[[2L]], function(s)
-    paste(dimnames(ch$samples$alpha)[[1L]], s, sep = '__')), use.names = FALSE)
+    paste('alpha', dimnames(ch$samples$alpha)[[1L]], s, sep = '__')), use.names = FALSE)
+  mu <- t(ch$samples$theta_mu)
+  colnames(mu) <- paste('mu', rownames(ch$samples$theta_mu), sep = '__')
+  V <- ch$samples$theta_var
+  sigma2 <- t(vapply(seq_len(dim(V)[3L]), function(i) diag(V[, , i]),
+                     numeric(dim(V)[1L])))
+  colnames(sigma2) <- paste('sigma2', rownames(V), sep = '__')
+  log_sd <- 0.5 * log(sigma2)
+  colnames(log_sd) <- paste('log_sd', rownames(V), sep = '__')
   pooled <- t(ch$samples$pooled)
-  colnames(pooled) <- rownames(ch$samples$pooled)
-  cbind(a, pooled)
+  colnames(pooled) <- paste('pooled', rownames(ch$samples$pooled), sep = '__')
+  cbind(a, mu, sigma2, log_sd, pooled)
 }
 load_arm <- function(arm) {
   out <- list(); times <- numeric()
@@ -67,6 +75,13 @@ ess_ratios <- data.frame(variable = sa$variable,
     (sa$ess_bulk / sum(base$times)),
   tail_per_second = (sb$ess_tail / sum(candidate$times)) /
     (sa$ess_tail / sum(base$times)))
+hardfit_vars <- grepl('^(mu|log_sd)__', ess_ratios$variable)
+for (metric in names(ess_ratios)[-1L]) {
+  x <- ess_ratios[[metric]][hardfit_vars]
+  cat('DMC2 hardfit mu/log_sd', metric,
+      'ratio median / 10th percentile / minimum / count below 0.90:',
+      median(x), unname(quantile(x, .1)), min(x), sum(x < .90), '/', length(x), '\n')
+}
 for (metric in names(ess_ratios)[-1L]) {
   x <- ess_ratios[[metric]]
   cat(metric, 'per-variable ratio median / 10th percentile / minimum / count below 0.90:',
