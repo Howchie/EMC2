@@ -94,17 +94,42 @@ minimum group/log-SD ESS ratio was 0.338 [0.111, 1.027] for bulk and 0.538
 [0.275, 1.052] for tail. These fixed-work results raise an ESS concern despite
 the runtime gain.
 
-To measure schedule noise, two more paired 1,200-draw runs used the frozen
-baseline library in both runner arms. The partial `hardfit()` subset passed on
-0/2 fits in each arm. Same-build per-coordinate ESS ratios had median 1.150
-(bulk) and 1.123 (tail); 5/16 coordinates in each measure were below 0.90,
-with minima 0.395 and 0.155. Thus the fixed-work contrast cannot attribute the
-scale ESS loss to PSIS warming: same-code allocator runs vary substantially,
-and the control is too small to establish non-inferiority. A direct
-time-to-common-stopping-target gate remains open. Raw summaries are in
+Two more paired 1,200-draw fixed-work runs used the frozen baseline library in
+both runner arms. The partial `hardfit()` subset passed on 0/2 fits in each
+arm. Same-build per-coordinate ESS ratios had median 1.150 (bulk) and 1.123
+(tail); 5/16 coordinates in each measure were below 0.90, with minima 0.395
+and 0.155. This confirms substantial run-to-run schedule variation.
+
+A separate pinned, machine-locked run measured time to the shared partial
+`hardfit()` target. It used the original 1,200-draw fits as starting states,
+checked at 100-draw intervals, and continued misses up to 4,000 draws. The
+table reports the first passing check and elapsed time; a miss at 4,000 is
+censored at the cap.
+
+| Seed | Baseline draws / time (s) | Warmed draws / time (s) |
+|---:|---:|---:|
+| 1506 | 1,500 / 207.4 | Missed at 4,000 / 427.4 |
+| 1607 | 1,000 / 158.6 | 1,200 / 163.2 |
+| 1708 | 1,000 / 154.8 | 1,900 / 230.7 |
+| 1809 | 1,000 / 157.0 | 2,000 / 238.2 |
+
+Across the three pairs where both builds passed, warmed/baseline geometric
+time-to-target speedup was 0.755 [0.438, 1.301]. The two-seed same-build
+time-to-target control produced ratios of 1.311 and 1.211 between its runner
+arms, geometric mean 1.260 [0.764, 2.080]. The paired result points toward
+slower convergence after warming, and one warmed fit missed the cap, while the
+same-build control and wide intervals show that this four-seed gate cannot
+separate the effect from allocator variation. Keep the PSIS warm change under
+evaluation; do not claim a time-to-DMC2-hardfit advantage from these data.
+
+This is not a full DMC2 `hardfit()` run: it uses three chains and omits
+likelihood-gap, subject-spread and culling rules. Raw summaries are in
 `results/pooled_long_posterior.txt`,
-`results/pooled_long_repeat_posterior.txt`, and the corresponding ignored RDS
-files under `results/pooled_long/` and `results/pooled_long_repeat/`.
+`results/pooled_long_repeat_posterior.txt`,
+`results/pooled_stop_summary.txt`,
+`results/pooled_scale_control_summary.txt`, and the corresponding ignored RDS
+files under `results/pooled_long/`, `results/pooled_long_repeat/`,
+`results/pooled_stop/` and `results/pooled_scale_control/`.
 
 ### Step 4a: shared-tuple REXG truncation cache
 
