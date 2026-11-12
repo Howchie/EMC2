@@ -35,7 +35,11 @@ collect <- function(x) {
 }
 ratios <- matrix(NA_real_, length(seeds), 2L,
                  dimnames = list(seeds, c('bulk', 'tail')))
+hardfit_vars <- NULL
+hardfit_ratios <- list(bulk = NULL, tail = NULL)
 time_speedups <- numeric(length(seeds))
+hardfit_pass <- matrix(FALSE, length(seeds), 2L,
+                       dimnames = list(seeds, c('base', 'candidate')))
 for (i in seq_along(seeds)) {
   seed <- seeds[i]
   a <- readRDS(file.path(root, if (seed == 101) 'pooled_base.rds' else paste0('pooled_', seed, '_base.rds')))
@@ -47,10 +51,19 @@ for (i in seq_along(seeds)) {
   draws_per_chain <- dim(a$fit[[1L]]$samples$alpha)[3L]
   total_draws <- draws_per_chain * length(a$fit)
   hardfit_ess_vars <- grepl('^(mu|log_sd)__', sa$variable)
+  if (is.null(hardfit_vars)) {
+    hardfit_vars <- sa$variable[hardfit_ess_vars]
+    hardfit_ratios <- lapply(c('bulk', 'tail'), function(x)
+      matrix(NA_real_, length(seeds), length(hardfit_vars),
+             dimnames = list(seeds, hardfit_vars)))
+    names(hardfit_ratios) <- c('bulk', 'tail')
+  }
   for (kind in c('bulk', 'tail')) {
     col <- paste0('ess_', kind)
     ratios[i, kind] <- min(sb[[col]][hardfit_ess_vars]) /
       min(sa[[col]][hardfit_ess_vars])
+    hardfit_ratios[[kind]][i, ] <- sb[[col]][hardfit_ess_vars] /
+      sa[[col]][hardfit_ess_vars]
   }
   diffs <- cbind(abs(sa$q5 - sb$q5) / sqrt(sa$mcse_q05^2 + sb$mcse_q05^2),
                  abs(sa$q50 - sb$q50) / sqrt(sa$mcse_q50^2 + sb$mcse_q50^2),
@@ -71,11 +84,19 @@ for (i in seq_along(seeds)) {
   mr <- lapply(list(a$fit, b$fit), get_rhat, selection = 'mu')
   vr <- lapply(list(a$fit, b$fit), get_rhat, selection = 'sigma2')
   hess <- c(min(sa$ess_bulk[hardfit_ess_vars]), min(sb$ess_bulk[hardfit_ess_vars]))
+  rule_max <- c(max(quantile(ar[[1L]], .99), max(mr[[1L]]), max(vr[[1L]])),
+                max(quantile(ar[[2L]], .99), max(mr[[2L]]), max(vr[[2L]])))
+  hardfit_pass[i, ] <- c(rule_max[1L] < 1.1 && hess[1L] >= 100,
+                         rule_max[2L] < 1.1 && hess[2L] >= 100)
   cat('DMC2 hardfit-style R-hat q99(alpha), max(mu), max(sigma2), and min bulk ESS; base/candidate:',
       sprintf('%.3f/%.3f, %.3f/%.3f, %.3f/%.3f, %.1f/%.1f',
               quantile(ar[[1L]], .99), quantile(ar[[2L]], .99),
               max(mr[[1L]]), max(mr[[2L]]), max(vr[[1L]]), max(vr[[2L]]),
               hess[1L], hess[2L]), '\n')
+  cat('DMC2 hardfit R-hat+ESS subset pass (max R-hat < 1.1; min group/log-SD bulk ESS >= 100), base/candidate:',
+      rule_max[1L] < 1.1 && hess[1L] >= 100,
+      rule_max[2L] < 1.1 && hess[2L] >= 100,
+      '(omits likelihood-gap and subject-spread checks)\n')
   cat('quantile differences beyond 4 combined MCSE:', sum(diffs > 4), '/', length(diffs),
       'largest standardized difference', max(diffs), '\n')
   cat('largest quantile standardized differences by variable:\n')
@@ -83,9 +104,16 @@ for (i in seq_along(seeds)) {
   cat('candidate diagnostics:\n'); print(sb, width = Inf)
 }
 cat('\nPer-seed minimum group-mean/log-SD ESS ratios (candidate/base):\n'); print(ratios)
+cat('Partial DMC2 hardfit R-hat+ESS subset passes (omits likelihood-gap and subject-spread): base',
+    sum(hardfit_pass[, 'base']), '/', nrow(hardfit_pass), '; candidate',
+    sum(hardfit_pass[, 'candidate']), '/', nrow(hardfit_pass), '\n')
 for (kind in colnames(ratios)) {
   z <- log(ratios[, kind]); ci <- exp(mean(z) + c(-1, 1) * qt(.975, df = length(z) - 1) * sd(z) / sqrt(length(z)))
   cat(kind, 'geometric mean ratio', exp(mean(z)), '95% t interval', ci, '\n')
+  v <- as.vector(hardfit_ratios[[kind]])
+  cat(kind, 'DMC2 group/log-SD ESS ratios per variable/run: median', median(v),
+      '10th percentile', unname(quantile(v, .1)), 'minimum', min(v),
+      'below 0.90', sum(v < .90), '/', length(v), '\n')
 }
 z <- log(time_speedups)
 time_ci <- exp(mean(z) + c(-1, 1) * qt(.975, df = length(z) - 1) * sd(z) / sqrt(length(z)))
@@ -105,4 +133,12 @@ if (all(file.exists(repeat_files))) {
       'draws identical', identical(a$fit[[1]]$samples$alpha, r$fit[[1]]$samples$alpha),
       'max quantile difference in combined MCSE', max(repeat_diff),
       'quantile checks beyond 4 combined MCSE', sum(repeat_diff > 4), '/', length(repeat_diff), '\n')
+  hvars <- grepl('^(mu|log_sd)__', sa$variable)
+  for (kind in c('bulk', 'tail')) {
+    col <- paste0('ess_', kind)
+    x <- sr[[col]][hvars] / sa[[col]][hvars]
+    cat('Same-baseline repeat group-mean/log-SD', kind,
+        'ESS ratio median / geometric mean / minimum:', median(x),
+        exp(mean(log(x))), min(x), '\n')
+  }
 }
