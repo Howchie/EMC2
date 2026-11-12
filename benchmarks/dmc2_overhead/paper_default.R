@@ -24,11 +24,16 @@ if (kind == 'EXG') {
 data_file <- tempfile(); saveRDS(dat, data_file); data_md5 <- unname(tools::md5sum(data_file)); unlink(data_file)
 set.seed(seed)
 options(emc2.fit_host = Sys.getenv('HOST', '1') == '1',
-        emc2.sampler_profile = Sys.getenv('PROFILE', '0') == '1')
+        emc2.sampler_profile = Sys.getenv('PROFILE', '0') == '1',
+        emc2.persistent_chains = Sys.getenv('PERSISTENT', '0') == '1',
+        emc2.persistent_chain_restart_blocks = as.integer(
+          Sys.getenv('RESTART_BLOCKS', '25')))
 cache_max_reuses <- Sys.getenv('CACHE_MAX_REUSES', 'default')
 if (cache_max_reuses != 'default')
   options(emc2.subject_fit_cache_max_reuses = as.numeric(cache_max_reuses))
-fit_options <- options()[c('emc2.fit_host', 'emc2.sampler_profile')]
+fit_options <- options()[c('emc2.fit_host', 'emc2.sampler_profile',
+                            'emc2.persistent_chains',
+                            'emc2.persistent_chain_restart_blocks')]
 fit_options$emc2.subject_fit_cache_max_reuses <-
   getOption('emc2.subject_fit_cache_max_reuses', 'model_default')
 emc <- make_emc(dat, des, type = 'single', n_chains = 3, rt_resolution = .001)
