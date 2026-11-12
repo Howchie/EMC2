@@ -40,6 +40,39 @@ add seeds until interval precision supports a decision. Report minimum bulk and
 tail ESS per draw and per second, not just averages. These tolerances are
 specified before evaluating a change that alters the transition stream.
 
+## Pooled scale stopping gate
+
+`run_pooled_scale_gate.sh` continues the paired 1,200-draw pooled fits and
+checks every 100 sample draws for the DMC2 `hardfit()` R-hat/ESS subset: at
+least 1,000 sample draws, alpha R-hat 99th percentile below 1.1, maximum group
+mean and `sigma2` R-hats below 1.1, and minimum bulk ESS of 100 over group
+means and log group SDs. DMC2 `hardfit()` defaults to `step_size = 100` and
+`max_tries = 40`, so a fresh fit has at most 4,000 sample draws. The gate uses
+three chains and does not implement DMC2's likelihood-gap, subject-spread, or
+culling rules; it is a shared partial stopping target, not an execution of
+`hardfit()`.
+
+Run the paired gate under the shared machine lock with the frozen
+1,200-draw inputs:
+
+```sh
+BASE_LIB=.Rlib_pooled_base \
+NEW_LIB=.Rlib_pooled_warm \
+INPUT_DIR=benchmarks/dmc2_overhead/results/pooled_long \
+OUT_DIR=benchmarks/dmc2_overhead/results/pooled_stop \
+POOLED_SEEDS='1506 1607 1708 1809' \
+bash /data/work/EMC2_workstreams/bench_lock.sh \
+  bash benchmarks/dmc2_overhead/run_pooled_scale_gate.sh
+```
+
+The runner pins R to CPUs 0–26 and limits OpenMP, OpenBLAS and MKL to one
+thread. `analyse_pooled_scale_gate.R` reports reached or censored runs and
+paired time-to-target ratios. For run-to-run variation, use
+`run_pooled_scale_repeat_control.sh` with `BASE_LIB=.Rlib_pooled_base` and
+`INPUT_DIR=benchmarks/dmc2_overhead/results/pooled_long_repeat`; both arms then
+load the same baseline library. Run this control under the same lock and
+affinity.
+
 ## Frozen DMC2 reference
 
 The external reference is the archive of `/data/work/DMC2` commit `fe8341a5`,
