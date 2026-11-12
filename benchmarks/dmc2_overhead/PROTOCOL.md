@@ -77,6 +77,35 @@ paired time-to-target ratios. For run-to-run variation, use
 load the same baseline library. Run this control under the same lock and
 affinity.
 
+## Persistent-chain whole-fit rollout gate
+
+`run_persistent_default_gate.sh` compares the normal default `fit()` on/off
+`options(emc2.persistent_chains = TRUE)` in a single current-source library.
+It uses the paper EXG and LNR fixtures, three chains, `cores_per_chain = 1`,
+the fit host, seeds 101/202/303, CPU affinity 0–26, and one OMP/OpenBLAS/MKL
+thread. Arm order alternates by seed. The persistent arm restarts a chain
+process after 25 acknowledged blocks. `/usr/bin/time -v` records whole-process
+user/system CPU, wall time, peak RSS, and page faults. The analyzer requires
+identical stored draws, chain/caller RNG, stage counts, and compared
+continuation fields, then reports paired fit-time intervals and resource ratios.
+
+Build the current source into an isolated library, then run both scripts under
+the machine lock:
+
+```sh
+mkdir -p .Rlib_persistent_default_gate
+bash /data/work/EMC2_workstreams/bench_lock.sh \
+  R CMD INSTALL --library=.Rlib_persistent_default_gate .
+EMC_LIB=.Rlib_persistent_default_gate \
+OUT_DIR=benchmarks/dmc2_overhead/results/persistent_default_gate \
+bash /data/work/EMC2_workstreams/bench_lock.sh \
+  bash benchmarks/dmc2_overhead/run_persistent_default_gate.sh
+EMC_LIB=.Rlib_persistent_default_gate \
+R_LIBS=.Rlib_persistent_default_gate \
+Rscript benchmarks/dmc2_overhead/analyse_persistent_default_gate.R \
+  benchmarks/dmc2_overhead/results/persistent_default_gate
+```
+
 ## Frozen DMC2 reference
 
 The external reference is the archive of `/data/work/DMC2` commit `fe8341a5`,

@@ -1,4 +1,4 @@
-# Fresh-process fixed-transition paper fixtures. Environment selects model,
+# Fresh-process paper fixtures for default-fit benchmarks. Environment selects model,
 # library, host, concurrency, seed and output. Data generation has its own seed.
 suppressPackageStartupMessages(library(EMC2, lib.loc = Sys.getenv('EMC_LIB')))
 kind <- Sys.getenv('CASE', 'EXG')

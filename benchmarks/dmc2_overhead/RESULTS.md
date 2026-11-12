@@ -520,6 +520,31 @@ restart memory run above, this closes the Step 5 interrupt and allocation
 lifecycle gates for the tested fork backend. These checks do not exercise the
 separate clean-spawn backend on this Unix configuration.
 
+An additional whole-fit rollout gate used the current source build
+(`baa5acce`, EMC2 3.4.0), the default fit host, three chains, one core per
+chain, and default `fit()` stopping behavior. It ran the paper EXG and LNR
+fixtures at seeds 101/202/303, pinned to CPUs 0–26 with OMP/OpenBLAS/MKL set
+to one thread. The persistent arm restarted chain processes every 25
+acknowledged blocks; arm order alternated by seed. Every pair had the same
+data checksum, all stored sample fields, chain and caller RNG states, stage
+counts (1,000 sample draws per chain), and compared continuation fields.
+
+| Model | Fork-per-block fit time, seeds 101/202/303 (s) | Persistent fit time (s) | Geometric speedup (95% paired t interval) | Geometric wall speedup |
+|---|---|---|---|---:|
+| EXG | 10.253, 10.253, 9.997 | 10.005, 10.029, 10.491 | 0.999 [0.902, 1.108] | 1.006x |
+| LNR | 94.411, 93.649, 94.892 | 95.139, 93.394, 92.865 | 1.006 [0.969, 1.043] | 1.007x |
+
+The whole-fit intervals include no speed change. Mean persistent/fork ratios
+for process user CPU, system CPU, peak RSS, and minor faults were respectively
+1.055/0.956/1.130/0.758 for EXG and 1.081/1.664/1.047/0.693 for LNR. Thus
+persistent chains reduce page faults but raise user CPU and peak RSS in these
+ordinary fits; LNR system CPU also rises. Keep the feature opt-in for
+block-heavy workloads where the targeted process-startup savings are material,
+and leave the default runner unchanged. Raw fits, timing records, and the
+reproducible whole-fit gate are under `results/persistent_default_gate/`,
+`run_persistent_default_gate.sh`, and
+`analyse_persistent_default_gate.R`.
+
 ### Step 2: conditional subject-fit cache
 
 The durable per-chain fit/check cache passed 258 focused expectations with no
