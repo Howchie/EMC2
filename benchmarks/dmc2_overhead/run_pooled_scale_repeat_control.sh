@@ -16,7 +16,7 @@ for seed_value in "${seed_values[@]}"; do
       echo "Skipping completed same-build repeat $label"
       continue
     fi
-    echo "Checking same-build repeat $label to the DMC2 hardfit R-hat/ESS subset target"
+    echo "Checking same-build repeat $label against the shared scale-aware target patterned after DMC2 hardfit"
     taskset -c "$CPUSET" env EMC_LIB="$BASE_LIB" R_LIBS="$BASE_LIB" \
       Rscript benchmarks/dmc2_overhead/continue_pooled_scale_gate.R \
       "$input" "$output" "$MAX_SAMPLE_DRAWS" \

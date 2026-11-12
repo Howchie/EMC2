@@ -30,7 +30,7 @@ for (seed in seeds) {
   }
 }
 out <- do.call(rbind, rows)
-cat('DMC2 hardfit R-hat/ESS subset target (omits likelihood-gap/subject-spread; three chains):\n')
+cat('Shared scale-aware target patterned after DMC2 hardfit (full prefixes; no discard, gap, spread, or culling; three chains):\n')
 print(out, row.names = FALSE)
 paired <- split(out, out$seed)
 paired <- paired[vapply(paired, function(x) all(x$reached_within_default), logical(1))]

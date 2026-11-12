@@ -1,6 +1,7 @@
-# Continue a fixed-work pooled run until the DMC2 hardfit R-hat/ESS subset
-# passes, checking every 100 sample draws. Likelihood-gap and subject-spread
-# rules are not included; see RESULTS.md.
+# Continue a fixed-work pooled run until the shared scale-aware target
+# patterned after DMC2 hardfit passes, checking every 100 sample draws. This
+# checks full prefixes; it does not reproduce hardfit's optional first-third
+# discard, likelihood-gap/subject-spread rules, or culling.
 args <- commandArgs(TRUE)
 if (length(args) != 3L)
   stop('usage: continue_pooled_scale_gate.R input.rds output.rds max-sample-draws')

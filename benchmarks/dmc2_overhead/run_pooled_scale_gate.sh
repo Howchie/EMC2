@@ -19,7 +19,7 @@ for index in "${!seed_values[@]}"; do
       echo "Skipping completed $label"
       continue
     fi
-    echo "Checking $label to the DMC2 hardfit R-hat/ESS subset target"
+    echo "Checking $label against the shared scale-aware target patterned after DMC2 hardfit"
     taskset -c "$CPUSET" env EMC_LIB="$lib" R_LIBS="$lib" \
       Rscript benchmarks/dmc2_overhead/continue_pooled_scale_gate.R \
       "$input" "$output" "$MAX_SAMPLE_DRAWS" \

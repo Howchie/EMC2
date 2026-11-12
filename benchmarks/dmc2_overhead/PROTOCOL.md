@@ -43,14 +43,18 @@ specified before evaluating a change that alters the transition stream.
 ## Pooled scale stopping gate
 
 `run_pooled_scale_gate.sh` continues the paired 1,200-draw pooled fits and
-checks every 100 sample draws for the DMC2 `hardfit()` R-hat/ESS subset: at
-least 1,000 sample draws, alpha R-hat 99th percentile below 1.1, maximum group
-mean and `sigma2` R-hats below 1.1, and minimum bulk ESS of 100 over group
-means and log group SDs. DMC2 `hardfit()` defaults to `step_size = 100` and
-`max_tries = 40`, so a fresh fit has at most 4,000 sample draws. The gate uses
-three chains and does not implement DMC2's likelihood-gap, subject-spread, or
-culling rules; it is a shared partial stopping target, not an execution of
-`hardfit()`.
+checks every 100 sample draws against a shared scale-aware target patterned
+after DMC2 `hardfit()`: at least 1,000 sample draws, alpha R-hat 99th
+percentile below 1.1, maximum group mean and `sigma2` R-hats below 1.1, and
+minimum bulk ESS of 100 over group means and log group SDs. Both EMC2 builds
+are checked against this same external target. It is not either package's
+default `fit()` stop, and it is not an exact execution of DMC2 `hardfit()`.
+DMC2 `hardfit()` may drop the oldest third of sample draws and recheck when
+the full-history R-hat fails; this gate checks the full accumulated prefix.
+DMC2 `hardfit()` also checks likelihood gaps and subject spread and enables
+chain culling; this gate omits those rules and uses three chains. DMC2
+`hardfit()` defaults to `step_size = 100` and `max_tries = 40`, so a fresh fit
+has at most 4,000 sample draws.
 
 Run the paired gate under the shared machine lock with the frozen
 1,200-draw inputs:

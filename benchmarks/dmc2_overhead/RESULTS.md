@@ -100,8 +100,14 @@ arm. Same-build per-coordinate ESS ratios had median 1.150 (bulk) and 1.123
 (tail); 5/16 coordinates in each measure were below 0.90, with minima 0.395
 and 0.155. This confirms substantial run-to-run schedule variation.
 
-A separate pinned, machine-locked run measured time to the shared partial
-`hardfit()` target. It used the original 1,200-draw fits as starting states,
+An additional pinned, machine-locked run measured time to a shared scale-aware
+target patterned after DMC2 `hardfit()`. Both EMC2 builds were checked against
+this same external target; it is not either package's default `fit()` stop or
+an exact replay of DMC2 `hardfit()`. DMC2's rule can recheck after dropping the
+oldest third of sample draws when its R-hat check fails. This continuation gate
+checks each full sample prefix and does not apply that discard-and-recheck path.
+It also omits likelihood-gap, subject-spread and culling rules and uses three
+chains. It used the original 1,200-draw fits as starting states,
 checked at 100-draw intervals, and continued misses up to 4,000 draws. The
 table reports the first passing check and elapsed time; a miss at 4,000 is
 censored at the cap.
@@ -122,8 +128,7 @@ same-build control and wide intervals show that this four-seed gate cannot
 separate the effect from allocator variation. Keep the PSIS warm change under
 evaluation; do not claim a time-to-DMC2-hardfit advantage from these data.
 
-This is not a full DMC2 `hardfit()` run: it uses three chains and omits
-likelihood-gap, subject-spread and culling rules. Raw summaries are in
+Raw summaries are in
 `results/pooled_long_posterior.txt`,
 `results/pooled_long_repeat_posterior.txt`,
 `results/pooled_stop_summary.txt`,
