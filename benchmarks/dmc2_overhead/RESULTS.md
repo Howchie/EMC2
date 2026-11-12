@@ -45,29 +45,36 @@ assesses the resulting schedule variation directly.
 
 Fourteen paired seeds used the same pooled LBA data (hash
 `d3650406e44a8b6307adab451250714a`) and 400 production draws in each of three
-chains (42 chains per arm). Per-seed checks found six quantile exceedances out
-of 1,050 comparisons, all from seeds 404 and 606; the largest was 5.99 combined
-MCSE. Combining all 42 chains, all 75 parameter quantiles were within four
-combined MCSEs (largest 1.85). Maximum rank R-hat was 1.166 baseline and 1.156
-candidate, so both arms remain weakly mixed on some coordinates; aggregate
-quantile agreement is not evidence of convergence by itself.
+chains (42 chains per arm). The corrected analysis covers 37 quantities:
+subject parameters, group means, group variances, derived log group SDs, and
+the pooled parameter. Per-seed checks found six quantile exceedances out of
+1,554 comparisons, all from seeds 404 and 606; the largest was 5.99 combined
+MCSE. Combining all 42 chains, all 111 parameter quantiles were within four
+combined MCSEs (largest 1.85).
+
+This is a fixed-work comparison, not a comparison of default stopping rules.
+The fixture explicitly requests preburn 50, burn 200, adapt 200 with
+`min_unique = 1`, and sample 400. That bypasses both packages' default burn and
+sample convergence stops. DMC2's current `hardfit()` default instead requires
+at least 1,000 sample draws and checks the 99th-percentile alpha R-hat plus the
+maximum group-mean and `sigma2` R-hats against 1.1; it also requires bulk ESS
+100 on group means and log group SDs, with additional likelihood-gap and
+subject-spread checks. Its hierarchical guidance recommends six chains. The
+14-seed fixture has three chains and does not implement the extra gap/spread
+checks. The logged DMC2-style diagnostics are therefore a partial post-hoc
+check, not a claim that default `hardfit()` passed. Every 400-draw fit fell
+short of its 100 group-mean/log-SD bulk ESS floor.
 
 Mean elapsed time was 93.924 s baseline and 90.226 s candidate, a 3.93% paired
 reduction. The paired geometric speedup was 1.041 [1.029, 1.053] (95% t
-interval). Aggregate minimum bulk ESS per draw was 0.01097 baseline and 0.01114
-candidate; minimum tail ESS per draw was 0.02461 and 0.01591. Minimum bulk
-ESS/s was 0.1402 and 0.1481, while minimum tail ESS/s was 0.3144 and 0.2116.
-Across-seed candidate/baseline minimum ESS ratios remained wide: geometric mean
-1.370 [0.728, 2.581] for bulk and 1.241 [0.661, 2.329] for tail ESS. The
-per-variable median aggregate ESS ratios were 1.043 bulk and 1.059 tail, but
-the 10th-percentile tail ratio was 0.667 and 12 of 25 variables fell below 0.90.
-The minimum-ESS interval therefore does not establish non-inferiority, and the
-per-variable spread leaves a real tail-efficiency question. Since both arms
-have R-hat above 1.15 at 400 draws, this short-chain minimum is too noisy to
-decide the optimization by itself. A paired 1,200-draw-per-chain extension is
-underway to test whether the tail-ESS pattern persists at longer runs. The
-14-seed summaries are in `results/pooled14_posterior.txt` and
-`results/pooled14_aggregate.txt`.
+interval). Across-seed minimum group-mean/log-SD ESS ratios were wide: 1.531
+[0.803, 2.919] for bulk and 1.422 [0.892, 2.268] for tail ESS. Across the
+eight group-mean/log-SD coordinates, median bulk and tail ESS ratios were
+1.001 and 0.969; the 10th percentiles were 0.776 and 0.707. The 0.90
+non-inferiority claim is unresolved. A paired 1,200-draw-per-chain extension
+is underway; it uses the same fixed-work criteria and includes the omitted
+scale quantities in its gate. The summaries are in
+`results/pooled14_posterior.txt` and `results/pooled14_aggregate.txt`.
 
 ### Step 4a: shared-tuple REXG truncation cache
 
