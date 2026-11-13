@@ -368,14 +368,14 @@ plot_relations <- function(emc = NULL, stage = "sample",  plot_cred = FALSE,
       p.mat[is.na(means)] <- 1
       p.mat[!is.na(means)] <- 0
       means[is.na(means)] <- 0
-      corrplot(means, addCoef.col =addCoef.col, number.cex = .75, tl.col = "black",
+      corrplot::corrplot(means, addCoef.col =addCoef.col, number.cex = .75, tl.col = "black",
                p.mat = p.mat, insig = "blank", sig.level = 0.05)
     } else{
-      corrplot(means, addCoef.col =addCoef.col, number.cex = .75, tl.col = "black")
+      corrplot::corrplot(means, addCoef.col =addCoef.col, number.cex = .75, tl.col = "black")
     }
 
   } else{
-    cols <- diverging_hcl(200, palette = "Red-Green")
+    cols <- colorspace::diverging_hcl(200, palette = "Red-Green")
     if(!is.null(nice_names)) rownames(means) <- nice_names
 
     # You might have to play around with the x and y limits of the legend.
@@ -385,16 +385,16 @@ plot_relations <- function(emc = NULL, stage = "sample",  plot_cred = FALSE,
       p.mat[!is.na(means)] <- 0
       means[is.na(means)] <- 0
       colnames(p.mat) <- colnames(means) <- 1:ncol(means)
-      p <- corrplot(means, is.corr = F, col = cols, col.lim = c(-1, 1),
+      p <- corrplot::corrplot(means, is.corr = F, col = cols, col.lim = c(-1, 1),
                     cl.pos = "n", addCoef.col =addCoef.col, number.cex = .75, tl.col = "black",
                     p.mat = p.mat, insig = "blank", sig.level = 0.05)
     } else{
-      p <- corrplot(means, is.corr = F, col = cols, col.lim = c(-1, 1),
+      p <- corrplot::corrplot(means, is.corr = F, col = cols, col.lim = c(-1, 1),
                     cl.pos = "n", addCoef.col =addCoef.col, number.cex = .75, tl.col = "black")
     }
     max_x <- max(p$corrPos$x)
     max_y <- max(p$corrPos$y)
-    colorlegend(xlim=c(max_x + 1, max_x + 3), ylim=c(max_y/2 - max_y/5,max_y/2 + max_y/5), cols, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
+    corrplot::colorlegend(xlim=c(max_x + 1, max_x + 3), ylim=c(max_y/2 - max_y/5,max_y/2 + max_y/5), cols, c(seq(-1,1,.25)), align="l", vertical=TRUE, addlabels=TRUE)
   }
 
   if(plot_cred){
@@ -455,7 +455,7 @@ factor_diagram <- function(emc = NULL, stage = "sample",
   if(!is.null(factor_names)){
     colnames(means) <- factor_names
   }
-  fa.diagram(means, cut = cut, simple = simple, sort = sort, adj = adj,
+  psych::fa.diagram(means, cut = cut, simple = simple, sort = sort, adj = adj,
              main = main, cex = cex)
 }
 

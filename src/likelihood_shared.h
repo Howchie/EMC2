@@ -96,6 +96,23 @@ struct DDMEndpointCache {
 };
 
 
+struct ExpandCounts {
+  bool counted = false;
+  std::vector<int> trial;
+  std::vector<double> weight;
+};
+
+struct TruncScan {
+  bool scanned = false;
+  std::vector<int> mask;
+  bool any = false;
+  bool uniform_LT_ok = true;
+  bool uniform_UT_ok = true;
+  double uniform_LT = 0.0;
+  double uniform_UT = R_PosInf;
+};
+
+
 // Pre-computed per-data state for likelihood functions (Race, DDM, etc.).
 // Built once outside the particle loop; reused across particles to eliminate
 // per-particle R-heap allocations and repeated attribute/column reads.
@@ -133,6 +150,13 @@ struct ModelSharedState {
   std::vector<int> n_resp;          // per-unique-trial guessable accumulator count (excl. time, nogo)
   std::vector<double> alt_res_buf;  // scratch for timed-race f_T and S_W
   std::vector<double> ll_unique_buf; // per-unique-trial log-likelihood accumulator
+  // Multiplicity of each unique trial in the `expand` index (data-only), so
+  // the summed likelihood is a weighted sum over unique trials rather than a
+  // gather over every observed trial. Unique trials that never occur are left
+  // out, so a -Inf among them cannot enter the sum. Filled on first use.
+  ExpandCounts expand_counts;
+  // Which finite unique trials are truncated (data-only). Filled on first use.
+  TruncScan trunc_scan;
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;

@@ -10,13 +10,14 @@ test_that("an uneven block donates workers to its active chain and reclaims them
 
   runner <- function(sampler, core_ctl, request_donation = TRUE,
                      ready_file = NULL) {
-    pool <- .emc_pool_state$subject_pool
+    pool_state <- EMC2:::.emc_pool_state
+    pool <- pool_state$subject_pool
     ctx <- list(tag = "uneven-block-donation")
     if (is.null(pool)) {
       pool <- EMC2:::.emc_wpool_start(
         2L, ctx, backend = "fork", retain_across_blocks = TRUE)
       if (is.null(pool)) stop("could not start the chain's base workers")
-      .emc_pool_state$subject_pool <- pool
+      pool_state$subject_pool <- pool
     }
     sampler$workers_at_entry <- pool$n
     sampler$base_pids <- vapply(pool$jobs, EMC2:::.emc_wpool_job_pid,
@@ -38,7 +39,7 @@ test_that("an uneven block donates workers to its active chain and reclaims them
       if (target <= pool$n) stop("no chain released capacity during the block")
 
       pool <- EMC2:::.emc_wpool_grow(pool, target, ctx)
-      .emc_pool_state$subject_pool <- pool
+      pool_state$subject_pool <- pool
       sampler$workers_after_donation <- pool$n
       sampler$donated_pids <- vapply(pool$jobs[3:4],
                                      EMC2:::.emc_wpool_job_pid, integer(1))
@@ -47,7 +48,7 @@ test_that("an uneven block donates workers to its active chain and reclaims them
     # run_stages() does this on exit. It first shrinks retained workers to the
     # chain's own share, then publishes completion for the current block.
     EMC2:::.emc_core_release(core_ctl)
-    pool_after <- .emc_pool_state$subject_pool
+    pool_after <- pool_state$subject_pool
     sampler$workers_after_release <- pool_after$n
     sampler$base_pids_after_release <- vapply(
       pool_after$jobs, EMC2:::.emc_wpool_job_pid, integer(1))

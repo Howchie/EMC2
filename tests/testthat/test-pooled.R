@@ -153,7 +153,7 @@ pooled_kernel_chain <- function(y, prec, prior_mean, prior_var, iters, seed) {
   set.seed(seed)
   p <- nrow(y); n <- ncol(y); pn <- rownames(y)
   local_mocked_bindings(
-    .emc_pooled_rows_ll = function(rows, dadm, model) {
+    .emc_pooled_rows_ll = function(rows, dadm, model, ...) {
       r <- sweep(rows[, pn, drop = FALSE], 2, attr(dadm, "y"))
       -0.5 * rowSums((r %*% prec) * r)
     }, .package = "EMC2")
@@ -207,7 +207,7 @@ test_that("the sheared pooled move leaves the joint posterior invariant", {
   n <- 5; y <- c(0.2, 0.6, -0.1, 0.4, 0.3); prec <- 50; tau2 <- 0.04
   m0 <- 0.3; v0 <- 0.5; mm <- 0; vm <- 1
   local_mocked_bindings(
-    .emc_pooled_rows_ll = function(rows, dadm, model) {
+    .emc_pooled_rows_ll = function(rows, dadm, model, ...) {
       -0.5 * prec * (attr(dadm, "y") - rows[, "a"] - rows[, "t0"])^2
     }, .package = "EMC2")
   st <- EMC2:::.emc_pooled_state(list(mean = c(t0 = m0), var = c(t0 = v0)))

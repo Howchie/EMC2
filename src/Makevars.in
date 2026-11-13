@@ -115,6 +115,16 @@ else
   $(error EMC2: unknown build profile '$(BUILD_PROFILE)' (expected legacy, compatibility, performance, or diagnostic))
 endif
 
+# simd_math.cpp alone is built with finite-only math: that is the condition
+# under which the compiler calls the C library's vector exp/log variants. Its
+# callers pass only finite arguments, so the rest of the package keeps
+# -fno-finite-math-only.
+simd_math.o: override CXXFLAGS += -ffinite-math-only
+
+# native_particle.cpp repeats the particle step's R arithmetic (the same sums
+# in the same order), so it keeps IEEE semantics and unfused multiply-adds.
+native_particle.o: override CXXFLAGS += -fno-fast-math -ffp-contract=off
+
 # --- Profile-selected C optimization flags (bundled GSL sources) -------------
 # gsl_bundled*.c (QAG/QAGS/QAGIU adaptive integration on the race-kernel paths)
 # otherwise compiles at R's stock -O2 with no -march in every profile. Mirror

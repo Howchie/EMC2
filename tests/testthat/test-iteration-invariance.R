@@ -24,10 +24,12 @@ test_that("the composed sample iteration preserves exact bounded marginals", {
     .emc_ensemble_options = function() list(pool = 8L, rounds = 2L,
       tail_weight = 0.25, tail_df = 4, tail_excess = 3),
     .emc_hmc_round = function(plan, proposals, pars, type, streams, data, model,
-      wpool = NULL, n_cores = 1L, r_cores = 1L, par_names, pick = NULL) {
+      wpool = NULL, n_cores = 1L, r_cores = 1L, par_names, pick = NULL,
+      ll_cache_validated = FALSE) {
       if (broken_mode) pick <- proposals[1L, ] > h$y[1L, ]
       hmc_round(plan, proposals, pars, type, streams, data, model, wpool,
-                n_cores, r_cores, par_names, pick)
+                n_cores, r_cores, par_names, pick,
+                ll_cache_validated = ll_cache_validated)
     },
     .package = "EMC2")
 

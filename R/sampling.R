@@ -906,8 +906,36 @@ run_stage <- function(pmwgs,
   mem_every <- max(1L, as.integer(
     getOption("emc2.sampler_profile_memory_every", 10L)))
 
+  group_chol_it <- NULL
+  native_done <- 0L
+  if (.emc_native_particle_ok(pmwgs, stage, nuisance, hmc_plan, alloc_on,
+                              sampler_profile, verboseProgress, wpool, llpool,
+                              pool_budget, tune, data)) {
+    alpha_prev <- matrix(pmwgs$samples$alpha[, , start_iter], nrow = n_pars,
+                         dimnames = dimnames(pmwgs$samples$alpha)[1:2])
+    pars_nat <- gibbs_step(pmwgs, alpha_prev, pmwgs$type)
+    gv <- get_group_level(pars_nat, 1L, pmwgs$type)$var
+    nb <- .emc_native_particle_block(
+      pmwgs, pars_nat,
+      build_group_chol_cache(gv, idx_list_blk, marginal_idx_blk,
+                             include_full = FALSE),
+      pm_settings[[1L]], chol_caches[[1L]], eff_mu[[1L]], eff_var[[1L]],
+      chains_mu[[1L]], chains_var[[1L]], tune, data[[1L]], wpool_ctx$model,
+      stage, start_iter, iter, wpool_streams[[1L]])
+    assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
+    if (!is.null(nb) && nb$done > 0L) {
+      native_done <- as.integer(nb$done)
+      js <- start_iter + seq_len(native_done)
+      pmwgs$samples$alpha[, 1L, js] <- nb$alpha[, seq_len(native_done)]
+      pmwgs$samples$subj_ll[1L, js] <- nb$ll[seq_len(native_done)]
+      pmwgs$samples$idx <- start_iter + native_done
+      pm_settings[[1L]] <- nb$pm_settings
+      wpool_streams[[1L]] <- nb$stream
+    }
+  }
   for (i in 1:iter) {
     if (persistent_workers) pool_iteration <- pool_iteration + 1L
+    if (i <= native_done) next
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     if (verboseProgress) {
       accRate <- mean(accept_rate(pmwgs))
@@ -980,9 +1008,12 @@ run_stage <- function(pmwgs,
     cache_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     group_var_it <- tryCatch(get_group_level(pars_comb, 1L, pmwgs$type)$var,
                              error = function(e) NULL)
-    group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
-                                          marginal_idx_blk,
-                                          include_full = length(unique(tune$components)) > 1L)
+    # The factors depend only on the group variance, which is fixed when there
+    # is no group level.
+    if (is.null(group_chol_it) || !identical(group_chol_it$ref, group_var_it))
+      group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
+                                              marginal_idx_blk,
+                                              include_full = length(unique(tune$components)) > 1L)
     cache_elapsed <- if (sampler_profile) {
       proc.time()[["elapsed"]] - cache_started
     } else NA_real_
@@ -1479,6 +1510,35 @@ reject_sample_iteration <- function(samples, j) {
 .emc_laplace_conditional <- function(eff_mu, group_pars) {
   lik <- attr(eff_mu, "lik")
   if (is.null(lik)) return(NULL)
+  memo <- .emc_lap_cond_memo
+  if (identical(memo$lik, lik) && identical(memo$mu, group_pars$mu) &&
+      identical(memo$var, group_pars$var)) return(memo$value)
+  value <- .emc_laplace_conditional_compute(lik, group_pars)
+  # Factors of the conditional covariance, filled on first use per block of
+  # coordinates and kept while the inputs repeat.
+  if (!is.null(value)) value$factors <- new.env(parent = emptyenv())
+  memo$lik <- lik
+  memo$mu <- group_pars$mu
+  memo$var <- group_pars$var
+  memo$value <- value
+  value
+}
+
+# The last conditional computed in this process: a fixed group state (a single
+# subject's prior) repeats it every iteration.
+.emc_lap_cond_memo <- new.env(parent = emptyenv())
+
+.emc_laplace_factor <- function(lap, idx) {
+  key <- if (all(idx)) "all" else paste(which(idx), collapse = ",")
+  fac <- lap$factors[[key]]
+  if (is.null(fac)) {
+    fac <- .chol_factor(lap$var[idx, idx, drop = FALSE], sum(idx))
+    assign(key, fac, envir = lap$factors)
+  }
+  fac
+}
+
+.emc_laplace_conditional_compute <- function(lik, group_pars) {
   mu <- as.numeric(group_pars$mu)
   V <- as.matrix(group_pars$var)
   p <- length(mu)
@@ -1498,6 +1558,196 @@ reject_sample_iteration <- function(samples, j) {
 # Subject s's column of a parameters x subjects matrix as a named vector; a
 # one-parameter matrix would otherwise lose the name.
 .emc_subject_col <- function(m, s) stats::setNames(m[, s], rownames(m))
+
+# A single-subject block whose iterations do nothing but the particle step can
+# run that step in C++ (src/native_particle.cpp): the same transition and, in
+# the adaptive stages, the same proposal-setting updates, on the same random
+# stream, without the per-iteration R wrappers.
+.emc_native_particle_ok <- function(pmwgs, stage, nuisance, hmc_plan, alloc_on,
+                                    sampler_profile, verbose_progress, wpool,
+                                    llpool, pool_budget, tune, data) {
+  isTRUE(getOption("emc2.native_particle_block", TRUE)) &&
+    identical(pmwgs$type, "single") &&
+    identical(as.integer(pmwgs$n_subjects), 1L) && !any(nuisance) &&
+    is.null(pmwgs$pooled) && is.null(pmwgs$marginalise) &&
+    is.null(hmc_plan) && !isTRUE(alloc_on) && !isTRUE(sampler_profile) &&
+    !isTRUE(verbose_progress) && (is.null(llpool) || is.null(llpool$dir)) &&
+    (is.null(wpool) || is.null(wpool$dir)) &&
+    pool_budget$likelihood <= 1L &&
+    length(unique(tune$components)) == 1L &&
+    !isTRUE(.emc_pool_state$ll_pool$alive) &&
+    !.emc_ensemble_supported(pmwgs) && !.emc_shear_active(pmwgs) &&
+    !.emc_collapsed_active(pmwgs) &&
+    is.data.frame(data[[1L]]) && is.null(attr(data[[1L]], "pooled")) &&
+    !nzchar(Sys.getenv("EMC2_LL_TRACE"))
+}
+
+# The likelihood arguments of one subject's data for the native step, kept
+# while the data and model objects repeat (one entry per subject).
+.emc_native_args_cache <- new.env(parent = emptyenv())
+
+.emc_native_ll_args <- function(s, data, model, alpha0) {
+  key <- as.character(s)
+  hit <- .emc_native_args_cache[[key]]
+  if (!is.null(hit) && identical(hit$data, data) && identical(hit$model, model) &&
+      identical(hit$par_names, names(alpha0))) {
+    set_stop_method_from_model(hit$m)
+    return(hit$args)
+  }
+  m <- .restore_custom_model_container(model, quiet = TRUE)
+  m <- m()
+  if (is.null(m$c_name)) return(NULL)
+  set_stop_method_from_model(m)
+  constants <- attr(data, "constants")
+  if (is.null(constants)) constants <- NA
+  designs <- .oo_expanded_designs(data, expand = FALSE)
+  p_types <- names(m$p_types)
+  template <- matrix(alpha0, nrow = 1L, dimnames = list(NULL, names(alpha0)))
+  args <- list(
+    data = data, constants = constants, designs = designs, type = m$c_name,
+    bounds = m$bound, transforms = m$transform, pretransforms = m$pre_transform,
+    p_types = p_types, min_ll = log(1e-10), trend = m$trend,
+    varying = rep(TRUE, length(alpha0)),
+    pt_context = .emc_native_pt_context_get(template, data, m, constants,
+                                            designs, p_types),
+    par_names = names(alpha0))
+  assign(key, list(data = data, model = model, par_names = names(alpha0),
+                   m = m, args = args), envir = .emc_native_args_cache)
+  args
+}
+
+# Runs up to n_iter particle steps of subject s from state alpha0 (with
+# log-likelihood ll0) on the given stream. Returns NULL when the step cannot
+# run natively; otherwise the completed iterations' states and
+# log-likelihoods, the stream to continue from and the updated settings.
+# Fewer than n_iter iterations complete when one hits a case the R step
+# handles (a rejected step).
+.emc_native_particle_run <- function(s, alpha0, ll0, population_mu,
+                                     population_var, group_chol, pm_settings,
+                                     chol_cache, eff_mu, eff_var, chains_mu,
+                                     chains_var, tune, data, model, stage,
+                                     type, n_iter, stream) {
+  if (is.null(names(alpha0)) || !is.finite(ll0)) return(NULL)
+  plan <- tryCatch(new_particle(
+    s = s, data = data, pm_settings = pm_settings, eff_mu = eff_mu,
+    eff_var = eff_var, chains_mu = chains_mu, chains_var = chains_var,
+    prev_ll = ll0, parameters = NULL, model = model, stage = stage,
+    type = type, tune = tune, marginalise = NULL, r_cores = 1L,
+    chol_cache = chol_cache, group_chol = group_chol,
+    current_alpha = alpha0, population_mu = population_mu,
+    population_var = population_var, ll_cache_validated = TRUE,
+    plan_only = TRUE), error = function(e) NULL)
+  pm <- pm_settings[[1L]]
+  n_prop <- plan$n_proposals
+  adapt <- !identical(stage, "sample")
+  if (!is.list(plan) || isTRUE(plan$repaired) || !isTRUE(plan$single_prior) ||
+      !isTRUE(plan$all_shared) || !all(plan$idx) ||
+      !all(vapply(c(plan$base_R, plan$base_rooti, list(plan$jump_rooti)),
+                  function(m) is.matrix(m) && all(is.finite(m)), logical(1))) ||
+      !all(is.finite(plan$base_sld)) ||
+      length(pm$mix) != n_prop || !length(pm$epsilon) ||
+      length(pm$n_particles) != 1L ||
+      (adapt && (length(pm$proposal_counts) != n_prop ||
+                 length(pm$acc_counts) != n_prop ||
+                 length(pm$iter) != 1L || length(pm$gd_good) != 1L)) ||
+      !all(vapply(plan$Mus[!plan$state_centred],
+                  function(m) length(m) == length(alpha0) && all(is.finite(m)),
+                  logical(1))))
+    return(NULL)
+  ll_args <- .emc_native_ll_args(s, data, model, alpha0)
+  if (is.null(ll_args)) return(NULL)
+  sel <- pm$sel[[stage]]
+  sel_n <- if (is.null(sel)) numeric(n_prop) else
+    c(sel$n, numeric(max(0L, n_prop - length(sel$n))))
+  sel_disp <- if (is.null(sel)) numeric(n_prop) else
+    c(sel$disp, numeric(max(0L, n_prop - length(sel$disp))))
+  sel_steps <- if (is.null(sel)) 0 else sel$steps
+  pm_in <- list(
+    iter = if (adapt) as.numeric(pm$iter) else 1,
+    proposal_counts = if (adapt) as.numeric(pm$proposal_counts) else numeric(n_prop),
+    acc_counts = if (adapt) as.numeric(pm$acc_counts) else numeric(n_prop),
+    jump_counts = as.numeric(pm$jump_counts), epsilon = as.numeric(pm$epsilon),
+    mix = as.numeric(pm$mix), n_particles = as.numeric(pm$n_particles),
+    step_layout = if (is.null(pm$step_layout)) NULL else as.character(pm$step_layout),
+    gd_good = isTRUE(pm$gd_good))
+  tune_in <- list(n0 = as.numeric(tune$n0),
+                  step_target = if (is.null(tune$step_target)) step_target(1) else
+                    tune$step_target,
+                  mix_adapt = as.numeric(tune$mix_adapt),
+                  target_ESS = as.numeric(tune$target_ESS),
+                  ESS_scale = as.numeric(tune$ESS_scale),
+                  max_particles = as.numeric(tune$max_particles))
+  if (adapt && !all(lengths(tune_in) == 1L)) return(NULL)
+  assign(".Random.seed", stream, envir = globalenv())
+  res <- tryCatch(emc2_native_particle_block(
+    plan, as.integer(n_iter), as.numeric(alpha0), ll0, ll_args,
+    sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt), error = function(e) NULL)
+  if (is.null(res)) return(NULL)
+  res$stream <- if (is.null(res$seed)) get(".Random.seed", envir = globalenv()) else res$seed
+  # The settings in the order update_pm_settings first creates them.
+  if (res$sel_steps > sel_steps) {
+    pm$sel[[stage]] <- list(n = res$sel_n, disp = res$sel_disp,
+                            steps = res$sel_steps)
+  }
+  out <- res$pm
+  if (adapt && res$done > 0L) {
+    pm$iter <- out$iter
+    if (out$layout_set) {
+      pm$proposal_counts <- out$proposal_counts
+      pm$acc_counts <- out$acc_counts
+      pm$jump_counts <- out$jump_counts
+    }
+    if (out$weight_set) pm$weight_ess <- out$weight_ess
+    if (out$layout_set) {
+      pm$step_layout <- out$step_layout
+      pm$epsilon <- out$epsilon
+      pm$mix <- out$mix
+    }
+    if (out$particles_set) pm$n_particles <- out$n_particles
+  }
+  pm_settings[[1L]] <- pm
+  res$pm_settings <- pm_settings
+  res
+}
+
+# A whole single-subject block from stored iteration j0.
+.emc_native_particle_block <- function(pmwgs, pars, group_chol, pm_settings,
+                                       chol_cache, eff_mu, eff_var, chains_mu,
+                                       chains_var, tune, data, model, stage,
+                                       j0, n_iter, stream) {
+  .emc_native_particle_run(
+    1L, .emc_subject_col(pars$alpha, 1L), pmwgs$samples$subj_ll[1L, j0],
+    get_group_level(pars, 1L, pmwgs$type)$mu, group_chol$ref, group_chol,
+    pm_settings, chol_cache, eff_mu, eff_var, chains_mu, chains_var, tune,
+    data, model, stage, pmwgs$type, n_iter, stream)
+}
+
+# One particle step of a subject in a multi-subject iteration, run natively
+# when it can be: the same transition as new_particle() on the current
+# stream. NULL when the R step must run (the stream is then unchanged).
+.emc_native_particle_one <- function(s, data, pm_settings, eff_mu, eff_var,
+                                     chains_mu, chains_var, prev_ll, model,
+                                     stage, type, tune, marginalise, r_cores,
+                                     chol_cache, group_chol, current_alpha,
+                                     population_mu, population_var) {
+  if (!isTRUE(getOption("emc2.native_particle_block", TRUE)) ||
+      !is.null(marginalise) || length(unique(tune$components)) != 1L ||
+      !is.data.frame(data) || !is.null(attr(data, "pooled")) ||
+      isTRUE(r_cores > 1L) || !is.null(.emc_pool_state$ll_pool) &&
+      isTRUE(.emc_pool_state$ll_pool$alive) ||
+      nzchar(Sys.getenv("EMC2_LL_TRACE"))) return(NULL)
+  stream <- get(".Random.seed", envir = globalenv())
+  res <- .emc_native_particle_run(
+    s, current_alpha, prev_ll, population_mu, population_var, group_chol,
+    pm_settings, chol_cache, eff_mu, eff_var, chains_mu, chains_var, tune,
+    data, model, stage, type, 1L, stream)
+  if (is.null(res) || !identical(as.integer(res$done), 1L)) {
+    assign(".Random.seed", stream, envir = globalenv())
+    return(NULL)
+  }
+  list(proposal = stats::setNames(res$alpha[, 1L], names(current_alpha)),
+       ll = res$ll[1L], pm_settings = res$pm_settings)
+}
 
 safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                eff_var = NULL, chains_mu = NULL,
@@ -1709,7 +1959,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           chol_cache = NULL, group_chol = NULL,
                           current_alpha = NULL, population_mu = NULL,
                           population_var = NULL,
-                          ll_cache_validated = FALSE)
+                          ll_cache_validated = FALSE, plan_only = FALSE)
 {
   direct_state <- !is.null(current_alpha) && !is.null(population_mu) &&
     !is.null(population_var)
@@ -1808,7 +2058,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         base <- switch(tag,
           group  = if (cache_ok(group_chol, "ref", group_var, idx)) group_chol$f[[i]],
           chains = if (cache_ok(chol_cache, "chains_ref", chains_var, idx)) chol_cache$chains[[i]],
-          eff    = if (cache_ok(chol_cache, "eff_ref", eff_var, idx)) chol_cache$eff[[i]],
+          eff    = if (cache_ok(chol_cache, "eff_ref", eff_var, idx)) chol_cache$eff[[i]]
+                   else if (!is.null(lap)) .emc_laplace_factor(lap, idx),
           NULL)
         if (is.null(base)) {
           base <- .chol_factor(Sigmas[[k_first]][idx, idx, drop = FALSE], p_idx)
@@ -1838,7 +2089,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # Two state-centred components in one step would multiply their auxiliary
     # densities, so the tighter one would pin every particle to the current
     # state and each step size would set the other's acceptance.
-    particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
+    particle_numbers <- if (isTRUE(plan_only)) NULL else
+      numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     mix_i <- pm_settings[[i]]$mix
     split_steps <- p_idx > 0 && any(state_centred)
     steps <- if (split_steps) {
@@ -1847,6 +2099,26 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     } else list(seq_len(n_proposals))
     shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
+    # The fixed part of this component's transition, for a caller that runs
+    # the steps itself (.emc_native_particle_block).
+    if (isTRUE(plan_only)) {
+      if (p_idx == 0L) return(NULL)
+      return(list(Mus = Mus,
+                  base_R = lapply(sig_tags, function(t) bases[[t]]$R),
+                  base_rooti = lapply(sig_tags, function(t) bases[[t]]$rooti),
+                  base_sld = vapply(sig_tags, function(t) bases[[t]]$sum_log_diag,
+                                    numeric(1), USE.NAMES = FALSE),
+                  const = const, multiplier = particle_multiplier,
+                  layout = ifelse(state_centred, sig_tags, "")[-1L],
+                  jump_rooti = if (!is.null(bases[["chains"]]))
+                    bases[["chains"]]$rooti else bases[[sig_tags[1L]]]$rooti,
+                  steps = steps, state_centred = state_centred,
+                  group_mu = as.numeric(group_mu[idx]), idx = idx,
+                  repaired = isTRUE(bases[[sig_tags[1L]]]$repaired),
+                  n_proposals = n_proposals,
+                  single_prior = length(unq_components) == 1L,
+                  all_shared = all(is_shared)))
+    }
     ref <- subj_mu[idx]
     ref_ll <- if (!is.na(ll_shared[as.character(shared_idx)])) ll_shared[as.character(shared_idx)] else prev_ll
     better <- numeric(n_proposals)
@@ -1859,10 +2131,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       if (!is.null(bases[["chains"]])) bases[["chains"]]$rooti else bases[[sig_tags[1L]]]$rooti
     } else NULL
     marg_seen <- list()
+    step_ref_ll <- NULL
     for (ks in steps) {
       if (sum(particle_numbers[ks]) == 0) next
       mus_i <- lapply(Mus, function(m) m[idx])
-      aux_k <- if (p_idx > 0) intersect(ks, which(state_centred)) else integer(0)
+      aux_k <- if (p_idx > 0) ks[state_centred[ks]] else integer(0)
       for (k in aux_k) {
         mus_i[[k]] <- particle_draws(1L, ref, covar = NULL, R = Rs[[k]])[1L, ]
       }
@@ -1894,16 +2167,24 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
       if (is.null(marginalise)) {
         comp_arg <- if (length(unq_components) > 1L) shared_idx else NULL
+        # After the first step the reference row is the previous step's
+        # winner, whose log-likelihood that step has just computed.
+        skip_ref <- !is.null(step_ref_ll)
+        eval_rows <- if (skip_ref) -1L else seq_len(n_rows)
         lw <- tryCatch(
-          calc_ll_pooled(proposals[, is_shared, drop = FALSE], dadm = data, model,
+          calc_ll_pooled(proposals[eval_rows, is_shared, drop = FALSE],
+                         dadm = data, model,
                          component = comp_arg, r_cores = r_cores, s = s,
                          varying = idx[is_shared],
                          ll_cache_validated = ll_cache_validated),
           error = identity)
-        if (inherits(lw, "error"))
+        if (inherits(lw, "error")) {
           lw <- .emc_particle_ll_rowwise(lw, proposals[, is_shared, drop = FALSE],
                                          data, model, comp_arg,
                                          ll_cache_validated = ll_cache_validated)
+        } else if (skip_ref) {
+          lw <- c(step_ref_ll, as.numeric(lw))
+        }
         lw[!is.finite(lw)] <- -Inf
       }
 
@@ -2049,6 +2330,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       if (1L %in% ks) weight_ess <- sum(weights)^2 / sum(weights^2)
       ref <- proposals[idx_ll, idx]
       ref_ll <- if (is.null(marginalise)) lw[idx_ll] else ll_cur
+      step_ref_ll <- if (is.null(marginalise)) lw[idx_ll] else NULL
     }
 
     ll_shared[as.character(shared_idx)] <- ref_ll
@@ -2452,13 +2734,16 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
 .emc_native_pt_context_state$pid <- NA_integer_
 .emc_native_pt_context_state$key <- NULL
 .emc_native_pt_context_state$ptr <- NULL
+.emc_native_pt_context_state$entries <- list()
 
 # Reuse only the immutable parameter-table layout. The key excludes particle
 # values and the data columns consumed by the likelihood; both remain fresh on
-# every call. PID changes invalidate inherited XPtrs after fork.
+# every call. PID changes invalidate inherited XPtrs after fork. One entry per
+# subject, since a process evaluates several subjects in turn; `key`/`ptr`
+# hold the most recent one.
 .emc_native_pt_context_get <- function(proposals, dadm, model, constants,
                                        designs, p_types) {
-  if (!isTRUE(getOption("emc2.native_pt_context", FALSE))) return(NULL)
+  if (!isTRUE(getOption("emc2.native_pt_context", TRUE))) return(NULL)
   if (!is.matrix(proposals) || !nrow(proposals) || is.null(model$c_name) ||
       !is.null(model$trend)) return(NULL)
   state <- .emc_native_pt_context_state
@@ -2467,6 +2752,7 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
     state$pid <- pid
     state$key <- NULL
     state$ptr <- NULL
+    state$entries <- list()
   }
   key <- list(
     n_trials = nrow(dadm), type = model$c_name,
@@ -2475,12 +2761,25 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
     bounds = model$bound, transforms = model$transform,
     pretransforms = model$pre_transform)
   if (!is.null(state$ptr) && identical(key, state$key)) return(state$ptr)
-  state$ptr <- emc2_create_pt_mapper_context(
+  slot <- if (is.null(dadm$subjects)) "" else as.character(dadm$subjects[1L])
+  hit <- state$entries[[slot]]
+  if (!is.null(hit) && identical(key, hit$key)) {
+    state$key <- hit$key
+    state$ptr <- hit$ptr
+    return(hit$ptr)
+  }
+  ptr <- emc2_create_pt_mapper_context(
     proposals[1L, , drop = FALSE], dadm, constants, designs,
     model$bound, model$transform, model$pre_transform, p_types)
+  if (length(state$entries) >= .EMC_PT_CONTEXT_MAX_ENTRIES)
+    state$entries <- list()
+  state$entries[[slot]] <- list(key = key, ptr = ptr)
   state$key <- key
-  state$ptr
+  state$ptr <- ptr
+  ptr
 }
+
+.EMC_PT_CONTEXT_MAX_ENTRIES <- 512L
 
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                             marginalise = NULL, varying = NULL,

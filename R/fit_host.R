@@ -55,7 +55,11 @@
     assign(key, TRUE, envir = seen)
     for (nm in ls(e, all.names = TRUE)) {
       if (bindingIsActive(nm, e)) next
-      visit(get(nm, envir = e, inherits = FALSE))
+      # A promise that cannot be forced (e.g. a lazy-load from another
+      # machine's library) refers to no global; it is saved unforced.
+      value <- tryCatch(get(nm, envir = e, inherits = FALSE),
+                        error = function(err) NULL)
+      visit(value)
     }
     visit_env(parent.env(e))
   }
@@ -198,7 +202,7 @@
            "or crashed)", call. = FALSE)
     }
     Sys.sleep(wait)
-    wait <- min(wait * 1.5, 0.25)
+    wait <- min(wait * 1.5, 0.05)
   }
   # The result is renamed into place after the host's last output, so this
   # relays everything it wrote.

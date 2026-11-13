@@ -165,7 +165,7 @@ test_that("Laplace likelihood batches propagate block validation", {
     data = list(data), model = model)
   local_mocked_bindings(.emc_optimize_subject = function(
       x0, prior, ll_batch, proposal_prior_scale = 1, blocks = NULL,
-      start_covariance = FALSE) {
+      start_covariance = FALSE, metric = NULL) {
     ll_batch(proposal)
     list(ok = TRUE)
   }, .package = "EMC2")

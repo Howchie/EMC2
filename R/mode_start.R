@@ -32,7 +32,7 @@
 
 .emc_burn_ll_batch <- function(x, data, model, par_names, batch_size = 256L,
                                component = NULL,
-                               ll_cache_validated = FALSE) {
+                               ll_cache_validated = FALSE, r_cores = 1L) {
   if (is.null(dim(x))) x <- matrix(x, nrow = 1L)
   out <- numeric(nrow(x))
   for (first in seq.int(1L, nrow(x), by = batch_size)) {
@@ -41,10 +41,14 @@
     colnames(proposals) <- par_names
     out[first:last] <- as.numeric(calc_ll_manager(
       proposals, dadm = data, model = model, component = component,
-      r_cores = 1L, ll_cache_validated = ll_cache_validated))
+      r_cores = r_cores, ll_cache_validated = ll_cache_validated))
   }
   out
 }
+
+# Batches at least this large are split over a Laplace job's spare cores;
+# smaller ones cost less than the forks would.
+.EMC_LAPLACE_SPLIT_ROWS <- 64L
 
 # Likelihood Hessian (of -ll) assembled from separable blocks: a joint model's
 # likelihood is a sum of per-model terms, each depending only on its own
@@ -241,7 +245,7 @@
 
 .emc_optimize_subject <- function(x0, prior, ll_batch, maxit = 2000L,
                                   proposal_prior_scale = 1, blocks = NULL,
-                                  start_covariance = FALSE) {
+                                  start_covariance = FALSE, metric = NULL) {
   p <- length(x0)
   root <- tryCatch(chol(prior$var), error = function(e) NULL)
   if (is.null(root)) return(list(reason = "prior covariance"))
@@ -287,17 +291,26 @@
   # A separable likelihood's partial derivatives in block b need only block
   # b's likelihood, evaluated on block b's coordinates.
   groups <- if (is.null(blocks)) list(list(idx = seq_len(p), ll = NULL)) else blocks
+  # The central differences also give the likelihood's diagonal second
+  # differences, kept from the latest gradient for the optimizer's scaling.
+  last_grad <- new.env(parent = emptyenv())
+  ll_curvature <- rep(NA_real_, p)
+  want_curvature <- TRUE
   gradient <- function(x) {
+    if (identical(x, last_grad$x)) return(last_grad$g)
     f <- objective(x)
     if (!is.finite(f) || f >= 1e10) stop("nonfinite central objective")
     ll_gradient <- rep(NA_real_, p)
+    ll_curvature[] <<- NA_real_
     for (g in groups) {
       xg <- x[g$idx]
       ll_g <- if (is.null(g$ll)) ll_batch else g$ll
-      # The centre is needed only for a one-sided difference.
-      center_ll <- if (is.null(g$ll)) loglik(x) else NULL
+      # The centre is needed for a one-sided difference and the curvature.
+      center_ll <- if (is.null(g$ll)) loglik(x) else if (want_curvature)
+        tryCatch(ll_g(xg), error = function(e) NA_real_) else NULL
       steps <- grad_step[g$idx]
       grad_g <- rep(NA_real_, length(xg))
+      curv_g <- rep(NA_real_, length(xg))
       for (attempt in seq_len(8L)) {
         pending <- which(!is.finite(grad_g))
         if (!length(pending)) break
@@ -316,6 +329,8 @@
           minus <- ll[2L * i]
           if (is.finite(plus) && is.finite(minus)) {
             grad_g[k] <- (plus - minus) / (2 * steps[k])
+            if (length(center_ll) == 1L && is.finite(center_ll))
+              curv_g[k] <- (plus + minus - 2 * center_ll) / steps[k]^2
             next
           }
           if (attempt < 8L) {
@@ -332,13 +347,47 @@
       }
       grad_step[g$idx] <<- pmin(grad_step[g$idx], steps)
       ll_gradient[g$idx] <- grad_g
+      ll_curvature[g$idx] <<- curv_g
     }
     if (any(!is.finite(ll_gradient))) stop("nonfinite likelihood gradient")
-    -ll_gradient + drop(precision %*% (x - prior$mu))
+    out <- -ll_gradient + drop(precision %*% (x - prior$mu))
+    last_grad$x <- x
+    last_grad$g <- out
+    out
   }
-  opt <- tryCatch(stats::optim(x0, objective, gradient, method = "BFGS",
-                               control = list(maxit = maxit, reltol = 1e-7)),
-                  error = function(e) e)
+  # BFGS starts from an identity Hessian. The posterior is often far narrower
+  # than the prior, and on such scales the first steps follow the raw gradient
+  # and backtrack repeatedly, so the search runs in coordinates scaled by the
+  # start's diagonal posterior curvature, or whitened by `metric`, a guess at
+  # the posterior covariance, when one is given: correlated posteriors then
+  # need far fewer iterations.
+  root_metric <- if (is.matrix(metric) && all(dim(metric) == p))
+    tryCatch(t(chol(metric)), error = function(e) NULL) else NULL
+  g0 <- tryCatch(gradient(x0), error = function(e) NULL)
+  want_curvature <- FALSE
+  opt <- if (!is.null(root_metric)) {
+    to_x <- function(u) x0 + drop(root_metric %*% u)
+    tryCatch({
+      o <- stats::optim(rep(0, p), function(u) objective(to_x(u)),
+                        function(u) drop(crossprod(root_metric,
+                                                   gradient(to_x(u)))),
+                        method = "BFGS",
+                        control = list(maxit = maxit, reltol = 1e-7))
+      o$par <- to_x(o$par)
+      o
+    }, error = function(e) e)
+  } else {
+    parscale <- sqrt(diag(prior$var))
+    if (!is.null(g0)) {
+      curvature <- diag(precision) - ll_curvature
+      use <- is.finite(curvature) & curvature > 0
+      parscale[use] <- pmin(parscale[use], 1 / sqrt(curvature[use]))
+    }
+    tryCatch(stats::optim(x0, objective, gradient, method = "BFGS",
+                          control = list(maxit = maxit, reltol = 1e-7,
+                                         parscale = parscale)),
+             error = function(e) e)
+  }
   if (is.list(opt) && !inherits(opt, "error") &&
       all(is.finite(opt$par))) objective(opt$par)
   x <- best$par
@@ -435,7 +484,8 @@
 .emc_burn_subject_mode <- function(sampler, s, proposal_prior_scale = 1,
                                    x0 = NULL, start_covariance = FALSE,
                                    prior = NULL,
-                                   ll_cache_validated = FALSE) {
+                                   ll_cache_validated = FALSE,
+                                   metric = NULL) {
   store <- sampler$samples
   i <- store$idx
   p <- sampler$n_pars
@@ -453,7 +503,7 @@
                         proposal_prior_scale = proposal_prior_scale,
                         blocks = .emc_joint_ll_blocks(
                           sampler, s, ll_cache_validated = ll_cache_validated),
-                        start_covariance = start_covariance)
+                        start_covariance = start_covariance, metric = metric)
 }
 
 # One block per model of a joint fit, each with that model's likelihood on its
@@ -483,20 +533,83 @@
 # property of the Gaussian-posterior pair, but its estimate from n_draws draws
 # is noisy, and the Gaussian assessed is the conditional Laplace fit, not the
 # widened proposal the burn stage executes: k is a proxy for that proposal.
-.emc_psis_warm_state <- new.env(parent = emptyenv())
+# Pareto-smoothed importance weights of one vector of log ratios (r_eff = 1),
+# following loo::psis(): the largest ceiling(min(0.2 S, 3 sqrt(S))) ratios
+# are replaced by the quantiles of a generalized Pareto fitted to them (Zhang
+# and Stephens's estimator with its weakly informative prior on k), then
+# truncated at the largest raw ratio. Returns normalized weights and the
+# Pareto k. Kept here so that sampling does not load loo and its dependencies
+# into every process that runs a Laplace check.
+.emc_psis <- function(log_ratios) {
+  S <- length(log_ratios)
+  lw <- log_ratios - max(log_ratios)
+  k <- Inf
+  tail_len <- ceiling(min(0.2 * S, 3 * sqrt(S)))
+  if (tail_len >= 5) {
+    ord <- sort.int(lw, index.return = TRUE)
+    tail_ids <- seq(S - tail_len + 1, S)
+    lw_tail <- ord$x[tail_ids]
+    if (abs(max(lw_tail) - min(lw_tail)) >= .Machine$double.eps / 100) {
+      exp_cutoff <- exp(ord$x[min(tail_ids) - 1])
+      fit <- .emc_gpdfit(exp(lw_tail) - exp_cutoff)
+      k <- if (is.na(fit$k)) Inf else fit$k
+      if (is.finite(k)) {
+        p <- (seq_len(tail_len) - 0.5) / tail_len
+        q <- if (is.na(fit$sigma) || fit$sigma <= 0) rep(NaN, tail_len) else
+          if (k == 0) -fit$sigma * log1p(-p) else
+            fit$sigma * expm1(-k * log1p(-p)) / k
+        lw[ord$ix[tail_ids]] <- log(q + exp_cutoff)
+      }
+    }
+  }
+  lw[lw > 0] <- 0
+  m <- max(lw)
+  lw <- lw - (m + log(sum(exp(lw - m))))
+  list(weights = exp(lw), pareto_k = k)
+}
 
-# Pay loo's lazy initialization in the process that will fork rebuild jobs.
-# A PID guard also handles an independently forked caller of run_emc.
-.emc_warm_psis <- function() {
-  pid <- Sys.getpid()
-  if (identical(.emc_psis_warm_state$pid, pid)) return(invisible(NULL))
-  .emc_with_preserved_rng(suppressWarnings(loo::psis(seq(-2, 2, length.out = 100), r_eff = 1)))
-  .emc_psis_warm_state$pid <- pid
-  invisible(NULL)
+# Generalized Pareto fit to sorted exceedances x (posterior::gpdfit with
+# wip = TRUE, min_grid_pts = 30).
+.emc_gpdfit <- function(x) {
+  N <- length(x)
+  prior <- 3
+  M <- 30 + floor(sqrt(N))
+  jj <- seq_len(M)
+  xstar <- x[floor(N / 4 + 0.5)]
+  if (!(xstar > x[1])) return(list(k = NA_real_, sigma = NA_real_))
+  theta <- 1 / x[N] + (1 - sqrt(M / (jj - 0.5))) / prior / xstar
+  k <- rowMeans(log1p(-theta %o% x))
+  l_theta <- N * (log(-theta / k) - k - 1)
+  m <- max(l_theta)
+  w_theta <- exp(l_theta - (m + log(sum(exp(l_theta - m)))))
+  theta_hat <- sum(theta * w_theta)
+  k_hat <- mean.default(log1p(-theta_hat * x))
+  sigma_hat <- -k_hat / theta_hat
+  k_hat <- (k_hat * N + 0.5 * 10) / (N + 10)
+  if (is.na(k_hat)) {
+    k_hat <- Inf
+    sigma_hat <- NaN
+  }
+  list(k = k_hat, sigma = sigma_hat)
 }
 
 .emc_laplace_is_start <- function(mode, covariance, prior, ll_batch,
-                                  n_draws = 256L) {
+                                  n_draws = 256L, pool = NULL,
+                                  keep_draws = FALSE) {
+  if (!is.null(pool))
+    return(.emc_laplace_is_pooled(mode, covariance, prior, ll_batch, pool))
+  out <- .emc_laplace_is_fresh(mode, covariance, prior, ll_batch, n_draws)
+  if (isTRUE(keep_draws))
+    out$draws <- list(components = list(list(mean = as.numeric(mode),
+                                             cov = covariance,
+                                             n = as.integer(n_draws))),
+                      x = out$x, ll = out$ll_draws)
+  out$x <- NULL
+  out$ll_draws <- NULL
+  out
+}
+
+.emc_laplace_is_fresh <- function(mode, covariance, prior, ll_batch, n_draws) {
   p <- length(mode)
   z <- matrix(stats::rnorm(n_draws * p), p, n_draws)
   draws <- t(mode + t(chol(covariance)) %*% z)
@@ -507,21 +620,130 @@
   ok <- which(is.finite(log_ratio))
   if (length(ok) < 2L)
     return(list(start = NULL, start_ll = NULL, pareto_k = NA_real_,
-                outside = 1 - length(ok) / n_draws, status = "support"))
+                outside = 1 - length(ok) / n_draws, status = "support",
+                x = draws, ll_draws = ll))
   if (diff(range(log_ratio[ok])) < 1e-3) {
     # Equal weights: the tail fit is meaningless.
     w <- rep(1 / length(ok), length(ok))
     k <- 0
   } else {
-    smoothed <- suppressWarnings(loo::psis(log_ratio[ok], r_eff = 1))
-    w <- as.numeric(stats::weights(smoothed, log = FALSE, normalize = TRUE))
-    k <- as.numeric(smoothed$diagnostics$pareto_k)
+    smoothed <- .emc_psis(log_ratio[ok])
+    w <- smoothed$weights
+    k <- smoothed$pareto_k
   }
   pick <- ok[sample.int(length(ok), 1L, prob = w)]
   # Draws outside the likelihood support have weight zero; k only sees the
   # others, so the share outside is reported alongside it.
   list(start = draws[pick, ], start_ll = ll[pick], pareto_k = k,
-       outside = 1 - length(ok) / n_draws, status = "ok")
+       outside = 1 - length(ok) / n_draws, status = "ok",
+       x = draws, ll_draws = ll)
+}
+
+# Draws kept from a subject's earlier checks are pooled with fresh ones while
+# its Laplace Gaussian stays within this KL divergence (nats) of theirs.
+.EMC_LAPLACE_POOL_KL <- 0.05
+.EMC_LAPLACE_POOL_FRESH <- 64L
+.EMC_LAPLACE_POOL_MAX <- 512L
+
+# KL(N(m1, S1) || N(m0, S0)); NA when either covariance is not positive
+# definite.
+.emc_gauss_kl <- function(m1, S1, m0, S0) {
+  tryCatch({
+    R0 <- chol(S0)
+    R1 <- chol(S1)
+    A <- backsolve(R0, t(R1), transpose = TRUE)
+    d <- backsolve(R0, m0 - m1, transpose = TRUE)
+    0.5 * (sum(A^2) + sum(d^2) - length(m1)) +
+      sum(log(diag(R0))) - sum(log(diag(R1)))
+  }, error = function(e) NA_real_)
+}
+
+# Draws from the subject's latest check whose proposals lie within the KL
+# tolerance of the Gaussian now checked, as list(pool, stable): pool is NULL
+# when none qualify; stable says whether the latest checked Gaussian was
+# within tolerance, and only then are this check's draws worth keeping.
+.emc_laplace_check_pool <- function(entries, key) {
+  none <- list(pool = NULL, stable = FALSE)
+  if (is.null(key) || !is.list(entries) || !length(entries)) return(none)
+  last <- entries[[length(entries)]]
+  lk <- last$key
+  if (!is.list(lk) || !identical(lk$config, key$config) ||
+      !identical(lk$subject, key$subject) || !identical(lk$pooled, key$pooled) ||
+      length(lk$mode) != length(key$mode)) return(none)
+  near <- function(m, S) isTRUE(.emc_gauss_kl(key$mode, key$covariance, m, S) <
+                                  .EMC_LAPLACE_POOL_KL)
+  stable <- near(lk$mode, lk$covariance)
+  draws <- last$draws
+  if (!stable || !is.list(draws) || !length(draws$components))
+    return(list(pool = NULL, stable = stable))
+  keep <- vapply(draws$components, function(cm) near(cm$mean, cm$cov), logical(1))
+  if (!any(keep)) return(list(pool = NULL, stable = TRUE))
+  rows <- rep(seq_along(draws$components),
+              vapply(draws$components, function(cm) cm$n, integer(1)))
+  sel <- rows %in% which(keep)
+  list(pool = list(components = draws$components[keep],
+                   x = draws$x[sel, , drop = FALSE], ll = draws$ll[sel]),
+       stable = TRUE)
+}
+
+# The check with pooled draws: fresh draws from the current Gaussian join the
+# kept ones, and every draw is weighted against the mixture of the Gaussians
+# that produced them (deterministic-mixture importance sampling), under the
+# current prior. The likelihood does not depend on the group state, so kept
+# draws stay valid; only their weights are recomputed.
+.emc_laplace_is_pooled <- function(mode, covariance, prior, ll_batch, pool) {
+  p <- length(mode)
+  n_fresh <- .EMC_LAPLACE_POOL_FRESH
+  z <- matrix(stats::rnorm(n_fresh * p), p, n_fresh)
+  fresh <- t(mode + t(chol(covariance)) %*% z)
+  ll_fresh <- ll_batch(fresh)
+  components <- c(pool$components,
+                  list(list(mean = as.numeric(mode), cov = covariance,
+                            n = as.integer(n_fresh))))
+  x <- rbind(pool$x, fresh)
+  ll <- c(pool$ll, ll_fresh)
+  # Oldest components go first once the pool is full.
+  sizes <- vapply(components, function(cm) cm$n, integer(1))
+  while (sum(sizes) > .EMC_LAPLACE_POOL_MAX && length(components) > 1L) {
+    x <- x[-seq_len(sizes[1L]), , drop = FALSE]
+    ll <- ll[-seq_len(sizes[1L])]
+    components <- components[-1L]
+    sizes <- sizes[-1L]
+  }
+  n <- nrow(x)
+  log_q <- vapply(components, function(cm) {
+    R <- chol(cm$cov)
+    u <- backsolve(R, t(x) - cm$mean, transpose = TRUE)
+    log(cm$n / n) - 0.5 * colSums(u^2) - sum(log(diag(R)))
+  }, numeric(n))
+  if (!is.matrix(log_q)) log_q <- matrix(log_q, nrow = n)
+  m <- apply(log_q, 1L, max)
+  log_q <- m + log(rowSums(exp(log_q - m)))
+  u <- forwardsolve(t(chol(prior$var)), t(x) - prior$mu)
+  log_ratio <- ll - 0.5 * colSums(u^2) - log_q
+  draws <- list(components = components, x = x, ll = ll)
+  ok <- which(is.finite(log_ratio))
+  if (length(ok) < 2L)
+    return(list(start = NULL, start_ll = NULL, pareto_k = NA_real_,
+                outside = 1 - length(ok) / n, status = "support",
+                draws = draws))
+  if (diff(range(log_ratio[ok])) < 1e-3) {
+    w <- rep(1 / length(ok), length(ok))
+    k <- 0
+  } else {
+    smoothed <- .emc_psis(log_ratio[ok])
+    w <- smoothed$weights
+    k <- smoothed$pareto_k
+  }
+  pick <- ok[sample.int(length(ok), 1L, prob = w)]
+  list(start = x[pick, ], start_ll = ll[pick], pareto_k = k,
+       outside = 1 - length(ok) / n, status = "ok", draws = draws)
+}
+
+# The draws a check leaves for later pooling: its own when it ran unpooled
+# with its draws recorded, or the pooled set.
+.emc_laplace_check_draws <- function(is_result) {
+  if (is.list(is_result) && is.list(is_result$draws)) is_result$draws else NULL
 }
 
 # The Laplace diagnostic of one fit attempt, total: a failed check is recorded
@@ -564,9 +786,11 @@
     assign(".Random.seed", task$seed, envir = globalenv())
     out <- .emc_quiet_fork(tryCatch({
       subject_data <- .emc_pooled_set_one(ctx$data[[task$subject]], task$pooled)
+      ll_cores <- if (is.null(task$ll_cores)) 1L else task$ll_cores
       ll_batch <- function(x) .emc_burn_ll_batch(
         x, subject_data, ctx$model, task$par_names,
-        ll_cache_validated = isTRUE(ctx$ll_cache_validated))
+        ll_cache_validated = isTRUE(ctx$ll_cache_validated),
+        r_cores = if (NROW(x) >= .EMC_LAPLACE_SPLIT_ROWS) ll_cores else 1L)
       check_from_cache <- function(key) {
         if (is.null(key) || !is.list(task$check_entries)) return(NULL)
         for (i in rev(seq_along(task$check_entries))) {
@@ -578,13 +802,17 @@
       if (identical(task$operation, "check")) {
         key <- task$check_key
         check <- check_from_cache(key)
+        check_draws <- NULL
         if (is.null(check)) {
+          pooled <- .emc_laplace_check_pool(task$check_entries, key)
           checked <- tryCatch(.emc_laplace_is_start(
-            task$mode, task$covariance, task$prior, ll_batch),
+            task$mode, task$covariance, task$prior, ll_batch,
+            pool = pooled$pool, keep_draws = pooled$stable),
             error = function(e) NULL)
           check <- .emc_laplace_check(checked)
+          check_draws <- .emc_laplace_check_draws(checked)
         }
-        list(check = check, check_key = key)
+        list(check = check, check_key = key, check_draws = check_draws)
       } else {
         mode_data <- list(subject_data)
         shared <- attr(ctx$data, "shared_ll_idx")
@@ -602,8 +830,9 @@
             mode_sampler, 1L,
             proposal_prior_scale = task$proposal_prior_scale,
             x0 = task$x0, start_covariance = TRUE, prior = task$prior,
-            ll_cache_validated = isTRUE(ctx$ll_cache_validated))
-        check_key <- check <- NULL
+            ll_cache_validated = isTRUE(ctx$ll_cache_validated),
+            metric = task$metric)
+        check_key <- check <- check_draws <- NULL
         if (.emc_usable_mode(result)) {
           covariance <- .emc_start_cov(result)
           check_key <- if (is.null(task$config)) NULL else
@@ -612,15 +841,18 @@
               task$pooled)
           check <- check_from_cache(check_key)
           if (is.null(check)) {
+            pooled <- .emc_laplace_check_pool(task$check_entries, check_key)
             checked <- tryCatch(.emc_laplace_is_start(
-              result$alpha, covariance, task$prior, ll_batch),
+              result$alpha, covariance, task$prior, ll_batch,
+              pool = pooled$pool, keep_draws = pooled$stable),
               error = function(e) NULL)
             check <- .emc_laplace_check(checked)
+            check_draws <- .emc_laplace_check_draws(checked)
           }
           result[c("pareto_k", "outside", "laplace_status")] <- unname(check)
         }
         list(result = result, key = task$key, check_key = check_key,
-             check = check)
+             check = check, check_draws = check_draws)
       }
     }, error = function(e) NULL))
     if (is.null(out)) out <- if (identical(task$operation, "check")) {
@@ -674,6 +906,7 @@
   mode_results <- lapply(mode_jobs, function(x)
     if (is.list(x) && !is.null(x$result)) x$result else NULL)
   # 2. Start draws, each on its chain's subject RNG stream.
+  ll_cores <- max(1L, as.integer(n_cores)[1L] %/% nrow(jobs))
   results <- .emc_with_preserved_rng(auto_mclapply(
     seq_len(nrow(jobs)), function(k) {
       j <- jobs$chain[k]
@@ -686,7 +919,8 @@
       if (.emc_usable_mode(result)) {
         ll_batch <- function(x) .emc_burn_ll_batch(
           x, sampler$data[[s]], sampler$model,
-          rownames(sampler$samples$alpha), ll_cache_validated = TRUE)
+          rownames(sampler$samples$alpha), ll_cache_validated = TRUE,
+          r_cores = if (NROW(x) >= .EMC_LAPLACE_SPLIT_ROWS) ll_cores else 1L)
         # Diagnostic probes consume the subject stream before the start draw.
         prior <- cache_info[[k]]$prior
         covariance <- .emc_start_cov(result)
@@ -770,6 +1004,15 @@
   emc
 }
 
+# The subject's conditional posterior covariance predicted from its stored
+# likelihood approximation under the current conditional prior, or NULL.
+.emc_laplace_metric <- function(lik, prior) {
+  if (!is.list(lik) || !is.matrix(lik$prec) ||
+      !all(dim(lik$prec) == length(prior$mu))) return(NULL)
+  tryCatch(chol2inv(chol(chol2inv(chol(prior$var)) + lik$prec)),
+           error = function(e) NULL)
+}
+
 .emc_store_lik <- function(chain, s, lik) {
   if (is.null(lik)) return(chain)
   if (is.null(chain$lik_laplace))
@@ -809,6 +1052,10 @@
     }
   }
   contexts <- lapply(emc, .emc_laplace_rebuild_context)
+  # Fewer jobs than cores (a fit without a group level shares one job across
+  # its chains): each job splits its large likelihood batches over its share.
+  ll_cores <- max(1L, as.integer(n_cores)[1L] %/% length(tasks))
+  for (k in seq_along(tasks)) tasks[[k]]$ll_cores <- ll_cores
   .emc_with_preserved_rng(.emc_rebuild_lapply(
     seq_along(tasks), function(k)
       .emc_laplace_rebuild_compute(tasks[[k]], contexts[[jobs$chain[k]]]),
@@ -871,15 +1118,17 @@
   results <- .emc_laplace_rebuild_dispatch(
     emc, task_jobs, tasks, n_cores, cost, "laplace_check", chain_pool,
     max_active)
-  for (i in seq_along(run_idx)) {
-    k <- run_idx[i]
+  pending_idx <- run_idx
+  for (i in seq_along(pending_idx)) {
+    k <- pending_idx[i]
     result <- results[[i]]
     checks[[k]] <- if (is.list(result)) result$check else NULL
     if (is.null(checks[[k]])) checks[[k]] <- .emc_laplace_check(NULL)
     j <- jobs$chain[k]
     s <- jobs$subject[k]
     emc[[j]] <- .emc_laplace_check_store(
-      emc[[j]], s, check_keys[[k]], checks[[k]])
+      emc[[j]], s, check_keys[[k]], checks[[k]],
+      draws = if (is.list(result)) result$check_draws)
     if (is.list(result) && !is.null(result$seed))
       emc[[j]]$rng$subjects[[s]] <- result$seed
   }
@@ -934,6 +1183,9 @@
          x0 = info$warm_start,
          current_alpha = as.numeric(
            chain$samples$alpha[, s, chain$samples$idx]),
+         metric = if (isTRUE(info$hit)) NULL else
+           .emc_laplace_metric(if (length(chain$lik_laplace) >= s)
+             chain$lik_laplace[[s]], info$prior),
          proposal_prior_scale = .emc_laplace_prior_scale,
          check_entries = if (isTRUE(info$warm_start_only)) NULL else
            chain$laplace_check_cache[[s]],
@@ -960,7 +1212,8 @@
         reuse_count = if (cache_info[[k]]$hit)
           cache_info[[k]]$reuse_count + 1L else 0L)
       emc[[j]] <- .emc_laplace_check_store(
-        emc[[j]], s, job_result$check_key, job_result$check)
+        emc[[j]], s, job_result$check_key, job_result$check,
+        draws = job_result$check_draws)
     }
     if (is.null(emc[[j]]$burn_mode_var))
       emc[[j]]$burn_mode_var <- vector("list", n_sub)

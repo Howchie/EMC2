@@ -711,6 +711,22 @@ construct_design_matrix <- function(frame_times, events, has_derivative, min_ons
     .Call(`_EMC2_construct_design_matrix`, frame_times, events, has_derivative, min_onset, oversampling, time_length, onset, delay, undershoot, dispersion, u_dispersion, ratio, add_intercept)
 }
 
+#' Lazy-load state of namespace bindings
+#'
+#' @param env Environment to inspect, normally the package namespace.
+#' @param names Binding names to look up.
+#' @return Logical vector, TRUE where the binding is a promise that has not
+#'   been forced. Always FALSE before R 4.6, which has no public way to ask
+#'   without forcing.
+#' @noRd
+emc_ns_unforced <- function(env, names) {
+    .Call(`_EMC2_emc_ns_unforced`, env, names)
+}
+
+emc2_native_particle_block <- function(plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt) {
+    .Call(`_EMC2_emc2_native_particle_block`, plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt)
+}
+
 ParamTable_create_from_p_types <- function(n_trials, p_types) {
     .Call(`_EMC2_ParamTable_create_from_p_types`, n_trials, p_types)
 }
@@ -785,6 +801,10 @@ TrendEngine_apply_posttransform_bases <- function(param_table_ptr, trend_engine_
 
 emc2_create_pt_mapper_context <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types) {
     .Call(`_EMC2_emc2_create_pt_mapper_context`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types)
+}
+
+emc2_ll_data_cache_clear <- function() {
+    .Call(`_EMC2_emc2_ll_data_cache_clear`)
 }
 
 calc_ll_oo <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL, marginalise = NULL, varying = NULL, pt_mapper_context = NULL) {

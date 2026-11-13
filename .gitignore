@@ -1,6 +1,7 @@
 **/__pycache__/*
 .gemini
 *.ipynb
+**/DMC2/**
 **/.ipynb_checkpoints/
 .ipynb_checkpoints
 /Papers

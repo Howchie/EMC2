@@ -73,9 +73,15 @@ static bool race_bin_near_support(const RtBin& bin, const double* const* cols,
                                  bool pre_t0_mass) {
   if (pre_t0_mass && rt_bin_near_support(bin, 0.0)) return true;
   if (t0_col < 0) return false;
-  for (int k = 0; k < n_acc; ++k)
-    if (pre_t0_mass ? rt_bin_internal_onset_weight(bin, cols[t0_col][start + k]) > 0.0 :
-        rt_bin_near_support(bin, cols[t0_col][start + k])) return true;
+  // An onset more than two bin widths below the bin has zero weight under
+  // either rule; only the rest need the exact weight.
+  const double far_below = bin.edge - 2.0 * bin.h;
+  for (int k = 0; k < n_acc; ++k) {
+    const double onset = cols[t0_col][start + k];
+    if (onset < far_below) continue;
+    if (pre_t0_mass ? rt_bin_internal_onset_weight(bin, onset) > 0.0 :
+        rt_bin_near_support(bin, onset)) return true;
+  }
   return false;
 }
 
@@ -471,6 +477,26 @@ static inline void configure_filter_defective(RaceModelAdapter& adapter,
 // was given, because a pointer that survived a fork would not survive a spawn.
 // Building it is a small share of a call, so cross-call caching would buy
 // little against the staleness risk above.
+// Fixed parameter-table structure shared by repeated calls with the same
+// designs and transforms. Particle values, invariance masks, bound verdicts,
+// and likelihood-call buffers stay in a fresh PtMapper per call.
+struct PtMapperContext {
+  ParamTable table_template;
+  std::vector<TransformSpec> transform_specs;
+  Rcpp::CharacterVector keep_names;
+  Rcpp::CharacterVector particle_names;
+  std::vector<int> pm_col_to_base_idx;
+  int n_trials = 0;
+  // Filled by the first call that uses the context. They depend on names
+  // only: the first particle's mapping (every design, then every transform
+  // but the split ones), the bound specs, and the materialised columns.
+  bool first_plan_ready = false;
+  Rcpp::LogicalVector map_all;
+  std::vector<TransformSpec> postmap_all;
+  std::vector<BoundSpec> bound_specs;
+  std::vector<int> mat_base_idx;
+};
+
 struct PtMapper {
   NumericMatrix particle_matrix_pt;
   ParamTable table;
@@ -488,6 +514,7 @@ struct PtMapper {
   Rcpp::List bounds;
   Rcpp::NumericMatrix minmax;
   Rcpp::CharacterVector mm_names;
+  PtMapperContext* shared_ctx = nullptr;
 
   // Reusable materialization: one NumericMatrix per likelihood call, refilled
   // per particle, so the LogicalRules / mixed-race / pw hot paths allocate no
@@ -640,6 +667,9 @@ struct PtMapper {
         update_pt_only(table, designs, trend_runtime.get(), transform_specs);
         build_trend_plan();
       }
+    } else if (i == 0 && shared_ctx && shared_ctx->first_plan_ready) {
+      update_pt_only(table, designs, nullptr, transform_specs, nullptr, nullptr,
+                     &shared_ctx->map_all, &shared_ctx->postmap_all);
     } else {
       update_pt_only(table, designs, nullptr, transform_specs,
                      skip_inv ? &invariant_design_mask : nullptr,
@@ -648,7 +678,24 @@ struct PtMapper {
                      (planned && i > 0) ? &plan_postmap : nullptr);
     }
     if (i == 0) {
-      bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
+      if (shared_ctx && !trend_runtime && !shared_ctx->first_plan_ready) {
+        // As the general route of update_pt_only() just did, with no
+        // invariant set.
+        std::unordered_set<std::string> transform_next = param_names_excluding(table, {});
+        for (const auto& nm : table.split_transform_params()) transform_next.erase(nm);
+        shared_ctx->postmap_all = filter_specs_by_param_set(table, transform_specs,
+                                                            transform_next);
+        shared_ctx->map_all = Rcpp::LogicalVector(designs.size(), true);
+        shared_ctx->bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
+        // The design plan depends on the designs and the table layout only;
+        // later tables copied from the template then skip building it.
+        if (shared_ctx->table_template.design_plan.empty())
+          shared_ctx->table_template.design_plan = table.design_plan;
+        shared_ctx->first_plan_ready = true;
+      }
+      bound_specs = (shared_ctx && shared_ctx->first_plan_ready)
+        ? shared_ctx->bound_specs
+        : make_bound_specs_pt(minmax, mm_names, table, bounds);
       Rcpp::LogicalVector ok = c_do_bound_pt(table, bound_specs);
       if (!trend_runtime) {
         if (!plan_ready) build_plan();
@@ -666,10 +713,15 @@ struct PtMapper {
   Rcpp::NumericMatrix materialize_reusable() {
     if (!mat_ready) {
       const int k = keep_names.size();
-      mat_base_idx.resize(k);
-      for (int j = 0; j < k; ++j) {
-        // base_index_for throws for unknown names.
-        mat_base_idx[j] = table.base_index_for(Rcpp::as<std::string>(keep_names[j]));
+      if (shared_ctx && static_cast<int>(shared_ctx->mat_base_idx.size()) == k) {
+        mat_base_idx = shared_ctx->mat_base_idx;
+      } else {
+        mat_base_idx.resize(k);
+        for (int j = 0; j < k; ++j) {
+          // base_index_for throws for unknown names.
+          mat_base_idx[j] = table.base_index_for(Rcpp::as<std::string>(keep_names[j]));
+        }
+        if (shared_ctx) shared_ctx->mat_base_idx = mat_base_idx;
       }
       mat_buf = Rcpp::NumericMatrix(table.n_trials, k);
       Rcpp::colnames(mat_buf) = keep_names;
@@ -694,18 +746,6 @@ struct PtMapper {
   }
 };
 
-// Fixed parameter-table structure shared by repeated calls with the same
-// designs and transforms. Particle values, invariance masks, bound verdicts,
-// and likelihood-call buffers stay in a fresh PtMapper per call.
-struct PtMapperContext {
-  ParamTable table_template;
-  std::vector<TransformSpec> transform_specs;
-  Rcpp::CharacterVector keep_names;
-  Rcpp::CharacterVector particle_names;
-  std::vector<int> pm_col_to_base_idx;
-  int n_trials = 0;
-};
-
 static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                NumericVector constants, List designs, List bounds,
                                List transforms, List pretransforms,
@@ -714,7 +754,7 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                int n_trials, int n_particles,
                                Rcpp::Nullable<Rcpp::LogicalVector> varying =
                                  R_NilValue,
-                               const PtMapperContext* cached = nullptr) {
+                               PtMapperContext* cached = nullptr) {
   PtMapper m;
   m.designs = designs;
   m.bounds = bounds;
@@ -738,18 +778,23 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
         cached->keep_names.size() != p_types.size()) {
       Rcpp::stop("calc_ll_oo: stale parameter-mapping context dimensions");
     }
+    // R caches strings, so equal pointers are equal names; only a pointer
+    // mismatch needs the text compared.
     for (int j = 0; j < pm_names.size(); ++j)
-      if (Rcpp::as<std::string>(pm_names[j]) !=
+      if (STRING_ELT(pm_names, j) != STRING_ELT(cached->particle_names, j) &&
+          Rcpp::as<std::string>(pm_names[j]) !=
           Rcpp::as<std::string>(cached->particle_names[j]))
         Rcpp::stop("calc_ll_oo: stale parameter-mapping context columns");
     for (int j = 0; j < p_types.size(); ++j)
-      if (Rcpp::as<std::string>(p_types[j]) !=
+      if (STRING_ELT(p_types, j) != STRING_ELT(cached->keep_names, j) &&
+          Rcpp::as<std::string>(p_types[j]) !=
           Rcpp::as<std::string>(cached->keep_names[j]))
         Rcpp::stop("calc_ll_oo: stale parameter-mapping context parameters");
     m.table = cached->table_template;
     m.table.base = Rcpp::clone(cached->table_template.base);
     m.transform_specs = cached->transform_specs;
     m.pm_col_to_base_idx = cached->pm_col_to_base_idx;
+    m.shared_ctx = cached;
   } else {
     NumericVector p_vector = m.particle_matrix_pt(0, Rcpp::_);
     p_vector.attr("names") = pm_names;
@@ -969,6 +1014,390 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
   return race_shared;
 }
 
+// ---------------------------------------------------------------------------
+// Race data state kept across likelihood calls.
+//
+// Everything below depends only on the data frame: response coding, the RT
+// bins, the winner/loser masks and the mixed path's shared state.  A sampler
+// calls the likelihood many times on the same data with a few particles each,
+// so rebuilding these per call costs more than the particles themselves on
+// small data.  Entries are keyed by a hash of the data frame's full content
+// (every column and every attribute), so a frame mutated in place, or a new
+// frame at a reused address, can never be served a stale entry.  Entries hold
+// only the vectors they read, never the frame itself.
+// ---------------------------------------------------------------------------
+namespace {
+
+inline uint64_t ll_hash_mix(uint64_t h, uint64_t w) {
+  h ^= w + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+  h *= 0xBF58476D1CE4E5B9ULL;
+  return h ^ (h >> 31);
+}
+
+// Four independent lanes, so the multiply chains overlap.
+inline uint64_t ll_hash_bytes(uint64_t h, const void* p, size_t n) {
+  const unsigned char* b = static_cast<const unsigned char*>(p);
+  uint64_t l0 = h, l1 = h ^ 0x632BE59BD9B4E019ULL,
+           l2 = h ^ 0x8CB92BA72F3D8DD7ULL, l3 = h ^ 0x9FB21C651E98DF25ULL;
+  size_t i = 0;
+  for (; i + 32 <= n; i += 32) {
+    uint64_t w[4];
+    std::memcpy(w, b + i, 32);
+    l0 = (l0 ^ w[0]) * 0xBF58476D1CE4E5B9ULL; l0 ^= l0 >> 29;
+    l1 = (l1 ^ w[1]) * 0xBF58476D1CE4E5B9ULL; l1 ^= l1 >> 29;
+    l2 = (l2 ^ w[2]) * 0xBF58476D1CE4E5B9ULL; l2 ^= l2 >> 29;
+    l3 = (l3 ^ w[3]) * 0xBF58476D1CE4E5B9ULL; l3 ^= l3 >> 29;
+  }
+  h = ll_hash_mix(ll_hash_mix(ll_hash_mix(ll_hash_mix(h, l0), l1), l2), l3);
+  for (; i + 8 <= n; i += 8) {
+    uint64_t w;
+    std::memcpy(&w, b + i, 8);
+    h = ll_hash_mix(h, w);
+  }
+  uint64_t tail = 0;
+  if (i < n) std::memcpy(&tail, b + i, n - i);
+  return ll_hash_mix(h, tail ^ (static_cast<uint64_t>(n) << 56));
+}
+
+uint64_t ll_hash_sexp(uint64_t h, SEXP x, int depth);
+
+#if R_VERSION >= R_Version(4, 5, 0)
+struct LlHashAttribState { uint64_t h; int depth; };
+inline SEXP ll_hash_attrib_one(SEXP tag, SEXP value, void* data) {
+  auto* s = static_cast<LlHashAttribState*>(data);
+  s->h = ll_hash_mix(s->h, reinterpret_cast<uintptr_t>(tag));
+  s->h = ll_hash_sexp(s->h, value, s->depth + 1);
+  return NULL;
+}
+inline uint64_t ll_hash_attrib(uint64_t h, SEXP x, int depth) {
+  LlHashAttribState s{h, depth};
+  R_mapAttrib(x, ll_hash_attrib_one, &s);
+  return s.h;
+}
+#else
+inline uint64_t ll_hash_attrib(uint64_t h, SEXP x, int depth) {
+  for (SEXP a = ATTRIB(x); a != R_NilValue; a = CDR(a)) {
+    h = ll_hash_mix(h, reinterpret_cast<uintptr_t>(TAG(a)));
+    h = ll_hash_sexp(h, CAR(a), depth + 1);
+  }
+  return h;
+}
+#endif
+
+// Content hash. Strings hash by CHARSXP address, which is unique per string
+// within a process (R's global string cache). Non-vector objects hash by
+// address.
+uint64_t ll_hash_sexp(uint64_t h, SEXP x, int depth) {
+  const int type = TYPEOF(x);
+  h = ll_hash_mix(h, static_cast<uint64_t>(type));
+  if (depth > 8) return ll_hash_mix(h, reinterpret_cast<uintptr_t>(x));
+  const R_xlen_t n = (type == NILSXP) ? 0 : Rf_xlength(x);
+  h = ll_hash_mix(h, static_cast<uint64_t>(n));
+  switch (type) {
+  case NILSXP: break;
+  case LGLSXP: case INTSXP:
+    h = ll_hash_bytes(h, INTEGER_RO(x), static_cast<size_t>(n) * sizeof(int));
+    break;
+  case REALSXP:
+    h = ll_hash_bytes(h, REAL_RO(x), static_cast<size_t>(n) * sizeof(double));
+    break;
+  case STRSXP:
+    for (R_xlen_t i = 0; i < n; ++i)
+      h = ll_hash_mix(h, reinterpret_cast<uintptr_t>(STRING_ELT(x, i)));
+    break;
+  case VECSXP:
+    for (R_xlen_t i = 0; i < n; ++i) h = ll_hash_sexp(h, VECTOR_ELT(x, i), depth + 1);
+    break;
+  default:
+    return ll_hash_mix(h, reinterpret_cast<uintptr_t>(x));
+  }
+  return ll_hash_attrib(h, x, depth);
+}
+
+// The fields race_data_state_fill() and build_race_shared_state() read,
+// directly or through read_all_finite_trials_attr(), RtBinCache::init(),
+// resolve_guess_kernel() and get_col_with_default().  Anything added to those
+// builders must be added here.
+const char* const kRaceDataColumns[] = {
+  "rt", "R", "lR", "winner", "LT", "UT", "LC", "UC", "RACE"};
+const char* const kRaceDataAttributes[] = {
+  "emc2_all_finite_trials", "RACE_nacc_by_row", "RACE_mask", "rt_resolution",
+  "guess_window", "guess_n_resp", "guess_response_codes", "finite_rt_mask",
+  "finite_rt_unique_trial_indices", "other_unique_trial_indices",
+  "active_nogo_trial_mask", "expand"};
+
+constexpr int kRaceDataNColumns =
+  static_cast<int>(sizeof(kRaceDataColumns) / sizeof(kRaceDataColumns[0]));
+constexpr int kRaceDataNAttributes =
+  static_cast<int>(sizeof(kRaceDataAttributes) / sizeof(kRaceDataAttributes[0]));
+constexpr int kRaceDataNParts = 1 + kRaceDataNColumns + kRaceDataNAttributes;
+
+// The objects the key covers: the names, the listed columns, the listed
+// attributes.
+void race_data_parts(const Rcpp::DataFrame& data, SEXP* parts) {
+  static SEXP attr_syms[kRaceDataNAttributes] = {nullptr};
+  if (attr_syms[0] == nullptr)
+    for (int i = 0; i < kRaceDataNAttributes; ++i)
+      attr_syms[i] = Rf_install(kRaceDataAttributes[i]);
+  SEXP names = Rf_getAttrib(data, R_NamesSymbol);
+  parts[0] = names;
+  const R_xlen_t n_cols = Rf_xlength(data);
+  for (int c = 0; c < kRaceDataNColumns; ++c) {
+    SEXP value = R_NilValue;
+    for (R_xlen_t j = 0; j < n_cols && TYPEOF(names) == STRSXP; ++j) {
+      if (std::strcmp(CHAR(STRING_ELT(names, j)), kRaceDataColumns[c]) == 0) {
+        value = VECTOR_ELT(data, j);
+        break;
+      }
+    }
+    parts[1 + c] = value;
+  }
+  for (int i = 0; i < kRaceDataNAttributes; ++i)
+    parts[1 + kRaceDataNColumns + i] = Rf_getAttrib(data, attr_syms[i]);
+}
+
+// Recent keys by object identity. Each slot holds a reference to its objects,
+// so their addresses cannot be reused and R-level modification of any of them
+// copies it (a new address) instead of writing in place.
+struct RaceDataKeyMemo {
+  static constexpr int kSlots = 16;
+  struct Slot {
+    SEXP parts[kRaceDataNParts];
+    Rcpp::List holder;
+    uint64_t key = 0;
+    uint64_t last_use = 0;
+    bool used = false;
+  };
+  Slot slots[kSlots];
+  uint64_t clock = 0;
+};
+
+RaceDataKeyMemo& race_data_key_memo() {
+  static RaceDataKeyMemo* memo = new RaceDataKeyMemo();
+  return *memo;
+}
+
+uint64_t race_data_key(const Rcpp::DataFrame& data) {
+  SEXP parts[kRaceDataNParts];
+  race_data_parts(data, parts);
+  RaceDataKeyMemo& memo = race_data_key_memo();
+  ++memo.clock;
+  for (auto& slot : memo.slots) {
+    if (!slot.used) continue;
+    bool same = true;
+    for (int i = 0; i < kRaceDataNParts && same; ++i)
+      same = slot.parts[i] == parts[i];
+    if (same) {
+      slot.last_use = memo.clock;
+      return slot.key;
+    }
+  }
+  uint64_t h = 0x243F6A8885A308D3ULL;
+  for (int i = 0; i < kRaceDataNParts; ++i) h = ll_hash_sexp(h, parts[i], 0);
+  RaceDataKeyMemo::Slot* target = &memo.slots[0];
+  for (auto& slot : memo.slots) {
+    if (!slot.used) { target = &slot; break; }
+    if (slot.last_use < target->last_use) target = &slot;
+  }
+  Rcpp::List holder(kRaceDataNParts);
+  for (int i = 0; i < kRaceDataNParts; ++i) {
+    holder[i] = parts[i];
+    target->parts[i] = parts[i];
+  }
+  target->holder = holder;
+  target->key = h;
+  target->last_use = memo.clock;
+  target->used = true;
+  return h;
+}
+
+struct RaceDataState {
+  uint64_t key = 0;
+  int n_trials = 0;
+  size_t bytes = 0;
+  uint64_t last_use = 0;
+  bool in_use = false;
+
+  // The unique-trial expansion, as integers: it is commonly stored as double.
+  Rcpp::IntegerVector expand;
+
+  int n_lR = 0;
+  int time_code = -1;
+  int nogo_code = -1;
+  Rcpp::IntegerVector lR_code_vec;
+  bool all_finite_trials = false;
+  bool has_RACE_col = false;
+  bool has_RACE_attrs = false;
+  Rcpp::IntegerVector RACE_nacc;
+  Rcpp::LogicalVector RACE_mask;
+  RtBinCache rt_bins;
+  std::vector<int> winner_int;
+  std::vector<int> loser_int;
+  std::vector<int> time_win_int;
+  std::vector<int> n_resp;
+  GuessKernel guess;
+  bool shared_built = false;
+  RaceSharedState shared;
+};
+
+struct RaceDataCache {
+  std::vector<std::unique_ptr<RaceDataState>> entries;
+  uint64_t clock = 0;
+  size_t bytes = 0;
+};
+
+// Never destroyed: entries hold R objects, which must not be released after
+// R has shut down.
+RaceDataCache& race_data_cache() {
+  static RaceDataCache* cache = new RaceDataCache();
+  return *cache;
+}
+
+constexpr size_t kRaceDataCacheMaxEntries = 64;
+constexpr size_t kRaceDataCacheMaxBytes = static_cast<size_t>(64) << 20;
+
+void race_data_state_fill(RaceDataState& st, const Rcpp::DataFrame& data,
+                          int n_trials) {
+  st.n_trials = n_trials;
+  st.expand = Rcpp::IntegerVector(Rcpp::RObject(data.attr("expand")));
+  NumericVector lR = data["lR"];
+  st.n_lR = unique(lR).length();
+  st.lR_code_vec = Rcpp::IntegerVector(static_cast<SEXP>(lR));
+  const Rcpp::CharacterVector lR_levels = st.lR_code_vec.attr("levels");
+  for (int j = 0; j < lR_levels.size(); ++j) {
+    std::string lev = Rcpp::as<std::string>(lR_levels[j]);
+    if (lev == "time") st.time_code = j + 1;
+    else if (lev == "nogo") st.nogo_code = j + 1;
+  }
+  const int n_lR = st.n_lR;
+  st.all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
+  st.has_RACE_col = data.containsElementNamed("RACE");
+  if (st.has_RACE_col && data.hasAttribute("RACE_nacc_by_row") &&
+      data.hasAttribute("RACE_mask")) {
+    st.RACE_nacc = data.attr("RACE_nacc_by_row");
+    st.RACE_mask = data.attr("RACE_mask");
+    st.has_RACE_attrs = (st.RACE_nacc.size() == n_trials &&
+                         st.RACE_mask.size() == n_trials);
+  }
+  st.rt_bins.init(data, n_lR);
+  if (n_lR > 0 && n_trials % n_lR == 0) {
+    LogicalVector winner = data["winner"];
+    const int n_unique = n_trials / n_lR;
+    st.winner_int.assign(n_trials, 0);
+    st.loser_int.assign(n_trials, 0);
+    if (st.time_code != -1) {
+      st.time_win_int.assign(n_trials, 0);
+      st.n_resp.assign(n_unique, 0);
+    }
+    for (int j = 0; j < n_trials; ++j) {
+      const bool active = !st.has_RACE_col || !st.has_RACE_attrs || st.RACE_mask[j];
+      st.winner_int[j] = (active && winner[j]) ? 1 : 0;
+      st.loser_int[j] = (active && n_lR > 1 && !winner[j]) ? 1 : 0;
+      if (st.time_code != -1 && active && st.lR_code_vec[j] == st.time_code)
+        st.time_win_int[j] = 1;
+    }
+    if (!st.n_resp.empty()) {
+      for (int j = 0; j < n_unique; ++j) {
+        const int start = j * n_lR;
+        const int n_lR_curr = st.has_RACE_attrs ? st.RACE_nacc[start] : n_lR;
+        st.n_resp[j] = count_resp_accumulators(st.lR_code_vec.begin(), start,
+                                               n_lR_curr, st.time_code,
+                                               st.nogo_code);
+      }
+    }
+  }
+  st.guess = resolve_guess_kernel(data);
+  st.bytes = static_cast<size_t>(n_trials) * 96 +
+    static_cast<size_t>(st.expand.size()) * sizeof(int) + 1024;
+}
+
+// The mixed path's shared state is built the first time a call needs it.
+RaceSharedState& race_data_state_shared(RaceDataState& st,
+                                        const Rcpp::DataFrame& data) {
+  if (!st.shared_built) {
+    LogicalVector winner = data["winner"];
+    st.shared = build_race_shared_state(data, st.n_trials, st.n_lR, winner,
+                                        st.lR_code_vec, st.time_code,
+                                        st.nogo_code, st.has_RACE_col,
+                                        st.RACE_nacc, st.RACE_mask);
+    st.shared_built = true;
+  }
+  // Column positions are cached per call, as without this cache.
+  st.shared.pc_col = -2;
+  st.shared.pg_col = -2;
+  return st.shared;
+}
+
+// Return the cached state for this data, building it on a miss. A state that
+// is in use (a nested call on the same data) is never shared: the nested call
+// builds a private copy in `local`.
+RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data,
+                                       int n_trials, RaceDataState& local) {
+  const char* off = std::getenv("EMC2_LL_DATA_CACHE_OFF");
+  if (off != nullptr && off[0] == '1') {
+    race_data_state_fill(local, data, n_trials);
+    return &local;
+  }
+  const uint64_t key = race_data_key(data);
+  RaceDataCache& cache = race_data_cache();
+  ++cache.clock;
+  for (auto& e : cache.entries) {
+    if (e->key == key && e->n_trials == n_trials) {
+      if (e->in_use) {
+        race_data_state_fill(local, data, n_trials);
+        return &local;
+      }
+      e->last_use = cache.clock;
+      return e.get();
+    }
+  }
+  auto fresh = std::make_unique<RaceDataState>();
+  race_data_state_fill(*fresh, data, n_trials);
+  fresh->key = key;
+  fresh->last_use = cache.clock;
+  if (fresh->bytes > kRaceDataCacheMaxBytes / 4) {
+    local = std::move(*fresh);
+    return &local;
+  }
+  while (!cache.entries.empty() &&
+         (cache.entries.size() >= kRaceDataCacheMaxEntries ||
+          cache.bytes + fresh->bytes > kRaceDataCacheMaxBytes)) {
+    size_t oldest = cache.entries.size();
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      if (cache.entries[i]->in_use) continue;
+      if (oldest == cache.entries.size() ||
+          cache.entries[i]->last_use < cache.entries[oldest]->last_use) oldest = i;
+    }
+    if (oldest == cache.entries.size()) break;
+    cache.bytes -= cache.entries[oldest]->bytes;
+    cache.entries.erase(cache.entries.begin() + static_cast<std::ptrdiff_t>(oldest));
+  }
+  cache.bytes += fresh->bytes;
+  cache.entries.push_back(std::move(fresh));
+  return cache.entries.back().get();
+}
+
+struct RaceDataLease {
+  RaceDataState* st;
+  explicit RaceDataLease(RaceDataState* s) : st(s) { st->in_use = true; }
+  ~RaceDataLease() { st->in_use = false; }
+};
+
+} // namespace
+
+// [[Rcpp::export]]
+int emc2_ll_data_cache_clear() {
+  RaceDataCache& cache = race_data_cache();
+  int n = 0;
+  for (auto it = cache.entries.begin(); it != cache.entries.end();) {
+    if ((*it)->in_use) { ++it; continue; }
+    cache.bytes -= (*it)->bytes;
+    it = cache.entries.erase(it);
+    ++n;
+  }
+  return n;
+}
+
 // [[Rcpp::export]]
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
@@ -1030,7 +1459,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
   PtMapper pt;
   if (use_pt_mapping) {
-    const PtMapperContext* cached = nullptr;
+    PtMapperContext* cached = nullptr;
     if (!Rf_isNull(pt_mapper_context)) {
       if (!Rf_inherits(pt_mapper_context, "EMC2PtMapperContext"))
         Rcpp::stop("calc_ll_oo: invalid parameter-mapping context");
@@ -1174,7 +1603,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
-      is_ok = lr_all(is_ok, n_lR);
+      lr_all_inplace(is_ok, n_lR);
       if (ss_raw_ready) {
         lls[i] = c_log_likelihood_ss_pt(ss_cols.data(), ss_shared, ss_raw_model,
                                         is_ok, expand, min_ll, ss_ws);
@@ -1187,7 +1616,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
     }
   } else {
-    IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
     const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
 
@@ -1209,17 +1637,15 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       Rcpp::stop("calc_ll_oo: shared-rate FRQ logical-rule races are not supported.");
     }
 
-    NumericVector lR = data["lR"];
-    int n_lR = unique(lR).length();
-    const Rcpp::IntegerVector lR_code_vec(static_cast<SEXP>(lR));
-    const Rcpp::CharacterVector lR_levels = lR_code_vec.attr("levels");
-    int time_code = -1;
-    int nogo_code = -1;
-    for (int j = 0; j < lR_levels.size(); ++j) {
-      std::string lev = Rcpp::as<std::string>(lR_levels[j]);
-      if (lev == "time") time_code = j + 1;
-      else if (lev == "nogo") nogo_code = j + 1;
-    }
+    // Data-fixed race state, kept across calls (race_data_state_acquire()).
+    RaceDataState race_data_local;
+    RaceDataState* race_data = race_data_state_acquire(data, n_trials, race_data_local);
+    RaceDataLease race_data_lease(race_data);
+    IntegerVector expand = race_data->expand;
+    const int n_lR = race_data->n_lR;
+    const Rcpp::IntegerVector& lR_code_vec = race_data->lR_code_vec;
+    const int time_code = race_data->time_code;
+    const int nogo_code = race_data->nogo_code;
     adapter.ctx.time_code = time_code;
     adapter.ctx.nogo_code = nogo_code;
 
@@ -1267,19 +1693,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       return lls;
     }
-    const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
+    const bool all_finite_trials = race_data->all_finite_trials;
 
-    bool has_RACE_col_fp = data.containsElementNamed("RACE");
-    bool has_RACE_attrs_fp = false;
-    Rcpp::IntegerVector RACE_fp;
-    Rcpp::LogicalVector RACE_mask_fp;
-    if (has_RACE_col_fp &&
-        data.hasAttribute("RACE_nacc_by_row") &&
-        data.hasAttribute("RACE_mask")) {
-      RACE_fp = data.attr("RACE_nacc_by_row");
-      RACE_mask_fp = data.attr("RACE_mask");
-      has_RACE_attrs_fp = (RACE_fp.size() == n_trials && RACE_mask_fp.size() == n_trials);
-    }
+    const bool has_RACE_col_fp = race_data->has_RACE_col;
+    const bool has_RACE_attrs_fp = race_data->has_RACE_attrs;
+    const Rcpp::IntegerVector& RACE_fp = race_data->RACE_nacc;
+    const Rcpp::LogicalVector& RACE_mask_fp = race_data->RACE_mask;
 
     // --- Fast path: all-finite RTs, no truncation ---
     // Pre-allocates buffers once outside the particle loop; each particle writes
@@ -1297,8 +1716,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
 
-    RtBinCache rt_bins;
-    rt_bins.init(data, n_lR);
+    const RtBinCache& rt_bins = race_data->rt_bins;
     const int n_unique_fp = n_trials / n_lR;
     std::vector<unsigned char> boundary_bin_fp;
     std::vector<int> boundary_trials_fp;
@@ -1345,29 +1763,15 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       // n_resp_fp:      needed for time-race only.
       // time_win_int_buf: needed for time-race only.
       if (time_code != -1) {
-        time_win_int_buf.assign(n_trials, 0);
         alt_res_buf_fp.resize(n_trials);
-        n_resp_fp.assign(n_unique_fp, 0);
       } else if (adapter.ctx.is_global_kill) {
         alt_res_buf_fp.resize(n_trials);
       }
-      // winner/loser masks are data-fixed; fill once
-      for (int j = 0; j < n_trials; ++j) {
-        const bool active = !has_RACE_col_fp || RACE_mask_fp[j];
-        winner_int_buf[j] = (active && winner[j]) ? 1 : 0;
-        loser_int_buf[j]  = (active && n_lR > 1 && !winner[j]) ? 1 : 0;
-        if (time_code != -1 && active && lR_code_vec[j] == time_code) {
-          time_win_int_buf[j] = 1;
-        }
-      }
-      if (!n_resp_fp.empty()) {
-        for (int j = 0; j < n_unique_fp; ++j) {
-          const int start = j * n_lR;
-          const int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
-          n_resp_fp[j] = count_resp_accumulators(lR_code_vec.begin(), start, n_lR_curr,
-                                                 time_code, nogo_code);
-        }
-      }
+      // winner/loser masks are data-fixed (race_data_state_fill()).
+      winner_int_buf = race_data->winner_int;
+      loser_int_buf = race_data->loser_int;
+      time_win_int_buf = race_data->time_win_int;
+      n_resp_fp = race_data->n_resp;
       rts_fp_hold = data["rt"];
       rt_ptr = rts_fp_hold.begin();
       R_fp_hold = data["R"];
@@ -1391,7 +1795,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         if (nm == "pContaminant") fast_pc_col = j;
         else if (nm == "pGuess") fast_pg_col = j;
       }
-      fast_guess = resolve_guess_kernel(data);
+      fast_guess = race_data->guess;
       fast_guess.pg_col = fast_pg_col;
       binned_guess_fp = fast_guess;
 
@@ -1400,12 +1804,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // --- Build shared state for the mixed (non-raw-fast) path ---
     // Pre-compute all data-fixed structures once so c_log_likelihood_race can skip
     // per-particle R-heap allocations, column reads, and attribute lookups.
-    RaceSharedState race_shared;
-    if (!use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials) {
-      race_shared = build_race_shared_state(data, n_trials, n_lR, winner, lR_code_vec,
-                                            time_code, nogo_code,
-                                            has_RACE_col_fp, RACE_fp, RACE_mask_fp);
-    }
+    RaceSharedState race_shared_none;
+    RaceSharedState& race_shared =
+      (!use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials)
+        ? race_data_state_shared(*race_data, data) : race_shared_none;
 
     // Correlated BAwL: data-fixed layout, role mapping, and direct
     // ParamTable column pointers resolved once outside the particle loop.
@@ -1434,7 +1836,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     for (int i = 0; i < n_particles; ++i) {
       have_boundary_bin_fp = false;
       is_ok = prepare_particle(i);
-      is_ok = lr_all(is_ok, n_lR);
+      lr_all_inplace(is_ok, n_lR);
       // PDE-backed models cache one solve per distinct parameter tuple; the
       // tuples change with the particle, so drop them here.  Keys are exact, so
       // this is about bounding memory, not about correctness.
@@ -1963,7 +2365,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
 
     for (int i = 0; i < n_particles; ++i) {
       is_ok = pt.prepare(i);
-      is_ok = lr_all(is_ok, n_lR);
+      lr_all_inplace(is_ok, n_lR);
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
       btawl_cache_new_particle(&adapter.ctx);
@@ -2054,6 +2456,20 @@ NumericVector get_pars_c_batch_wrapper_oo(NumericMatrix particle_matrix,
 // This function is the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
 // It uses batching for finite RTs and iterative processing for others (censored/NA RTs).
+// True when every entry is zero.  Checks in fixed-width chunks so the common
+// all-zero column is a vectorised pass rather than one branch per row.
+static inline bool column_all_zero(const double* x, int n) {
+  constexpr int W = 16;
+  int i = 0;
+  for (; i + W <= n; i += W) {
+    bool nz = false;
+    for (int k = 0; k < W; ++k) nz |= (x[i + k] != 0.0);
+    if (nz) return false;
+  }
+  for (; i < n; ++i) if (x[i] != 0.0) return false;
+  return true;
+}
+
 double c_log_likelihood_race(
     Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
     Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
@@ -2179,17 +2595,7 @@ double c_log_likelihood_race(
   // scans every row -- hoist the column pointer out of the Rcpp bounds check.
   if (use_pC) {
     const double* pc_ptr = pars.begin() + static_cast<std::ptrdiff_t>(pc_col) * pars.nrow();
-    const int n_pars_rows = pars.nrow();
-    bool all_zero = true;
-    for (int i = 0; i < n_pars_rows; ++i) {
-      if (pc_ptr[i] != 0.0) {
-        all_zero = false;
-        break;
-      }
-    }
-    if (all_zero) {
-      use_pC = false;
-    }
+    if (column_all_zero(pc_ptr, pars.nrow())) use_pC = false;
   }
 
   // pGuess: the same column-cache and all-zeroes shortcut, run in parallel with
@@ -2215,12 +2621,7 @@ double c_log_likelihood_race(
   GuessKernel binned_guess = guess;
   if (use_pG) {
     const double* pg_ptr = pars.begin() + static_cast<std::ptrdiff_t>(pg_col) * pars.nrow();
-    const int n_pars_rows = pars.nrow();
-    bool all_zero = true;
-    for (int i = 0; i < n_pars_rows; ++i) {
-      if (pg_ptr[i] != 0.0) { all_zero = false; break; }
-    }
-    if (all_zero) use_pG = false;
+    if (column_all_zero(pg_ptr, pars.nrow())) use_pG = false;
   }
 
   int n_unique_trials = n_trials / n_lR;
@@ -2690,10 +3091,10 @@ double c_log_likelihood_race(
     boundary_bins_unique.assign(static_cast<size_t>(n_unique_trials), 0);
     for (int j = 0; j < n_unique_trials; ++j) {
       const int start = j * n_lR;
-      const double rt = rts_dadm[start];
+      const double rt = rt_eval[start];
       if (!R_FINITE(rt) || !(rt > 0.0)) continue;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
-      const bool is_bnd = (R_idxs_dadm[start] == NA_INTEGER ||
+      const bool is_bnd = (R_idxs_dadm.begin()[start] == NA_INTEGER ||
          !(rt_bins.bins[static_cast<size_t>(j)].hi >
            rt_bins.bins[static_cast<size_t>(j)].lo) ||
          race_bin_near_support(rt_bins.bins[static_cast<size_t>(j)], cols_view,
@@ -2754,8 +3155,9 @@ double c_log_likelihood_race(
 
     if (use_shared_bufs) {
       // Per-particle: only fill isok (winner/loser masks are data-fixed)
-      for (int i = 0; i < n_trials; ++i)
-        shared->ok_int_buf[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
+      const int* isok_raw = isok.begin();
+      int* ok_out = shared->ok_int_buf.data();
+      for (int i = 0; i < n_trials; ++i) ok_out[i] = isok_raw[i] != 0 ? 1 : 0;
       idx_win_ptr  = shared->idx_win.data();
       idx_loss_ptr = shared->idx_loss.data();
       isok_ptr     = shared->ok_int_buf.data();
@@ -2902,6 +3304,9 @@ double c_log_likelihood_race(
     // Trials that fail the fast path fall back to the per-trial scalar route.
     bool batch_trunc_done = false;
     std::vector<double> logZ_batch;  // length n_unique_trials, filled when batch_trunc_done
+    // The shared state's truncation scan, when there is one: the per-trial loop
+    // below then reads LT/UT only for the trials the scan marked truncated.
+    const TruncScan* known_trunc = nullptr;
     const int n_finite_unique = use_full_finite_batch
         ? n_unique_trials
         : static_cast<int>(finite_rt_unique_trial_indices.size());
@@ -2947,31 +3352,43 @@ double c_log_likelihood_race(
       // Pass 1: scan for truncated trials; check uniformity of LT and UT separately.
       // We can batch the normaliser whenever all truncated finite-RT trials share the
       // same LT value AND the same UT value (each may be 0/Inf trivially).
-      double uniform_LT = -1.0;   // -1 = not yet observed (LT >= 0 always)
-      double uniform_UT = -1.0;   // -1 = not yet observed
-      bool uniform_LT_ok = true;
-      bool uniform_UT_ok = true;
-      bool any_trunc = false;
-      std::vector<int> trunc_mask(static_cast<size_t>(n_unique_trials), 0);
-
-      for (int i = 0; i < n_finite_unique; ++i) {
-        const int j = use_full_finite_batch
-            ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
-        const int start = j * n_lR;
-        const double LTj = LT[start];
-        const double UTj = UT[start];
-        if (LTj != 0.0 || UTj != R_PosInf) {
-          trunc_mask[static_cast<size_t>(j)] = 1;
-          any_trunc = true;
-          if (uniform_LT < 0.0) uniform_LT = LTj;
-          else if (LTj != uniform_LT) uniform_LT_ok = false;
-          if (uniform_UT < 0.0) uniform_UT = UTj;
-          else if (UTj != uniform_UT) uniform_UT_ok = false;
+      // The scan reads only data, so the shared state keeps its outcome.
+      TruncScan trunc_local;
+      TruncScan& trunc_scan = use_shared ? shared->trunc_scan : trunc_local;
+      if (!trunc_scan.scanned) {
+        double scan_LT = -1.0;   // -1 = not yet observed (LT >= 0 always)
+        double scan_UT = -1.0;
+        trunc_scan.uniform_LT_ok = true;
+        trunc_scan.uniform_UT_ok = true;
+        trunc_scan.any = false;
+        trunc_scan.mask.assign(static_cast<size_t>(n_unique_trials), 0);
+        for (int i = 0; i < n_finite_unique; ++i) {
+          const int j = use_full_finite_batch
+              ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+          const int start = j * n_lR;
+          const double LTj = LT[start];
+          const double UTj = UT[start];
+          if (LTj != 0.0 || UTj != R_PosInf) {
+            trunc_scan.mask[static_cast<size_t>(j)] = 1;
+            trunc_scan.any = true;
+            if (scan_LT < 0.0) scan_LT = LTj;
+            else if (LTj != scan_LT) trunc_scan.uniform_LT_ok = false;
+            if (scan_UT < 0.0) scan_UT = UTj;
+            else if (UTj != scan_UT) trunc_scan.uniform_UT_ok = false;
+          }
         }
+        // No truncated trial seen: the endpoints are trivial.
+        trunc_scan.uniform_LT = scan_LT < 0.0 ? 0.0 : scan_LT;
+        trunc_scan.uniform_UT = scan_UT < 0.0 ? R_PosInf : scan_UT;
+        trunc_scan.scanned = true;
       }
-      // Resolve sentinels: if no truncated trial was seen, treat as trivial.
-      if (uniform_LT < 0.0) uniform_LT = 0.0;
-      if (uniform_UT < 0.0) uniform_UT = R_PosInf;
+      const std::vector<int>& trunc_mask = trunc_scan.mask;
+      const bool any_trunc = trunc_scan.any;
+      const bool uniform_LT_ok = trunc_scan.uniform_LT_ok;
+      const bool uniform_UT_ok = trunc_scan.uniform_UT_ok;
+      const double uniform_LT = trunc_scan.uniform_LT;
+      const double uniform_UT = trunc_scan.uniform_UT;
+      if (use_shared) known_trunc = &shared->trunc_scan;
 
       // Global kill is excluded: logS_at_t zeroes the kill rate for the racers
       // (utils.h), so the batched survivor is the unkilled one.  The per-trial
@@ -3056,8 +3473,37 @@ double c_log_likelihood_race(
       }
     }
 
+    // Fixed-width races with no timer accumulator, no global kill and no
+    // truncated trial: each trial's log-likelihood is the plain sum of its
+    // rows, done here as one branch-free pass.
+    const bool plain_sum_only =
+      !has_RACE_col && !has_time &&
+      !(ctx && ctx->is_global_kill && ctx->kill_active) &&
+      !(apply_truncation_correction && may_need_ct &&
+        (known_trunc == nullptr || known_trunc->any));
+    if (plain_sum_only) {
+      const int* finite_idx = use_full_finite_batch
+          ? nullptr : finite_rt_unique_trial_indices.data();
+      const double* lds = lds_ptr;
+      double* out = ll_unique.data();
+      const int width = n_lR;
+      const double floor_ll = min_ll;
+      const bool clamp = raw_for_trunc;
+      for (int i = 0; i < n_finite_unique; ++i) {
+        const int j = finite_idx ? finite_idx[i] : i;
+        const double* row = lds + static_cast<size_t>(j) * width;
+        double sum = 0.0;
+        for (int k = 0; k < width; ++k) {
+          const double v = row[k];
+          sum += (clamp && !(v > floor_ll)) ? floor_ll : v;
+        }
+        out[j] = std::max(floor_ll, sum);
+      }
+    }
+
     // Apply truncation correction and calculate log-likelihood for each trial in the batch
-    for (int i = 0; i < n_finite_unique; ++i) {
+    const int n_general_finite = plain_sum_only ? 0 : n_finite_unique;
+    for (int i = 0; i < n_general_finite; ++i) {
       // When all unique trials are finite, iterate in order 0..n_unique_trials-1.
       // Otherwise, iterate over the precomputed subset of finite-RT unique trials.
       const int unique_trial_idx = use_full_finite_batch
@@ -3067,7 +3513,9 @@ double c_log_likelihood_race(
       const double rt_j = rts_dadm[start_row_idx];
       log_Z_this = 0.0;
 
-      if (apply_truncation_correction && may_need_ct) {
+      if (apply_truncation_correction && may_need_ct &&
+          (known_trunc == nullptr ||
+           (known_trunc->any && known_trunc->mask[static_cast<size_t>(unique_trial_idx)]))) {
         const double LTj = LT[start_row_idx];
         const double UTj = UT[start_row_idx];
         if (LTj != 0.0 || UTj != R_PosInf) { // truncation active
@@ -3447,8 +3895,8 @@ apply_trial_trunc:
   if (rt_bins.active()) {
     #pragma omp simd
     for (int j = 0; j < n_unique_trials; ++j) {
-      const int start = j * n_lR;
-      if (R_FINITE(rts_dadm[start]) && rts_dadm[start] > 0.0) {
+      const double rt_j = rt_eval[j * n_lR];
+      if (R_FINITE(rt_j) && rt_j > 0.0) {
         ll_unique[j] = std::max(min_ll, ll_unique[j] + rt_bins.log_fraction[j]);
       }
     }
@@ -3522,11 +3970,28 @@ apply_trial_trunc:
         total_ll += v;
       }
     } else {
-      // Gather + reduce: indirect indexing prevents full SIMD gather, but the
-      // reduction itself still benefits from the pragma.
+      ExpandCounts expand_local;
+      ExpandCounts& counts = use_shared ? shared->expand_counts : expand_local;
+      if (!counts.counted) {
+        std::vector<int> n_of(static_cast<size_t>(n_unique_trials), 0);
+        for (int i = 0; i < n_exp; ++i) ++n_of[static_cast<size_t>(ex_ptr[i] - 1)];
+        counts.trial.clear();
+        counts.weight.clear();
+        for (int j = 0; j < n_unique_trials; ++j) {
+          if (n_of[static_cast<size_t>(j)] == 0) continue;
+          counts.trial.push_back(j);
+          counts.weight.push_back(static_cast<double>(n_of[static_cast<size_t>(j)]));
+        }
+        counts.counted = true;
+      }
+      // Each unique trial's log-likelihood times the number of observed
+      // trials it stands for.
+      const int n_used = static_cast<int>(counts.trial.size());
+      const int* used = counts.trial.data();
+      const double* weight = counts.weight.data();
       #pragma omp simd reduction(+:total_ll)
-      for (int i = 0; i < n_exp; ++i) {
-        total_ll += ll_ptr[ex_ptr[i] - 1];
+      for (int k = 0; k < n_used; ++k) {
+        total_ll += weight[k] * ll_ptr[used[k]];
       }
     }
   } else { // compressed dadm: each unique trial counted once

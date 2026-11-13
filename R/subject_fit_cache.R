@@ -182,13 +182,20 @@
 }
 
 .emc_laplace_check_store <- function(chain, subject, key, check,
-                                     max_entries = 8L) {
+                                     max_entries = 8L, draws = NULL) {
   if (is.null(key) || is.null(check) || identical(check$status, "error") ||
       length(chain$laplace_check_cache) < subject) return(chain)
   entries <- chain$laplace_check_cache[[subject]]
   if (!is.list(entries)) entries <- list()
+  same <- Filter(function(entry) identical(entry$key, key), entries)
   entries <- Filter(function(entry) !identical(entry$key, key), entries)
-  entries[[length(entries) + 1L]] <- list(key = key, check = check)
+  # Only the latest entry keeps importance draws for pooling; an exact repeat
+  # keeps the draws it already had.
+  if (is.null(draws) && length(same)) draws <- same[[length(same)]]$draws
+  entries <- lapply(entries, function(entry) { entry$draws <- NULL; entry })
+  entry <- list(key = key, check = check)
+  if (!is.null(draws)) entry$draws <- draws
+  entries[[length(entries) + 1L]] <- entry
   if (length(entries) > max_entries)
     entries <- entries[seq.int(length(entries) - max_entries + 1L,
                                length(entries))]

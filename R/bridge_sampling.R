@@ -90,7 +90,7 @@ run.iterative.scheme <- function(q11, q12, q21, q22, r0, tol,
 
   r_vals <- r
   logml_vals <-  logml
-  e <- as.brob( exp(1) )
+  e <- Brobdingnag::as.brob( exp(1) )
 
   criterion_val <- 1 + tol
 

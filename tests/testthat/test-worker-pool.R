@@ -47,6 +47,7 @@ test_that("chain continuation messages retain immutable setup and round-trip", {
 test_that("chain processes keep their state and obey the active-chain limit", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))
+  withr::local_options(list(emc2.persistent_chain_restart_blocks = 25L))
   runner <- function(sampler, increment = 1L, delay = 0) {
     sampler$started <- as.numeric(Sys.time())
     if (delay > 0) Sys.sleep(delay)
@@ -178,7 +179,8 @@ test_that("a retained rebuild miss supplies a three-dimensional sample store", {
     config = "miss-config", pooled = NULL, par_names = "x", seed = seed)
   ctx <- list(data = list(data.frame(x = 1)), model = identity)
   local_mocked_bindings(.emc_burn_subject_mode = function(
-    sampler, s, proposal_prior_scale, x0, start_covariance, prior) {
+    sampler, s, proposal_prior_scale, x0, start_covariance, prior,
+    ll_cache_validated = FALSE, metric = NULL) {
       expect_identical(dim(sampler$samples$alpha), c(1L, 1L, 1L))
       expect_identical(as.numeric(sampler$samples$alpha[, s, 1L]),
                        task$current_alpha)
@@ -344,7 +346,7 @@ test_that("persistent chain execution matches block-fork execution", {
   }
 })
 
-test_that("persistent chains retain subject pools at full concurrency", {
+test_that("persistent chains keep subject pools at full concurrency", {
   skip_on_os("windows")
   skip_on_cran()
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:2], ]
@@ -381,8 +383,10 @@ test_that("persistent chains retain subject pools at full concurrency", {
     expect_true(all(rows$role == "subject"))
     expect_true(all(rows$alive))
     expect_true(all(rows$workers >= 2L))
-    expect_identical(rows$epoch, c(0L, 1L))
-    expect_identical(rows$pids[1L], rows$pids[2L])
+    # Each chain process keeps its pool across the block boundary, parked:
+    # the workers are stopped between blocks and forked again from the kept
+    # template, so the second block runs on new workers.
+    expect_false(identical(rows$pids[1L], rows$pids[2L]))
   }
 })
 

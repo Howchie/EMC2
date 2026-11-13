@@ -460,6 +460,25 @@ inline LogicalVector lr_all(LogicalVector ok, int n_side)
   return out;
 }
 
+// As lr_all, but overwrites `ok`.  For the per-particle verdict buffer, which
+// is rebuilt from scratch for every particle.
+inline void lr_all_inplace(LogicalVector& ok, int n_side)
+{
+  const R_xlen_t n = ok.size();
+  if (n % n_side)
+    stop("Vector length is not a multiple of n_side");
+  int* x = LOGICAL(ok);
+  for (R_xlen_t i = 0; i < n; i += n_side) {
+    int state = TRUE;
+    for (int j = 0; j < n_side; ++j) {
+      const int v = x[i + j];
+      if (v == FALSE) { state = FALSE; break; }
+      if (v == NA_LOGICAL) state = NA_LOGICAL;
+    }
+    for (int j = 0; j < n_side; ++j) x[i + j] = state;
+  }
+}
+
 inline std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
                                         CharacterVector minmax_colnames,
                                         NumericMatrix pars,

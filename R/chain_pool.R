@@ -40,7 +40,7 @@
   if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
     return(invisible(NULL))
   for (other in other_slots) {
-    if (is.null(other$template)) next
+    if (is.null(other$template) || identical(other, slot)) next
     for (cn in list(other$template$wc, other$template$rc))
       if (!is.null(cn)) try(close(cn), silent = TRUE)
   }
@@ -305,19 +305,29 @@
   while (length(pending) && length(active) < max_active) {
     i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
   }
+  # The done markers are cheap to test; the liveness check reads /proc, so it
+  # runs at most every 0.2 s, and the wait backs off to 5 ms between tests.
+  alive_checked <- proc.time()[["elapsed"]]
+  nap <- 0.001
   while (length(active)) {
     finished <- active[vapply(active, function(i) {
       file.exists(file.path(pool$workers[[i]]$dir,
                             paste0("done_", ids[i])))
     }, logical(1))]
     if (!length(finished)) {
-      dead <- active[!vapply(active, function(i)
-        .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
-      if (length(dead)) stop("persistent chain process exited without a reply",
-                             call. = FALSE)
-      Sys.sleep(0.001)
+      now <- proc.time()[["elapsed"]]
+      if (now - alive_checked >= 0.2) {
+        alive_checked <- now
+        dead <- active[!vapply(active, function(i)
+          .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
+        if (length(dead))
+          stop("persistent chain process exited without a reply", call. = FALSE)
+      }
+      Sys.sleep(nap)
+      nap <- min(0.005, nap * 1.5)
       next
     }
+    nap <- 0.001
     for (i in finished) {
       worker <- pool$workers[[i]]
       reply <- .emc_wpool_recv(
@@ -339,7 +349,10 @@
     }
   }
   .emc_chain_process_memory_record(pool)
-  restart_blocks <- getOption("emc2.persistent_chain_restart_blocks", 25L)
+  # A chain process's heap only grows: it starts with a copy of the session's
+  # and ratchets up with every block's largest temporaries. A fresh fork costs
+  # about as much as the block boundary it replaces.
+  restart_blocks <- getOption("emc2.persistent_chain_restart_blocks", 2L)
   if (identical(restart_blocks, FALSE) || is.null(restart_blocks)) {
     restart_blocks <- Inf
   } else {
@@ -369,11 +382,20 @@
 # process. A lost worker pool falls back to the owning chain process; each task
 # restores its original subject RNG seed before it computes.
 .emc_chain_process_rebuild <- function(tasks, sampler) {
-  pool_name <- if (!is.null(.emc_pool_state$subject_pool) &&
-                   isTRUE(.emc_pool_state$subject_pool$alive)) {
+  usable <- function(p) !is.null(p) && (isTRUE(p$alive) || isTRUE(p$parked))
+  pool_name <- if (usable(.emc_pool_state$subject_pool)) {
     "subject_pool"
   } else "subject_ll_pool"
   pool <- .emc_pool_state[[pool_name]]
+  if (isTRUE(pool$parked)) {
+    unparked <- .emc_wpool_unpark(pool, pool$ctx, pool$n)
+    if (!is.null(unparked)) {
+      pool <- unparked
+      .emc_pool_state[[pool_name]] <- pool
+      on.exit(.emc_pool_state[[pool_name]] <-
+                .emc_wpool_park(.emc_pool_state[[pool_name]]), add = TRUE)
+    }
+  }
   ctx <- if (!is.null(pool) && !is.null(pool$ctx)) pool$ctx else
     list(data = sampler$data, model = sampler$model,
          par_names = rownames(sampler$samples$alpha), n_pars = sampler$n_pars)
@@ -474,19 +496,28 @@
   while (length(pending) && length(active) < max_active) {
     i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
   }
+  alive_checked <- proc.time()[["elapsed"]]
+  nap <- 0.001
   while (length(active)) {
     finished <- active[vapply(active, function(i) {
       file.exists(file.path(pool$workers[[i]]$dir,
                             paste0("done_", ids[i])))
     }, logical(1))]
     if (!length(finished)) {
-      dead <- active[!vapply(active, function(i)
-        .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
+      now <- proc.time()[["elapsed"]]
+      dead <- integer()
+      if (now - alive_checked >= 0.2) {
+        alive_checked <- now
+        dead <- active[!vapply(active, function(i)
+          .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
+      }
       if (length(dead)) finished <- dead else {
-        Sys.sleep(0.001)
+        Sys.sleep(nap)
+        nap <- min(0.005, nap * 1.5)
         next
       }
     }
+    nap <- 0.001
     for (i in finished) {
       worker <- pool$workers[[i]]
       reply <- tryCatch(.emc_wpool_recv(
@@ -926,9 +957,12 @@
     tryCatch(readLines(sprintf("/proc/%d/stat", as.integer(pid)), n = 1L),
              error = function(e) character()))
   if (!length(stat)) return(FALSE)
-  tail <- sub("^.*\\) ", "", stat)
-  state <- strsplit(tail, " ", fixed = TRUE)[[1L]][1L]
-  !(state %in% c("Z", "X", "x"))
+  fields <- strsplit(sub("^.*\\) ", "", stat), " ", fixed = TRUE)[[1L]]
+  if (fields[1L] %in% c("Z", "X", "x")) return(FALSE)
+  # A process past exit() still runs while the kernel tears it down (PF_EXITING
+  # in its flags); it will serve nothing more.
+  flags <- suppressWarnings(as.numeric(fields[7L]))
+  !(is.finite(flags) && bitwAnd(as.integer(flags %% 8), 4L) != 0L)
 }
 
 .emc_wpool_job_pid <- function(job) {
@@ -1000,7 +1034,8 @@
       id <- .emc_wpool_next_request()
       if (!.emc_wpool_send(template$wc, list(command = "spawn", idx = idx,
                                              req = req, ans = ans,
-                                             ctx = ctx_update, id = id))) {
+                                             ctx = ctx_update, id = id,
+                                             context_epoch = context_epoch))) {
         stop(.emc_wpool_transport_error("template stopped accepting requests"))
       }
       # A template kept across blocks may still hold the reply to a command
@@ -1068,6 +1103,67 @@
 
   if (!success) return(NULL)
   list(jobs = jobs, wcs = wcs, rcs = rcs)
+}
+
+# One Rscript serving several template slots. It loads the package and the
+# base context once and forks a server per slot, each running the template loop
+# on that slot's FIFOs; the slots then share the booted heap instead of each
+# holding a copy. The root exits once every slot has. The slots are detached
+# and watched by pid: collecting them with mccollect() returns while they are
+# still serving, and the root's exit cleanup then kills them.
+.emc_wpool_template_root <- function(boot) {
+  base <- readRDS(boot$ctx)
+  base$model <- .restore_custom_model_container(base$model, quiet = TRUE)
+  pids <- vapply(boot$slots, function(slot) parallel::mcparallel(
+    .emc_wpool_template(slot, base = base), detached = TRUE)$pid, integer(1))
+  while (any(vapply(pids, .emc_wpool_pid_alive, logical(1)))) Sys.sleep(0.25)
+  invisible(NULL)
+}
+
+# Launch the slots of a session from one root (.emc_wpool_template_root()).
+# Returns one launch record per directory, each connected like a single
+# template's; NULL entries for slots whose FIFOs could not be made.
+.emc_wpool_template_launch_shared <- function(dirs, ctx_file, lib) {
+  slots <- lapply(dirs, function(dir) {
+    req <- file.path(dir, "template_req")
+    ans <- file.path(dir, "template_ans")
+    made <- tryCatch(
+      system2("mkfifo", shQuote(c(req, ans)), stdout = FALSE, stderr = FALSE),
+      warning = function(e) 1L, error = function(e) 1L
+    )
+    if (!identical(as.integer(made), 0L)) return(NULL)
+    list(req = req, ans = ans, pidfile = file.path(dir, "template.pid"))
+  })
+  ok <- !vapply(slots, is.null, logical(1))
+  if (!any(ok)) return(vector("list", length(dirs)))
+  root_dir <- dirs[which(ok)[1L]]
+  boot <- file.path(root_dir, "template_root.rds")
+  log <- file.path(root_dir, "template.log")
+  saveRDS(list(slots = slots[ok], ctx = ctx_file, lib = lib), boot,
+          compress = FALSE)
+  tag <- sprintf("EMC2-worker-pool[%s|master=%d]",
+                 gsub("[^A-Za-z0-9._-]", "_", basename(root_dir)), Sys.getpid())
+  expr <- paste0(
+    "EMC2.worker<-'", tag, "';",
+    "b<-readRDS(commandArgs(TRUE)[1L]);",
+    ".libPaths(unique(c(b$lib,.libPaths())));",
+    "ns<-loadNamespace('EMC2');",
+    "get('.emc_wpool_template_root',ns)(b)"
+  )
+  status <- tryCatch(system2(
+    file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", "-e", shQuote(expr), shQuote(boot)),
+    stdout = log, stderr = log, wait = FALSE,
+    env = paste0("EMC2_CPP_CACHE=", shQuote(.emc_cpp_cache_dir()))
+  ), error = function(e) 1L)
+  if (!identical(as.integer(status), 0L)) {
+    for (slot in slots[ok]) unlink(c(slot$req, slot$ans))
+    unlink(c(boot, log))
+    return(vector("list", length(dirs)))
+  }
+  lapply(slots, function(slot) if (is.null(slot)) NULL else
+    list(req = slot$req, ans = slot$ans, boot = boot, pidfile = slot$pidfile,
+         log = log))
 }
 
 .emc_wpool_template_start <- function(dir, ctx_file, lib) {
@@ -1166,7 +1262,8 @@
 # run_emc() across blocks (.emc_wpool_session_start()) when one is available,
 # instead of booting a template for this pool alone.
 # `retain_across_blocks = TRUE` instead keeps fork workers owned by one
-# persistent chain process, refreshing their mutable context between blocks.
+# persistent chain process, refreshing their mutable context between blocks;
+# they too are forked from the chain's session template when it has one.
 .emc_wpool_start <- function(n_workers, ctx, allow_one = FALSE,
                              persistent = FALSE, backend = NULL,
                              retain_across_blocks = FALSE) {
@@ -1181,9 +1278,18 @@
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
 
-  if (isTRUE(persistent) && is.null(backend)) {
+  if ((isTRUE(persistent) || isTRUE(retain_across_blocks)) && is.null(backend)) {
     pool <- .emc_wpool_start_kept(dir, n_workers, ctx)
-    if (!is.null(pool)) return(pool)
+    if (!is.null(pool)) {
+      if (isTRUE(retain_across_blocks)) {
+        pool$ctx <- ctx
+        pool$retained <- TRUE
+        pool$iterations <- 0L
+        pool$base_n <- n_workers
+        pool$context_epoch <- 0L
+      }
+      return(pool)
+    }
   }
 
   if (is.null(backend)) backend <- .emc_wpool_backend(ctx)
@@ -1220,6 +1326,7 @@
        rcs = spawned$rcs, alive = TRUE, backend = backend,
        generation = .emc_wpool_next_generation(),
        ctx_file = ctx_file, lib = lib, template = template,
+       template_data = if (is.null(template)) NULL else ctx$data,
        done = .emc_wpool_done_open(dir), ctx = ctx,
        retained = isTRUE(retain_across_blocks), iterations = 0L,
        base_n = n_workers, context_epoch = 0L)
@@ -1353,10 +1460,17 @@
     if (!is.null(pool)) .emc_wpool_stop(pool)
     return(.emc_wpool_retained_idle(ctx, iterations, 1L))
   }
+  if (compatible && isTRUE(pool$parked)) {
+    unparked <- .emc_wpool_unpark(pool, ctx, n_workers)
+    if (!is.null(unparked)) {
+      unparked$iterations <- iterations
+      unparked$base_n <- n_workers
+      return(unparked)
+    }
+  }
   if (!compatible || !isTRUE(pool$alive)) {
     if (!is.null(pool)) .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_workers, ctx, backend = "fork",
-                              retain_across_blocks = TRUE)
+    fresh <- .emc_wpool_start(n_workers, ctx, retain_across_blocks = TRUE)
     if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
                                                        n_workers))
     fresh$iterations <- iterations
@@ -1366,8 +1480,7 @@
   refreshed <- .emc_wpool_context_update(pool, ctx)
   if (is.null(refreshed)) {
     .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_workers, ctx, backend = "fork",
-                              retain_across_blocks = TRUE)
+    fresh <- .emc_wpool_start(n_workers, ctx, retain_across_blocks = TRUE)
     if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
                                                        n_workers))
     fresh$iterations <- iterations
@@ -1386,9 +1499,72 @@
   for (name in c("subject_pool", "subject_ll_pool")) {
     pool <- .emc_pool_state[[name]]
     if (is.null(pool) || !isTRUE(pool$retained)) next
-    .emc_pool_state[[name]] <- .emc_wpool_shrink(pool, pool$base_n)
+    .emc_pool_state[[name]] <- .emc_wpool_park(
+      .emc_wpool_shrink(pool, pool$base_n))
   }
   invisible(NULL)
+}
+
+.emc_wpool_template_live <- function(pool) {
+  identical(pool$backend, "spawn") && !is.null(pool$template) &&
+    isTRUE(pool$template$alive) &&
+    .emc_wpool_pid_alive(.emc_wpool_job_pid(pool$template$job))
+}
+
+# Between blocks a persistent chain's workers would sit idle while the session
+# forks its own jobs, so a pool with a live template stops its workers and
+# keeps the template; the workers are forked again, with the then-current
+# context, when the pool is next needed. Workers are re-forked from the
+# template every few dozen iterations anyway, so this adds little.
+.emc_wpool_park <- function(pool) {
+  if (is.null(pool) || !isTRUE(pool$retained) || !isTRUE(pool$alive) ||
+      !length(pool$jobs) || !.emc_wpool_template_live(pool)) return(pool)
+  .emc_wpool_stop_workers(pool)
+  unlink(file.path(pool$dir, c(sprintf("req%d", seq_len(pool$n)),
+                               sprintf("ans%d", seq_len(pool$n)))))
+  pool$jobs <- list()
+  pool$wcs <- list()
+  pool$rcs <- list()
+  pool$alive <- FALSE
+  pool$parked <- TRUE
+  pool$generation <- .emc_wpool_next_generation()
+  .emc_wpool_retire(pool)
+  pool
+}
+
+# Writes ctx as an update over the context a template booted with.  The data
+# are left out when the template already holds the same data: a template
+# reads every update into its own heap, so resending them grows it.
+.emc_wpool_save_update <- function(ctx, template_data, path) {
+  upd <- ctx
+  if (!is.null(template_data) && identical(ctx$data, template_data))
+    upd$data <- NULL
+  tryCatch({ saveRDS(upd, path, compress = FALSE); TRUE },
+           error = function(e) FALSE)
+}
+
+# NULL when the template can no longer fork the workers.
+.emc_wpool_unpark <- function(pool, ctx, n_workers) {
+  if (!isTRUE(pool$parked) || !.emc_wpool_template_live(pool)) return(NULL)
+  n_workers <- max(1L, as.integer(n_workers))
+  ctx_update <- file.path(pool$dir, "context_current.rds")
+  if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update)) return(NULL)
+  spawned <- .emc_wpool_spawn(pool$dir, seq_len(n_workers), ctx,
+                              backend = "spawn", template = pool$template,
+                              ctx_update = ctx_update,
+                              context_epoch = pool$context_epoch)
+  unlink(ctx_update)
+  if (is.null(spawned)) return(NULL)
+  pool$n <- n_workers
+  pool$jobs <- spawned$jobs
+  pool$wcs <- spawned$wcs
+  pool$rcs <- spawned$rcs
+  pool$ctx <- ctx
+  pool$alive <- TRUE
+  pool$parked <- NULL
+  pool$generation <- .emc_wpool_next_generation()
+  .emc_wpool_retire(pool)
+  pool
 }
 
 # Fork a pool from the session template for this chain, sending it this
@@ -1400,12 +1576,8 @@
       isTRUE(.emc_pool_state$session_in_use) ||
       !.emc_wpool_pid_alive(.emc_wpool_job_pid(template$job)) ||
       !identical(.emc_wpool_backend(ctx), "spawn")) return(NULL)
-  upd <- ctx
-  if (identical(ctx$data, slot$data)) upd$data <- NULL
   ctx_update <- file.path(dir, "context.rds")
-  saved <- tryCatch({ saveRDS(upd, ctx_update, compress = FALSE); TRUE },
-                    error = function(e) FALSE)
-  if (!saved) return(NULL)
+  if (!.emc_wpool_save_update(ctx, slot$data, ctx_update)) return(NULL)
   .emc_pool_state$warned <- FALSE
   spawned <- .emc_wpool_spawn(dir, seq_len(n_workers), ctx, "spawn",
                               template = template, ctx_update = ctx_update)
@@ -1420,6 +1592,7 @@
        rcs = spawned$rcs, alive = TRUE, backend = "spawn",
        generation = .emc_wpool_next_generation(),
        ctx_file = NULL, lib = NULL, template = template, kept = TRUE,
+       template_data = slot$data,
        done = .emc_wpool_done_open(dir))
 }
 
@@ -1442,14 +1615,20 @@
   lib <- dirname(ns_path)
   dirs <- character(0)
   launches <- vector("list", n_slots)
+  slot_dirs <- rep(NA_character_, n_slots)
   for (k in seq_len(n_slots)) {
     dir <- tempfile("emc_wtemplate_")
     if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) next
     dirs <- c(dirs, dir)
-    ctx_file <- file.path(dir, "context.rds")
+    slot_dirs[k] <- dir
+  }
+  made <- !is.na(slot_dirs)
+  if (any(made)) {
+    ctx_file <- file.path(slot_dirs[which(made)[1L]], "context.rds")
     saved <- tryCatch({ saveRDS(base_ctx, ctx_file, compress = FALSE); TRUE },
                       error = function(e) FALSE)
-    if (saved) launches[[k]] <- .emc_wpool_template_launch(dir, ctx_file, lib)
+    if (saved) launches[made] <- .emc_wpool_template_launch_shared(
+      slot_dirs[made], ctx_file, lib)
   }
   templates <- lapply(launches, function(l) {
     if (is.null(l)) return(NULL)
@@ -1639,8 +1818,7 @@
     iterations <- pool$iterations
     base_n <- pool$base_n
     .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_total, ctx, backend = "fork",
-                              retain_across_blocks = TRUE)
+    fresh <- .emc_wpool_start(n_total, ctx, retain_across_blocks = TRUE)
     if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
                                                        base_n))
     fresh$iterations <- iterations
@@ -1661,9 +1839,8 @@
   if (isTRUE(pool$retained) && identical(pool$backend, "spawn") &&
       !is.null(pool$template)) {
     ctx_update <- file.path(pool$dir, "context_current.rds")
-    saved <- tryCatch({ saveRDS(ctx, ctx_update, compress = FALSE); TRUE },
-                      error = function(e) FALSE)
-    if (!saved) ctx_update <- NULL
+    if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update))
+      ctx_update <- NULL
   }
   spawned <- .emc_wpool_spawn(pool$dir, pool$n + seq_len(n_new), ctx,
                               backend = if (is.null(pool$backend)) "fork" else pool$backend,
@@ -1703,12 +1880,16 @@
     return(pool)
   }
 
-  if (isTRUE(pool$retained)) {
+  # A retained pool with a live template re-forks its workers from the
+  # template, which takes the current context as an update; other retained
+  # pools are restarted.
+  spawn_alive <- identical(pool$backend, "spawn") && !is.null(pool$template) &&
+    isTRUE(pool$template$alive)
+  if (isTRUE(pool$retained) && !spawn_alive) {
     iterations <- pool$iterations
     base_n <- pool$base_n
     .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(target, ctx, backend = "fork",
-                              retain_across_blocks = TRUE)
+    fresh <- .emc_wpool_start(target, ctx, retain_across_blocks = TRUE)
     if (is.null(fresh)) {
       if (!dead) .emc_wpool_degraded("could not re-fork the retained pool when recycling")
       return(.emc_wpool_retained_idle(ctx, iterations, base_n))
@@ -1718,14 +1899,22 @@
     return(fresh)
   }
 
-  if (identical(pool$backend, "spawn") && !is.null(pool$template) &&
-      isTRUE(pool$template$alive)) {
+  if (spawn_alive) {
     .emc_wpool_stop_workers(pool)
     unlink(file.path(pool$dir,
                      c(sprintf("req%d", seq_len(target)),
                        sprintf("ans%d", seq_len(target)))))
+    ctx_update <- NULL
+    if (isTRUE(pool$retained)) {
+      ctx_update <- file.path(pool$dir, "context_current.rds")
+      if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update))
+        ctx_update <- NULL
+    }
     spawned <- .emc_wpool_spawn(pool$dir, seq_len(target), ctx,
-                                backend = "spawn", template = pool$template)
+                                backend = "spawn", template = pool$template,
+                                ctx_update = ctx_update,
+                                context_epoch = pool$context_epoch)
+    if (!is.null(ctx_update)) unlink(ctx_update)
     fresh <- if (is.null(spawned)) NULL else {
       pool$jobs <- spawned$jobs
       pool$wcs <- spawned$wcs
@@ -1873,9 +2062,13 @@
   invisible(NULL)
 }
 
-.emc_wpool_template <- function(boot) {
-  base <- readRDS(boot$ctx)
-  base$model <- .restore_custom_model_container(base$model, quiet = TRUE)
+.emc_wpool_template <- function(boot, base = NULL) {
+  if (is.null(base)) {
+    base <- readRDS(boot$ctx)
+    base$model <- .restore_custom_model_container(base$model, quiet = TRUE)
+  } else {
+    writeLines(as.character(Sys.getpid()), boot$pidfile)
+  }
   ctx <- base
   rc <- fifo(boot$req, "rb", blocking = TRUE)
   wc <- fifo(boot$ans, "wb", blocking = TRUE)
@@ -1912,7 +2105,9 @@
             # collects only when it next forks a worker in the same slot.
             parallel::mcparallel(
               .emc_wpool_serve(command$req[i], command$ans[i], ctx,
-                               inherited = list(rc, wc)),
+                               inherited = list(rc, wc),
+                               context_epoch = if (is.null(command$context_epoch))
+                                 0L else command$context_epoch),
               detached = TRUE
             )
           })
@@ -2335,7 +2530,17 @@
     # (R/move_allocation.R) keeps its state.
     out <- if (isTRUE(msg$skip[k])) {
       reject_particle(.emc_subject_col(msg$alpha, k), msg$prev_ll[k], msg$pm[[k]])
-    } else safe_new_particle(
+    } else .emc_native_particle_one(
+      s = s, data = data_s, pm_settings = msg$pm[[k]],
+      eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
+      chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
+      prev_ll = msg$prev_ll[k], model = ctx$model, stage = ctx$stage,
+      type = ctx$type, tune = ctx$tune, marginalise = ctx$marginalise,
+      r_cores = ctx$r_cores, chol_cache = ctx$chol_caches[[s]],
+      group_chol = group_chol, current_alpha = .emc_subject_col(msg$alpha, k),
+      population_mu = msg$population_mu[, k],
+      population_var = shared$group_var)
+    if (is.null(out)) out <- safe_new_particle(
       s = s, data = data_s, pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
@@ -2359,11 +2564,14 @@
   }
   w_spent <- proc.time() - w_started
   ensemble_delta <- .emc_reject_delta(ensemble_rejects_before, "ensemble")
-  reject_messages <- .emc_reject_messages()
-  ensemble_msgs <- lapply(names(ensemble_delta), function(cls)
-    reject_messages[[paste("ensemble", cls, sep = ".")]])
-  names(ensemble_msgs) <- names(ensemble_delta)
-  ensemble_msgs <- ensemble_msgs[ensemble_delta > 0L]
+  ensemble_msgs <- stats::setNames(list(), character(0))
+  if (any(ensemble_delta > 0L)) {
+    reject_messages <- .emc_reject_messages()
+    ensemble_msgs <- lapply(names(ensemble_delta), function(cls)
+      reject_messages[[paste("ensemble", cls, sep = ".")]])
+    names(ensemble_msgs) <- names(ensemble_delta)
+    ensemble_msgs <- ensemble_msgs[ensemble_delta > 0L]
+  }
   list(props = props, pm = pm, seeds = seeds, times = times, extra_ll = extra_ll,
        t_recv = t_recv, t_done = Sys.time(),
        cpu = unname(w_spent[["user.self"]] + w_spent[["sys.self"]]),
@@ -2558,10 +2766,17 @@
   per <- seconds / n_particles
   if (is.null(route)) route <- if (pooled) "persistent_pool" else "serial"
   st$last_route <- route
-  if (pooled) st$t_pool <- c(st$t_pool, per) else st$t_serial <- c(st$t_serial, per)
+  # Decisions use the latest .EMC_LL_PROBE_N timings. Without a pool the
+  # mode stays "probe" for the life of the process, so the record is capped.
+  keep <- function(x) {
+    x <- c(x, per)
+    n <- length(x)
+    if (n > .EMC_LL_PROBE_N) x[(n - .EMC_LL_PROBE_N + 1L):n] else x
+  }
+  if (pooled) st$t_pool <- keep(st$t_pool) else st$t_serial <- keep(st$t_serial)
   if (pooled && identical(st$mode, "pool")) {
-    if (dynamic) st$t_dynamic <- c(st$t_dynamic, per)
-    else st$t_static <- c(st$t_static, per)
+    if (dynamic) st$t_dynamic <- keep(st$t_dynamic)
+    else st$t_static <- keep(st$t_static)
     if (identical(st$split, "probe")) {
       if (length(st$t_dynamic) >= .EMC_LL_PROBE_N &&
           length(st$t_static) >= .EMC_LL_PROBE_N) {
@@ -2680,15 +2895,12 @@
   has_work <- if (claim) rep(TRUE, pool$n) else lengths(part) > 0L
   sent <- rep(FALSE, pool$n)
   dispatch_at <- finish_at <- rep(NA_real_, pool$n)
-  dispatch_wall <- rep(Sys.time()[NA], pool$n)
+  dispatch_wall <- if (profile) rep(Sys.time()[NA], pool$n) else NULL
   worker_cpu <- worker_elapsed <- queue_delay <- rep(NA_real_, pool$n)
   fallback_workers <- 0L
   fallback_subjects <- 0L
-  rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
-                             .EMC_REJECT_CLASSES)
-  ensemble_rejects <- list(
-    counts = stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES),
-    msgs = list())
+  rejects <- .EMC_REJECT_ZERO
+  ensemble_rejects <- list(counts = .EMC_REJECT_ZERO, msgs = list())
   send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   if (was_alive && !is.null(shared_file)) {
     if (claim) emc_claim_reset(claim_map$ptr, request)

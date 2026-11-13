@@ -75,6 +75,22 @@ inline double exg_normal_tail_factor(double x, double* derivative = nullptr) {
   return (0.39894228040143267794 - u * r) * inv;
 }
 
+// log H(x).  In the central branch H is exp(x^2/2) times a rational factor, so
+// the log is taken of the factor alone and the exponential is never formed.
+inline double exg_log_normal_tail_factor(double x) {
+  if (!emc2_isinf(x) && x <= 0.67448975) {
+    const double u = x * x;
+    const double numerator = (((0.065682337918207449113 * u +
+      2.2352520354606839287) * u + 161.02823106855587881) * u +
+      1067.6894854603709582) * u + 18154.981253343561249;
+    const double denominator = (((u + 47.20258190468824187) * u +
+      976.09855173777669322) * u + 10260.932208618978205) * u +
+      45507.789335026729956;
+    return 0.5 * u + std::log(0.5 - x * numerator / denominator);
+  }
+  return std::log(exg_normal_tail_factor(x));
+}
+
 inline double exg_normal_tail_difference(double x, double width) {
   if (!(width > 0.0)) return 0.0;
   if (width < 0.1 * (1.0 + std::max(0.0, x))) {
@@ -111,7 +127,7 @@ inline double exg_log_weighted_tail(double y, double a, double log_a) {
       const double log_w = log_a + std::log1p(-y * std::exp(-log_a));
       return -0.5 * y * y - LOG_SQRT_2PI - log_w;
     }
-    return -0.5 * y * y + std::log(exg_normal_tail_factor(w));
+    return -0.5 * y * y + exg_log_normal_tail_factor(w);
   }
   return a * (0.5 * a - y) + pnorm_log_direct(-w, true);
 }

@@ -427,6 +427,8 @@
 .emc_profile_state <- new.env(parent = emptyenv())
 
 .EMC_REJECT_CLASSES <- c("numerical", "infrastructure", "programming", "unknown")
+.EMC_REJECT_ZERO <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)),
+                                    .EMC_REJECT_CLASSES)
 
 .emc_reject_reset <- function(source = NULL) {
   if (is.null(source)) {
@@ -524,9 +526,7 @@
 
 .emc_reject_counts <- function(source = "particle") {
   cur <- .emc_profile_state$rejects[[source]]
-  if (is.null(cur)) {
-    stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES)
-  } else cur
+  if (is.null(cur)) .EMC_REJECT_ZERO else cur
 }
 
 # Counters live in the process that caught the error, so a worker's counts must

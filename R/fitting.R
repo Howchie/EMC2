@@ -122,8 +122,6 @@ run_emc <- function(emc, stage, stop_criteria,
     emc <- .emc_prepare_subject_fit_cache(emc, validate = TRUE)
   emc <- .emc_prepare_chain_rng(emc)
   .emc_ll_route_reset()
-  if (stage != "preburn" && cores_per_chain * cores_for_chains > 1L &&
-      .Platform$OS.type == "unix") .emc_warm_psis()
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
   total_iters_stage <- chain_n(emc)[,stage][1]
@@ -148,8 +146,9 @@ run_emc <- function(emc, stage, stop_criteria,
     frozen_tries <- integer(length(emc))
     last_snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
   }
-  # Non-persistent chain runners can share clean templates across blocks.
-  # Persistent chain processes own their retained subject workers directly.
+  # Chain runners fork their subject workers from clean templates shared
+  # across blocks; persistent chain processes fork their retained pools from
+  # the same templates.
   pool_slots <- if (cores_for_chains >= length(emc)) length(emc)
                 else if (cores_for_chains <= 1L) 1L else 0L
   pool_session <- NULL
@@ -166,8 +165,7 @@ run_emc <- function(emc, stage, stop_criteria,
     .emc_chain_process_pool_stop(chain_process_pool)
     .emc_wpool_session_stop(pool_session)
   }, add = TRUE)
-  pool_session <- if (!persistent_chain_supported &&
-                      cores_per_chain > 1L && pool_slots > 0L) {
+  pool_session <- if (cores_per_chain > 1L && pool_slots > 0L) {
     .emc_wpool_session_start(
       list(data = emc[[1L]]$data,
            model = .emc_wpool_slim_model(emc[[1L]]$model)), pool_slots)
@@ -185,7 +183,9 @@ run_emc <- function(emc, stage, stop_criteria,
       emc <- .emc_burn_mode_start(emc, cores_per_chain * cores_for_chains)
       # The mode starts are deliberately near one another. Give the group
       # hierarchy and subject proposals time to settle before using R-hat.
-      if (is.null(stop_criteria$iter) &&
+      # Without a group level the starts are approximate posterior draws, so
+      # the ordinary R-hat rule applies from the first block.
+      if (is.null(stop_criteria$iter) && emc[[1L]]$type != "single" &&
           any(vapply(emc, function(x) !is.null(x$burn_mode_index), logical(1)))) {
         stop_criteria$iter <- 300L
         iter <- total_iters_stage + stop_criteria$iter
@@ -215,6 +215,22 @@ run_emc <- function(emc, stage, stop_criteria,
     t0 <- Sys.time()
     prepare_elapsed <- proc.time()[["elapsed"]] - block_started - prop_elapsed
     sample_started <- proc.time()[["elapsed"]]
+    # Every stop rule waits for the iteration target, and production proposals
+    # change only at their rebuild points, so a sample-stage block runs
+    # straight to whichever comes first. Each block is a fork whose children
+    # copy the session heap; checkpoints and thinning keep the per-step
+    # blocks. block_units counts the steps the block stands for.
+    block_units <- 1L
+    if (stage == "sample" && is.null(fileName) && isFALSE(thin) &&
+        is.null(stop_criteria$max_sample_iter)) {
+      remaining <- iter - progress$total_iters_stage
+      to_rebuild <- emc[[1L]]$sample_proposals_next - emc[[1L]]$sample_transitions
+      if (length(to_rebuild) != 1L || !is.finite(to_rebuild) || to_rebuild <= 0)
+        to_rebuild <- Inf
+      block_units <- max(1L, as.integer(floor(min(remaining, to_rebuild) /
+                                                progress$step_size)))
+      progress$step_size <- progress$step_size * block_units
+    }
     stage_iter <- progress$step_size*max(1,cur_thin)
     core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain,
                               cores_for_chains = cores_for_chains)
@@ -228,7 +244,8 @@ run_emc <- function(emc, stage, stop_criteria,
         attr(sampler, "emc_pool_slot") <- NULL
         sampler
       })
-      chain_slots <- rep(list(NULL), length(sub_emc))
+      chain_slots <- lapply(seq_along(sub_emc), function(j)
+        .emc_wpool_session_slot(pool_session, min(j, max(1L, pool_slots))))
       if (is.null(chain_process_pool)) {
         chain_process_pool <- .emc_chain_process_pool_start(
           chain_samplers, slots = chain_slots)
@@ -296,6 +313,9 @@ run_emc <- function(emc, stage, stop_criteria,
     }
     concat_elapsed <- proc.time()[["elapsed"]] - concat_started
     check_started <- proc.time()[["elapsed"]]
+    if (block_units > 1L) {
+      progress$trys <- progress$trys + block_units - 1L
+    }
     progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains,
                                verbose, progress, n_blocks, rhat_version = rhat_version)
     emc <- progress$emc
@@ -303,7 +323,7 @@ run_emc <- function(emc, stage, stop_criteria,
     if (check_stall) {
       snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
       moved <- !mapply(identical, snap, last_snap)
-      frozen_tries <- ifelse(moved, 0L, frozen_tries + 1L)
+      frozen_tries <- ifelse(moved, 0L, frozen_tries + block_units)
       last_snap <- snap
       if (any(frozen_tries >= stall_limit)) {
         .emc_stall_abort(stage = stage, iteration = chain_n(emc)[1, stage],
@@ -1146,6 +1166,11 @@ reset_pm_settings <- function(emc, stage){
             x[[i]]$iter <- 25
             x[[i]]$mix <- NULL
           }
+          # Burn has met its stop rule, and sample freezes the particle
+          # count, so adapt must tune it. gd_good uses a stricter R-hat than
+          # the burn rule and is not rechecked in adapt, so it can otherwise
+          # stay FALSE through adapt and sample.
+          if(stage == "adapt") x[[i]]$gd_good <- TRUE
         }
         return(x)
       })
@@ -1644,6 +1669,37 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
   invisible(NULL)
 }
 
+# Namespace functions are lazy-loaded, and a forked child that loads one keeps
+# it only until it exits. Each child therefore reports which still-unloaded
+# bindings it loaded, and the parent loads them, so that later forks inherit
+# them instead of loading them again.
+.emc_ns_unloaded <- function() {
+  ns <- asNamespace("EMC2")
+  nms <- ls(ns, all.names = TRUE, sorted = FALSE)
+  nms[emc_ns_unforced(ns, nms)]
+}
+
+.emc_ns_reporting <- function(fun, unloaded) {
+  force(fun)
+  function(...) {
+    value <- fun(...)
+    ns <- asNamespace("EMC2")
+    loaded <- unloaded[!emc_ns_unforced(ns, unloaded)]
+    structure(list(value = value, loaded = loaded),
+              class = "emc_ns_report")
+  }
+}
+
+.emc_ns_load <- function(reports) {
+  loaded <- unique(unlist(lapply(reports, function(r)
+    if (inherits(r, "emc_ns_report")) r$loaded), use.names = FALSE))
+  if (!length(loaded)) return(invisible(NULL))
+  ns <- asNamespace("EMC2")
+  loaded <- loaded[emc_ns_unforced(ns, loaded)]
+  for (nm in loaded) invisible(get(nm, envir = ns, inherits = FALSE))
+  invisible(NULL)
+}
+
 auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
                           mc.set.seed = TRUE){
   if(mc.cores <= 1) return(lapply(X, FUN, ...))
@@ -1653,9 +1709,16 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE,
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
   } else{
     .emc_gc_before_fork(mc.cores)
-    list_out <- parallel::mclapply(X, .emc_armed(FUN), mc.cores = mc.cores,
+    unloaded <- .emc_ns_unloaded()
+    run <- if (length(unloaded)) .emc_ns_reporting(FUN, unloaded) else FUN
+    list_out <- parallel::mclapply(X, .emc_armed(run), mc.cores = mc.cores,
                                    mc.preschedule = mc.preschedule,
                                    mc.set.seed = mc.set.seed, ...)
+    if (length(unloaded)) {
+      .emc_ns_load(list_out)
+      list_out <- lapply(list_out, function(r)
+        if (inherits(r, "emc_ns_report")) r$value else r)
+    }
     failed <- vapply(list_out, inherits, logical(1), what = "try-error")
     if (any(failed)) {
       first <- list_out[[which(failed)[1]]]

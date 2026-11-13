@@ -3084,6 +3084,39 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_ns_unforced
+Rcpp::LogicalVector emc_ns_unforced(SEXP env, Rcpp::CharacterVector names);
+RcppExport SEXP _EMC2_emc_ns_unforced(SEXP envSEXP, SEXP namesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type env(envSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type names(namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ns_unforced(env, names));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_native_particle_block
+List emc2_native_particle_block(List plan, int n_iter, NumericVector start, double start_ll, List ll_args, NumericVector sel_n, NumericVector sel_disp, double sel_steps, List pm_in, List tune_in, bool adapt);
+RcppExport SEXP _EMC2_emc2_native_particle_block(SEXP planSEXP, SEXP n_iterSEXP, SEXP startSEXP, SEXP start_llSEXP, SEXP ll_argsSEXP, SEXP sel_nSEXP, SEXP sel_dispSEXP, SEXP sel_stepsSEXP, SEXP pm_inSEXP, SEXP tune_inSEXP, SEXP adaptSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type plan(planSEXP);
+    Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type start(startSEXP);
+    Rcpp::traits::input_parameter< double >::type start_ll(start_llSEXP);
+    Rcpp::traits::input_parameter< List >::type ll_args(ll_argsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sel_n(sel_nSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sel_disp(sel_dispSEXP);
+    Rcpp::traits::input_parameter< double >::type sel_steps(sel_stepsSEXP);
+    Rcpp::traits::input_parameter< List >::type pm_in(pm_inSEXP);
+    Rcpp::traits::input_parameter< List >::type tune_in(tune_inSEXP);
+    Rcpp::traits::input_parameter< bool >::type adapt(adaptSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_native_particle_block(plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ParamTable_create_from_p_types
 SEXP ParamTable_create_from_p_types(int n_trials, CharacterVector p_types);
 RcppExport SEXP _EMC2_ParamTable_create_from_p_types(SEXP n_trialsSEXP, SEXP p_typesSEXP) {
@@ -3309,6 +3342,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
     Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
     rcpp_result_gen = Rcpp::wrap(emc2_create_pt_mapper_context(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_ll_data_cache_clear
+int emc2_ll_data_cache_clear();
+RcppExport SEXP _EMC2_emc2_ll_data_cache_clear() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(emc2_ll_data_cache_clear());
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4188,6 +4231,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_compute_time_derivative", (DL_FUNC) &_EMC2_compute_time_derivative, 10},
     {"_EMC2_build_hrf_kernel", (DL_FUNC) &_EMC2_build_hrf_kernel, 10},
     {"_EMC2_construct_design_matrix", (DL_FUNC) &_EMC2_construct_design_matrix, 13},
+    {"_EMC2_emc_ns_unforced", (DL_FUNC) &_EMC2_emc_ns_unforced, 2},
+    {"_EMC2_emc2_native_particle_block", (DL_FUNC) &_EMC2_emc2_native_particle_block, 11},
     {"_EMC2_ParamTable_create_from_p_types", (DL_FUNC) &_EMC2_ParamTable_create_from_p_types, 2},
     {"_EMC2_ParamTable_create_from_matrix", (DL_FUNC) &_EMC2_ParamTable_create_from_matrix, 2},
     {"_EMC2_ParamTable_materialize", (DL_FUNC) &_EMC2_ParamTable_materialize, 1},
@@ -4207,6 +4252,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_TrendEngine_apply_pretransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_pretransform_bases, 2},
     {"_EMC2_TrendEngine_apply_posttransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_posttransform_bases, 2},
     {"_EMC2_emc2_create_pt_mapper_context", (DL_FUNC) &_EMC2_emc2_create_pt_mapper_context, 8},
+    {"_EMC2_emc2_ll_data_cache_clear", (DL_FUNC) &_EMC2_emc2_ll_data_cache_clear, 0},
     {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 14},
     {"_EMC2_pt_prologue_oo", (DL_FUNC) &_EMC2_pt_prologue_oo, 10},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},

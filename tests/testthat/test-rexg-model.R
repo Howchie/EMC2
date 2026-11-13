@@ -265,3 +265,59 @@ test_that("REXG compiled density handles small scales and extreme ratios", {
     }
   }
 })
+
+test_that("REXG compiled density is accurate when many trials share one parameter set", {
+  lI_fun <- function(d) factor(rep(1, nrow(d)), levels = 1)
+  model_factory <- plain_link(REXG)
+  des <- design(
+    factors = list(subjects = 1, S = 1), Rlevels = 1,
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
+    functions = list(lI = lI_fun), model = model_factory
+  )
+  log_sum_exp_R <- function(a, b) {
+    h <- max(a, b)
+    h + log(exp(a - h) + exp(b - h))
+  }
+  # Each case spans both sides of the density's mode, so one call evaluates
+  # trials on every branch of the tail calculation, in groups of many rows.
+  cases <- list(
+    list(mu = 0.4, sigma = 0.03, tau = 0.1, x = seq(0.2, 2.5, length.out = 37)),
+    list(mu = 0.4, sigma = 0.1, tau = 0.001, x = seq(0.05, 0.9, length.out = 29)),
+    list(mu = 0.3, sigma = 0.2, tau = 0.5, x = seq(0.001, 6, length.out = 41))
+  )
+  p_types <- names(model_factory()$p_types)
+  for (case in cases) {
+    mu <- case$mu; sigma <- case$sigma; tau <- case$tau; t0 <- 0.05
+    log_survival_zero <- log_sum_exp_R(
+      pnorm(-mu / sigma, lower.tail = FALSE, log.p = TRUE),
+      mu / tau + 0.5 * (sigma / tau)^2 +
+        pnorm(-mu / sigma - sigma / tau, log.p = TRUE)
+    )
+    expected <- vapply(case$x, function(xx) {
+      y <- (xx - mu) / sigma
+      -log(tau) + (mu - xx) / tau + 0.5 * (sigma / tau)^2 +
+        pnorm(y - sigma / tau, log.p = TRUE) - log_survival_zero
+    }, numeric(1))
+    p <- c(mu = log(mu), sigma = log(sigma), tau = log(tau), t0 = log(t0))
+    dat <- data.frame(subjects = factor(1), S = factor(1),
+                      R = factor(1, levels = 1), rt = t0 + case$x)
+    invisible(capture.output({
+      dadm <- EMC2:::design_model(dat, des, compress = FALSE,
+                                   rt_resolution = NULL)
+      model_i <- attr(dadm, "model")()
+      designs <- lapply(p_types, function(nm) {
+        d <- attr(dadm, "designs")[[nm]]
+        d[attr(d, "expand"), , drop = FALSE]
+      })
+      names(designs) <- p_types
+      ll <- EMC2:::calc_ll_oo(
+        matrix(p, nrow = 1, dimnames = list(NULL, names(p))), dadm,
+        constants = attr(dadm, "constants"), designs = designs,
+        type = model_i$c_name, bounds = model_i$bound,
+        transforms = model_i$transform, pretransforms = model_i$pre_transform,
+        p_types = p_types, min_ll = -1e20, trend = model_i$trend
+      )
+    }))
+    expect_equal(as.numeric(ll), sum(expected), tolerance = 1e-12)
+  }
+})
