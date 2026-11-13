@@ -480,6 +480,8 @@ static inline void configure_filter_defective(RaceModelAdapter& adapter,
 // Fixed parameter-table structure shared by repeated calls with the same
 // designs and transforms. Particle values, invariance masks, bound verdicts,
 // and likelihood-call buffers stay in a fresh PtMapper per call.
+struct PtMapper;
+
 struct PtMapperContext {
   ParamTable table_template;
   std::vector<TransformSpec> transform_specs;
@@ -495,6 +497,15 @@ struct PtMapperContext {
   std::vector<TransformSpec> postmap_all;
   std::vector<BoundSpec> bound_specs;
   std::vector<int> mat_base_idx;
+  // The pre-transform specs of the proposal columns (names only).
+  bool pre_specs_ready = false;
+  std::vector<TransformSpec> pre_specs;
+  // A finished call leaves its mapper here for the next call of the same
+  // kind (one particle, or several): the table, its plans and its buffers
+  // depend on names and data only, and every value is rewritten from the
+  // first particle. A call takes the mapper out while it runs.
+  std::unique_ptr<PtMapper> spare[2];
+  ~PtMapperContext();
 };
 
 struct PtMapper {
@@ -746,6 +757,67 @@ struct PtMapper {
   }
 };
 
+PtMapperContext::~PtMapperContext() = default;
+
+// The call's proposals on the mapping scale: pre-transformed, with the
+// constants appended as columns.
+static void pt_mapper_load_particles(PtMapper& m, NumericMatrix particle_matrix,
+                                     NumericVector constants, List pretransforms,
+                                     PtMapperContext* cached) {
+  if (cached) {
+    if (!cached->pre_specs_ready) {
+      cached->pre_specs = make_transform_specs(particle_matrix, pretransforms);
+      cached->pre_specs_ready = true;
+    }
+    m.particle_matrix_pt = c_do_transform(particle_matrix, cached->pre_specs);
+  } else {
+    std::vector<TransformSpec> pre_specs =
+      make_transform_specs(particle_matrix, pretransforms);
+    m.particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
+  }
+  const bool has_constants = !(constants.size() == 1 &&
+                               Rcpp::NumericVector::is_na(constants[0]));
+  if (has_constants) {
+    m.particle_matrix_pt = add_constants_columns(m.particle_matrix_pt, constants);
+  }
+}
+
+// A context serves only the columns and parameters it was built for.
+static void pt_mapper_check_context(const PtMapper& m, const PtMapperContext& cached,
+                                    const CharacterVector& p_types, int n_trials) {
+  const SEXP dn = Rf_getAttrib(m.particle_matrix_pt, R_DimNamesSymbol);
+  const SEXP pm_names = (TYPEOF(dn) == VECSXP && XLENGTH(dn) > 1)
+    ? VECTOR_ELT(dn, 1) : R_NilValue;
+  if (cached.n_trials != n_trials || TYPEOF(pm_names) != STRSXP ||
+      cached.particle_names.size() != XLENGTH(pm_names) ||
+      cached.keep_names.size() != p_types.size()) {
+    Rcpp::stop("calc_ll_oo: stale parameter-mapping context dimensions");
+  }
+  // R caches strings, so equal pointers are equal names; only a pointer
+  // mismatch needs the text compared.
+  for (R_xlen_t j = 0; j < XLENGTH(pm_names); ++j)
+    if (STRING_ELT(pm_names, j) != STRING_ELT(cached.particle_names, j) &&
+        std::string(CHAR(STRING_ELT(pm_names, j))) !=
+        Rcpp::as<std::string>(cached.particle_names[j]))
+      Rcpp::stop("calc_ll_oo: stale parameter-mapping context columns");
+  for (int j = 0; j < p_types.size(); ++j)
+    if (STRING_ELT(p_types, j) != STRING_ELT(cached.keep_names, j) &&
+        Rcpp::as<std::string>(p_types[j]) !=
+        Rcpp::as<std::string>(cached.keep_names[j]))
+      Rcpp::stop("calc_ll_oo: stale parameter-mapping context parameters");
+}
+
+// A mapper left by an earlier call, loaded with this call's proposals.
+static void pt_mapper_reload(PtMapper& m, NumericMatrix particle_matrix,
+                             NumericVector constants, List pretransforms,
+                             CharacterVector p_types, int n_trials,
+                             PtMapperContext* cached) {
+  pt_mapper_load_particles(m, particle_matrix, constants, pretransforms, cached);
+  pt_mapper_check_context(m, *cached, p_types, n_trials);
+  m.table.const_init();
+  m.table.fill_from_particle_row(m.particle_matrix_pt, 0, m.pm_col_to_base_idx);
+}
+
 static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
                                NumericVector constants, List designs, List bounds,
                                List transforms, List pretransforms,
@@ -762,34 +834,11 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
   m.mm_names = colnames(m.minmax);
   m.keep_names = p_types;
 
-  std::vector<TransformSpec> pre_specs = make_transform_specs(particle_matrix, pretransforms);
-  m.particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
-
-  const bool has_constants = !(constants.size() == 1 &&
-                               Rcpp::NumericVector::is_na(constants[0]));
-  if (has_constants) {
-    m.particle_matrix_pt = add_constants_columns(m.particle_matrix_pt, constants);
-  }
+  pt_mapper_load_particles(m, particle_matrix, constants, pretransforms, cached);
 
   Rcpp::CharacterVector pm_names = colnames(m.particle_matrix_pt);
   if (cached) {
-    if (cached->n_trials != n_trials ||
-        cached->particle_names.size() != pm_names.size() ||
-        cached->keep_names.size() != p_types.size()) {
-      Rcpp::stop("calc_ll_oo: stale parameter-mapping context dimensions");
-    }
-    // R caches strings, so equal pointers are equal names; only a pointer
-    // mismatch needs the text compared.
-    for (int j = 0; j < pm_names.size(); ++j)
-      if (STRING_ELT(pm_names, j) != STRING_ELT(cached->particle_names, j) &&
-          Rcpp::as<std::string>(pm_names[j]) !=
-          Rcpp::as<std::string>(cached->particle_names[j]))
-        Rcpp::stop("calc_ll_oo: stale parameter-mapping context columns");
-    for (int j = 0; j < p_types.size(); ++j)
-      if (STRING_ELT(p_types, j) != STRING_ELT(cached->keep_names, j) &&
-          Rcpp::as<std::string>(p_types[j]) !=
-          Rcpp::as<std::string>(cached->keep_names[j]))
-        Rcpp::stop("calc_ll_oo: stale parameter-mapping context parameters");
+    pt_mapper_check_context(m, *cached, p_types, n_trials);
     m.table = cached->table_template;
     m.table.base = Rcpp::clone(cached->table_template.base);
     m.transform_specs = cached->transform_specs;
@@ -1331,12 +1380,15 @@ RaceSharedState& race_data_state_shared(RaceDataState& st,
 // Return the cached state for this data, building it on a miss. A state that
 // is in use (a nested call on the same data) is never shared: the nested call
 // builds a private copy in `local`.
-RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data,
-                                       int n_trials, RaceDataState& local) {
+// `local` holds the state of a call the cache cannot serve; it is built only
+// then.
+RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data, int n_trials,
+                                       std::unique_ptr<RaceDataState>& local) {
   const char* off = std::getenv("EMC2_LL_DATA_CACHE_OFF");
   if (off != nullptr && off[0] == '1') {
-    race_data_state_fill(local, data, n_trials);
-    return &local;
+    local.reset(new RaceDataState());
+    race_data_state_fill(*local, data, n_trials);
+    return local.get();
   }
   const uint64_t key = race_data_key(data);
   RaceDataCache& cache = race_data_cache();
@@ -1344,8 +1396,9 @@ RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data,
   for (auto& e : cache.entries) {
     if (e->key == key && e->n_trials == n_trials) {
       if (e->in_use) {
-        race_data_state_fill(local, data, n_trials);
-        return &local;
+        local.reset(new RaceDataState());
+        race_data_state_fill(*local, data, n_trials);
+        return local.get();
       }
       e->last_use = cache.clock;
       return e.get();
@@ -1356,8 +1409,8 @@ RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data,
   fresh->key = key;
   fresh->last_use = cache.clock;
   if (fresh->bytes > kRaceDataCacheMaxBytes / 4) {
-    local = std::move(*fresh);
-    return &local;
+    local = std::move(fresh);
+    return local.get();
   }
   while (!cache.entries.empty() &&
          (cache.entries.size() >= kRaceDataCacheMaxEntries ||
@@ -1375,6 +1428,14 @@ RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data,
   cache.bytes += fresh->bytes;
   cache.entries.push_back(std::move(fresh));
   return cache.entries.back().get();
+}
+
+// A placeholder for state a call's path never reads. Never destroyed: it may
+// hold R objects, which must not be released after R has shut down.
+template <class T>
+T& unused_state() {
+  static T* state = new T();
+  return *state;
 }
 
 struct RaceDataLease {
@@ -1446,18 +1507,33 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   const bool is_ss_type = is_stop_signal_type(type_std);
   const bool use_pt_mapping = !is_mri_type;
 
-  NumericMatrix one_particle(1, particle_matrix.ncol());
-  colnames(one_particle) = p_names;
-  IntegerVector kernel_output_codes = IntegerVector::create(1);
+  // Built on first use: only the generic mapping path needs them.
+  std::unique_ptr<NumericMatrix> one_particle;
+  std::unique_ptr<IntegerVector> kernel_output_codes;
   auto pars_for_particle_generic = [&](int i) -> NumericMatrix {
-    for (int j = 0; j < particle_matrix.ncol(); ++j) {
-      one_particle(0, j) = particle_matrix(i, j);
+    if (!one_particle) {
+      one_particle.reset(new NumericMatrix(1, particle_matrix.ncol()));
+      colnames(*one_particle) = p_names;
+      kernel_output_codes.reset(new IntegerVector(IntegerVector::create(1)));
     }
-    return get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
-                                      pretransforms, trend, false, false, kernel_output_codes);
+    for (int j = 0; j < particle_matrix.ncol(); ++j) {
+      (*one_particle)(0, j) = particle_matrix(i, j);
+    }
+    return get_pars_c_wrapper_oo_core(*one_particle, data, constants, designs, bounds, transforms,
+                                      pretransforms, trend, false, false, *kernel_output_codes);
   };
 
-  PtMapper pt;
+  std::unique_ptr<PtMapper> pt_owner;
+  // Returns the mapper to its context when the call ends without an error.
+  struct PtMapperLease {
+    std::unique_ptr<PtMapper>* owner = nullptr;
+    std::unique_ptr<PtMapper>* slot = nullptr;
+    int exceptions = 0;
+    ~PtMapperLease() {
+      if (slot && owner && *owner && std::uncaught_exceptions() == exceptions)
+        *slot = std::move(*owner);
+    }
+  } pt_lease;
   if (use_pt_mapping) {
     PtMapperContext* cached = nullptr;
     if (!Rf_isNull(pt_mapper_context)) {
@@ -1467,17 +1543,36 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         Rcpp::stop("calc_ll_oo: trend models cannot use a parameter-mapping context");
       cached = Rcpp::XPtr<PtMapperContext>(pt_mapper_context).get();
     }
-    pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
-                        transforms, pretransforms, trend, p_types,
-                        n_trials, n_particles, varying, cached);
+    // The invariant lanes of a mapper follow from names alone only when no
+    // varying mask narrows them, so only those calls share mappers.
+    const bool reusable = cached && varying.isNull() && n_particles > 0;
+    if (reusable) {
+      pt_lease.owner = &pt_owner;
+      pt_lease.slot = &cached->spare[n_particles > 1 ? 1 : 0];
+      pt_lease.exceptions = std::uncaught_exceptions();
+      pt_owner = std::move(*pt_lease.slot);
+    }
+    if (pt_owner) {
+      pt_mapper_reload(*pt_owner, particle_matrix, constants, pretransforms,
+                       p_types, n_trials, cached);
+    } else {
+      pt_owner.reset(new PtMapper(make_pt_mapper(
+        particle_matrix, data, constants, designs, bounds, transforms,
+        pretransforms, trend, p_types, n_trials, n_particles, varying, cached)));
+    }
   } else if (!Rf_isNull(pt_mapper_context)) {
     Rcpp::stop("calc_ll_oo: this likelihood path cannot use a parameter-mapping context");
+  } else {
+    pt_owner.reset(new PtMapper());
   }
+  PtMapper& pt = *pt_owner;
   ParamTable& param_table_template = pt.table;
   Rcpp::CharacterVector& keep_names = pt.keep_names;
   auto prepare_particle = [&](int i) -> Rcpp::LogicalVector { return pt.prepare(i); };
 
-  ModelSharedState ddm_shared;
+  // Only the two-boundary models use it.
+  std::unique_ptr<ModelSharedState> ddm_shared_ptr;
+  if (is_ddm_type) ddm_shared_ptr.reset(new ModelSharedState());
   bool ddm_raw_ready = true;
   std::vector<const double*> ddm_cols;
   // The adapter carries the model's two primitives, its column spec and its
@@ -1498,7 +1593,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   if (is_ddm_type) {
     emc2col::validate_col_prefix(keep_names, ddm_adapter.col_spec);
     ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
-                                          ddm_shared, ddm_cols,
+                                          *ddm_shared_ptr, ddm_cols,
                                           &ddm_adapter.col_spec, &keep_names);
   }
 
@@ -1523,11 +1618,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         ddm_adapter.ctx.bou_cache->t_horizon = 0.0;
       }
       if (ddm_raw_ready) {
-        for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
+        for(int j = 0; j < n_trials; ++j) ddm_shared_ptr->ok_int_buf[j] = is_ok[j] ? 1 : 0;
         lls[i] = c_log_likelihood_DDM_pt(ddm_cols.data(),
                                         rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
-                                        min_ll, ddm_shared.ok_int_buf.data(), gng,
-                                        all_finite_untruncated, &ddm_shared,
+                                        min_ll, ddm_shared_ptr->ok_int_buf.data(), gng,
+                                        all_finite_untruncated, ddm_shared_ptr.get(),
                                         nullptr, &ddm_adapter);
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
@@ -1638,7 +1733,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
 
     // Data-fixed race state, kept across calls (race_data_state_acquire()).
-    RaceDataState race_data_local;
+    std::unique_ptr<RaceDataState> race_data_local;
     RaceDataState* race_data = race_data_state_acquire(data, n_trials, race_data_local);
     RaceDataLease race_data_lease(race_data);
     IntegerVector expand = race_data->expand;
@@ -1804,32 +1899,46 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // --- Build shared state for the mixed (non-raw-fast) path ---
     // Pre-compute all data-fixed structures once so c_log_likelihood_race can skip
     // per-particle R-heap allocations, column reads, and attribute lookups.
-    RaceSharedState race_shared_none;
+    // The raw fast path never reads the shared state, so it gets the unused
+    // placeholder instead of an empty one of its own.
+    const bool want_race_shared =
+      !use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials;
+    std::unique_ptr<RaceSharedState> race_shared_none;
+    if (!want_race_shared && !use_raw_fast_path)
+      race_shared_none.reset(new RaceSharedState());
     RaceSharedState& race_shared =
-      (!use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials)
-        ? race_data_state_shared(*race_data, data) : race_shared_none;
+      want_race_shared ? race_data_state_shared(*race_data, data)
+                       : (race_shared_none ? *race_shared_none
+                                           : unused_state<RaceSharedState>());
 
     // Correlated BAwL: data-fixed layout, role mapping, and direct
     // ParamTable column pointers resolved once outside the particle loop.
     // The generic-clock fallback materialises lazily via this callback.
-    CorrDriftSharedState corr_drift_shared;
+    // Each of these is read only by the path that builds it.
+    std::unique_ptr<CorrDriftSharedState> corr_drift_owner;
     if (adapter.ctx.corr_drift_active) {
-      corr_drift_shared = build_corr_drift_shared_state(
+      corr_drift_owner.reset(new CorrDriftSharedState(build_corr_drift_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
-          param_table_template, keep_names);
+          param_table_template, keep_names)));
     }
-    RDMSWTNCorrSharedState rdmswtn_corr_shared;
+    CorrDriftSharedState& corr_drift_shared =
+      corr_drift_owner ? *corr_drift_owner : unused_state<CorrDriftSharedState>();
+    std::unique_ptr<RDMSWTNCorrSharedState> rdmswtn_corr_owner;
     if (adapter.ctx.rdmswtn_correlated) {
-      rdmswtn_corr_shared = build_rdmswtn_corr_shared_state(
+      rdmswtn_corr_owner.reset(new RDMSWTNCorrSharedState(build_rdmswtn_corr_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
-          param_table_template, keep_names);
+          param_table_template, keep_names)));
     }
-    FrqSharedState frq_shared_state;
+    RDMSWTNCorrSharedState& rdmswtn_corr_shared =
+      rdmswtn_corr_owner ? *rdmswtn_corr_owner : unused_state<RDMSWTNCorrSharedState>();
+    std::unique_ptr<FrqSharedState> frq_owner;
     if (adapter.ctx.frq_shared != 0) {
-      frq_shared_state = build_frq_shared_state(
+      frq_owner.reset(new FrqSharedState(build_frq_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
-          param_table_template, keep_names);
+          param_table_template, keep_names)));
     }
+    FrqSharedState& frq_shared_state =
+      frq_owner ? *frq_owner : unused_state<FrqSharedState>();
     const std::function<Rcpp::NumericMatrix()> corr_materialize =
         [&pt]() { return pt.materialize_reusable(); };
 

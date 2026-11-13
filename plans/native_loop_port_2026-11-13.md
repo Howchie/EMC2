@@ -33,7 +33,33 @@ Timings (seconds):
 
 One iteration in-process: 31 ms to about 18 ms.
 
+Second pass (after commit d77173d9):
+
+| Piece | Where | Check |
+|---|---|---|
+| Parameter mapper kept with its context and reused across calls | `PtMapperContext::spare`, `pt_mapper_reload` in `src/particle_ll.cpp` | R path draws |
+| Shared-state objects built only on the path that reads them | `calc_ll_oo` race branch, `unused_state<T>()` | R path draws |
+| Shear and collapsed likelihood rows built in C++ | `emc_candidate_rows_cpp` | R path draws |
+
+A one-row likelihood call: 31 us to 14.8 us (about 8 us inside `calc_ll_oo`,
+2.3 us of it kernel). One iteration in-process: about 13.4 ms. Whole fit:
+42.2 s to 37.2 s (preburn 1.1, burn 8.8, adapt 3.0, sample 24.3).
+
+The shear and collapsed arithmetic was already in C++
+(`emc_shear_candidates_cpp`, `emc_shear_frames_cpp`,
+`collapsed_trajectories_cpp`); after the row builder their R side is a flat
+tail with no line above 0.15 ms per iteration.
+
 ## Remaining, by size
+
+Items 3 and 4 below are done to the extent the profile supports (second pass
+above); the rebuilds are now the largest structural cost: in a 400-iteration
+sample window, 3.9 of 11.2 s. Per rebuild: forked jobs about 0.58 s
+(`.emc_rebuild_lapply`, four calls: shear orbit steps 0.27, efficient
+proposals, Laplace), `.emc_alloc_solve` 36 calls of 6 ms in the master
+(0.22 s), `.emc_empirical_covariance_ok` about 410 calls (0.14 s). Chain
+blocks themselves have no measurable fork overhead (master wall equals the
+slowest chain, 15-17 ms per iteration with three chains running).
 
 1. **Proposal rebuilds between blocks**: about 1.3 s wall each, nine per fit
    (about 12 of 42 s). Per rebuild: allocation 0.40 s (the unit solve is 0.23 s

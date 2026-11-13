@@ -183,6 +183,10 @@ emc2_ll_cached_subjects <- function(rows, data, model) {
     .Call(`_EMC2_emc2_ll_cached_subjects`, rows, data, model)
 }
 
+emc_candidate_rows_cpp <- function(cand, par_names) {
+    .Call(`_EMC2_emc_candidate_rows_cpp`, cand, par_names)
+}
+
 emc2_ll_cache_put <- function(dadm, model, cols, args) {
     invisible(.Call(`_EMC2_emc2_ll_cache_put`, dadm, model, cols, args))
 }

@@ -446,8 +446,7 @@
   jac <- if (is.null(walls)) numeric(n) else
     ifelse(walls$has, tr$jac - 0.5 * (tr$r1sq - colSums(r^2)), 0)
   pn <- sampler$par_names
-  rows <- lapply(seq_len(n), function(s)
-    matrix(alpha_new[, s], 1L, dimnames = list(NULL, pn)))
+  rows <- emc_candidate_rows_cpp(list(alpha_new), pn)
   evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
                                     source = "collapsed")
   x$wpool <- evaluated$pool

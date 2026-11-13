@@ -135,6 +135,39 @@ List emc2_ll_cached_subjects(List rows, List data, SEXP model) {
   return out;
 }
 
+// The likelihood rows of each subject from K candidate states: `cand` holds K
+// matrices with one subject per column, and subject s gets a K-row matrix
+// with one parameter per column, named `par_names`.
+// [[Rcpp::export(rng = false)]]
+List emc_candidate_rows_cpp(List cand, CharacterVector par_names) {
+  const int K = cand.size();
+  if (K == 0) Rcpp::stop("no candidate states");
+  const NumericMatrix first(static_cast<SEXP>(cand[0]));
+  const int p = first.nrow(), n = first.ncol();
+  const bool named = par_names.size() > 0;
+  if (named && par_names.size() != p)
+    Rcpp::stop("parameter names do not match the states");
+  std::vector<const double*> src(K);
+  for (int k = 0; k < K; ++k) {
+    const SEXP a = cand[k];
+    if (TYPEOF(a) != REALSXP || !Rf_isMatrix(a) || Rf_nrows(a) != p || Rf_ncols(a) != n)
+      Rcpp::stop("candidate states differ in shape");
+    src[k] = REAL(a);
+  }
+  const List dimnames = List::create(R_NilValue, par_names);
+  List out(n);
+  for (int s = 0; s < n; ++s) {
+    NumericMatrix rows(K, p);
+    double* r = REAL(rows);
+    for (int j = 0; j < p; ++j)
+      for (int k = 0; k < K; ++k)
+        r[k + static_cast<size_t>(j) * K] = src[k][j + static_cast<size_t>(s) * p];
+    if (named) rows.attr("dimnames") = dimnames;
+    out[s] = rows;
+  }
+  return out;
+}
+
 // [[Rcpp::export]]
 void emc2_ll_cache_put(SEXP dadm, SEXP model, CharacterVector cols, List args) {
   const pid_t pid = getpid();

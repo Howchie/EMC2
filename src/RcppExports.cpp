@@ -701,6 +701,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_candidate_rows_cpp
+List emc_candidate_rows_cpp(List cand, CharacterVector par_names);
+RcppExport SEXP _EMC2_emc_candidate_rows_cpp(SEXP candSEXP, SEXP par_namesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type cand(candSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type par_names(par_namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_candidate_rows_cpp(cand, par_names));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cache_put
 void emc2_ll_cache_put(SEXP dadm, SEXP model, CharacterVector cols, List args);
 RcppExport SEXP _EMC2_emc2_ll_cache_put(SEXP dadmSEXP, SEXP modelSEXP, SEXP colsSEXP, SEXP argsSEXP) {
@@ -4187,6 +4198,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
+    {"_EMC2_emc_candidate_rows_cpp", (DL_FUNC) &_EMC2_emc_candidate_rows_cpp, 2},
     {"_EMC2_emc2_ll_cache_put", (DL_FUNC) &_EMC2_emc2_ll_cache_put, 4},
     {"_EMC2_emc2_ll_cache_clear", (DL_FUNC) &_EMC2_emc2_ll_cache_clear, 0},
     {"_EMC2_lr_capacity_counter_values", (DL_FUNC) &_EMC2_lr_capacity_counter_values, 0},

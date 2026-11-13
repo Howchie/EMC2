@@ -886,9 +886,7 @@
   if (length(ok)) {
     pn <- sampler$par_names
     cand <- lapply(ok, moved_alpha)
-    rows <- lapply(seq_len(n), function(s)
-      matrix(vapply(cand, function(a) a[, s], numeric(p)), length(ok), byrow = TRUE,
-             dimnames = list(NULL, pn)))
+    rows <- emc_candidate_rows_cpp(cand, pn)
     ll_el0 <- proc.time()[["elapsed"]]
     x$build_el <- x$build_el + ll_el0 - build_el0
     evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,

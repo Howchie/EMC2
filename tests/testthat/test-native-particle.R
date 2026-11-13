@@ -99,6 +99,18 @@ test_that("stored likelihood arguments reproduce the full likelihood path", {
   expect_identical(EMC2:::emc2_ll_cached(P, data[[2]], model, NULL), full[[2]])
   expect_identical(EMC2:::emc2_ll_cached_subjects(list(P, P[1:3, ]), data, model),
                    list(full[[1]], full[[2]][1:3]))
+  # Repeated calls of either size reuse one parameter mapper.
+  for (rows in list(1L, 1:7, 4L, 2:3, 1L)) {
+    expect_identical(
+      EMC2:::calc_ll_manager(P[rows, , drop = FALSE], data[[1]], model,
+                             ll_cache_validated = TRUE),
+      full[[1]][rows])
+  }
+  cand <- list(matrix(1:6 + 0.5, 3, 2), matrix(7:12 + 0.5, 3, 2))
+  expect_identical(
+    EMC2:::emc_candidate_rows_cpp(cand, colnames(P)),
+    lapply(1:2, function(s) matrix(vapply(cand, function(a) a[, s], numeric(3)), 2,
+                                   byrow = TRUE, dimnames = list(NULL, colnames(P)))))
   # Other parameter columns or another model object are not served.
   expect_null(EMC2:::emc2_ll_cached(P[, 3:1], data[[1]], model, NULL))
   other <- model
