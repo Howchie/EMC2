@@ -891,6 +891,11 @@
   }
   lw <- rep(-Inf, length(t))
   ll_new <- NULL
+  if (isTRUE(getOption("emc2.shear_delayed", FALSE)))
+    return(.emc_shear_round_delayed(x, t, ok, moved_alpha, prior_delta, mean_step,
+                                    if (mean_step) d else NULL,
+                                    if (mean_step) NULL else props, sampler, ctx,
+                                    build_el0))
   if (length(ok)) {
     pn <- sampler$par_names
     cand <- lapply(ok, moved_alpha)
@@ -924,6 +929,68 @@
     x$cur_hier <- .emc_shear_log_hier(x$alpha, x$cur)
     x$ll <- ll_new[, match(j, ok)]
   }
+  x
+}
+
+# The round in two stages. The candidate (or the current state) is selected
+# with the subjects' likelihoods replaced by their quadratic fits, a step that
+# is reversible for the posterior under those fits; the selected candidate is
+# then accepted with the ratio of the likelihood to its fit at the candidate
+# against the same ratio at the current state, which restores the posterior
+# itself. Only the selected candidate's likelihoods are computed. x$E is the
+# expected squared jump given the selection.
+.emc_shear_round_delayed <- function(x, t, ok, moved_alpha, prior_delta, mean_step,
+                                     d, props, sampler, ctx, build_el0) {
+  p <- nrow(x$alpha)
+  n <- ncol(x$alpha)
+  x$E <- 0
+  x$moved <- FALSE
+  x$t <- 0
+  if (!length(ok)) {
+    x$build_el <- x$build_el + proc.time()[["elapsed"]] - build_el0
+    return(x)
+  }
+  fits <- ctx$packed
+  if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, p)
+  cand <- lapply(ok, moved_alpha)
+  fit_ll <- emc_shear_surrogate_cpp(c(list(x$alpha), cand), fits$cube, fits$lin)
+  fit_delta <- fit_ll[-1L] - fit_ll[1L]
+  lw <- fit_delta + prior_delta[ok]
+  lw[!is.finite(lw)] <- -Inf
+  w <- c(0, lw)
+  w <- exp(w - max(w))
+  w <- w / sum(w)
+  pick <- sample.int(length(w), 1L, prob = w) - 1L
+  x$rounds <- x$rounds + 1L
+  if (pick == 0L) {
+    x$build_el <- x$build_el + proc.time()[["elapsed"]] - build_el0
+    return(x)
+  }
+  j <- ok[pick]
+  rows <- emc_candidate_rows_cpp(cand[pick], sampler$par_names)
+  ll_el0 <- proc.time()[["elapsed"]]
+  x$build_el <- x$build_el + ll_el0 - build_el0
+  evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
+                                     source = "shear")
+  x$ll_el <- x$ll_el + proc.time()[["elapsed"]] - ll_el0
+  x$wpool <- evaluated$pool
+  ll_new <- as.numeric(evaluated$ll)
+  log_accept <- sum(ll_new) - sum(x$ll) - fit_delta[pick]
+  u <- stats::runif(1L)
+  if (!is.finite(log_accept)) return(x)
+  x$E <- min(1, exp(log_accept)) * t[j]^2
+  if (log(u) >= log_accept) return(x)
+  x$moved <- TRUE
+  x$t <- t[j]
+  if (mean_step) {
+    x$cur <- .emc_shear_shift_state(x$cur, t[j] * d, sampler$prior)
+    x$alpha <- cand[[pick]]
+  } else {
+    x$cur <- props[[j]]$state
+    x$alpha <- props[[j]]$alpha
+  }
+  x$cur_hier <- .emc_shear_log_hier(x$alpha, x$cur)
+  x$ll <- ll_new
   x
 }
 

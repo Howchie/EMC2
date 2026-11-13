@@ -38,7 +38,7 @@
 # tail spends far from the bulk, chosen empirically; at p = 1, c = 4. q_s is
 # rebuilt with the chain proposals: at every refresh in the discarded stages,
 # and in sampling on the increasingly-rare schedule of add_proposals() (after
-# 100, 200, 400, ... production transitions).
+# 100, 400, 1600, ... production transitions).
 
 # Pool size M, number of Gibbs rounds per sweep, and the defensive t
 # component of q_s (mixture weight, degrees of freedom, scale excess).

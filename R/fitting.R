@@ -433,10 +433,10 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
 }
 
 # Transition count of the next production rebuild after one at n_sample: the
-# stage is refreshed once it holds 100, 200, 400, ... transitions, so
+# stage is refreshed once it holds 100, 400, 1600, ... transitions, so
 # adaptation becomes increasingly rare.
 .emc_next_sample_rebuild <- function(n_sample) {
-  if (n_sample < 100) 100L else 2L * as.integer(n_sample)
+  if (n_sample < 100) 100L else 4L * as.integer(n_sample)
 }
 
 add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L,

@@ -2,11 +2,11 @@
 
 local_rng_guard()
 
-test_that("production refreshes its proposals on a doubling schedule", {
+test_that("production refreshes its proposals on a quadrupling schedule", {
   expect_identical(EMC2:::.emc_next_sample_rebuild(0), 100L)
-  expect_identical(EMC2:::.emc_next_sample_rebuild(100), 200L)
-  expect_identical(EMC2:::.emc_next_sample_rebuild(200), 400L)
-  expect_identical(EMC2:::.emc_next_sample_rebuild(400), 800L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(100), 400L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(400), 1600L)
+  expect_identical(EMC2:::.emc_next_sample_rebuild(1600), 6400L)
 })
 
 test_that("production proposals are not rebuilt before their next refresh", {
@@ -66,20 +66,15 @@ test_that("production refreshes use every stored production draw", {
   expect_length(calls, 0L)                   # between rebuilds: unchanged
   emc <- step(emc, 100)
   expect_identical(calls[[1]]$window, 51:150) # every production draw so far
-  expect_identical(emc[[2]]$sample_proposals_next, 200L)
-  for (n in c(150, 199)) { emc <- step(emc, n); expect_length(calls, 0L) }
-  emc <- step(emc, 200)
-  expect_identical(calls[[1]]$window, 51:250)
-  expect_identical(emc[[1]]$sample_proposals_next, 400L)
-  emc <- step(emc, 300)
-  expect_length(calls, 0L)
+  expect_identical(emc[[2]]$sample_proposals_next, 400L)
+  for (n in c(150, 200, 300)) { emc <- step(emc, n); expect_length(calls, 0L) }
   # Rebuild times follow transitions, not stored draws: thinned 4x, the stage
   # holds 100 draws after 400 transitions and still rebuilds on time.
   emc <- step(emc, 399, n_stored = 99)
   expect_length(calls, 0L)
   emc <- step(emc, 400, n_stored = 100)
   expect_identical(calls[[1]]$window, 51:150)
-  expect_identical(emc[[1]]$sample_proposals_next, 800L)
+  expect_identical(emc[[1]]$sample_proposals_next, 1600L)
   # Warm-up stages still rebuild every time. Adapt tunes the full production
   # mixture, so it also builds the efficient proposal.
   calls <- list()
@@ -88,7 +83,7 @@ test_that("production refreshes use every stored production draw", {
 })
 
 # End to end: a real fit on a weak-data Gaussian mock whose exact posterior is
-# known, with production long enough for four rebuilds (100, 200, 400, 800).
+# known, with production long enough for two rebuilds (100, 400).
 test_that("rebuilding sample proposals keeps an exact Gibbs posterior", {
   skip_model_validation()
   skip_on_os("windows")

@@ -4108,6 +4108,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_surrogate_cpp
+Rcpp::NumericVector emc_shear_surrogate_cpp(Rcpp::List cands, Rcpp::NumericVector cube, Rcpp::NumericMatrix lin);
+RcppExport SEXP _EMC2_emc_shear_surrogate_cpp(SEXP candsSEXP, SEXP cubeSEXP, SEXP linSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type cands(candsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type cube(cubeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type lin(linSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_surrogate_cpp(cands, cube, lin));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -4395,6 +4407,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
     {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 14},
+    {"_EMC2_emc_shear_surrogate_cpp", (DL_FUNC) &_EMC2_emc_shear_surrogate_cpp, 3},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

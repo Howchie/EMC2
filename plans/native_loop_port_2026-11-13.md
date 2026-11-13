@@ -118,7 +118,26 @@ Whole fits with shear, collapsed, subject HMC and the ensemble update all off, t
 | DMC2 | 3.2-3.5 s | 2913 / 1014 / 1702 | 1750 / 292 / 551 | 1591 / 414 | 0.98-0.99 |
 | EMC2, moves off | 9.5-10.3 s | 2501 / 262 / 1179 | 1767 / 53 / 394 | 1562 / 140 | 0.93 |
 
-The slow coordinate (sigma) mixes 3.5-7x worse per iteration in our baseline and the
-iteration costs 2.8x more. The two particle kernels differ (ours is the auxiliary-centred
-two-step kernel validated against exact references; DMC2's has not been checked the same
-way), so the next step is an exact-reference comparison of the two baselines.
+Resolved: DMC2's default is not Gibbs plus particles. It adds native scale moves and
+location moves for standard hierarchies (`options(emc.scale_move = FALSE)` disables them;
+`src/sampler/runner.cpp`). With them off DMC2 gives ESS mu 297, log sd 52-53, alpha min
+101-131 in 2.4-2.5 s, the same mixing as our moves-off baseline at a quarter of the wall.
+Its moves cost about 1 ms an iteration and buy 3.4x (mu) to 5.5x (log sd).
+
+## Exact conjugate check (scratchpad `conj/`)
+
+LNR with only six cell means free (200/200/20/20/2/2 trials a subject, 20 subjects, s and
+t0 constant): both packages' likelihoods equal the Gaussian closed form to 1e-6 and the
+priors are identical. Reference: 6 x 150,000 exact Gibbs draws (min ESS 3,425; its own
+per-chain 5% point of the weakest log sd spans 0.6 sd, which bounds what the check resolves).
+3 x 4,000 sample draws each:
+
+| | sample wall | ESS weak log sd (5, 6) | ESS mu6 | worst abs z of means |
+|---|---|---|---|---|
+| DMC2 default | 27.6 s | 410 / 413 | 1655 | 2.2 |
+| DMC2, moves off | 18.2 s | 50 / 49 | 164 | - |
+| EMC2, moves off | 50.2 s | 117 / 96 | 262 | 2.9 |
+| EMC2 full | 180.4 s | 4949 / 4873 | 8186 | 2.5 |
+
+No arm departs from the reference beyond its noise. DMC2's kernel in adapt and sample is
+exact by construction (local auxiliary-centred step or independent step, chosen at random).

@@ -255,3 +255,37 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
   }
   return out;
 }
+
+// Each candidate's quadratic likelihood surrogate summed over subjects:
+// sum_s lin_s' a_s - a_s' P_s a_s / 2, with P_s the slices of `cube` (zero for
+// a subject without a fit). Candidates are parameters x subjects.
+// [[Rcpp::export(rng = false)]]
+Rcpp::NumericVector emc_shear_surrogate_cpp(Rcpp::List cands, Rcpp::NumericVector cube,
+                                            Rcpp::NumericMatrix lin) {
+  const int p = lin.nrow(), n = lin.ncol();
+  if (cube.size() != static_cast<R_xlen_t>(p) * p * n)
+    Rcpp::stop("emc_shear_surrogate_cpp: cube and lin disagree");
+  const double* P = REAL(cube);
+  const R_xlen_t K = cands.size();
+  Rcpp::NumericVector out(K);
+  for (R_xlen_t k = 0; k < K; ++k) {
+    Rcpp::NumericMatrix a(cands[k]);
+    if (a.nrow() != p || a.ncol() != n)
+      Rcpp::stop("emc_shear_surrogate_cpp: candidate dimensions");
+    double total = 0.0;
+    for (int s = 0; s < n; ++s) {
+      const double* as = &a(0, s);
+      const double* Ps = P + static_cast<R_xlen_t>(s) * p * p;
+      double lin_term = 0.0, quad = 0.0;
+      for (int j = 0; j < p; ++j) {
+        lin_term += lin(j, s) * as[j];
+        double row = 0.0;
+        for (int i = 0; i < p; ++i) row += Ps[i + static_cast<R_xlen_t>(j) * p] * as[i];
+        quad += row * as[j];
+      }
+      total += lin_term - 0.5 * quad;
+    }
+    out[k] = total;
+  }
+  return out;
+}

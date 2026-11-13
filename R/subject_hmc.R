@@ -35,7 +35,7 @@
 #
 # Adaptation. Rates come from the move allocation (R/move_allocation.R).
 # Rates, step sizes and the likelihood metric change only at the proposal
-# rebuilds (every block in burn and adapt, at 100, 200, 400, ... production
+# rebuilds (every block in burn and adapt, at 100, 400, 1600, ... production
 # transitions) and are fixed in between: each block runs a fixed kernel that
 # leaves the subject conditional invariant. The exception is a subject's
 # first burn block, whose draws are discarded: every eligible subject then
