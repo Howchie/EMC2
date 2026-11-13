@@ -676,6 +676,53 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc2_ll_cached
+SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
+RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type proposals(proposalsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type dadm(dadmSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type varying(varyingSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_ll_cached(proposals, dadm, model, varying));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_ll_cached_subjects
+List emc2_ll_cached_subjects(List rows, List data, SEXP model);
+RcppExport SEXP _EMC2_emc2_ll_cached_subjects(SEXP rowsSEXP, SEXP dataSEXP, SEXP modelSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< List >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_ll_cached_subjects(rows, data, model));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_ll_cache_put
+void emc2_ll_cache_put(SEXP dadm, SEXP model, CharacterVector cols, List args);
+RcppExport SEXP _EMC2_emc2_ll_cache_put(SEXP dadmSEXP, SEXP modelSEXP, SEXP colsSEXP, SEXP argsSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type dadm(dadmSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type cols(colsSEXP);
+    Rcpp::traits::input_parameter< List >::type args(argsSEXP);
+    emc2_ll_cache_put(dadm, model, cols, args);
+    return R_NilValue;
+END_RCPP
+}
+// emc2_ll_cache_clear
+void emc2_ll_cache_clear();
+RcppExport SEXP _EMC2_emc2_ll_cache_clear() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    emc2_ll_cache_clear();
+    return R_NilValue;
+END_RCPP
+}
 // lr_capacity_counter_values
 Rcpp::List lr_capacity_counter_values();
 RcppExport SEXP _EMC2_lr_capacity_counter_values() {
@@ -3096,13 +3143,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// emc2_native_particle_block
-List emc2_native_particle_block(List plan, int n_iter, NumericVector start, double start_ll, List ll_args, NumericVector sel_n, NumericVector sel_disp, double sel_steps, List pm_in, List tune_in, bool adapt);
-RcppExport SEXP _EMC2_emc2_native_particle_block(SEXP planSEXP, SEXP n_iterSEXP, SEXP startSEXP, SEXP start_llSEXP, SEXP ll_argsSEXP, SEXP sel_nSEXP, SEXP sel_dispSEXP, SEXP sel_stepsSEXP, SEXP pm_inSEXP, SEXP tune_inSEXP, SEXP adaptSEXP) {
+// emc2_native_hmc_subjects
+List emc2_native_hmc_subjects(NumericMatrix alpha, NumericVector ll, NumericMatrix mu, NumericMatrix var, List seeds, NumericVector eps_base, List plans, List data, SEXP model, CharacterVector par_names);
+RcppExport SEXP _EMC2_emc2_native_hmc_subjects(SEXP alphaSEXP, SEXP llSEXP, SEXP muSEXP, SEXP varSEXP, SEXP seedsSEXP, SEXP eps_baseSEXP, SEXP plansSEXP, SEXP dataSEXP, SEXP modelSEXP, SEXP par_namesSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type plan(planSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type ll(llSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type var(varSEXP);
+    Rcpp::traits::input_parameter< List >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type eps_base(eps_baseSEXP);
+    Rcpp::traits::input_parameter< List >::type plans(plansSEXP);
+    Rcpp::traits::input_parameter< List >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type par_names(par_namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_native_hmc_subjects(alpha, ll, mu, var, seeds, eps_base, plans, data, model, par_names));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_native_particle_block
+List emc2_native_particle_block(List plan_in, int n_iter, NumericVector start, double start_ll, List ll_args, NumericVector sel_n, NumericVector sel_disp, double sel_steps, List pm_in, List tune_in, bool adapt);
+RcppExport SEXP _EMC2_emc2_native_particle_block(SEXP plan_inSEXP, SEXP n_iterSEXP, SEXP startSEXP, SEXP start_llSEXP, SEXP ll_argsSEXP, SEXP sel_nSEXP, SEXP sel_dispSEXP, SEXP sel_stepsSEXP, SEXP pm_inSEXP, SEXP tune_inSEXP, SEXP adaptSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type plan_in(plan_inSEXP);
     Rcpp::traits::input_parameter< int >::type n_iter(n_iterSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type start(startSEXP);
     Rcpp::traits::input_parameter< double >::type start_ll(start_llSEXP);
@@ -3113,7 +3180,28 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< List >::type pm_in(pm_inSEXP);
     Rcpp::traits::input_parameter< List >::type tune_in(tune_inSEXP);
     Rcpp::traits::input_parameter< bool >::type adapt(adaptSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc2_native_particle_block(plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt));
+    rcpp_result_gen = Rcpp::wrap(emc2_native_particle_block(plan_in, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc2_native_particle_subjects
+List emc2_native_particle_subjects(List statics, NumericMatrix alpha, NumericVector prev_ll, NumericMatrix population_mu, NumericMatrix group_var, List group, List pm_list, List seeds, LogicalVector skip, std::string stage, List tune_in);
+RcppExport SEXP _EMC2_emc2_native_particle_subjects(SEXP staticsSEXP, SEXP alphaSEXP, SEXP prev_llSEXP, SEXP population_muSEXP, SEXP group_varSEXP, SEXP groupSEXP, SEXP pm_listSEXP, SEXP seedsSEXP, SEXP skipSEXP, SEXP stageSEXP, SEXP tune_inSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type statics(staticsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type prev_ll(prev_llSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type population_mu(population_muSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type group_var(group_varSEXP);
+    Rcpp::traits::input_parameter< List >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< List >::type pm_list(pm_listSEXP);
+    Rcpp::traits::input_parameter< List >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type skip(skipSEXP);
+    Rcpp::traits::input_parameter< std::string >::type stage(stageSEXP);
+    Rcpp::traits::input_parameter< List >::type tune_in(tune_inSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_native_particle_subjects(statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4097,6 +4185,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
+    {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
+    {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
+    {"_EMC2_emc2_ll_cache_put", (DL_FUNC) &_EMC2_emc2_ll_cache_put, 4},
+    {"_EMC2_emc2_ll_cache_clear", (DL_FUNC) &_EMC2_emc2_ll_cache_clear, 0},
     {"_EMC2_lr_capacity_counter_values", (DL_FUNC) &_EMC2_lr_capacity_counter_values, 0},
     {"_EMC2_lr_capacity_counters_reset", (DL_FUNC) &_EMC2_lr_capacity_counters_reset, 0},
     {"_EMC2_calc_ll_oo_marginal_nodes", (DL_FUNC) &_EMC2_calc_ll_oo_marginal_nodes, 12},
@@ -4232,7 +4324,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_build_hrf_kernel", (DL_FUNC) &_EMC2_build_hrf_kernel, 10},
     {"_EMC2_construct_design_matrix", (DL_FUNC) &_EMC2_construct_design_matrix, 13},
     {"_EMC2_emc_ns_unforced", (DL_FUNC) &_EMC2_emc_ns_unforced, 2},
+    {"_EMC2_emc2_native_hmc_subjects", (DL_FUNC) &_EMC2_emc2_native_hmc_subjects, 10},
     {"_EMC2_emc2_native_particle_block", (DL_FUNC) &_EMC2_emc2_native_particle_block, 11},
+    {"_EMC2_emc2_native_particle_subjects", (DL_FUNC) &_EMC2_emc2_native_particle_subjects, 11},
     {"_EMC2_ParamTable_create_from_p_types", (DL_FUNC) &_EMC2_ParamTable_create_from_p_types, 2},
     {"_EMC2_ParamTable_create_from_matrix", (DL_FUNC) &_EMC2_ParamTable_create_from_matrix, 2},
     {"_EMC2_ParamTable_materialize", (DL_FUNC) &_EMC2_ParamTable_materialize, 1},

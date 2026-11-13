@@ -175,6 +175,22 @@ draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
 }
 
+emc2_ll_cached <- function(proposals, dadm, model, varying) {
+    .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
+}
+
+emc2_ll_cached_subjects <- function(rows, data, model) {
+    .Call(`_EMC2_emc2_ll_cached_subjects`, rows, data, model)
+}
+
+emc2_ll_cache_put <- function(dadm, model, cols, args) {
+    invisible(.Call(`_EMC2_emc2_ll_cache_put`, dadm, model, cols, args))
+}
+
+emc2_ll_cache_clear <- function() {
+    invisible(.Call(`_EMC2_emc2_ll_cache_clear`))
+}
+
 lr_capacity_counter_values <- function() {
     .Call(`_EMC2_lr_capacity_counter_values`)
 }
@@ -723,8 +739,16 @@ emc_ns_unforced <- function(env, names) {
     .Call(`_EMC2_emc_ns_unforced`, env, names)
 }
 
-emc2_native_particle_block <- function(plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt) {
-    .Call(`_EMC2_emc2_native_particle_block`, plan, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt)
+emc2_native_hmc_subjects <- function(alpha, ll, mu, var, seeds, eps_base, plans, data, model, par_names) {
+    .Call(`_EMC2_emc2_native_hmc_subjects`, alpha, ll, mu, var, seeds, eps_base, plans, data, model, par_names)
+}
+
+emc2_native_particle_block <- function(plan_in, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt) {
+    .Call(`_EMC2_emc2_native_particle_block`, plan_in, n_iter, start, start_ll, ll_args, sel_n, sel_disp, sel_steps, pm_in, tune_in, adapt)
+}
+
+emc2_native_particle_subjects <- function(statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in) {
+    .Call(`_EMC2_emc2_native_particle_subjects`, statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in)
 }
 
 ParamTable_create_from_p_types <- function(n_trials, p_types) {

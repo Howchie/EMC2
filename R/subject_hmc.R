@@ -268,7 +268,13 @@
 .emc_hmc_compute <- function(msg, ctx) .emc_with_preserved_rng({
   tasks <- vector("list", length(msg$subs))
   seeds <- vector("list", length(msg$subs))
+  native <- .emc_native_hmc(msg, ctx)
   for (k in seq_along(msg$subs)) {
+    if (isTRUE(native$done[k])) {
+      tasks[[k]] <- native$tasks[[k]]
+      seeds[[k]] <- native$seeds[[k]]
+      next
+    }
     s <- msg$subs[k]
     assign(".Random.seed", msg$seeds[[k]], envir = globalenv())
     plan_s <- ctx$hmc[[s]]
@@ -282,6 +288,23 @@
   }
   list(tasks = tasks, seeds = seeds)
 })
+
+# The transitions of a request in one native call (src/native_particle.cpp),
+# for subjects whose likelihood arguments are already prepared. NULL, or
+# `done` FALSE for a subject, leaves the R path above to run it from the
+# stream the request carries.
+.emc_native_hmc <- function(msg, ctx) {
+  if (!isTRUE(getOption("emc2.native_particle_block", TRUE)) ||
+      !isTRUE(ctx$ll_cache_validated) || !is.null(msg$pooled) ||
+      !is.null(ctx$r_cores) && ctx$r_cores > 1L || !length(msg$subs) ||
+      !is.character(ctx$par_names) || !is.data.frame(ctx$data[[msg$subs[1L]]]))
+    return(NULL)
+  tryCatch(
+    emc2_native_hmc_subjects(msg$alpha, msg$ll, msg$mu, msg$var, msg$seeds,
+                             msg$eps, ctx$hmc[msg$subs], ctx$data[msg$subs],
+                             ctx$model, ctx$par_names),
+    error = function(e) NULL)
+}
 
 # The round, from the final state of the other updates. Draws each
 # subject's selection uniform from its own stream on the master, runs the
@@ -360,11 +383,16 @@
   } else {
     ctx <- list(data = data, model = model, hmc = plan, r_cores = r_cores,
                 par_names = par_names, ll_cache_validated = ll_cache_validated)
-    out <- auto_mclapply(subs, function(s) .emc_hmc_compute(msg_for(s), ctx),
-                         mc.cores = max(1L, min(n_cores, length(subs))),
-                         mc.set.seed = FALSE)
-    for (k in seq_along(subs))
-      results[[k]] <- list(subs = subs[k], res = out[[k]])
+    hmc_cores <- max(1L, min(n_cores, length(subs)))
+    if (hmc_cores <= 1L) {
+      # Each subject runs from its own stream, so one request serves all.
+      results[[1L]] <- list(subs = subs, res = .emc_hmc_compute(msg_for(subs), ctx))
+    } else {
+      out <- auto_mclapply(subs, function(s) .emc_hmc_compute(msg_for(s), ctx),
+                           mc.cores = hmc_cores, mc.set.seed = FALSE)
+      for (k in seq_along(subs))
+        results[[k]] <- list(subs = subs[k], res = out[[k]])
+    }
   }
   for (r in results) for (k in seq_along(r$subs)) {
     s <- r$subs[k]

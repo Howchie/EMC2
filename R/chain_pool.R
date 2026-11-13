@@ -2164,12 +2164,25 @@
   expr
 }
 
+# Valid log-likelihoods of each subject's rows in one native call
+# (src/ll_fast_cache.cpp); NULL for a subject leaves it to the checked path.
+.emc_ll_subjects_fast <- function(rows, data, model, pooled, ctx) {
+  n <- length(rows)
+  if (!n || !isTRUE(ctx$ll_cache_validated) || !is.null(pooled) ||
+      !is.null(ctx$marginalise))
+    return(vector("list", n))
+  emc2_ll_cached_subjects(rows, data, model)
+}
+
 .emc_wpool_compute <- function(msg, ctx, shared = NULL) {
   if (identical(msg$kind, "subject_ll")) {
     return(.emc_with_preserved_rng({
       started <- proc.time()
       failures <- list()
+      fast <- .emc_ll_subjects_fast(msg$rows, ctx$data[msg$subs], ctx$model,
+                                    msg$pooled, ctx)
       ll <- lapply(seq_along(msg$subs), function(k) {
+        if (!is.null(fast[[k]])) return(fast[[k]])
         tryCatch(.emc_ensemble_ll_checked(msg$rows[[k]],
                                          .emc_pooled_set_one(ctx$data[[msg$subs[k]]], msg$pooled),
                                          ctx$model,
@@ -2511,9 +2524,26 @@
   w_started <- proc.time()
   rejects_before <- .emc_reject_counts("particle")
   ensemble_rejects_before <- .emc_reject_counts("ensemble")
+  native <- .emc_native_particle_batch(msg, ctx, shared, group_chol)
+  extra_fast <- if (!is.null(extra_ll) && !isTRUE(msg$rows_only))
+    .emc_ll_subjects_fast(msg$extra, ctx$data[subs], ctx$model, msg$pooled, ctx)
+  extra_candidate <- function(k, data_s) {
+    if (!is.null(extra_fast[[k]])) return(extra_fast[[k]])
+    .emc_ensemble_ll_candidate(msg$extra[[k]], data_s, ctx$model,
+                               ll_cache_validated = isTRUE(ctx$ll_cache_validated))
+  }
   for (k in seq_along(subs)) {
     s <- subs[k]
     data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
+    if (isTRUE(native$done[k])) {
+      props[, k] <- c(native$alpha[, k], native$ll[k])
+      pm[[k]] <- native$pm_settings[[k]]
+      seeds[[k]] <- native$seeds[[k]]
+      times[k] <- native$cpu[k]
+      if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
+        extra_ll[[k]] <- extra_candidate(k, data_s)
+      next
+    }
     if (isTRUE(msg$rows_only)) {
       # Pooled-parameter candidates (R/pooled.R): no particle step, no RNG.
       props[, k] <- c(msg$alpha[, k], msg$prev_ll[k])
@@ -2530,17 +2560,7 @@
     # (R/move_allocation.R) keeps its state.
     out <- if (isTRUE(msg$skip[k])) {
       reject_particle(.emc_subject_col(msg$alpha, k), msg$prev_ll[k], msg$pm[[k]])
-    } else .emc_native_particle_one(
-      s = s, data = data_s, pm_settings = msg$pm[[k]],
-      eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
-      chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
-      prev_ll = msg$prev_ll[k], model = ctx$model, stage = ctx$stage,
-      type = ctx$type, tune = ctx$tune, marginalise = ctx$marginalise,
-      r_cores = ctx$r_cores, chol_cache = ctx$chol_caches[[s]],
-      group_chol = group_chol, current_alpha = .emc_subject_col(msg$alpha, k),
-      population_mu = msg$population_mu[, k],
-      population_var = shared$group_var)
-    if (is.null(out)) out <- safe_new_particle(
+    } else safe_new_particle(
       s = s, data = data_s, pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
@@ -2559,8 +2579,7 @@
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
     # Ensemble pool members for this subject (no RNG use).
     if (!is.null(extra_ll) && !is.null(msg$extra[[k]]))
-      extra_ll[[k]] <- .emc_ensemble_ll_candidate(msg$extra[[k]], data_s,
-        ctx$model, ll_cache_validated = isTRUE(ctx$ll_cache_validated))
+      extra_ll[[k]] <- extra_candidate(k, data_s)
   }
   w_spent <- proc.time() - w_started
   ensemble_delta <- .emc_reject_delta(ensemble_rejects_before, "ensemble")
