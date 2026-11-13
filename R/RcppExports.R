@@ -995,6 +995,14 @@ emc_shear_candidates_cpp <- function(t, v, alpha, mu, V, m0, R0, logdet0, prec, 
     .Call(`_EMC2_emc_shear_candidates_cpp`, t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec)
 }
 
+emc_shear_state_cpp <- function(mu, V, prec, lin, spec) {
+    .Call(`_EMC2_emc_shear_state_cpp`, mu, V, prec, lin, spec)
+}
+
+emc_collapsed_log_lhat_cpp <- function(alpha, H, lin, has) {
+    .Call(`_EMC2_emc_collapsed_log_lhat_cpp`, alpha, H, lin, has)
+}
+
 emc_shear_surrogate_cpp <- function(cands, cube, lin) {
     .Call(`_EMC2_emc_shear_surrogate_cpp`, cands, cube, lin)
 }

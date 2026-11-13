@@ -623,16 +623,13 @@
 # factor of the conditional precision H_s + V^-1, stacked by subject (fm:
 # m by column, R and logdet by slice; .emc_shear_frame takes out one).
 .emc_shear_state <- function(mu, V, fits, prior, spec) {
-  if (any(!is.finite(mu)) || any(!is.finite(V))) return(NULL)
-  chol_V <- tryCatch(chol(V), error = function(e) NULL)
-  if (is.null(chol_V)) return(NULL)
-  Vi <- tryCatch(chol2inv(chol_V), error = function(e) NULL)
-  if (is.null(Vi) || any(!is.finite(Vi))) return(NULL)
   if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, length(mu))
-  out <- emc_shear_frames_cpp(fits$cube, fits$lin, Vi, drop(Vi %*% mu))
+  out <- emc_shear_state_cpp(mu, V, fits$cube, fits$lin, spec)
   if (!isTRUE(out$ok)) return(NULL)
-  .emc_shear_state_of(mu, V, Vi, chol_V, list(m = out$m, R = out$R, logdet = out$logdet),
-                      prior, spec)
+  fm <- list(m = out$m, R = out$R, logdet = out$logdet)
+  list(mu = mu, V = V, Vi = out$Vi, chol_V = out$chol_V, fm = fm,
+       logdet = sum(fm$logdet), lp_v = out$lp_v,
+       lp = .emc_shear_log_prior_mu(mu, prior) + out$lp_v)
 }
 
 .emc_shear_state_of <- function(mu, V, Vi, chol_V, fm, prior, spec) {

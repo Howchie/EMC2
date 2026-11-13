@@ -251,7 +251,7 @@ test_that("the collapsed move leaves the joint posterior invariant (diagonal-gam
                list(lik = fits$wrong, broken = TRUE))
   for (run in runs) {
     if (isTRUE(run$broken)) {
-      local_mocked_bindings(.emc_collapsed_log_lhat = function(alpha, fits)
+      local_mocked_bindings(.emc_collapsed_log_lhat = function(alpha, fits, ...)
         numeric(ncol(alpha)), .package = "EMC2")
     }
     sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
@@ -376,7 +376,7 @@ test_that("the collapsed move keeps the joint distribution with a full covarianc
   ctx_dim <- EMC2:::.emc_collapsed_chart(EMC2:::.emc_shear_v_spec(base), p)$dim
   run_chain <- function(broken) {
     if (broken) {
-      local_mocked_bindings(.emc_collapsed_log_lhat = function(alpha, fits)
+      local_mocked_bindings(.emc_collapsed_log_lhat = function(alpha, fits, ...)
         numeric(ncol(alpha)), .package = "EMC2")
     }
     # The move draws from its own stream, as in the sampler; sharing the

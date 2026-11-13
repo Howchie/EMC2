@@ -5,6 +5,7 @@
 #ifndef USE_FC_LEN_T
 #define USE_FC_LEN_T
 #endif
+#include <R_ext/BLAS.h>
 #include <R_ext/Lapack.h>
 #ifndef FCONE
 #define FCONE
@@ -195,6 +196,14 @@ Rcpp::List emc_shear_transport_cpp(const arma::mat& alpha,
 // The covariance prior's log density at V, as .emc_shear_log_prior_v()
 // computes it: the same factorisations, and sums accumulated as R's sum().
 // NA when a block has no Cholesky factor.
+#if defined(__GNUC__) && !defined(__clang__)
+#define EMC2_STRICT_MATH __attribute__((optimize("no-fast-math")))
+#else
+#define EMC2_STRICT_MATH
+#endif
+
+// Strict IEEE arithmetic: a vectorised log differs from R's in the last bit.
+EMC2_STRICT_MATH
 static double shear_log_prior_v(const arma::mat& V, const Rcpp::List& spec) {
   double lp = 0.0;
   const Rcpp::IntegerVector g = spec["gamma_idx"];
@@ -329,6 +338,84 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
       cand["lp_v"] = shear_log_prior_v(V1, spec_list);
     }
     out[k] = cand;
+  }
+  return out;
+}
+
+// A group state's factors and frames (R/shear_move.R .emc_shear_state): the
+// upper Cholesky factor of V and its inverse as R's chol() and chol2inv()
+// return them, the subjects' frames at V^-1 and V^-1 mu, and the covariance
+// prior's density. ok = FALSE when mu or V is not finite, V has no factor or
+// a frame fails.
+// [[Rcpp::export(rng = false)]]
+Rcpp::List emc_shear_state_cpp(Rcpp::NumericVector mu, Rcpp::NumericMatrix V,
+                               const arma::cube& prec, const arma::mat& lin,
+                               Rcpp::List spec) {
+  const int p = V.nrow();
+  const Rcpp::List failed = Rcpp::List::create(Rcpp::Named("ok") = false);
+  if (V.ncol() != p || mu.size() != p) return failed;
+  for (int i = 0; i < p; ++i) if (!R_FINITE(mu[i])) return failed;
+  for (R_xlen_t i = 0; i < V.size(); ++i) if (!R_FINITE(V[i])) return failed;
+  Rcpp::NumericMatrix cholV(p, p);
+  for (int c = 0; c < p; ++c)
+    for (int r = 0; r <= c; ++r) cholV(r, c) = V(r, c);
+  int info = 0;
+  F77_CALL(dpotrf)("U", &p, cholV.begin(), &p, &info FCONE);
+  if (info != 0) return failed;
+  Rcpp::NumericMatrix Vi(p, p);
+  for (int c = 0; c < p; ++c)
+    for (int r = 0; r <= c; ++r) Vi(r, c) = cholV(r, c);
+  F77_CALL(dpotri)("U", &p, Vi.begin(), &p, &info FCONE);
+  if (info != 0) return failed;
+  for (int c = 0; c < p; ++c)
+    for (int r = c + 1; r < p; ++r) Vi(r, c) = Vi(c, r);
+  for (R_xlen_t i = 0; i < Vi.size(); ++i) if (!R_FINITE(Vi[i])) return failed;
+  Rcpp::NumericVector Vi_mu(p);
+  const double one = 1.0, zero = 0.0;
+  const int inc = 1;
+  F77_CALL(dgemv)("N", &p, &p, &one, Vi.begin(), &p, mu.begin(), &inc, &zero,
+                  Vi_mu.begin(), &inc FCONE);
+  const Rcpp::List frames = emc_shear_frames_cpp(
+    prec, lin, Rcpp::as<arma::mat>(Vi), Rcpp::as<arma::vec>(Vi_mu));
+  if (!Rcpp::as<bool>(frames["ok"])) return failed;
+  const SEXP dn = Rf_getAttrib(V, R_DimNamesSymbol);
+  if (!Rf_isNull(dn)) Rf_setAttrib(cholV, R_DimNamesSymbol, dn);
+  return Rcpp::List::create(
+    Rcpp::Named("ok") = true, Rcpp::Named("Vi") = Vi, Rcpp::Named("chol_V") = cholV,
+    Rcpp::Named("m") = frames["m"], Rcpp::Named("R") = frames["R"],
+    Rcpp::Named("logdet") = frames["logdet"],
+    Rcpp::Named("lp_v") = shear_log_prior_v(Rcpp::as<arma::mat>(V), spec));
+}
+
+// log Lhat_s of each subject's column of alpha: lin_s' a - a' H_s a / 2 for
+// the subjects listed in `has` (1-based, the slices of H in order), 0 for the
+// rest; the products and sums are R's.
+// [[Rcpp::export(rng = false)]]
+EMC2_STRICT_MATH
+Rcpp::NumericVector emc_collapsed_log_lhat_cpp(Rcpp::NumericMatrix alpha,
+                                               Rcpp::NumericVector H,
+                                               Rcpp::NumericMatrix lin,
+                                               Rcpp::IntegerVector has) {
+  const int p = alpha.nrow(), n = alpha.ncol();
+  Rcpp::NumericVector out(n);
+  std::vector<double> Ha(p);
+  const double one = 1.0, zero = 0.0;
+  const int inc = 1;
+  for (R_xlen_t k = 0; k < has.size(); ++k) {
+    const int s = has[k] - 1;
+    if (s < 0 || s >= n) Rcpp::stop("log lhat: subject out of range");
+    const double* a = &alpha[static_cast<R_xlen_t>(s) * p];
+    const double* Hs = &H[static_cast<R_xlen_t>(k) * p * p];
+    F77_CALL(dgemv)("N", &p, &p, &one, Hs, &p, a, &inc, &zero, Ha.data(), &inc FCONE);
+    long double quad = 0.0L, linear = 0.0L;
+    for (int i = 0; i < p; ++i) {
+      volatile double term = a[i] * Ha[i];
+      quad += term;
+      volatile double lterm = lin(i, k) * a[i];
+      linear += lterm;
+    }
+    volatile double half = -0.5 * static_cast<double>(quad);
+    out[s] = half + static_cast<double>(linear);
   }
   return out;
 }

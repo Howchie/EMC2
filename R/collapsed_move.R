@@ -133,7 +133,7 @@
     H[, , k] <- fits[[has[k]]]$prec
     lin[, k] <- fits[[has[k]]]$lin
   }
-  list(p = p, dim = chart$dim,
+  list(p = p, dim = chart$dim, has = as.integer(has),
        block_idx = lapply(chart$blocks, function(b) b$idx - 1L),
        block_at = lapply(chart$blocks, function(b) b$at - 1L),
        gamma = as.integer(chart$gamma) - 1L, gamma_at = as.integer(chart$gamma_at) - 1L,
@@ -206,7 +206,8 @@
   fits <- .emc_collapsed_condition(fits, sampler$pooled$value)
   fits <- lapply(fits, .emc_collapsed_safe_fit)
   chart <- .emc_collapsed_chart(spec, sampler$n_pars)
-  list(fits = fits, base_fits = base_fits, cacheable = cacheable,
+  list(fits = fits, packed = .emc_shear_pack(fits, sampler$n_pars),
+       base_fits = base_fits, cacheable = cacheable,
        spec = spec, prior = sampler$prior, chart = chart,
        walls = .emc_shear_walls_of(sampler),
        cpp = .emc_collapsed_cpp_model(chart, fits, sampler$prior, spec))
@@ -302,8 +303,11 @@
   })
 }
 
-# log Lhat_s at each subject's state; 0 without a fit.
-.emc_collapsed_log_lhat <- function(alpha, fits) {
+# log Lhat_s at each subject's state; 0 without a fit. `cpp` is the
+# context's packed form of the same fits (.emc_collapsed_cpp_model).
+.emc_collapsed_log_lhat <- function(alpha, fits, cpp = NULL) {
+  if (!is.null(cpp$has))
+    return(emc_collapsed_log_lhat_cpp(alpha, cpp$H, cpp$lin, cpp$has))
   vapply(seq_along(fits), function(s) {
     fit <- fits[[s]]
     if (is.null(fit)) return(0)
@@ -433,9 +437,6 @@
   x$acc <- 0
   x$jump <- numeric(2L * p)
   cur <- x$cur
-  r <- matrix(vapply(seq_len(n), function(s) {
-    drop(cur$fm$R[, , s] %*% (x$alpha[, s] - cur$fm$m[, s]))
-  }, numeric(p)), p)
   phi0 <- .emc_collapsed_to_phi(cur$mu, cur$V, ctx$chart)
   inner <- collapsed_trajectories_cpp(phi0, plan$C, plan$eps, .EMC_COLLAPSED_INNER,
                                       .EMC_COLLAPSED_LENGTH, ctx$cpp)
@@ -443,7 +444,7 @@
   phi <- as.numeric(inner$phi)
   if (identical(phi, phi0)) return(x)
   st <- .emc_collapsed_from_phi(phi, ctx$chart)
-  new <- .emc_shear_state(st$mu, st$V, ctx$fits, sampler$prior, ctx$spec)
+  new <- .emc_shear_state(st$mu, st$V, ctx$packed, sampler$prior, ctx$spec)
   if (is.null(new) || !is.finite(new$lp)) return(x)
   walls <- ctx$walls
   # Subjects with a transport wall take the wall-aware map; the exact
@@ -452,8 +453,13 @@
   tr <- .emc_shear_transport(x$alpha, cur, new, walls)
   if (!all(tr$ok) || any(!is.finite(tr$alpha))) return(x)
   alpha_new <- tr$alpha
-  jac <- if (is.null(walls)) numeric(n) else
+  jac <- if (is.null(walls)) numeric(n) else {
+    # The subjects' whitened coordinates in the current frames.
+    r <- matrix(vapply(seq_len(n), function(s) {
+      drop(cur$fm$R[, , s] %*% (x$alpha[, s] - cur$fm$m[, s]))
+    }, numeric(p)), p)
     ifelse(walls$has, tr$jac - 0.5 * (tr$r1sq - colSums(r^2)), 0)
+  }
   pn <- sampler$par_names
   rows <- emc_candidate_rows_cpp(list(alpha_new), pn)
   evaluated <- .emc_wpool_subject_ll(x$wpool, rows, sampler, x$wpool_part,
@@ -461,8 +467,8 @@
   x$wpool <- evaluated$pool
   x$rounds <- x$rounds + 1L
   ll_new <- as.numeric(evaluated$ll)
-  lhat_new <- .emc_collapsed_log_lhat(alpha_new, ctx$fits)
-  lhat_old <- .emc_collapsed_log_lhat(x$alpha, ctx$fits)
+  lhat_new <- .emc_collapsed_log_lhat(alpha_new, ctx$fits, ctx$cpp)
+  lhat_old <- .emc_collapsed_log_lhat(x$alpha, ctx$fits, ctx$cpp)
   la <- sum(ll_new - lhat_new) - sum(x$ll - lhat_old) + sum(jac)
   acc <- if (is.finite(la) && all(is.finite(ll_new))) min(1, exp(la)) else 0
   x$acc <- acc
@@ -508,7 +514,7 @@
   # against the current pooled values in each context.
   if (isTRUE(ctx$cacheable)) st$fits <- ctx$base_fits
   cur <- if (n_rounds > 0L && plan$dim == ctx$chart$dim)
-    .emc_shear_state(as.numeric(pars$tmu), as.matrix(pars$tvar), ctx$fits,
+    .emc_shear_state(as.numeric(pars$tmu), as.matrix(pars$tvar), ctx$packed,
                      sampler$prior, ctx$spec)
   x <- list(cur = cur, alpha = alpha_start,
             ll = proposals[p + 1L, ], rounds = 0L, wpool = wpool,

@@ -4109,6 +4109,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_state_cpp
+Rcpp::List emc_shear_state_cpp(Rcpp::NumericVector mu, Rcpp::NumericMatrix V, const arma::cube& prec, const arma::mat& lin, Rcpp::List spec);
+RcppExport SEXP _EMC2_emc_shear_state_cpp(SEXP muSEXP, SEXP VSEXP, SEXP precSEXP, SEXP linSEXP, SEXP specSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type V(VSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type prec(precSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type lin(linSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type spec(specSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_state_cpp(mu, V, prec, lin, spec));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_collapsed_log_lhat_cpp
+Rcpp::NumericVector emc_collapsed_log_lhat_cpp(Rcpp::NumericMatrix alpha, Rcpp::NumericVector H, Rcpp::NumericMatrix lin, Rcpp::IntegerVector has);
+RcppExport SEXP _EMC2_emc_collapsed_log_lhat_cpp(SEXP alphaSEXP, SEXP HSEXP, SEXP linSEXP, SEXP hasSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type H(HSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type lin(linSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type has(hasSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_collapsed_log_lhat_cpp(alpha, H, lin, has));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_shear_surrogate_cpp
 Rcpp::NumericVector emc_shear_surrogate_cpp(Rcpp::List cands, Rcpp::NumericVector cube, Rcpp::NumericMatrix lin);
 RcppExport SEXP _EMC2_emc_shear_surrogate_cpp(SEXP candsSEXP, SEXP cubeSEXP, SEXP linSEXP) {
@@ -4440,6 +4467,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
     {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 15},
+    {"_EMC2_emc_shear_state_cpp", (DL_FUNC) &_EMC2_emc_shear_state_cpp, 5},
+    {"_EMC2_emc_collapsed_log_lhat_cpp", (DL_FUNC) &_EMC2_emc_collapsed_log_lhat_cpp, 4},
     {"_EMC2_emc_shear_surrogate_cpp", (DL_FUNC) &_EMC2_emc_shear_surrogate_cpp, 3},
     {"_EMC2_emc_shear_round_cpp", (DL_FUNC) &_EMC2_emc_shear_round_cpp, 22},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},

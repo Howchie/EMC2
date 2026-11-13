@@ -2260,6 +2260,18 @@
 .emc_wpool_subject_ll <- function(pool, rows, ctx, part = NULL, source) {
   n <- length(rows)
   if (is.null(pool) || !isTRUE(pool$alive)) {
+    # Without workers, subjects served by the stored-argument path need none
+    # of the dispatch below.
+    if (n > 0L) {
+      pooled <- if (is.data.frame(ctx$data[[1L]])) attr(ctx$data[[1L]], "pooled_values")
+      fast <- .emc_ll_subjects_fast(rows, ctx$data, ctx$model, pooled, ctx)
+      if (length(fast) == n && !any(vapply(fast, is.null, logical(1)))) {
+        if (is.null(.emc_pool_state$subject_ll_cpu)) .emc_pool_state$subject_ll_cpu <- 0
+        ll <- if (nrow(rows[[1L]]) == 1L) unlist(fast, use.names = FALSE) else
+          do.call(rbind, fast)
+        return(list(ll = ll, pool = pool))
+      }
+    }
     part <- list(seq_len(n))
   } else if (is.null(part)) {
     part <- .emc_lpt_partition(.emc_subject_cost(ctx$data), pool$n)
