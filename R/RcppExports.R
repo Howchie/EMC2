@@ -999,6 +999,10 @@ emc_shear_surrogate_cpp <- function(cands, cube, lin) {
     .Call(`_EMC2_emc_shear_surrogate_cpp`, cands, cube, lin)
 }
 
+emc_shear_round_cpp <- function(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names) {
+    .Call(`_EMC2_emc_shear_round_cpp`, t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names)
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }

@@ -899,6 +899,10 @@
     prior_delta <- line$delta
     ok <- which(is.finite(prior_delta))
   } else {
+    if (.emc_shear_round_native_ok(x, v, sampler)) {
+      done <- .emc_shear_round_native(x, v, t, sampler, ctx, build_el0)
+      if (!is.null(done)) return(done)
+    }
     props <- .emc_shear_candidates(x$cur, v, t, x$alpha, ctx$packed, sampler$prior, ctx$spec,
                                    ctx$walls)
     ok <- which(!vapply(props, is.null, logical(1)))
@@ -948,6 +952,63 @@
     }
     x$cur_hier <- .emc_shear_log_hier(x$alpha, x$cur)
     x$ll <- ll_new[, match(j, ok)]
+  }
+  x
+}
+
+# Whether the round can run in one native call (emc_shear_round_cpp): a
+# direction without a mean part, subject likelihoods computed in this process
+# on the stored-argument path, and the one-stage selection.
+.emc_shear_round_native_ok <- function(x, v, sampler) {
+  p <- nrow(x$alpha)
+  isTRUE(getOption("emc2.native_shear_round", TRUE)) &&
+    !isTRUE(getOption("emc2.shear_delayed", FALSE)) &&
+    all(v[seq_len(p)] == 0) &&
+    (is.null(x$wpool) || !isTRUE(x$wpool$alive)) &&
+    isTRUE(sampler$ll_cache_validated) && is.null(sampler$marginalise) &&
+    is.list(sampler$data) && is.data.frame(sampler$data[[1L]]) &&
+    is.null(attr(sampler$data[[1L]], "pooled_values"))
+}
+
+# The round of .emc_shear_round() in one native call, on the same random
+# stream. NULL when a subject's likelihood needs the full path; no random
+# number has been drawn then.
+.emc_shear_round_native <- function(x, v, t, sampler, ctx, build_el0) {
+  p <- nrow(x$alpha)
+  cur <- x$cur
+  fits <- ctx$packed
+  if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, p)
+  walls <- ctx$walls
+  if (is.null(walls)) {
+    has <- logical(0); U <- matrix(0, p, 0); b <- numeric(0)
+    Uc <- array(0, c(p, max(p - 1L, 0L), 0))
+  } else {
+    has <- walls$has; U <- walls$U; b <- ifelse(has, walls$b, 0)
+    Uc <- .emc_shear_uperp_cube(walls, p)
+  }
+  f0 <- .emc_shear_frame_arrays(cur)
+  o <- emc_shear_round_cpp(t, v, x$alpha, cur$mu, cur$V, f0$m, f0$R, f0$logdet,
+                           fits$cube, fits$lin, has, U, b, Uc, ctx$spec,
+                           .emc_shear_log_prior_mu(cur$mu, sampler$prior),
+                           x$cur_hier, cur$lp, x$ll, sampler$data, sampler$model,
+                           sampler$par_names)
+  if (isTRUE(o$fallback)) return(NULL)
+  el <- proc.time()[["elapsed"]] - build_el0
+  x$build_el <- x$build_el + max(0, el - o$ll_seconds)
+  x$ll_el <- x$ll_el + o$ll_seconds
+  if (o$evaluated) x$rounds <- x$rounds + 1L
+  x$E <- o$E
+  x$moved <- o$j > 0L
+  x$t <- if (x$moved) t[o$j] else 0
+  if (x$moved) {
+    V <- o$V
+    dimnames(V) <- dimnames(cur$V)
+    fm <- list(m = o$m, R = o$R, logdet = o$logdet)
+    x$cur <- list(mu = o$mu, V = V, Vi = o$Vi, chol_V = o$chol_V, fm = fm,
+                  logdet = sum(fm$logdet), lp_v = o$lp_v, lp = o$lp)
+    x$alpha <- o$alpha
+    x$cur_hier <- .emc_shear_log_hier(x$alpha, x$cur)
+    x$ll <- o$ll
   }
   x
 }

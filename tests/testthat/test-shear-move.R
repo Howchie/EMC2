@@ -1080,3 +1080,46 @@ test_that("unresolved orbit widths do not replace the existing tuning", {
   extent <- vapply(grids, function(g) max(abs(g)), numeric(1))
   expect_true(all(extent[-1] / head(extent, -1) <= 4))
 })
+
+test_that("the native shear round is the R round on the same random stream", {
+  skip_on_cran()
+  old <- options(emc2.fit_host = FALSE)
+  on.exit(options(old), add = TRUE)
+  des <- design(factors = list(subjects = 1:5, S = 1), Rlevels = 1, model = REXG,
+                formula = list(mu ~ 1, sigma ~ 1, tau ~ 1))
+  set.seed(31)
+  pars <- cbind(mu = log(0.4) + rnorm(5, 0, 0.15), sigma = log(0.05) + rnorm(5, 0, 0.3),
+                tau = log(0.2) + rnorm(5, 0, 0.3))
+  rownames(pars) <- 1:5
+  dat <- make_data(pars, des, n_trials = 60)
+  emc <- make_emc(dat, des, rt_resolution = 0.001, n_chains = 2)
+  round_r <- EMC2:::.emc_shear_round
+  native <- moved <- differing <- 0L
+  strip <- function(x) x[setdiff(names(x), c("build_el", "ll_el", "wpool"))]
+  both <- function(x, v, step, sampler, ctx) {
+    seed <- get(".Random.seed", envir = globalenv())
+    options(emc2.native_shear_round = FALSE)
+    a <- round_r(x, v, step, sampler, ctx)
+    seed_a <- get(".Random.seed", envir = globalenv())
+    assign(".Random.seed", seed, envir = globalenv())
+    options(emc2.native_shear_round = TRUE)
+    if (EMC2:::.emc_shear_round_native_ok(x, v, sampler)) native <<- native + 1L
+    b <- round_r(x, v, step, sampler, ctx)
+    moved <<- moved + isTRUE(b$moved)
+    if (!identical(strip(a), strip(b)) ||
+        !identical(seed_a, get(".Random.seed", envir = globalenv())))
+      differing <<- differing + 1L
+    b
+  }
+  local_mocked_bindings(.emc_shear_round = both, .package = "EMC2")
+  fitted <- suppressWarnings(fit(emc, verbose = FALSE, cores_for_chains = 1,
+                                 stop_criteria = list(preburn = list(iter = 20),
+                                                      burn = list(iter = 60),
+                                                      adapt = list(iter = 60),
+                                                      sample = list(iter = 100))))
+  options(emc2.native_shear_round = NULL)
+  # The comparison covered native rounds that moved the state.
+  expect_gt(native, 20L)
+  expect_gt(moved, 10L)
+  expect_identical(differing, 0L)
+})
