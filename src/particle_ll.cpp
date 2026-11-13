@@ -510,6 +510,8 @@ struct PtMapperContext {
 
 struct PtMapper {
   NumericMatrix particle_matrix_pt;
+  // particle_matrix_pt was allocated by this mapper, not shared with a caller.
+  bool particle_matrix_owned = false;
   ParamTable table;
   std::vector<TransformSpec> transform_specs;
   std::unique_ptr<TrendPlan> trend_plan;
@@ -761,24 +763,77 @@ PtMapperContext::~PtMapperContext() = default;
 
 // The call's proposals on the mapping scale: pre-transformed, with the
 // constants appended as columns.
+// Whether buf's columns are named as the proposals' columns followed by the
+// constants. R caches strings, so equal names have equal addresses.
+static bool pt_buffer_names_match(SEXP buf, SEXP particle_matrix, SEXP constants) {
+  const SEXP bdn = Rf_getAttrib(buf, R_DimNamesSymbol);
+  const SEXP pdn = Rf_getAttrib(particle_matrix, R_DimNamesSymbol);
+  const SEXP cn = Rf_getAttrib(constants, R_NamesSymbol);
+  if (TYPEOF(bdn) != VECSXP || XLENGTH(bdn) < 2 || TYPEOF(pdn) != VECSXP ||
+      XLENGTH(pdn) < 2) return false;
+  const SEXP bn = VECTOR_ELT(bdn, 1), pn = VECTOR_ELT(pdn, 1);
+  if (TYPEOF(bn) != STRSXP || TYPEOF(pn) != STRSXP || TYPEOF(cn) != STRSXP ||
+      XLENGTH(bn) != XLENGTH(pn) + XLENGTH(cn)) return false;
+  const R_xlen_t p_old = XLENGTH(pn);
+  for (R_xlen_t j = 0; j < p_old; ++j)
+    if (STRING_ELT(bn, j) != STRING_ELT(pn, j)) return false;
+  for (R_xlen_t k = 0; k < XLENGTH(cn); ++k)
+    if (STRING_ELT(bn, p_old + k) != STRING_ELT(cn, k)) return false;
+  return true;
+}
+
+// The proposals pre-transformed. c_do_transform() writes into its argument,
+// so a transform that changes values is applied to a copy and the caller's
+// matrix is left as it was.
+static NumericMatrix pt_pretransformed(const NumericMatrix& particle_matrix,
+                                       const std::vector<TransformSpec>& specs) {
+  bool changes = false;
+  for (const TransformSpec& sp : specs)
+    if (sp.code != IDENTITY) { changes = true; break; }
+  if (!changes) return particle_matrix;
+  return c_do_transform(Rcpp::clone(particle_matrix), specs);
+}
+
 static void pt_mapper_load_particles(PtMapper& m, NumericMatrix particle_matrix,
                                      NumericVector constants, List pretransforms,
                                      PtMapperContext* cached) {
+  const bool with_constants = !(constants.size() == 1 &&
+                                Rcpp::NumericVector::is_na(constants[0]));
+  // A mapper that built its own matrix for proposals of this shape and these
+  // columns is refilled in place.
+  if (cached && cached->pre_specs_ready && with_constants && m.particle_matrix_owned) {
+    const int n_rows = particle_matrix.nrow(), p_old = particle_matrix.ncol();
+    const int p_add = constants.size();
+    if (m.particle_matrix_pt.nrow() == n_rows &&
+        m.particle_matrix_pt.ncol() == p_old + p_add &&
+        pt_buffer_names_match(m.particle_matrix_pt, particle_matrix, constants)) {
+      double* out = REAL(m.particle_matrix_pt);
+      std::copy(REAL(particle_matrix),
+                REAL(particle_matrix) + static_cast<size_t>(n_rows) * p_old, out);
+      for (int k = 0; k < p_add; ++k)
+        std::fill(out + static_cast<size_t>(p_old + k) * n_rows,
+                  out + static_cast<size_t>(p_old + k + 1) * n_rows, constants[k]);
+      c_do_transform(m.particle_matrix_pt, cached->pre_specs);
+      return;
+    }
+  }
+  m.particle_matrix_owned = false;
   if (cached) {
     if (!cached->pre_specs_ready) {
       cached->pre_specs = make_transform_specs(particle_matrix, pretransforms);
       cached->pre_specs_ready = true;
     }
-    m.particle_matrix_pt = c_do_transform(particle_matrix, cached->pre_specs);
+    m.particle_matrix_pt = pt_pretransformed(particle_matrix, cached->pre_specs);
   } else {
     std::vector<TransformSpec> pre_specs =
       make_transform_specs(particle_matrix, pretransforms);
-    m.particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
+    m.particle_matrix_pt = pt_pretransformed(particle_matrix, pre_specs);
   }
   const bool has_constants = !(constants.size() == 1 &&
                                Rcpp::NumericVector::is_na(constants[0]));
   if (has_constants) {
     m.particle_matrix_pt = add_constants_columns(m.particle_matrix_pt, constants);
+    m.particle_matrix_owned = true;
   }
 }
 
@@ -1224,7 +1279,36 @@ RaceDataKeyMemo& race_data_key_memo() {
   return *memo;
 }
 
+// Keys by the data frame's own address. The frame is held and marked
+// immutable, so the address stays its identity.
+struct RaceDataFrameMemo {
+  struct Slot { Rcpp::RObject frame; uint64_t key = 0; };
+  std::unordered_map<SEXP, Slot> slots;
+};
+
+RaceDataFrameMemo& race_data_frame_memo() {
+  static RaceDataFrameMemo* memo = new RaceDataFrameMemo();
+  return *memo;
+}
+
+uint64_t race_data_key_by_parts(const Rcpp::DataFrame& data);
+
 uint64_t race_data_key(const Rcpp::DataFrame& data) {
+  RaceDataFrameMemo& memo = race_data_frame_memo();
+  const SEXP frame = data;
+  const auto hit = memo.slots.find(frame);
+  if (hit != memo.slots.end()) return hit->second.key;
+  const uint64_t key = race_data_key_by_parts(data);
+  if (memo.slots.size() >= RaceDataKeyMemo::kMaxSlots) memo.slots.clear();
+  MARK_NOT_MUTABLE(frame);
+  RaceDataFrameMemo::Slot slot;
+  slot.frame = frame;
+  slot.key = key;
+  memo.slots.emplace(frame, std::move(slot));
+  return key;
+}
+
+uint64_t race_data_key_by_parts(const Rcpp::DataFrame& data) {
   SEXP parts[kRaceDataNParts];
   race_data_parts(data, parts);
   RaceDataKeyMemo& memo = race_data_key_memo();
@@ -1262,6 +1346,11 @@ struct RaceDataState {
 
   // The unique-trial expansion, as integers: it is commonly stored as double.
   Rcpp::IntegerVector expand;
+  // The columns the race paths read each call.
+  Rcpp::LogicalVector winner;
+  Rcpp::NumericVector rt;
+  Rcpp::IntegerVector R;
+  bool has_rt_R = false;
 
   int n_lR = 0;
   int time_code = -1;
@@ -1308,6 +1397,12 @@ void race_data_state_fill(RaceDataState& st, const Rcpp::DataFrame& data,
                           int n_trials) {
   st.n_trials = n_trials;
   st.expand = Rcpp::IntegerVector(Rcpp::RObject(data.attr("expand")));
+  st.winner = data["winner"];
+  st.has_rt_R = data.containsElementNamed("rt") && data.containsElementNamed("R");
+  if (st.has_rt_R) {
+    st.rt = data["rt"];
+    st.R = data["R"];
+  }
   NumericVector lR = data["lR"];
   st.n_lR = unique(lR).length();
   st.lR_code_vec = Rcpp::IntegerVector(static_cast<SEXP>(lR));
@@ -1484,13 +1579,9 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
   const int n_trials = data.nrow();
   NumericVector lls(n_particles);
   LogicalVector is_ok(n_trials);
-  NumericMatrix pars;
 
-  NumericMatrix minmax = bounds["minmax"];
-  CharacterVector mm_names = colnames(minmax);
   std::vector<BoundSpec> bound_specs;
-  CharacterVector p_names = colnames(particle_matrix);
-  std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
+  const std::string type_std(type.get_cstring());
 
   // BOU is the DDM with leak: a different kernel behind the SAME two-boundary
   // likelihood, so it takes the DDM path and swaps only the two primitives (see
@@ -1508,7 +1599,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
   auto pars_for_particle_generic = [&](int i) -> NumericMatrix {
     if (!one_particle) {
       one_particle.reset(new NumericMatrix(1, particle_matrix.ncol()));
-      colnames(*one_particle) = p_names;
+      colnames(*one_particle) = CharacterVector(colnames(particle_matrix));
       kernel_output_codes.reset(new IntegerVector(IntegerVector::create(1)));
     }
     for (int j = 0; j < particle_matrix.ncol(); ++j) {
@@ -1620,7 +1711,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
                                         all_finite_untruncated, ddm_shared_ptr.get(),
                                         nullptr, &ddm_adapter);
       } else {
-        pars = param_table_template.materialize_by_param_names(keep_names);
+        NumericMatrix pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
                                       gng, all_finite_untruncated);
       }
@@ -1629,7 +1720,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     IntegerVector expand = data.attr("expand");
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
-      pars = param_table_template.materialize_by_param_names(keep_names);
+      NumericMatrix pars = param_table_template.materialize_by_param_names(keep_names);
       lls[i] = c_log_likelihood_huvsd(pars, data, n_trials, expand, min_ll, is_ok);
     }
   }
@@ -1637,8 +1728,10 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     int n_pars = p_types.length();
     NumericVector y = extract_y(data);
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle_generic(i);
+      NumericMatrix pars = pars_for_particle_generic(i);
       if (i == 0) {
+        NumericMatrix minmax = bounds["minmax"];
+        CharacterVector mm_names = colnames(minmax);
         bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
       }
       is_ok = c_do_bound(pars, bound_specs);
@@ -1698,7 +1791,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
         lls[i] = c_log_likelihood_ss_pt(ss_cols.data(), ss_shared, ss_raw_model,
                                         is_ok, expand, min_ll, ss_ws);
       } else {
-        pars = param_table_template.materialize_by_param_names(keep_names);
+        NumericMatrix pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
                                      ssa.go_lpdf_ptr, ssa.go_lccdf_ptr,
                                      ssa.stop_logsurv_ptr, ssa.stop_success_ptr,
@@ -1706,7 +1799,6 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
       }
     }
   } else {
-    LogicalVector winner = data["winner"];
     const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo");
@@ -1731,7 +1823,8 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     std::unique_ptr<RaceDataState> race_data_local;
     RaceDataState* race_data = race_data_state_acquire(data, n_trials, race_data_local);
     RaceDataLease race_data_lease(race_data);
-    IntegerVector expand = race_data->expand;
+    const IntegerVector& expand = race_data->expand;
+    const LogicalVector& winner = race_data->winner;
     const int n_lR = race_data->n_lR;
     const Rcpp::IntegerVector& lR_code_vec = race_data->lR_code_vec;
     const int time_code = race_data->time_code;
@@ -1821,8 +1914,6 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     std::vector<int> winner_int_buf;
     std::vector<int> loser_int_buf;
     std::vector<int> isok_int_fp;
-    NumericVector rts_fp_hold;
-    IntegerVector R_fp_hold;
     const double* rt_ptr = nullptr;
     const int* R_idxs_dadm = nullptr;
     const int* expand_ptr = expand.begin();
@@ -1862,10 +1953,9 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
       loser_int_buf = race_data->loser_int;
       time_win_int_buf = race_data->time_win_int;
       n_resp_fp = race_data->n_resp;
-      rts_fp_hold = data["rt"];
-      rt_ptr = rts_fp_hold.begin();
-      R_fp_hold = data["R"];
-      R_idxs_dadm = R_fp_hold.begin();
+      if (!race_data->has_rt_R) Rcpp::stop("calc_ll_oo: race data lack rt or R");
+      rt_ptr = race_data->rt.begin();
+      R_idxs_dadm = race_data->R.begin();
 
       // Resolve keep_names[j] -> base column pointer once; kernels index the
       // leading columns positionally, so a missing required column is fatal.
@@ -2186,7 +2276,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
             race_shared.valid ? &race_shared : nullptr, nullptr,
             corr_materialize);
       } else {
-        pars = pt.materialize_reusable();
+        NumericMatrix pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_race(pars, data,
                                        adapter.pdf1_ptr, adapter.cdf1_ptr,
                                        n_trials,
