@@ -1,27 +1,50 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 #include <RcppArmadillo.h>
+#include <memory>
+#include <pthread.h>
 #include <string>
-#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
 using namespace Rcpp;
 
-NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
-                         List designs, String type, List bounds, List transforms, List pretransforms,
-                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
-                         Rcpp::Nullable<Rcpp::List> marginalise,
-                         Rcpp::Nullable<Rcpp::LogicalVector> varying,
-                         SEXP pt_mapper_context);
+NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFrame& data,
+                              const NumericVector& constants, const List& designs,
+                              const String& type, const List& bounds,
+                              const List& transforms, const List& pretransforms,
+                              const CharacterVector& p_types, double min_ll,
+                              const Rcpp::Nullable<Rcpp::List>& trend,
+                              const Rcpp::Nullable<Rcpp::LogicalVector>& varying,
+                              SEXP pt_mapper_context);
 
 namespace {
 
 // The prepared likelihood arguments of one (data, model) pair. Both objects
 // are preserved and marked immutable, so their addresses identify them for
 // as long as the entry lives.
+// The stored arguments as the likelihood takes them, unpacked once.
+struct LlArgs {
+  DataFrame data;
+  NumericVector constants;
+  List designs, bounds, transforms, pretransforms;
+  String type;
+  CharacterVector p_types;
+  double min_ll;
+  Nullable<List> trend;
+  SEXP context;
+  LlArgs(SEXP dadm, const List& a)
+    : data(dadm), constants(as<NumericVector>(a["constants"])),
+      designs(as<List>(a["designs"])), bounds(as<List>(a["bounds"])),
+      transforms(as<List>(a["transforms"])),
+      pretransforms(as<List>(a["pretransforms"])), type(as<String>(a["type"])),
+      p_types(as<CharacterVector>(a["p_types"])), min_ll(as<double>(a["min_ll"])),
+      trend(static_cast<SEXP>(a["trend"])), context(a["pt_context"]) {}
+};
+
 struct LlEntry {
   SEXP dadm, model, args;
   std::vector<std::string> cols;
+  std::shared_ptr<LlArgs> unpacked;
 };
 
 struct LlKey {
@@ -38,7 +61,18 @@ struct LlKeyHash {
 };
 
 std::unordered_map<LlKey, LlEntry, LlKeyHash> ll_entries;
-pid_t ll_entries_pid = 0;
+
+// Set in a forked child until its first call here, which drops the entries
+// inherited from the parent: parameter-table contexts are not carried across
+// a fork.
+bool ll_entries_stale = false;
+void mark_entries_stale() { ll_entries_stale = true; }
+void watch_forks() {
+  static bool watching = false;
+  if (watching) return;
+  pthread_atfork(nullptr, nullptr, mark_entries_stale);
+  watching = true;
+}
 const size_t kMaxEntries = 4096;
 
 void release(LlEntry& e) {
@@ -74,11 +108,9 @@ SEXP column_names(SEXP x) {
 // numbers, so the generator state is not synchronised around the call.
 // [[Rcpp::export(rng = false)]]
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying) {
-  // Parameter-table contexts are not carried across a fork.
-  const pid_t pid = getpid();
-  if (pid != ll_entries_pid) {
+  if (ll_entries_stale) {
     clear_entries();
-    ll_entries_pid = pid;
+    ll_entries_stale = false;
     return R_NilValue;
   }
   auto it = ll_entries.find(LlKey{dadm, model});
@@ -86,20 +118,15 @@ SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying) {
   const LlEntry& e = it->second;
   if (TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) ||
       !same_names(column_names(proposals), e.cols)) return R_NilValue;
-  const List a(e.args);
-  const SEXP trend = a["trend"], context = a["pt_context"];
-  return calc_ll_oo(NumericMatrix(proposals), DataFrame(dadm),
-                    as<NumericVector>(a["constants"]), as<List>(a["designs"]),
-                    as<String>(a["type"]), as<List>(a["bounds"]),
-                    as<List>(a["transforms"]), as<List>(a["pretransforms"]),
-                    as<CharacterVector>(a["p_types"]), as<double>(a["min_ll"]),
-                    Nullable<List>(trend), R_NilValue,
-                    Nullable<LogicalVector>(varying), context);
+  const LlArgs& a = *e.unpacked;
+  return calc_ll_oo_core(NumericMatrix(proposals), a.data, a.constants, a.designs,
+                         a.type, a.bounds, a.transforms, a.pretransforms, a.p_types,
+                         a.min_ll, a.trend, Nullable<LogicalVector>(varying), a.context);
 }
 
 // Whether emc2_ll_cached() would evaluate these columns for this pair.
 bool emc2_ll_cache_has(SEXP dadm, SEXP model, SEXP cols) {
-  if (getpid() != ll_entries_pid) return false;
+  if (ll_entries_stale) return false;
   auto it = ll_entries.find(LlKey{dadm, model});
   return it != ll_entries.end() && same_names(cols, it->second.cols);
 }
@@ -170,10 +197,10 @@ List emc_candidate_rows_cpp(List cand, CharacterVector par_names) {
 
 // [[Rcpp::export]]
 void emc2_ll_cache_put(SEXP dadm, SEXP model, CharacterVector cols, List args) {
-  const pid_t pid = getpid();
-  if (pid != ll_entries_pid) {
+  watch_forks();
+  if (ll_entries_stale) {
     clear_entries();
-    ll_entries_pid = pid;
+    ll_entries_stale = false;
   }
   if (ll_entries.size() >= kMaxEntries) clear_entries();
   const LlKey key{dadm, model};
@@ -187,6 +214,7 @@ void emc2_ll_cache_put(SEXP dadm, SEXP model, CharacterVector cols, List args) {
   e.model = model;
   e.args = args;
   e.cols = as<std::vector<std::string>>(cols);
+  e.unpacked = std::make_shared<LlArgs>(dadm, args);
   R_PreserveObject(e.dadm);
   R_PreserveObject(e.model);
   R_PreserveObject(e.args);

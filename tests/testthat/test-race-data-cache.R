@@ -86,12 +86,14 @@ test_that("modifying data already seen rebuilds the cached race state", {
 test_that("the race state cache stays bounded", {
   fx <- race_cache_fixture(FALSE)
   EMC2:::emc2_ll_data_cache_clear()
-  for (k in 1:80) {
+  for (k in 1:4200) {
     d <- fx$dadm
-    d$rt <- d$rt + k * 1e-4
+    d$rt <- d$rt + k * 1e-6
     race_ll(fx, dadm = d, P = fx$P[1, , drop = FALSE])
   }
-  # 64 entries at most; clearing removes them all.
-  expect_lte(EMC2:::emc2_ll_data_cache_clear(), 64L)
+  # 4096 entries at most; clearing removes them all.
+  n_cleared <- EMC2:::emc2_ll_data_cache_clear()
+  expect_gt(n_cleared, 64L)
+  expect_lte(n_cleared, 4096L)
   expect_identical(EMC2:::emc2_ll_data_cache_clear(), 0L)
 })

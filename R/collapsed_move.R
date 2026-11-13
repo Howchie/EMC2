@@ -188,6 +188,15 @@
 }
 
 .emc_collapsed_context <- function(sampler) {
+  key <- sampler[c("lik_laplace", "n_pars", "n_subjects", "type", "prior",
+                   "is_blocked", "nuisance", "par_group")]
+  key$walls <- sampler$shear$walls
+  key$fits <- sampler$collapsed$fits
+  key$pooled <- sampler$pooled$value
+  .emc_context_memo("collapsed", key, function() .emc_collapsed_context_now(sampler))
+}
+
+.emc_collapsed_context_now <- function(sampler) {
   spec <- .emc_shear_v_spec(sampler)
   fits <- sampler$collapsed$fits
   cacheable <- length(fits) == sampler$n_subjects

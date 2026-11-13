@@ -722,15 +722,18 @@
   }
   f0 <- .emc_shear_frame_arrays(cur)
   out <- emc_shear_candidates_cpp(t, v, alpha, cur$mu, cur$V, f0$m, f0$R, f0$logdet,
-                                  fits$cube, fits$lin, has, U, b, Uc)
+                                  fits$cube, fits$lin, has, U, b, Uc, spec)
   u_sd <- v[p + seq_len(p)]
+  u_mu <- v[seq_len(p)]
   lapply(seq_along(t), function(k) {
     o <- out[[k]]
     if (!isTRUE(o$ok)) return(NULL)
-    u <- t[k] * v
-    d <- exp(u[p + seq_len(p)])
-    new <- .emc_shear_state_of(cur$mu + u[seq_len(p)], cur$V * outer(d, d), o$Vi, o$chol_V,
-                               list(m = o$m, R = o$R, logdet = o$logdet), prior, spec)
+    fm <- list(m = o$m, R = o$R, logdet = o$logdet)
+    V <- o$V
+    dimnames(V) <- dimnames(cur$V)
+    new <- list(mu = cur$mu + t[k] * u_mu, V = V, Vi = o$Vi, chol_V = o$chol_V,
+                fm = fm, logdet = sum(fm$logdet), lp_v = o$lp_v)
+    new$lp <- .emc_shear_log_prior_mu(new$mu, prior) + new$lp_v
     if (!is.finite(new$lp)) return(NULL)
     list(state = new, alpha = o$alpha, hier = o$hier,
          log_jac = sum((spec$size + 1) * t[k] * u_sd) + o$jac, wall_jac = o$wall_jac)
@@ -774,9 +777,26 @@
 # What every round of one move shares: the usable fits and the covariance
 # prior.
 .emc_shear_context <- function(sampler) {
-  fits <- .emc_shear_fits(sampler)
-  list(fits = fits, packed = .emc_shear_pack(fits, sampler$n_pars),
-       spec = .emc_shear_v_spec(sampler), walls = .emc_shear_walls_of(sampler))
+  key <- sampler[c("lik_laplace", "n_pars", "n_subjects", "type", "prior",
+                   "is_blocked", "nuisance", "par_group")]
+  key$walls <- sampler$shear$walls
+  .emc_context_memo("shear", key, function() {
+    fits <- .emc_shear_fits(sampler)
+    list(fits = fits, packed = .emc_shear_pack(fits, sampler$n_pars),
+         spec = .emc_shear_v_spec(sampler), walls = .emc_shear_walls_of(sampler))
+  })
+}
+
+# The last value built for a slot, reused while its inputs are unchanged: a
+# move's context depends only on proposal state that is fixed between
+# rebuilds.
+.emc_context_store <- new.env(parent = emptyenv())
+.emc_context_memo <- function(slot, key, build) {
+  hit <- .emc_context_store[[slot]]
+  if (!is.null(hit) && identical(hit$key, key)) return(hit$value)
+  value <- build()
+  .emc_context_store[[slot]] <- list(key = key, value = value)
+  value
 }
 
 # The block's transport walls when they match the sampler's dimensions.

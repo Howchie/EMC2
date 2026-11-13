@@ -1205,20 +1205,18 @@ void race_data_parts(const Rcpp::DataFrame& data, SEXP* parts) {
     parts[1 + kRaceDataNColumns + i] = Rf_getAttrib(data, attr_syms[i]);
 }
 
-// Recent keys by object identity. Each slot holds a reference to its objects,
-// so their addresses cannot be reused and R-level modification of any of them
-// copies it (a new address) instead of writing in place.
+// Keys by object identity. Each slot holds a reference to its objects, so
+// their addresses cannot be reused and R-level modification of any of them
+// copies it (a new address) instead of writing in place. Slots are found by
+// a hash of the addresses, so a fit's subjects each keep their own.
 struct RaceDataKeyMemo {
-  static constexpr int kSlots = 16;
+  static constexpr size_t kMaxSlots = 4096;
   struct Slot {
     SEXP parts[kRaceDataNParts];
     Rcpp::List holder;
     uint64_t key = 0;
-    uint64_t last_use = 0;
-    bool used = false;
   };
-  Slot slots[kSlots];
-  uint64_t clock = 0;
+  std::unordered_multimap<uint64_t, Slot> slots;
 };
 
 RaceDataKeyMemo& race_data_key_memo() {
@@ -1230,33 +1228,28 @@ uint64_t race_data_key(const Rcpp::DataFrame& data) {
   SEXP parts[kRaceDataNParts];
   race_data_parts(data, parts);
   RaceDataKeyMemo& memo = race_data_key_memo();
-  ++memo.clock;
-  for (auto& slot : memo.slots) {
-    if (!slot.used) continue;
+  uint64_t where = 0x9E3779B97F4A7C15ULL;
+  for (int i = 0; i < kRaceDataNParts; ++i)
+    where = ll_hash_mix(where, reinterpret_cast<uintptr_t>(parts[i]));
+  const auto range = memo.slots.equal_range(where);
+  for (auto it = range.first; it != range.second; ++it) {
     bool same = true;
     for (int i = 0; i < kRaceDataNParts && same; ++i)
-      same = slot.parts[i] == parts[i];
-    if (same) {
-      slot.last_use = memo.clock;
-      return slot.key;
-    }
+      same = it->second.parts[i] == parts[i];
+    if (same) return it->second.key;
   }
   uint64_t h = 0x243F6A8885A308D3ULL;
   for (int i = 0; i < kRaceDataNParts; ++i) h = ll_hash_sexp(h, parts[i], 0);
-  RaceDataKeyMemo::Slot* target = &memo.slots[0];
-  for (auto& slot : memo.slots) {
-    if (!slot.used) { target = &slot; break; }
-    if (slot.last_use < target->last_use) target = &slot;
-  }
+  if (memo.slots.size() >= RaceDataKeyMemo::kMaxSlots) memo.slots.clear();
+  RaceDataKeyMemo::Slot slot;
   Rcpp::List holder(kRaceDataNParts);
   for (int i = 0; i < kRaceDataNParts; ++i) {
     holder[i] = parts[i];
-    target->parts[i] = parts[i];
+    slot.parts[i] = parts[i];
   }
-  target->holder = holder;
-  target->key = h;
-  target->last_use = memo.clock;
-  target->used = true;
+  slot.holder = holder;
+  slot.key = h;
+  memo.slots.emplace(where, std::move(slot));
   return h;
 }
 
@@ -1289,11 +1282,17 @@ struct RaceDataState {
   RaceSharedState shared;
 };
 
+// `index` finds an entry by its data key and trial count.
 struct RaceDataCache {
   std::vector<std::unique_ptr<RaceDataState>> entries;
+  std::unordered_map<uint64_t, RaceDataState*> index;
   uint64_t clock = 0;
   size_t bytes = 0;
 };
+
+inline uint64_t race_data_index_key(uint64_t key, int n_trials) {
+  return ll_hash_mix(key, static_cast<uint64_t>(n_trials));
+}
 
 // Never destroyed: entries hold R objects, which must not be released after
 // R has shut down.
@@ -1302,7 +1301,7 @@ RaceDataCache& race_data_cache() {
   return *cache;
 }
 
-constexpr size_t kRaceDataCacheMaxEntries = 64;
+constexpr size_t kRaceDataCacheMaxEntries = 4096;
 constexpr size_t kRaceDataCacheMaxBytes = static_cast<size_t>(64) << 20;
 
 void race_data_state_fill(RaceDataState& st, const Rcpp::DataFrame& data,
@@ -1393,16 +1392,24 @@ RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data, int n_trials
   const uint64_t key = race_data_key(data);
   RaceDataCache& cache = race_data_cache();
   ++cache.clock;
-  for (auto& e : cache.entries) {
-    if (e->key == key && e->n_trials == n_trials) {
-      if (e->in_use) {
-        local.reset(new RaceDataState());
-        race_data_state_fill(*local, data, n_trials);
-        return local.get();
-      }
-      e->last_use = cache.clock;
-      return e.get();
+  const uint64_t index_key = race_data_index_key(key, n_trials);
+  const auto found = cache.index.find(index_key);
+  if (found != cache.index.end() && found->second->key == key &&
+      found->second->n_trials == n_trials) {
+    RaceDataState* e = found->second;
+    if (e->in_use) {
+      local.reset(new RaceDataState());
+      race_data_state_fill(*local, data, n_trials);
+      return local.get();
     }
+    e->last_use = cache.clock;
+    return e;
+  }
+  // The index slot is taken by other data: this call is not cached.
+  if (found != cache.index.end()) {
+    local.reset(new RaceDataState());
+    race_data_state_fill(*local, data, n_trials);
+    return local.get();
   }
   auto fresh = std::make_unique<RaceDataState>();
   race_data_state_fill(*fresh, data, n_trials);
@@ -1423,10 +1430,13 @@ RaceDataState* race_data_state_acquire(const Rcpp::DataFrame& data, int n_trials
     }
     if (oldest == cache.entries.size()) break;
     cache.bytes -= cache.entries[oldest]->bytes;
+    cache.index.erase(race_data_index_key(cache.entries[oldest]->key,
+                                          cache.entries[oldest]->n_trials));
     cache.entries.erase(cache.entries.begin() + static_cast<std::ptrdiff_t>(oldest));
   }
   cache.bytes += fresh->bytes;
   cache.entries.push_back(std::move(fresh));
+  cache.index[index_key] = cache.entries.back().get();
   return cache.entries.back().get();
 }
 
@@ -1453,38 +1463,23 @@ int emc2_ll_data_cache_clear() {
   for (auto it = cache.entries.begin(); it != cache.entries.end();) {
     if ((*it)->in_use) { ++it; continue; }
     cache.bytes -= (*it)->bytes;
+    cache.index.erase(race_data_index_key((*it)->key, (*it)->n_trials));
     it = cache.entries.erase(it);
     ++n;
   }
   return n;
 }
 
-// [[Rcpp::export]]
-NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
-                         List designs, String type, List bounds, List transforms, List pretransforms,
-                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
-                         Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue,
-                         Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue,
-                         SEXP pt_mapper_context = R_NilValue) {
-  // -------------------------------------------------------------------------
-  // Optional coherent marginalization of a shared subject-level parameter
-  // (the non-decision time t0 in race/GNG models). When `marginalise`
-  // is supplied we integrate ONE shared t0 out of the COMPLETE subject
-  // likelihood via Gauss-Legendre quadrature on the log-t0 (sampled) axis:
-  //     Lbar(theta) = int p(t0|eta) L(t0, theta) dt0,   log t0 ~ N(mu, sigma)
-  // The SAME t0 is inserted into every trial at each node (coherent, not the
-  // trialwise prod-of-integrals). Each node overwrites the sampled t0 column
-  // and re-calls THIS function with marginalise off, so the existing kernel is
-  // reused verbatim for every race model (no per-model code). The integration
-  // interval is clipped to where the likelihood is live: below the t0 lower
-  // bound c_do_bound floors the whole subject to min_ll; above min(rt) a
-  // response is infeasible. When `marginalise` is null this is a single branch
-  // test and the ordinary path runs unchanged.
-  if (marginalise.isNotNull()) {
-    return calc_ll_oo_marginal(particle_matrix, data, constants, designs, type, bounds,
-                               transforms, pretransforms, p_types, min_ll, trend,
-                               Rcpp::List(marginalise));
-  }
+// The likelihood without marginalisation. Arguments are taken by reference:
+// a caller holding them across calls passes them without re-wrapping.
+NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFrame& data,
+                              const NumericVector& constants, const List& designs,
+                              const String& type, const List& bounds,
+                              const List& transforms, const List& pretransforms,
+                              const CharacterVector& p_types, double min_ll,
+                              const Rcpp::Nullable<Rcpp::List>& trend,
+                              const Rcpp::Nullable<Rcpp::LogicalVector>& varying,
+                              SEXP pt_mapper_context) {
   const int n_particles = particle_matrix.nrow();
   const int n_trials = data.nrow();
   NumericVector lls(n_particles);
@@ -2206,6 +2201,37 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
   }
   return lls;
+}
+
+// [[Rcpp::export]]
+NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+                         List designs, String type, List bounds, List transforms, List pretransforms,
+                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                         Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue,
+                         Rcpp::Nullable<Rcpp::LogicalVector> varying = R_NilValue,
+                         SEXP pt_mapper_context = R_NilValue) {
+  // -------------------------------------------------------------------------
+  // Optional coherent marginalization of a shared subject-level parameter
+  // (the non-decision time t0 in race/GNG models). When `marginalise`
+  // is supplied we integrate ONE shared t0 out of the COMPLETE subject
+  // likelihood via Gauss-Legendre quadrature on the log-t0 (sampled) axis:
+  //     Lbar(theta) = int p(t0|eta) L(t0, theta) dt0,   log t0 ~ N(mu, sigma)
+  // The SAME t0 is inserted into every trial at each node (coherent, not the
+  // trialwise prod-of-integrals). Each node overwrites the sampled t0 column
+  // and re-calls THIS function with marginalise off, so the existing kernel is
+  // reused verbatim for every race model (no per-model code). The integration
+  // interval is clipped to where the likelihood is live: below the t0 lower
+  // bound c_do_bound floors the whole subject to min_ll; above min(rt) a
+  // response is infeasible. When `marginalise` is null this is a single branch
+  // test and the ordinary path runs unchanged.
+  if (marginalise.isNotNull()) {
+    return calc_ll_oo_marginal(particle_matrix, data, constants, designs, type, bounds,
+                               transforms, pretransforms, p_types, min_ll, trend,
+                               Rcpp::List(marginalise));
+  }
+  return calc_ll_oo_core(particle_matrix, data, constants, designs, type, bounds,
+                         transforms, pretransforms, p_types, min_ll, trend, varying,
+                         pt_mapper_context);
 }
 
 // Run the per-particle parameter prologue on its own: refill from the particle

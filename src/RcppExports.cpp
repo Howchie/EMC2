@@ -4085,8 +4085,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_shear_candidates_cpp
-Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v, const arma::mat& alpha, const arma::vec& mu, const arma::mat& V, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::cube& prec, const arma::mat& lin, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp);
-RcppExport SEXP _EMC2_emc_shear_candidates_cpp(SEXP tSEXP, SEXP vSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP precSEXP, SEXP linSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP) {
+Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v, const arma::mat& alpha, const arma::vec& mu, const arma::mat& V, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::cube& prec, const arma::mat& lin, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp, Rcpp::Nullable<Rcpp::List> spec);
+RcppExport SEXP _EMC2_emc_shear_candidates_cpp(SEXP tSEXP, SEXP vSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP precSEXP, SEXP linSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP, SEXP specSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -4104,7 +4104,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const arma::mat& >::type U(USEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type b(bSEXP);
     Rcpp::traits::input_parameter< const arma::cube& >::type Uperp(UperpSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type spec(specSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4406,7 +4407,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
-    {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 14},
+    {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 15},
     {"_EMC2_emc_shear_surrogate_cpp", (DL_FUNC) &_EMC2_emc_shear_surrogate_cpp, 3},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
