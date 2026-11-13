@@ -452,6 +452,14 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   dadm
 }
 
+# Whether every subject's data carry the current prepared likelihood partition.
+.emc_ll_data_prepared <- function(x) {
+  if (is.data.frame(x))
+    return(identical(attr(x, "emc2_ll_cache_version"), .emc2_ll_cache_version))
+  is.list(x) && length(x) > 0L &&
+    all(vapply(x, .emc_ll_data_prepared, logical(1)))
+}
+
 # Validate the likelihood partition once when a sampler block takes ownership
 # of its data. Internal registered-model calls in that block can then reuse it;
 # public likelihood entry points continue to validate on every call. A cached

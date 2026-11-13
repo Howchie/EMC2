@@ -857,16 +857,16 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
       nuis_idx <- nuisance[idx]
       if(any(nuis_idx)){
         type <- samples_merged$sampler_nuis$type
-        conditionals <- auto_mclapply(X = 1:n_subjects,
-                                      FUN = get_conditionals, samples = test_samples,
-                                      n_pars = sum(idx[!nuisance]), iteration =  iteration, idx = idx[!nuisance],
-                                      type = type ,
-                                      mc.cores = n_cores)
-        conditionals_nuis <- auto_mclapply(X = 1:n_subjects,
-                                           FUN = get_conditionals, samples = test_samples$nuisance,
-                                           n_pars = sum(idx[nuisance]), iteration =  iteration, idx = idx[nuisance],
-                                           type = type,
-                                           mc.cores = n_cores)
+        conditionals <- .emc_rebuild_lapply(seq_len(n_subjects), function(sub)
+          get_conditionals(sub, samples = test_samples,
+                           n_pars = sum(idx[!nuisance]), iteration = iteration,
+                           idx = idx[!nuisance], type = type),
+          n_cores, cost_key = "eff_conditionals")
+        conditionals_nuis <- .emc_rebuild_lapply(seq_len(n_subjects), function(sub)
+          get_conditionals(sub, samples = test_samples$nuisance,
+                           n_pars = sum(idx[nuisance]), iteration = iteration,
+                           idx = idx[nuisance], type = type),
+          n_cores, cost_key = "eff_conditionals_nuisance")
         place(conditionals, which(idx & !nuisance))
         place(conditionals_nuis, which(idx & nuisance))
       } else{
@@ -877,11 +877,12 @@ create_eff_proposals <- function(emc, n_cores, from_burn = FALSE){
           tryCatch(get_conditionals(...), warning = function(w) NULL,
                    error = function(e) NULL)
         } else get_conditionals
-        conditionals <- auto_mclapply(X = 1:n_subjects,
-                                      FUN = cond_fun, samples = test_samples,
-                                      n_pars = sum(idx[!nuisance]), iteration =  iteration, idx = idx[!nuisance],
-                                      type = type,
-                                      mc.cores = n_cores)
+        # The conditionals are deterministic; cheap ones run without forking.
+        conditionals <- .emc_rebuild_lapply(seq_len(n_subjects), function(sub)
+          cond_fun(sub, samples = test_samples,
+                   n_pars = sum(idx[!nuisance]), iteration = iteration,
+                   idx = idx[!nuisance], type = type),
+          n_cores, cost_key = "eff_conditionals")
         if (from_burn && any(vapply(conditionals, is.null, logical(1)))) {
           # Not buildable yet: the adapt block uses the chain proposal in the
           # efficient slot, which keeps the production mixture's shape.
@@ -948,18 +949,18 @@ sub_blocking <- function(emc, n_blocks){
   return(components)
 }
 
+# Whether S is an exactly symmetric, finite covariance whose eigenvalues and
+# reciprocal condition number are safely positive.
 .emc_empirical_covariance_ok <- function(S, subject = NULL, context = NULL) {
-  pd <- tryCatch(is.positive.definite(S), error = function(e) FALSE)
-  if(!isTRUE(pd)) return(FALSE)
-  if(is.null(context)) {
-    context <- if(is.null(subject)) "empirical proposal covariance" else {
-      paste0("empirical proposal covariance subject ", subject)
-    }
-  }
-  isTRUE(tryCatch({
-    .iwish_condition(S, context = context)
-    TRUE
-  }, error = function(e) FALSE))
+  if (!is.matrix(S) || !is.numeric(S) || nrow(S) != ncol(S) || !nrow(S))
+    return(FALSE)
+  if (!all(is.finite(S)) || !all(S == t(S))) return(FALSE)
+  values <- tryCatch(eigen(S, symmetric = TRUE, only.values = TRUE)$values,
+                     error = function(e) NULL)
+  if (is.null(values) || !all(is.finite(values)) || min(values) < 1e-8)
+    return(FALSE)
+  rcond <- tryCatch(1 / kappa(S, exact = FALSE), error = function(e) NA_real_)
+  is.finite(rcond) && rcond >= 1e-12
 }
 
 .emc_chain_proposal_window <- function(emc, samples_idx = NULL, stage) {

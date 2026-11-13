@@ -505,6 +505,25 @@
 .emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
                              joint = NULL, movable = NULL, shear_fixed = 0,
                              hmc_fixed = 0) {
+  if (!isTRUE(.emc_alloc_memo$on))
+    return(.emc_alloc_solve_now(units, C_rest, max_rounds, joint, movable,
+                                shear_fixed, hmc_fixed))
+  args <- list(units, C_rest, max_rounds, joint, movable, shear_fixed, hmc_fixed)
+  for (entry in .emc_alloc_memo$entries)
+    if (identical(entry$args, args)) return(entry$value)
+  value <- .emc_alloc_solve_now(units, C_rest, max_rounds, joint, movable,
+                                shear_fixed, hmc_fixed)
+  .emc_alloc_memo$entries[[length(.emc_alloc_memo$entries) + 1L]] <-
+    list(args = args, value = value)
+  value
+}
+
+# Solves repeated within one rebuild (a chain solved again at the shared HMC
+# choice asks for the same plans) are answered from the rebuild's own record.
+.emc_alloc_memo <- new.env(parent = emptyenv())
+
+.emc_alloc_solve_now <- function(units, C_rest, max_rounds, joint, movable,
+                                 shear_fixed, hmc_fixed) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
   moved_idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
@@ -1560,6 +1579,12 @@
   if (identical(stage, "preburn") || !.emc_alloc_wanted(emc[[1L]])) return(emc)
   emc <- .emc_prepare_chain_rng(emc)
   nch <- length(emc)
+  .emc_alloc_memo$entries <- list()
+  .emc_alloc_memo$on <- TRUE
+  on.exit({
+    .emc_alloc_memo$on <- FALSE
+    .emc_alloc_memo$entries <- list()
+  }, add = TRUE)
   Vbar <- lapply(emc, function(ch) {
     k <- .emc_alloc_draws(ch, if (is.null(ch$alloc$window)) 200L else
       max(2L, ch$alloc$window$n))

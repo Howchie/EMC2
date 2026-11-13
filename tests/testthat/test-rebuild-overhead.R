@@ -127,3 +127,52 @@ test_that("direct array slices match the split index implementation", {
   a <- array(c(NA_real_, NaN, Inf, -Inf, -0, 1), c(1L, 2L, 3L))
   for (n in 1:3) expect_identical(split_along_dim(a, n), previous(a, n))
 })
+
+test_that("a job timed in the calling process overrides inflated fork timings", {
+  skip_on_os("windows")
+  old_costs <- .emc_rebuild_queue$costs
+  old_decision <- .emc_rebuild_queue$last_decision
+  on.exit({
+    .emc_rebuild_queue$costs <- old_costs
+    .emc_rebuild_queue$last_decision <- old_decision
+  }, add = TRUE)
+  .emc_rebuild_queue$costs <- list()
+  # Fork timings that favour forking.
+  seed_costs <- function(key) .emc_rebuild_queue$costs[[.emc_rebuild_cost_id(key, 2L)]] <-
+    list(job_seconds = rep(.01, 12L), startup_seconds = .005)
+  seed_costs("probe_cheap")
+  seen <- integer()
+  set.seed(110)
+  before <- .Random.seed
+  result <- .emc_rebuild_lapply(1:12, function(i) {
+    seen <<- c(seen, i)
+    runif(1)
+    i
+  }, 2L, order = 12:1, cost_key = "probe_cheap")
+  expect_identical(result, as.list(1:12))
+  # Every job ran once, here, in the requested order.
+  expect_identical(seen, 12:1)
+  expect_identical(.Random.seed, before)
+  expect_identical(.emc_rebuild_queue$last_decision$route, "serial")
+
+  # Jobs that are slow here too are still forked; the timed job is not rerun.
+  seed_costs("probe_slow")
+  seen <- integer()
+  result <- .emc_rebuild_lapply(1:12, function(i) {
+    seen <<- c(seen, i)
+    Sys.sleep(.02)
+    i
+  }, 2L, order = 12:1, cost_key = "probe_slow")
+  expect_identical(result, as.list(1:12))
+  expect_identical(seen, 12L)
+  expect_identical(.emc_rebuild_queue$last_decision$route, "parallel")
+  # The stored timing settles later rounds without another job run here.
+  seen <- integer()
+  result <- .emc_rebuild_lapply(1:12, function(i) {
+    seen <<- c(seen, i)
+    Sys.sleep(.02)
+    i
+  }, 2L, order = 12:1, cost_key = "probe_slow")
+  expect_identical(result, as.list(1:12))
+  expect_length(seen, 0L)
+})

@@ -292,19 +292,23 @@
     .emc_shear_state(st$mu, st$V, fits_of(st), ch$prior, spec))
   if (any(vapply(states, is.null, logical(1))))
     return(list(per = matrix(NA_real_, length(grid), n), lp = rep(NA_real_, length(grid))))
-  ldn <- function(a, st) {
-    z <- backsolve(st$chol, a - st$mu, transpose = TRUE)
-    -0.5 * sum(z^2) - sum(log(diag(st$chol)))
-  }
   tr <- lapply(states, function(st) .emc_shear_transport(alpha, states[[g0]], st, walls))
+  ok <- Reduce(`&`, lapply(tr, function(x) x$ok %in% TRUE))
+  # Hierarchical density of every subject at one path state.
+  ldn <- vapply(seq_along(grid), function(g) {
+    st <- path[[g]]
+    z <- backsolve(st$chol, tr[[g]]$alpha - st$mu, transpose = TRUE)
+    -0.5 * colSums(z^2) - sum(log(diag(st$chol)))
+  }, numeric(n))
+  validated <- isTRUE(ch$ll_cache_validated)
   per <- .emc_with_preserved_rng(auto_mclapply(seq_len(n), function(ss) {
-    if (!all(vapply(tr, function(x) isTRUE(x$ok[ss]), logical(1))))
-      return(rep(NA_real_, length(grid)))
+    if (!ok[ss]) return(rep(NA_real_, length(grid)))
     X <- t(vapply(tr, function(x) x$alpha[, ss], numeric(p)))
-    ll <- tryCatch(.emc_burn_ll_batch(X, ch$data[[ss]], ch$model, par_names),
+    ll <- tryCatch(.emc_burn_ll_batch(X, ch$data[[ss]], ch$model, par_names,
+                                      ll_cache_validated = validated),
                    error = function(e) rep(NA_real_, length(grid)))
     vapply(seq_along(grid), function(g)
-      ll[g] + ldn(X[g, ], path[[g]]) + states[[g0]]$fm$logdet[ss] -
+      ll[g] + ldn[ss, g] + states[[g0]]$fm$logdet[ss] -
         states[[g]]$fm$logdet[ss] + tr[[g]]$jac[ss], numeric(1))
   }, mc.cores = max(1L, min(n, n_cores)), mc.set.seed = FALSE))
   lp <- vapply(path, function(st) .emc_shear_log_prior_mu(st$mu, ch$prior) +
@@ -378,8 +382,11 @@
   }
   if (!length(jobs)) return(emc)
   packed <- vector("list", length(emc))
-  for (j in unique(vapply(jobs, `[[`, integer(1), "chain")))
+  for (j in unique(vapply(jobs, `[[`, integer(1), "chain"))) {
     packed[j] <- list(.emc_shear_context(emc[[j]])$packed)
+    # Data a sampling block has prepared needs no further validation.
+    emc[[j]]$ll_cache_validated <- .emc_ll_data_prepared(emc[[j]]$data)
+  }
   widths <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_along(jobs), function(m) {
     jb <- jobs[[m]]
     ch <- emc[[jb$chain]]
@@ -387,6 +394,7 @@
     tryCatch(.emc_shear_orbit_width(ch, idx, jb$k, function(st) fits, jb$s0),
              error = function(e) NA_real_)
   }, n_cores = n_cores))
+  for (j in seq_along(emc)) emc[[j]]$ll_cache_validated <- NULL
   for (m in seq_along(jobs)) {
     jb <- jobs[[m]]
     w <- widths[[m]]

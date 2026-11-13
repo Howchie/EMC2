@@ -87,3 +87,38 @@ slowest chain, 15-17 ms per iteration with three chains running).
   identity checks depend on it.
 - Likelihood entries are keyed on the pointer pair because the same data is
   evaluated with two model objects (the slim worker model and the sampler's).
+
+## Rebuild pass (uncommitted, after 625e9232)
+
+Whole fit 35.9 -> 33.6 s (sample 23.3 -> 22.0 s per 1,000); each rebuild 1.35 -> 1.04 s.
+Draws identical to 625e9232 on a 400-iteration sample continuation.
+
+- Fork rounds were job work, not fork overhead (startup about 10 ms a round), so
+  merging rounds was dropped.
+- `.emc_empirical_covariance_ok`: one symmetric eigen solve instead of two plus an
+  `all.equal` symmetry test; same decision on 36,558 test matrices.
+- Shear orbit terms: hierarchical density computed per path state for all subjects,
+  likelihood through the prepared-data path.
+- Allocator: solves repeated within a rebuild are answered from a per-rebuild record
+  (108 -> 68 solves over three rebuilds).
+- Rebuild dispatcher: a job timed in the calling process decides serial against fork,
+  because fork-measured job times run 5-8x above the in-process time for cheap jobs.
+  Efficient-proposal conditionals now go through the dispatcher.
+
+Per rebuild now: Laplace refresh 0.20, shear plans 0.20, allocator 0.34 (solves 0.16),
+efficient proposals 0.13, fit checks 0.11, collapsed plans 0.09, chain proposals 0.04 s.
+
+## Baseline against DMC2 (measured, not diagnosed)
+
+Whole fits with shear, collapsed, subject HMC and the ensemble update all off, two seeds,
+1,000 sample iterations, 25 particles in both packages:
+
+| | sample wall | ESS mu (mu, sigma, tau) | ESS log sd | alpha median / min | move rate |
+|---|---|---|---|---|---|
+| DMC2 | 3.2-3.5 s | 2913 / 1014 / 1702 | 1750 / 292 / 551 | 1591 / 414 | 0.98-0.99 |
+| EMC2, moves off | 9.5-10.3 s | 2501 / 262 / 1179 | 1767 / 53 / 394 | 1562 / 140 | 0.93 |
+
+The slow coordinate (sigma) mixes 3.5-7x worse per iteration in our baseline and the
+iteration costs 2.8x more. The two particle kernels differ (ours is the auxiliary-centred
+two-step kernel validated against exact references; DMC2's has not been checked the same
+way), so the next step is an exact-reference comparison of the two baselines.
