@@ -10,20 +10,21 @@
 .EMC_NATIVE_STEPS <- c(group = "group", particle = "particle", ensemble = "ensemble",
                        shear = "shear", collapsed = "collapsed", hmc = "hmc", store = "store")
 
-# Whether native forms of the steps cover the block: fits without nuisance or
-# pooled parameters, outside profiled runs. A step whose native form does not
-# take the state (a likelihood pool of a single subject, no subject pool)
-# runs in R.
+# Whether native forms of the steps cover the block: every run but a profiled
+# one. A step whose native form does not take the state (a likelihood pool
+# of a single subject, no subject pool) runs in R.
 .emc_steps_native_ok <- function(pmwgs, nuisance, sampler_profile, wpool, llpool) {
-  !any(nuisance) && is.null(pmwgs$pooled) && !sampler_profile
+  !sampler_profile
 }
 
-# The steps with a native form for a hierarchy type: all of them for standard
-# hierarchies and fits without a group level; the particle step for the
-# other types, whose group updates and moves are their own.
-.emc_steps_native_set <- function(type) {
-  if (identical(type, "standard") || identical(type, "single")) names(.EMC_NATIVE_STEPS) else
-    "particle"
+# The steps with a native form for a sampler: all of them for standard
+# hierarchies and fits without a group level; the particle step alone for
+# the other types, whose group updates and moves are their own, and with
+# nuisance or pooled parameters.
+.emc_steps_native_set <- function(pmwgs) {
+  plain <- !any(pmwgs$nuisance) && is.null(pmwgs$pooled)
+  if (plain && (identical(pmwgs$type, "standard") || identical(pmwgs$type, "single")))
+    names(.EMC_NATIVE_STEPS) else "particle"
 }
 
 # Each subject's prior mean under the group state, parameters x subjects.
@@ -53,7 +54,7 @@
   n <- pmwgs$n_subjects
   out <- list()
   # Without a group level the "group draw" is the prior itself.
-  if (identical(pmwgs$type, "single"))
+  if (identical(pmwgs$type, "single") && !any(pmwgs$nuisance))
     out$single <- list(tmu = pmwgs$prior$theta_mu_mean, tvar = pmwgs$prior$theta_mu_var,
                        rows = pmwgs$par_names[!pmwgs$nuisance])
   else if (identical(pmwgs$type, "standard") && is.null(pmwgs$gd) &&
@@ -680,7 +681,7 @@
   native <- if (!cx$native_ok) rep(FALSE, length(steps)) else
     (if (is.character(native)) names(steps) %in% native else
       rep(isTRUE(native), length(steps))) &
-      names(steps) %in% .emc_steps_native_set(st$pmwgs$type)
+      names(steps) %in% .emc_steps_native_set(st$pmwgs)
   if (from <= cx$iter)
     emc_iteration_loop_cpp(st, cx, as.integer(from), steps, native, .emc_steps_rejects)
   invisible(NULL)

@@ -71,12 +71,14 @@ SEXP prior_means(SEXP pars, SEXP cx, SEXP pmwgs) {
       !Rf_isMatrix(alpha))
     return R_NilValue;
   const std::string kind = CHAR(STRING_ELT(type, 0));
-  if (kind == "standard") return lget(pars, "subj_mu");
   const int p = Rf_nrows(alpha), n = Rf_ncols(alpha);
-  if (kind == "single") {
-    SEXP tmu = lget(pars, "tmu");
-    if (lget(cx, "single") == R_NilValue || TYPEOF(tmu) != REALSXP || XLENGTH(tmu) != p)
-      return R_NilValue;
+  SEXP subj_mu = lget(pars, "subj_mu");
+  if (kind == "standard" && TYPEOF(subj_mu) == REALSXP && Rf_isMatrix(subj_mu) &&
+      Rf_nrows(subj_mu) == p && Rf_ncols(subj_mu) == n)
+    return subj_mu;
+  SEXP tmu = lget(pars, "tmu");
+  if (kind == "single" && lget(cx, "single") != R_NilValue && TYPEOF(tmu) == REALSXP &&
+      XLENGTH(tmu) == p) {
     Shield<SEXP> out(Rf_allocMatrix(REALSXP, p, n));
     for (int s = 0; s < n; ++s)
       std::copy(REAL(tmu), REAL(tmu) + p, REAL(out) + static_cast<R_xlen_t>(s) * p);
@@ -133,6 +135,9 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   SEXP consts = lget(cx, "particle"), ctx = lget(cx, "wpool_ctx");
   SEXP group_chol = var(st, "group_chol_it"), pm_settings = var(st, "pm_settings");
   SEXP streams = var(st, "streams"), ens_pools = var(st, "ens_pools");
+  if (var(st, "pars_comb") != R_NilValue || var(st, "wpool_ctx") != R_NilValue ||
+      var(st, "data") != R_NilValue || lget(pmwgs, "pooled") != R_NilValue)
+    return false;
   if (TYPEOF(consts) != VECSXP || TYPEOF(pmwgs) != VECSXP || TYPEOF(wpool) != VECSXP ||
       flag(lget(wpool, "alive")) || num(lget(wpool, "n"), 0.0) != 1.0 ||
       lget(wpool, "retained") != R_NilValue || TYPEOF(pm_settings) != VECSXP ||
@@ -319,14 +324,17 @@ SEXP tally_sum(SEXP x, SEXP y) {
 // the state untouched, for states the R step handles; a pool that does not
 // serve the queue leaves the round to .emc_step_particle_run().
 bool particle_pool(SEXP st, SEXP cx, int i) {
-  SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), wpool = var(st, "wpool");
-  SEXP ctx = lget(cx, "wpool_ctx"), group_chol = var(st, "group_chol_it");
+  SEXP pmwgs = var(st, "pmwgs"), wpool = var(st, "wpool");
+  // With nuisance parameters the subjects see the merged group state; under
+  // pooled parameters the pool's context carries the current data.
+  SEXP pars = var(st, "pars_comb") != R_NilValue ? var(st, "pars_comb") : var(st, "pars");
+  SEXP ctx = var(st, "wpool_ctx") != R_NilValue ? var(st, "wpool_ctx") : lget(cx, "wpool_ctx");
+  SEXP group_chol = var(st, "group_chol_it");
   SEXP pm_settings = var(st, "pm_settings"), streams = var(st, "streams");
   SEXP ens_pools = var(st, "ens_pools"), cost0 = var(st, "wpool_cost");
   if (TYPEOF(pmwgs) != VECSXP || TYPEOF(wpool) != VECSXP || TYPEOF(pm_settings) != VECSXP ||
       TYPEOF(streams) != VECSXP || var(st, "llpool") != R_NilValue ||
-      var(st, "pars_comb") != R_NilValue || var(st, "wpool_ctx") != R_NilValue ||
-      var(st, "data") != R_NilValue || flag(lget(cx, "sampler_profile")))
+      flag(lget(cx, "sampler_profile")))
     return false;
   const int n = static_cast<int>(XLENGTH(pm_settings));
   SEXP samples = lget(pmwgs, "samples");
