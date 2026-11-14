@@ -2749,10 +2749,11 @@
   } else NULL
   claim <- !is.null(claim_map)
   # The unprofiled round over the queue runs natively (src/pool_exchange.cpp).
-  if (claim && !profile && !rows_only) {
+  if (claim && !profile) {
     queued <- emc_wpool_particle_queue_cpp(pool, ctx, part, alpha, population_mu,
                                            group_chol, pm_settings, prev_ll, seeds, extra,
-                                           pooled, skip, as.integer(ctx$n_pars), topenv())
+                                           pooled, skip, as.integer(ctx$n_pars),
+                                           isTRUE(rows_only), topenv())
     if (!is.null(queued)) return(queued)
   }
   order <- if (claim) .emc_wpool_queue_order(part) else NULL
@@ -3053,7 +3054,8 @@
 }
 
 .emc_wpool_iter_missing <- function(s, ctx, alpha, population_mu, pm_settings, prev_ll,
-                                    seeds, extra, pooled, skip, group_chol) {
+                                    seeds, extra, pooled, skip, group_chol,
+                                    rows_only = FALSE) {
   shared <- list(group_var = group_chol$ref, idx_list = group_chol$idx_list,
                  marginal_idx = group_chol$marginal_idx,
                  include_full = group_chol$include_full, group_chol = group_chol)
@@ -3062,7 +3064,7 @@
          population_mu = population_mu[, s, drop = FALSE], pm = pm_settings[s],
          prev_ll = prev_ll[s], seeds = seeds[s],
          extra = if (is.null(extra)) NULL else extra[s], pooled = pooled,
-         rows_only = FALSE, skip = if (is.null(skip)) NULL else skip[s]),
+         rows_only = rows_only, skip = if (is.null(skip)) NULL else skip[s]),
     ctx, shared = shared)
 }
 

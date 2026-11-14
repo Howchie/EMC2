@@ -28,6 +28,8 @@ struct ParticleRequest {
   SEXP ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra,
       pooled, skip;
   int n_pars;
+  // Candidate rows only: no particle step is taken.
+  bool rows_only = false;
 };
 struct ParticleReply {
   Rcpp::RObject props, pm_settings, seeds, times, extra_ll, rejects, ensemble_rejects;

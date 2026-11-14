@@ -939,8 +939,8 @@ emc_wpool_subject_ll_queue_cpp <- function(pool, rows, ctx, part, source, ns) {
     .Call(`_EMC2_emc_wpool_subject_ll_queue_cpp`, pool, rows, ctx, part, source, ns)
 }
 
-emc_wpool_particle_queue_cpp <- function(pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, ns) {
-    .Call(`_EMC2_emc_wpool_particle_queue_cpp`, pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, ns)
+emc_wpool_particle_queue_cpp <- function(pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, rows_only, ns) {
+    .Call(`_EMC2_emc_wpool_particle_queue_cpp`, pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, rows_only, ns)
 }
 
 emc_wpool_recv_cpp <- function(con, deadline, alive, busy, read_chunk, max_frame) {

@@ -746,7 +746,7 @@ bool particle_queue(RObject& pool, const ParticleRequest& q, ParticleReply& out)
     List inputs = List::create(
         _["alpha"] = q.alpha, _["population_mu"] = q.population_mu, _["pm"] = q.pm_settings,
         _["prev_ll"] = q.prev_ll, _["seeds"] = q.seeds, _["extra"] = q.extra,
-        _["pooled"] = q.pooled, _["rows_only"] = false, _["skip"] = q.skip,
+        _["pooled"] = q.pooled, _["rows_only"] = q.rows_only, _["skip"] = q.skip,
         _["order"] = IntegerVector(order.begin(), order.end()));
     List shared = List::create(
         _["group_var"] = lget(q.group_chol, "ref"), _["idx_list"] = lget(q.group_chol, "idx_list"),
@@ -906,7 +906,7 @@ bool particle_queue(RObject& pool, const ParticleRequest& q, ParticleReply& out)
     if (stored[s]) continue;
     static Function compute = package_function(".emc_wpool_iter_missing");
     RObject res = compute(s + 1, q.ctx, q.alpha, q.population_mu, pm, q.prev_ll, seeds, q.extra,
-                          q.pooled, q.skip, q.group_chol);
+                          q.pooled, q.skip, q.group_chol, q.rows_only);
     RObject named = lset(res, "subs", Rf_ScalarInteger(s + 1));
     if (!store(named, false))
       Rcpp::stop("particle step: a subject's result differs in shape");
@@ -951,7 +951,7 @@ SEXP emc_wpool_subject_ll_queue_cpp(SEXP pool, List rows, SEXP ctx, SEXP part,
 SEXP emc_wpool_particle_queue_cpp(SEXP pool, SEXP ctx, SEXP part, SEXP alpha,
                                   SEXP population_mu, SEXP group_chol, SEXP pm_settings,
                                   SEXP prev_ll, SEXP seeds, SEXP extra, SEXP pooled, SEXP skip,
-                                  int n_pars, SEXP ns) {
+                                  int n_pars, bool rows_only, SEXP ns) {
   emc_iter::set_package_namespace(ns);
   emc_pool::ParticleRequest request;
   request.ctx = ctx;
@@ -966,6 +966,7 @@ SEXP emc_wpool_particle_queue_cpp(SEXP pool, SEXP ctx, SEXP part, SEXP alpha,
   request.pooled = pooled;
   request.skip = skip;
   request.n_pars = n_pars;
+  request.rows_only = rows_only;
   emc_pool::ParticleReply reply;
   RObject after = pool;
   if (TYPEOF(seeds) != VECSXP || TYPEOF(pm_settings) != VECSXP ||

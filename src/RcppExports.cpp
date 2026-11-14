@@ -3871,8 +3871,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_wpool_particle_queue_cpp
-SEXP emc_wpool_particle_queue_cpp(SEXP pool, SEXP ctx, SEXP part, SEXP alpha, SEXP population_mu, SEXP group_chol, SEXP pm_settings, SEXP prev_ll, SEXP seeds, SEXP extra, SEXP pooled, SEXP skip, int n_pars, SEXP ns);
-RcppExport SEXP _EMC2_emc_wpool_particle_queue_cpp(SEXP poolSEXP, SEXP ctxSEXP, SEXP partSEXP, SEXP alphaSEXP, SEXP population_muSEXP, SEXP group_cholSEXP, SEXP pm_settingsSEXP, SEXP prev_llSEXP, SEXP seedsSEXP, SEXP extraSEXP, SEXP pooledSEXP, SEXP skipSEXP, SEXP n_parsSEXP, SEXP nsSEXP) {
+SEXP emc_wpool_particle_queue_cpp(SEXP pool, SEXP ctx, SEXP part, SEXP alpha, SEXP population_mu, SEXP group_chol, SEXP pm_settings, SEXP prev_ll, SEXP seeds, SEXP extra, SEXP pooled, SEXP skip, int n_pars, bool rows_only, SEXP ns);
+RcppExport SEXP _EMC2_emc_wpool_particle_queue_cpp(SEXP poolSEXP, SEXP ctxSEXP, SEXP partSEXP, SEXP alphaSEXP, SEXP population_muSEXP, SEXP group_cholSEXP, SEXP pm_settingsSEXP, SEXP prev_llSEXP, SEXP seedsSEXP, SEXP extraSEXP, SEXP pooledSEXP, SEXP skipSEXP, SEXP n_parsSEXP, SEXP rows_onlySEXP, SEXP nsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< SEXP >::type pool(poolSEXP);
@@ -3888,8 +3888,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type pooled(pooledSEXP);
     Rcpp::traits::input_parameter< SEXP >::type skip(skipSEXP);
     Rcpp::traits::input_parameter< int >::type n_pars(n_parsSEXP);
+    Rcpp::traits::input_parameter< bool >::type rows_only(rows_onlySEXP);
     Rcpp::traits::input_parameter< SEXP >::type ns(nsSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_wpool_particle_queue_cpp(pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, ns));
+    rcpp_result_gen = Rcpp::wrap(emc_wpool_particle_queue_cpp(pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, rows_only, ns));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4726,7 +4727,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_emc2_particle_log_weights", (DL_FUNC) &_EMC2_emc2_particle_log_weights, 10},
     {"_EMC2_emc_wpool_subject_ll_queue_cpp", (DL_FUNC) &_EMC2_emc_wpool_subject_ll_queue_cpp, 6},
-    {"_EMC2_emc_wpool_particle_queue_cpp", (DL_FUNC) &_EMC2_emc_wpool_particle_queue_cpp, 14},
+    {"_EMC2_emc_wpool_particle_queue_cpp", (DL_FUNC) &_EMC2_emc_wpool_particle_queue_cpp, 15},
     {"_EMC2_emc_wpool_recv_cpp", (DL_FUNC) &_EMC2_emc_wpool_recv_cpp, 6},
     {"_EMC2_emc_wpool_send_cpp", (DL_FUNC) &_EMC2_emc_wpool_send_cpp, 5},
     {"_EMC2_emc_arm_parent_death", (DL_FUNC) &_EMC2_emc_arm_parent_death, 0},
