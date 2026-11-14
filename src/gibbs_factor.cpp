@@ -1,7 +1,8 @@
 // The group draws of the factor hierarchies: parameter-expanded factor
 // analysis with loadings fixed or free by entry (R/variant_factor.R
 // gibbs_step_factor) and the shrinkage prior over an unbounded number of
-// factors (R/variant_infnt_factor.R gibbs_step_infnt_factor).
+// factors (R/variant_infnt_factor.R gibbs_step_infnt_factor), and the structural equation model's draw up to
+// its structural coefficients (R/variant_SEM.R).
 // Every product, inverse and eigendecomposition goes through the routine R's
 // own operators call, in R's order, so the draw equals the R form's bit for
 // bit on the same random stream. The draw declines where the R form would
@@ -55,7 +56,9 @@ Mat diagonal(const std::vector<double>& d) {
 // x %*% y as R computes it for finite operands: a matrix-vector product when
 // either result dimension is one, else the general product.
 Mat mult(const Mat& x, const Mat& y) {
-  if (x.c != y.r || x.r == 0 || x.c == 0 || y.c == 0) throw Decline();
+  if (x.c != y.r) throw Decline();
+  // A product over an empty dimension is the zero matrix.
+  if (x.r == 0 || x.c == 0 || y.c == 0) return Mat(x.r, y.c);
   require_finite(x);
   require_finite(y);
   Mat z(x.r, y.c);
@@ -578,6 +581,212 @@ void draw_infinite(emc_factor::InfiniteState& s, const Mat& alpha,
       s.var(i, j) = s.var(i, j) + (i == j ? 1.0 / s.epsilon_inv[i] : 0.0);
 }
 
+// crossprod(x, y) for a single-column y.
+Mat cross_column(const Mat& x, const Mat& y) {
+  if (y.c != 1 || y.r != x.r || x.r == 0 || x.c == 0) throw Decline();
+  require_finite(x);
+  require_finite(y);
+  Mat z(x.c, 1);
+  int nr = x.r, nc = x.c, ione = 1;
+  double one = 1.0, zero = 0.0;
+  F77_CALL(dgemv)("T", &nr, &nc, &one, x.v.data(), &nr, y.v.data(), &ione, &zero, z.v.data(),
+                  &ione FCONE);
+  return z;
+}
+
+// The columns `idx` of x.
+Mat columns(const Mat& x, const std::vector<int>& idx) {
+  Mat z(x.r, static_cast<int>(idx.size()));
+  for (size_t f = 0; f < idx.size(); ++f)
+    for (int i = 0; i < x.r; ++i) z(i, static_cast<int>(f)) = x(i, idx[f]);
+  return z;
+}
+
+// A regression row's draw: coefficients of the columns `fr` of `design` for
+// the response net of the fixed columns' part, at residual precision `tau`
+// and prior precisions `prec` (by design column). `coef` holds the row's
+// current coefficients and takes the draw.
+void regression_row(const Mat& design, Mat response, double tau, const std::vector<int>& fr,
+                    const std::vector<int>& fx, const std::vector<double>& prec,
+                    std::vector<double>& coef, bool scale_response) {
+  const int n = design.r, kf = static_cast<int>(fr.size());
+  if (!fx.empty()) {
+    Mat fixed(static_cast<int>(fx.size()), 1);
+    for (size_t f = 0; f < fx.size(); ++f) fixed(static_cast<int>(f), 0) = coef[fx[f]];
+    const Mat part = mult(columns(design, fx), fixed);
+    for (int i = 0; i < n; ++i) response(i, 0) = response(i, 0) - part(i, 0);
+  }
+  const Mat x = columns(design, fr);
+  Mat m = sym_product(x, false);
+  for (int b = 0; b < kf; ++b)
+    for (int a = 0; a < kf; ++a) {
+      volatile double scaled = tau * m(a, b);
+      m(a, b) = scaled + (a == b ? prec[fr[a]] : 0.0);
+    }
+  const Mat sig = inverse(m);
+  Mat rhs = cross_column(x, response);
+  if (scale_response)
+    for (double& e : rhs.v) e = tau * e;
+  const Mat mean = mult(sig, rhs);
+  const Mat row = normal_rows(1, mean.v.data(), normal_factor(sig));
+  for (int f = 0; f < kf; ++f) coef[fr[f]] = row(0, f);
+}
+
+void draw_sem(emc_factor::SemState& s, const Mat& y, const Mat& cov,
+              const emc_factor::SemPrior& prior) {
+  const int n = y.r, p = y.c, k = s.lambda.c, c = cov.c;
+  Mat eps = diagonal(s.epsilon_inv);
+  auto centred = [&](const std::vector<double>& mu) {
+    Mat z(n, p);
+    for (int j = 0; j < p; ++j)
+      for (int i = 0; i < n; ++i) z(i, j) = y(i, j) - mu[j];
+    return z;
+  };
+  auto minus = [](Mat a, const Mat& b) {
+    for (size_t e = 0; e < a.v.size(); ++e) a.v[e] = a.v[e] - b.v[e];
+    return a;
+  };
+  // The factor scores' conditional draw given centred subject states.
+  auto scores = [&](const Mat& tilde) {
+    Mat ib(k, k);
+    for (int j = 0; j < k; ++j)
+      for (int i = 0; i < k; ++i) ib(i, j) = (i == j ? 1.0 : 0.0) - s.B(i, j);
+    const Mat b0 = inverse(ib);
+    const Mat psi0 = inverse(mult(mult(b0, inverse(s.delta_inv)), transpose(b0)));
+    const Mat lt = transpose(s.lambda);
+    Mat prec = mult(mult(lt, eps), s.lambda);
+    for (size_t e = 0; e < prec.v.size(); ++e) prec.v[e] = psi0.v[e] + prec.v[e];
+    const Mat eta_sig = inverse(prec);
+    const Mat data = mult(mult(lt, eps), transpose(minus(tilde, mult(cov, transpose(s.K)))));
+    const Mat structural = mult(mult(mult(psi0, b0), s.G), transpose(cov));
+    Mat total(k, n);
+    for (size_t e = 0; e < total.v.size(); ++e) total.v[e] = data.v[e] + structural.v[e];
+    const Mat mean = mult(eta_sig, total);
+    const Mat noise = normal_rows(n, NULL, normal_factor(eta_sig));
+    for (int f = 0; f < k; ++f)
+      for (int i = 0; i < n; ++i) s.eta(i, f) = mean(f, i) + noise(i, f);
+  };
+  auto residual = [&](const Mat& base) {
+    return minus(minus(base, mult(cov, transpose(s.K))), mult(s.eta, transpose(s.lambda)));
+  };
+
+  s.eta = Mat(n, k);
+  scores(centred(s.mu));
+
+  // The means.
+  {
+    Mat prec(p, p), prior_prec = diagonal(prior.mu_prec);
+    for (int j = 0; j < p; ++j)
+      for (int i = 0; i < p; ++i) {
+        volatile double scaled = n * eps(i, j);
+        prec(i, j) = scaled + prior_prec(i, j);
+      }
+    const Mat mu_sig = inverse(prec);
+    Mat sums(p, 1), mean0(p, 1);
+    sums.v = col_sums(residual(y));
+    mean0.v = prior.mu_mean;
+    const Mat a = mult(eps, sums), b = mult(prior_prec, mean0);
+    Mat rhs(p, 1);
+    for (int i = 0; i < p; ++i) rhs(i, 0) = a(i, 0) + b(i, 0);
+    const Mat mu_mu = mult(mu_sig, rhs);
+    s.mu = normal_rows(1, mu_mu.v.data(), normal_factor(mu_sig)).v;
+  }
+  const Mat tilde = centred(s.mu);
+  scores(tilde);
+
+  // The error precisions.
+  {
+    Mat sq = residual(tilde);
+    for (double& e : sq.v) {
+      volatile double e2 = e * e;
+      e = e2;
+    }
+    const std::vector<double> ss = col_sums(sq);
+    for (int j = 0; j < p; ++j) {
+      volatile double half = 0.5 * ss[j];
+      s.epsilon_inv[j] = gamma_draw(prior.shape_err[j], prior.rate_err[j] + half);
+    }
+  }
+
+  // Each parameter's covariate effects and loadings.
+  {
+    Mat design(n, c + k);
+    std::copy(cov.v.begin(), cov.v.end(), design.v.begin());
+    std::copy(s.eta.v.begin(), s.eta.v.end(), design.v.begin() + cov.v.size());
+    for (int j = 0; j < p; ++j) {
+      std::vector<int> fr, fx;
+      std::vector<double> coef(c + k);
+      for (int f = 0; f < c; ++f) {
+        (prior.free_K[j + static_cast<size_t>(f) * p] ? fr : fx).push_back(f);
+        coef[f] = s.K(j, f);
+      }
+      for (int f = 0; f < k; ++f) {
+        (prior.free_lambda[j + static_cast<size_t>(f) * p] ? fr : fx).push_back(c + f);
+        coef[c + f] = s.lambda(j, f);
+      }
+      if (fr.empty()) continue;
+      Mat response(n, 1);
+      for (int i = 0; i < n; ++i) response(i, 0) = tilde(i, j);
+      regression_row(design, response, s.epsilon_inv[j], fr, fx, prior.load_prec, coef, true);
+      for (int f = 0; f < c; ++f) s.K(j, f) = coef[f];
+      for (int f = 0; f < k; ++f) s.lambda(j, f) = coef[c + f];
+    }
+  }
+
+  // Each factor's structural coefficients given the others' residuals.
+  {
+    Mat design(n, c + k);
+    std::copy(cov.v.begin(), cov.v.end(), design.v.begin());
+    std::copy(s.eta.v.begin(), s.eta.v.end(), design.v.begin() + cov.v.size());
+    Mat resid = minus(minus(s.eta, mult(s.eta, transpose(s.B))), mult(cov, transpose(s.G)));
+    for (int f = 0; f < k; ++f) {
+      std::vector<int> fr, fx;
+      std::vector<double> coef(c + k);
+      for (int g = 0; g < c; ++g) {
+        (prior.free_G[f + static_cast<size_t>(g) * k] ? fr : fx).push_back(g);
+        coef[g] = s.G(f, g);
+      }
+      for (int g = 0; g < k; ++g) {
+        (prior.free_B[f + static_cast<size_t>(g) * k] ? fr : fx).push_back(c + g);
+        coef[c + g] = s.B(f, g);
+      }
+      if (fr.empty()) continue;
+      const double tau = s.delta_inv(f, f);
+      Mat others(n, 1);
+      if (k > 1) {
+        std::vector<int> rest;
+        for (int g = 0; g < k; ++g)
+          if (g != f) rest.push_back(g);
+        Mat weights(k - 1, 1);
+        for (int g = 0; g < k - 1; ++g) weights(g, 0) = s.delta_inv(rest[g], f);
+        others = mult(columns(resid, rest), weights);
+      }
+      // The response is scaled by the factor's own precision after the
+      // fixed coefficients' part is removed.
+      Mat response(n, 1);
+      for (int i = 0; i < n; ++i) response(i, 0) = s.eta(i, f);
+      if (!fx.empty()) {
+        Mat fixed(static_cast<int>(fx.size()), 1);
+        for (size_t g = 0; g < fx.size(); ++g) fixed(static_cast<int>(g), 0) = coef[fx[g]];
+        const Mat part = mult(columns(design, fx), fixed);
+        for (int i = 0; i < n; ++i) response(i, 0) = response(i, 0) - part(i, 0);
+      }
+      for (int i = 0; i < n; ++i) {
+        volatile double scaled = tau * response(i, 0);
+        response(i, 0) = scaled + others(i, 0);
+      }
+      regression_row(design, response, tau, fr, std::vector<int>(), prior.struct_prec, coef,
+                     false);
+      for (int g = 0; g < c; ++g) s.G(f, g) = coef[g];
+      for (int g = 0; g < k; ++g) s.B(f, g) = coef[c + g];
+      Mat row(c + k, 1);
+      row.v = coef;
+      const Mat fitted = mult(design, row);
+      for (int i = 0; i < n; ++i) resid(i, f) = s.eta(i, f) - fitted(i, 0);
+    }
+  }
+}
+
 Mat as_mat(const Rcpp::NumericMatrix& x) {
   Mat z(x.nrow(), x.ncol());
   std::copy(x.begin(), x.end(), z.v.begin());
@@ -714,7 +923,68 @@ bool gibbs_infinite(InfiniteState& state, const Mat& alpha, const InfinitePrior&
   return true;
 }
 
+bool gibbs_sem(SemState& state, const Mat& y, const Mat& cov, const SemPrior& prior) {
+  const int n = y.r, p = y.c, k = state.lambda.c, c = cov.c;
+  auto len = [](const std::vector<double>& x) { return static_cast<int>(x.size()); };
+  auto cells = [](const std::vector<int>& x) { return x.size(); };
+  if (n < 1 || p < 2 || k < 1 || cov.r != n || state.lambda.r != p || state.B.r != k ||
+      state.B.c != k || state.K.r != p || state.K.c != c || state.G.r != k || state.G.c != c ||
+      state.delta_inv.r != k || state.delta_inv.c != k || len(state.mu) != p ||
+      len(state.epsilon_inv) != p || len(prior.mu_prec) != p || len(prior.mu_mean) != p ||
+      len(prior.shape_err) != p || len(prior.rate_err) != p || len(prior.load_prec) != c + k ||
+      len(prior.struct_prec) != c + k ||
+      cells(prior.free_lambda) != static_cast<size_t>(p) * k ||
+      cells(prior.free_K) != static_cast<size_t>(p) * c ||
+      cells(prior.free_B) != static_cast<size_t>(k) * k ||
+      cells(prior.free_G) != static_cast<size_t>(k) * c)
+    return false;
+  try {
+    draw_sem(state, y, cov, prior);
+  } catch (Decline&) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace emc_factor
+
+// The structural equation model's group draw up to its structural
+// coefficients: `y` subjects x parameters, the covariates (no columns
+// without any), the state as the store holds it, which coefficients are
+// free, and the prior's precisions at full length. NULL when the draw is
+// left to the R form.
+// [[Rcpp::export]]
+SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates,
+                       const Rcpp::List& state, const Rcpp::List& free,
+                       const Rcpp::List& prior) {
+  emc_factor::SemState s;
+  s.lambda = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["lambda"]));
+  s.B = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["B"]));
+  s.K = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["K"]));
+  s.G = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["G"]));
+  s.delta_inv = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["delta_inv"]));
+  s.mu = as_std(state["mu"]);
+  s.epsilon_inv = as_std(state["epsilon_inv"]);
+  emc_factor::SemPrior pr;
+  pr.mu_prec = as_std(prior["mu_prec"]);
+  pr.mu_mean = as_std(prior["mu_mean"]);
+  pr.shape_err = as_std(prior["shape_err"]);
+  pr.rate_err = as_std(prior["rate_err"]);
+  pr.load_prec = as_std(prior["load_prec"]);
+  pr.struct_prec = as_std(prior["struct_prec"]);
+  if (!free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["lambda"]), pr.free_lambda) ||
+      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["K"]), pr.free_K) ||
+      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["B"]), pr.free_B) ||
+      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["G"]), pr.free_G))
+    return R_NilValue;
+  if (!emc_factor::gibbs_sem(s, as_mat(y), as_mat(covariates), pr)) return R_NilValue;
+  return Rcpp::List::create(
+      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
+      Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["epsilon_inv"] = Rcpp::NumericVector(s.epsilon_inv.begin(), s.epsilon_inv.end()),
+      Rcpp::_["lambda"] = as_r(s.lambda), Rcpp::_["K"] = as_r(s.K), Rcpp::_["G"] = as_r(s.G),
+      Rcpp::_["B"] = as_r(s.B));
+}
 
 // mvtnorm::rmvnorm(n, mean, sigma) by its default method, on the same random
 // stream: `mean` NULL for the zero vector. NULL where that function would

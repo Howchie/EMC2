@@ -60,6 +60,28 @@ struct InfinitePrior {
 // The draw given the subjects' states; FALSE as for gibbs().
 bool gibbs_infinite(InfiniteState& state, const Mat& alpha, const InfinitePrior& prior);
 
+// The structural equation model's state: scores, loadings, the factors'
+// structural coefficients B, the covariates' effects on parameters (K) and
+// factors (G), the factors' disturbance precision, means and error
+// precisions.
+struct SemState {
+  Mat eta, lambda, B, K, G, delta_inv;
+  std::vector<double> mu, epsilon_inv;
+};
+
+// Its prior: the means' precisions and means, the error precisions' shapes
+// (with the subjects' half count added) and rates, the prior precisions of a
+// parameter's coefficients (covariates then factors) and of a factor's
+// (covariates then factors), and which coefficients are free (column-major).
+struct SemPrior {
+  std::vector<double> mu_prec, mu_mean, shape_err, rate_err, load_prec, struct_prec;
+  std::vector<int> free_lambda, free_K, free_B, free_G;
+};
+
+// The draw of everything but the disturbance precision, given the subjects'
+// states and covariates (subjects x covariates); FALSE as for gibbs().
+bool gibbs_sem(SemState& state, const Mat& y, const Mat& cov, const SemPrior& prior);
+
 }  // namespace emc_factor
 
 #endif

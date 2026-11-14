@@ -416,7 +416,61 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
          n_subjects, n_factors)
 }
 
+# The group draw: everything but the disturbance precision from the native
+# form (src/gibbs_factor.cpp), which gives the R form's draw on the same
+# random stream, else from the R form started at the stream's state before
+# the call; then the disturbance precision and the implied moments.
 gibbs_step_SEM <- function(sampler, alpha){
+  seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
+  front <- if (!is.null(seed) && isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
+    .sem_gibbs_front_native(sampler, alpha)
+  if (is.null(front)) {
+    if (!is.null(seed)) assign(".Random.seed", seed, envir = globalenv())
+    front <- .sem_gibbs_front_r(sampler, alpha)
+  }
+  .sem_gibbs_back(sampler, alpha, front)
+}
+
+# The native draw of everything but the disturbance precision, or NULL where
+# the native form does not cover the model or declines the draw.
+.sem_gibbs_front_native <- function(sampler, alpha) {
+  last <- last_sample_SEM(sampler$samples)
+  ss <- sampler$sem_settings
+  prior <- sampler$prior
+  n <- sampler$n_subjects
+  p <- sum(!sampler$nuisance)
+  k <- sampler$n_factors
+  x <- if (is.null(ss$covariates)) matrix(0, n, 0) else as.matrix(ss$covariates)
+  n_cov <- ncol(x)
+  full <- function(v, len) is.numeric(v) && length(v) %in% c(1L, len)
+  exact <- function(v, len) is.numeric(v) && length(v) == len
+  shaped <- function(m, nr, nc) is.matrix(m) && all(dim(m) == c(nr, nc)) && !anyNA(m)
+  if (p < 2L || length(k) != 1L || k < 1L || !is.matrix(alpha) ||
+      !all(dim(alpha) == c(p, n)) || !is.double(x) || nrow(x) != n ||
+      !shaped(ss$Lambda_mat, p, k) || !shaped(ss$B_mat, k, k) ||
+      !shaped(ss$K_mat, p, n_cov) || !shaped(ss$G_mat, k, n_cov) ||
+      !full(prior$theta_mu_var, p) || !exact(prior$theta_mu_mean, p) ||
+      !full(prior$a_e, p) || !full(prior$b_e, p) || !exact(prior$K_var, n_cov) ||
+      !exact(prior$lambda_var, k) || !exact(prior$G_var, n_cov) || !exact(prior$B_var, k))
+    return(NULL)
+  emc_gibbs_sem_cpp(
+    t(alpha), unname(x),
+    list(lambda = matrix(as.numeric(last$lambda), p, k), B = matrix(as.numeric(last$B), k, k),
+         K = matrix(as.numeric(last$K), p, n_cov), G = matrix(as.numeric(last$G), k, n_cov),
+         delta_inv = matrix(as.numeric(last$delta_inv), k, k), mu = as.numeric(last$mu),
+         epsilon_inv = as.numeric(last$epsilon_inv)),
+    list(lambda = ss$Lambda_mat == Inf, K = ss$K_mat == Inf, B = ss$B_mat == Inf,
+         G = ss$G_mat == Inf),
+    list(mu_prec = rep_len(1 / as.numeric(prior$theta_mu_var), p),
+         mu_mean = as.numeric(prior$theta_mu_mean),
+         shape_err = rep_len(as.numeric(prior$a_e + n / 2), p),
+         rate_err = rep_len(as.numeric(prior$b_e), p),
+         load_prec = 1 / c(as.numeric(prior$K_var), as.numeric(prior$lambda_var)),
+         struct_prec = 1 / c(as.numeric(prior$G_var), as.numeric(prior$B_var))))
+}
+
+# The draw of everything but the disturbance precision, in R.
+.sem_gibbs_front_r <- function(sampler, alpha){
   last          <- last_sample_SEM(sampler$samples)
   sem_settings  <- sampler$sem_settings
   prior         <- sampler$prior
@@ -566,8 +620,32 @@ gibbs_step_SEM <- function(sampler, alpha){
     eta_residuals[, p] <- eta[, p] - Z_full %*% c(G_new[p, ], B_new[p, ])
   }
 
-  G <- G_new
-  B <- B_new
+  list(mu = mu, eta = eta, epsilon_inv = diag(epsilon_inv), lambda = lambda, K = K,
+       G = G_new, B = B_new)
+}
+
+# The disturbance precision given the rest of the draw, and the draw in the
+# form the sampler stores, with the moments the factor scores imply.
+.sem_gibbs_back <- function(sampler, alpha, front) {
+  sem_settings  <- sampler$sem_settings
+  prior         <- sampler$prior
+  y             <- t(alpha)
+  n_subjects    <- sampler$n_subjects
+  n_pars        <- sum(!sampler$nuisance)
+  n_factors     <- sampler$n_factors
+  covariates    <- if (is.null(sem_settings$covariates)) matrix(0, n_subjects, 0) else
+    as.matrix(sem_settings$covariates)
+  factor_groups <- sem_settings$factor_groups
+  unique_factor_groups <- unique(factor_groups)
+  last          <- last_sample_SEM(sampler$samples)
+  delta_inv     <- matrix(last$delta_inv, n_factors, n_factors)
+  mu <- front$mu
+  eta <- front$eta
+  epsilon_inv <- diag(front$epsilon_inv)
+  lambda <- front$lambda
+  K <- front$K
+  G <- front$G
+  B <- front$B
 
   ## ---- update delta_inv ---------------------------------------------------
   eta_residuals <- eta - eta %*% t(B) - covariates %*% t(G)
@@ -620,8 +698,6 @@ gibbs_step_SEM <- function(sampler, alpha){
        pop_mean    = pop_mean,
        tvar        = pop_var)
 }
-
-
 
 last_sample_SEM <- function(store) {
   slice2d <- function(arr) {

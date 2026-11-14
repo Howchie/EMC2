@@ -237,3 +237,30 @@ test_that("the native latent ensemble rounds are the R rounds", {
     expect_identical(.Random.seed, after)
   }
 })
+
+test_that("the native SEM group draw is the R form's draw", {
+  skip_on_os("windows")
+  set.seed(8)
+  x <- matrix(rnorm(2), 2, 1, dimnames = list(NULL, "x"))
+  settings <- list(
+    list(Lambda_mat = matrix(c(1, Inf, Inf, Inf), 4, 1)),
+    list(Lambda_mat = cbind(c(1, Inf, 0, 0), c(0, 0, 1, Inf)),
+         B_mat = matrix(c(0, Inf, 0, 0), 2, 2), K_mat = matrix(c(Inf, 0, 0, 0.2), 4, 1),
+         G_mat = matrix(c(Inf, 0), 2, 1), covariates = x))
+  for (ss in settings) {
+    sem <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = "SEM",
+                    sem_settings = ss)
+    sem <- init_chains(sem, cores_for_chains = 1, particles = 5)
+    sampler <- sem[[1]]
+    alpha <- sampler$samples$alpha[, , sampler$samples$idx]
+    set.seed(11)
+    seed <- .Random.seed
+    r_form <- EMC2:::.sem_gibbs_front_r(sampler, alpha)
+    after <- .Random.seed
+    assign(".Random.seed", seed, envir = globalenv())
+    native <- EMC2:::.sem_gibbs_front_native(sampler, alpha)
+    expect_false(is.null(native))
+    expect_identical(native, r_form)
+    expect_identical(.Random.seed, after)
+  }
+})

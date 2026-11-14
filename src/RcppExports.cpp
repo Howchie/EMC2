@@ -681,6 +681,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_gibbs_sem_cpp
+SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates, const Rcpp::List& state, const Rcpp::List& free, const Rcpp::List& prior);
+RcppExport SEXP _EMC2_emc_gibbs_sem_cpp(SEXP ySEXP, SEXP covariatesSEXP, SEXP stateSEXP, SEXP freeSEXP, SEXP priorSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type y(ySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type covariates(covariatesSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type state(stateSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type free(freeSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_gibbs_sem_cpp(y, covariates, state, free, prior));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_rmvnorm_cpp
 SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma);
 RcppExport SEXP _EMC2_emc_rmvnorm_cpp(SEXP nSEXP, SEXP meanSEXP, SEXP sigmaSEXP) {
@@ -4523,6 +4538,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
+    {"_EMC2_emc_gibbs_sem_cpp", (DL_FUNC) &_EMC2_emc_gibbs_sem_cpp, 5},
     {"_EMC2_emc_rmvnorm_cpp", (DL_FUNC) &_EMC2_emc_rmvnorm_cpp, 3},
     {"_EMC2_emc_solve_cpp", (DL_FUNC) &_EMC2_emc_solve_cpp, 1},
     {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 4},
