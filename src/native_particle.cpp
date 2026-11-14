@@ -924,12 +924,14 @@ List emc2_native_particle_block(List plan_in, int n_iter, NumericVector start,
 // `next` names the subjects to step, one per call until it returns a
 // negative value; `after` runs once a named subject has been handled. With
 // `guard`, a subject whose step raises an exception is left to R like any
-// other the kernel does not finish.
+// other the kernel does not finish. `done_out` receives the vector marking
+// the subjects stepped so far.
 template <typename Next, typename After>
 List particle_subjects(List statics, NumericMatrix alpha, NumericVector prev_ll,
                        NumericMatrix population_mu, NumericMatrix group_var, List group,
                        List pm_list, List seeds, LogicalVector skip, std::string stage,
-                       List tune_in, Next next, After after, const bool guard) {
+                       List tune_in, Next next, After after, const bool guard,
+                       SEXP* done_out = nullptr) {
   const int n = alpha.ncol(), p = alpha.nrow();
   const bool adapt = stage != "sample";
   const TuneArgs tune = read_tune(tune_in);
@@ -944,6 +946,7 @@ List particle_subjects(List statics, NumericMatrix alpha, NumericVector prev_ll,
   NumericMatrix alpha_out(p, n);
   NumericVector ll_out(n), cpu(n);
   LogicalVector done(n);
+  if (done_out != nullptr) *done_out = done;
   List pm_out(n), seeds_out(n), sel_out(n);
   Environment global = Environment::global_env();
 
@@ -1204,8 +1207,11 @@ List emc2_ll_cached_subjects(List rows, List data, SEXP model);
 // it is claimed.
 // Each claimed subject's candidate rows (`extra`, NULL without any) are
 // evaluated as it is stepped, from the stored likelihood arguments where
-// `extra_cached`. Adds the claimed subjects, in claim order, and their
-// candidates' likelihoods (NULL where the full path must evaluate them).
+// `extra_cached`. Claiming stops at the first subject left unfinished (a
+// step left to R, or candidates the full path must evaluate), so that the
+// caller finishes it before this process takes another. Adds the claimed
+// subjects, in claim order, their candidates' likelihoods (NULL where the
+// full path must evaluate them) and whether the queue ran out.
 // [[Rcpp::export]]
 List emc2_native_particle_claim(Function get_static, NumericMatrix alpha,
                                 NumericVector prev_ll,
@@ -1223,12 +1229,18 @@ List emc2_native_particle_claim(Function get_static, NumericMatrix alpha,
     Rcpp::stop("claim inputs do not cover the subjects");
   std::vector<int> claimed;
   List extra_ll(n);
+  bool unfinished = false, exhausted = false;
+  SEXP last_done = R_NilValue;
   List out = particle_subjects(
       statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage,
       tune_in,
       [&]() {
+        if (unfinished) return -1;
         const int i = emc_claim_next(claim, key, n_queue);
-        if (i < 0) return -1;
+        if (i < 0) {
+          exhausted = true;
+          return -1;
+        }
         const int s = order[i];
         if (s < 1 || s > n) Rcpp::stop("queued subject outside the iteration");
         claimed.push_back(s);
@@ -1236,16 +1248,22 @@ List emc2_native_particle_claim(Function get_static, NumericMatrix alpha,
         return s - 1;
       },
       [&](const int k) {
-        if (!has_extra || !extra_cached) return;
+        const LogicalVector stepped = last_done;
+        if (!stepped[k] && !skip[k]) unfinished = true;
+        if (!has_extra) return;
         const SEXP rows = VECTOR_ELT(extra, k);
         if (Rf_isNull(rows)) return;
-        const List one = emc2_ll_cached_subjects(List::create(rows), List::create(data[k]),
-                                                 model);
-        extra_ll[k] = one[0];
+        if (extra_cached) {
+          const List one = emc2_ll_cached_subjects(List::create(rows),
+                                                   List::create(data[k]), model);
+          extra_ll[k] = one[0];
+        }
+        if (Rf_isNull(extra_ll[k])) unfinished = true;
       },
-      true);
+      true, &last_done);
   out["claimed"] = wrap(claimed);
   out["extra_ll"] = extra_ll;
+  out["exhausted"] = exhausted;
   return out;
 }
 

@@ -2388,36 +2388,8 @@
     tryCatch(.emc_native_static(s, ctx, par_names), error = function(e) NULL)
   extra_cached <- isTRUE(ctx$ll_cache_validated) && is.null(inp$pooled) &&
     is.null(ctx$marginalise)
-  res <- .emc_with_preserved_rng(emc2_native_particle_claim(
-    get_static, inp$alpha, as.numeric(inp$prev_ll), inp$population_mu, args$group_var,
-    args$group, inp$pm, inp$seeds, args$skip, args$stage, args$tune_in, map$ptr,
-    as.integer(msg$key), as.integer(unlist(inp$order))[seq_len(msg$n)], inp$extra,
-    extra_cached, ctx$data, ctx$model))
-  got <- res$claimed
-  if (!length(got)) return(NULL)
-  res <- .emc_native_particle_settings(res, inp$pm, args$stage)
-  done <- res$done[got] %in% TRUE
-  skipped <- !done & args$skip[got]
-  complete <- done | skipped
-  unscored <- if (is.null(inp$extra)) logical(length(got)) else
-    complete & !vapply(inp$extra[got], is.null, logical(1)) &
-      vapply(res$extra_ll[got], is.null, logical(1))
+  order <- as.integer(unlist(inp$order))[seq_len(msg$n)]
   rows <- seq_len(ctx$n_pars)
-  props <- matrix(0, ctx$n_pars + 1L, length(got))
-  pm <- vector("list", length(got))
-  seeds <- vector("list", length(got))
-  times <- numeric(length(got))
-  extra_ll <- if (is.null(inp$extra)) NULL else vector("list", length(got))
-  props[rows, done] <- res$alpha[, got[done]]
-  props[ctx$n_pars + 1L, done] <- res$ll[got[done]]
-  pm[done] <- res$pm_settings[got[done]]
-  seeds[done] <- res$seeds[got[done]]
-  times[done] <- res$cpu[got[done]]
-  props[rows, skipped] <- inp$alpha[, got[skipped]]
-  props[ctx$n_pars + 1L, skipped] <- inp$prev_ll[got[skipped]]
-  pm[skipped] <- inp$pm[got[skipped]]
-  seeds[skipped] <- inp$seeds[got[skipped]]
-  if (!is.null(extra_ll)) extra_ll[complete] <- res$extra_ll[got[complete]]
   rejects <- stats::setNames(integer(length(.EMC_REJECT_CLASSES)), .EMC_REJECT_CLASSES)
   ensemble_rejects <- list(counts = rejects, msgs = list())
   note_ensemble <- function(counts, msgs) {
@@ -2426,34 +2398,78 @@
       if (is.null(ensemble_rejects$msgs[[cls]]))
         ensemble_rejects$msgs[[cls]] <<- msgs[[cls]]
   }
-  # Claim order, as the replies' rejections are reported.
-  for (j in which(!complete | unscored)) {
-    s <- got[j]
-    if (complete[j]) {
-      before <- .emc_reject_counts("ensemble")
-      extra_ll[[j]] <- .emc_ensemble_ll_candidate(
-        inp$extra[[s]], .emc_pooled_set_one(ctx$data[[s]], inp$pooled), ctx$model,
-        ll_cache_validated = isTRUE(ctx$ll_cache_validated))
-      delta <- .emc_reject_delta(before, "ensemble")
-      if (any(delta > 0L)) {
-        recorded <- .emc_reject_messages()
-        note_ensemble(delta, stats::setNames(
-          lapply(names(delta), function(cls) recorded[[paste("ensemble", cls, sep = ".")]]),
-          names(delta))[delta > 0L])
+  # The kernel returns at the first claimed subject it does not finish, which
+  # is finished here before any other is claimed.
+  parts <- list()
+  repeat {
+    res <- .emc_with_preserved_rng(emc2_native_particle_claim(
+      get_static, inp$alpha, as.numeric(inp$prev_ll), inp$population_mu, args$group_var,
+      args$group, inp$pm, inp$seeds, args$skip, args$stage, args$tune_in, map$ptr,
+      as.integer(msg$key), order, inp$extra, extra_cached, ctx$data, ctx$model))
+    got <- res$claimed
+    if (length(got)) {
+      res <- .emc_native_particle_settings(res, inp$pm, args$stage)
+      done <- res$done[got] %in% TRUE
+      skipped <- !done & args$skip[got]
+      complete <- done | skipped
+      unscored <- if (is.null(inp$extra)) logical(length(got)) else
+        complete & !vapply(inp$extra[got], is.null, logical(1)) &
+          vapply(res$extra_ll[got], is.null, logical(1))
+      props <- matrix(0, ctx$n_pars + 1L, length(got))
+      pm <- vector("list", length(got))
+      seeds <- vector("list", length(got))
+      times <- numeric(length(got))
+      extra_ll <- if (is.null(inp$extra)) NULL else vector("list", length(got))
+      props[rows, done] <- res$alpha[, got[done]]
+      props[ctx$n_pars + 1L, done] <- res$ll[got[done]]
+      pm[done] <- res$pm_settings[got[done]]
+      seeds[done] <- res$seeds[got[done]]
+      times[done] <- res$cpu[got[done]]
+      props[rows, skipped] <- inp$alpha[, got[skipped]]
+      props[ctx$n_pars + 1L, skipped] <- inp$prev_ll[got[skipped]]
+      pm[skipped] <- inp$pm[got[skipped]]
+      seeds[skipped] <- inp$seeds[got[skipped]]
+      if (!is.null(extra_ll)) extra_ll[complete] <- res$extra_ll[got[complete]]
+      for (j in which(!complete | unscored)) {
+        s <- got[j]
+        if (complete[j]) {
+          before <- .emc_reject_counts("ensemble")
+          extra_ll[[j]] <- .emc_ensemble_ll_candidate(
+            inp$extra[[s]], .emc_pooled_set_one(ctx$data[[s]], inp$pooled), ctx$model,
+            ll_cache_validated = isTRUE(ctx$ll_cache_validated))
+          delta <- .emc_reject_delta(before, "ensemble")
+          if (any(delta > 0L)) {
+            recorded <- .emc_reject_messages()
+            note_ensemble(delta, stats::setNames(
+              lapply(names(delta),
+                     function(cls) recorded[[paste("ensemble", cls, sep = ".")]]),
+              names(delta))[delta > 0L])
+          }
+          next
+        }
+        out <- .emc_wpool_compute_particle(one_subject(s), ctx, shared)
+        props[, j] <- out$props
+        pm[j] <- out$pm
+        seeds[j] <- out$seeds
+        times[j] <- out$times
+        if (!is.null(extra_ll)) extra_ll[j] <- out$extra_ll
+        rejects <- rejects + out$rejects
+        note_ensemble(out$ensemble_rejects$counts, out$ensemble_rejects$msgs)
       }
-      next
+      parts[[length(parts) + 1L]] <- list(subs = got, props = props, pm = pm, seeds = seeds,
+                                          times = times, extra_ll = extra_ll)
     }
-    out <- .emc_wpool_compute_particle(one_subject(s), ctx, shared)
-    props[, j] <- out$props
-    pm[j] <- out$pm
-    seeds[j] <- out$seeds
-    times[j] <- out$times
-    if (!is.null(extra_ll)) extra_ll[j] <- out$extra_ll
-    rejects <- rejects + out$rejects
-    note_ensemble(out$ensemble_rejects$counts, out$ensemble_rejects$msgs)
+    if (isTRUE(res$exhausted)) break
   }
-  list(subs = got, props = props, pm = pm, seeds = seeds, times = times,
-       extra_ll = extra_ll, rejects = rejects, ensemble_rejects = ensemble_rejects)
+  if (!length(parts)) return(NULL)
+  whole <- if (length(parts) == 1L) parts[[1L]] else {
+    each <- function(name) lapply(parts, `[[`, name)
+    list(subs = do.call(c, each("subs")), props = do.call(cbind, each("props")),
+         pm = do.call(c, each("pm")), seeds = do.call(c, each("seeds")),
+         times = do.call(c, each("times")),
+         extra_ll = if (is.null(inp$extra)) NULL else do.call(c, each("extra_ll")))
+  }
+  c(whole, list(rejects = rejects, ensemble_rejects = ensemble_rejects))
 }
 
 .emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
