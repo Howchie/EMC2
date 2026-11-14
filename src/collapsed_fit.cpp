@@ -404,3 +404,62 @@ SEXP emc_covariance_ok_cpp(const Rcpp::NumericMatrix& S) {
   volatile double rcond = 1 / kappa;
   return Rf_ScalarLogical(R_FINITE(rcond) && rcond >= 1e-12);
 }
+
+// .emc_collapsed_to_phi(): the group state (mean mu, covariance V) in the
+// collapsed move's coordinates: the mean, each block's lower Cholesky factor
+// with its diagonal logged, and half the log of each remaining variance.
+// NULL where the R form raises a condition or takes a path of its own.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_collapsed_to_phi_cpp(const Rcpp::NumericVector& mu, const Rcpp::NumericMatrix& V,
+                              const Rcpp::List& chart) {
+  if (!chart.containsElementNamed("dim") || !chart.containsElementNamed("p") ||
+      !chart.containsElementNamed("blocks"))
+    return R_NilValue;
+  const int dim = Rcpp::as<int>(chart["dim"]), p = Rcpp::as<int>(chart["p"]);
+  const int nv = V.nrow();
+  if (p < 1 || dim < p || mu.size() != p || V.ncol() != nv) return R_NilValue;
+  Rcpp::NumericVector phi(dim);
+  std::copy(mu.begin(), mu.end(), phi.begin());
+  const Rcpp::List blocks = chart["blocks"];
+  for (R_xlen_t q = 0; q < blocks.size(); ++q) {
+    const Rcpp::List b = blocks[q];
+    const Rcpp::IntegerVector idx = Rcpp::as<Rcpp::IntegerVector>(b["idx"]);
+    const Rcpp::IntegerVector lt = Rcpp::as<Rcpp::IntegerVector>(b["lt"]);
+    const Rcpp::IntegerVector at = Rcpp::as<Rcpp::IntegerVector>(b["at"]);
+    int d = idx.size();
+    if (d < 1 || lt.size() != at.size()) return R_NilValue;
+    Vec U(static_cast<std::size_t>(d) * d, 0.0);
+    for (int j = 0; j < d; ++j)
+      for (int i = 0; i <= j; ++i) {
+        if (idx[i] < 1 || idx[i] > nv || idx[j] < 1 || idx[j] > nv) return R_NilValue;
+        const double v = V(idx[i] - 1, idx[j] - 1);
+        if (ISNAN(v)) return R_NilValue;
+        U[i + static_cast<std::size_t>(j) * d] = v;
+      }
+    int info = 0;
+    F77_CALL(dpotrf)("U", &d, U.data(), &d, &info FCONE);
+    if (info != 0) return R_NilValue;
+    // The lower factor, its diagonal logged.
+    Vec L(U.size(), 0.0);
+    for (int j = 0; j < d; ++j)
+      for (int i = 0; i <= j; ++i)
+        L[j + static_cast<std::size_t>(i) * d] = i == j ? std::log(U[i + static_cast<std::size_t>(j) * d])
+                                                         : U[i + static_cast<std::size_t>(j) * d];
+    for (R_xlen_t e = 0; e < lt.size(); ++e) {
+      if (lt[e] < 1 || lt[e] > d * d || at[e] < 1 || at[e] > dim) return R_NilValue;
+      phi[at[e] - 1] = L[lt[e] - 1];
+    }
+  }
+  if (chart.containsElementNamed("gamma") && Rf_length(chart["gamma"]) > 0) {
+    const Rcpp::IntegerVector g = Rcpp::as<Rcpp::IntegerVector>(chart["gamma"]);
+    const Rcpp::IntegerVector at = Rcpp::as<Rcpp::IntegerVector>(chart["gamma_at"]);
+    if (g.size() != at.size()) return R_NilValue;
+    for (R_xlen_t e = 0; e < g.size(); ++e) {
+      if (g[e] < 1 || g[e] > nv || at[e] < 1 || at[e] > dim) return R_NilValue;
+      const double v = V(g[e] - 1, g[e] - 1);
+      if (!(v >= 0.0)) return R_NilValue;
+      phi[at[e] - 1] = 0.5 * std::log(v);
+    }
+  }
+  return phi;
+}

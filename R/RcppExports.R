@@ -92,6 +92,10 @@ emc_covariance_ok_cpp <- function(S) {
     .Call(`_EMC2_emc_covariance_ok_cpp`, S)
 }
 
+emc_collapsed_to_phi_cpp <- function(mu, V, chart) {
+    .Call(`_EMC2_emc_collapsed_to_phi_cpp`, mu, V, chart)
+}
+
 collapsed_surrogate_cpp <- function(phi, model) {
     .Call(`_EMC2_collapsed_surrogate_cpp`, phi, model)
 }

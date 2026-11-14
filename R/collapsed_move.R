@@ -85,6 +85,10 @@
 }
 
 .emc_collapsed_to_phi <- function(mu, V, chart) {
+  phi <- if (getOption("emc2.native_collapsed_fit", TRUE) && is.double(mu) && is.matrix(V) &&
+             is.double(V))
+    emc_collapsed_to_phi_cpp(mu, V, chart)
+  if (!is.null(phi)) return(phi)
   phi <- numeric(chart$dim)
   phi[seq_len(chart$p)] <- mu
   for (b in chart$blocks) {
