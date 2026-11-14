@@ -10,13 +10,27 @@
 .EMC_NATIVE_STEPS <- c(group = "group", particle = "particle", ensemble = "ensemble",
                        shear = "shear", collapsed = "collapsed", hmc = "hmc", store = "store")
 
-# Whether the native forms of the steps cover the block: standard hierarchies
-# and fits without a group level, without nuisance or pooled parameters,
-# outside profiled runs. A step whose native form does not take the state
-# (a likelihood pool of a single subject, no subject pool) runs in R.
+# Whether native forms of the steps cover the block: fits without nuisance or
+# pooled parameters, outside profiled runs. A step whose native form does not
+# take the state (a likelihood pool of a single subject, no subject pool)
+# runs in R.
 .emc_steps_native_ok <- function(pmwgs, nuisance, sampler_profile, wpool, llpool) {
-  (identical(pmwgs$type, "standard") || identical(pmwgs$type, "single")) &&
-    !any(nuisance) && is.null(pmwgs$pooled) && !sampler_profile
+  !any(nuisance) && is.null(pmwgs$pooled) && !sampler_profile
+}
+
+# The steps with a native form for a hierarchy type: all of them for standard
+# hierarchies and fits without a group level; the particle step for the
+# other types, whose group updates and moves are their own.
+.emc_steps_native_set <- function(type) {
+  if (identical(type, "standard") || identical(type, "single")) names(.EMC_NATIVE_STEPS) else
+    "particle"
+}
+
+# Each subject's prior mean under the group state, parameters x subjects.
+.emc_steps_prior_means <- function(pars, type, n_subjects) {
+  mu <- vapply(seq_len(n_subjects), function(s)
+    as.numeric(get_group_level(pars, s, type)$mu), numeric(nrow(pars$alpha)))
+  matrix(mu, nrow(pars$alpha), n_subjects)
 }
 
 # The state's own value of a block constant that a step may replace (the data
@@ -42,7 +56,8 @@
   if (identical(pmwgs$type, "single"))
     out$single <- list(tmu = pmwgs$prior$theta_mu_mean, tvar = pmwgs$prior$theta_mu_var,
                        rows = pmwgs$par_names[!pmwgs$nuisance])
-  else if (is.null(pmwgs$gd) && !length(pmwgs$group_designs)) {
+  else if (identical(pmwgs$type, "standard") && is.null(pmwgs$gd) &&
+           !length(pmwgs$group_designs)) {
     is_blocked <- pmwgs$is_blocked[!pmwgs$nuisance]
     par_group <- pmwgs$par_group[!pmwgs$nuisance]
     if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
@@ -663,8 +678,9 @@
              if (cx$sampler_profile) list(profile = .emc_step_profile))
   native <- getOption("emc2.native_steps", TRUE)
   native <- if (!cx$native_ok) rep(FALSE, length(steps)) else
-    if (is.character(native)) names(steps) %in% native else
-      rep(isTRUE(native), length(steps))
+    (if (is.character(native)) names(steps) %in% native else
+      rep(isTRUE(native), length(steps))) &
+      names(steps) %in% .emc_steps_native_set(st$pmwgs$type)
   if (from <= cx$iter)
     emc_iteration_loop_cpp(st, cx, as.integer(from), steps, native, .emc_steps_rejects)
   invisible(NULL)
