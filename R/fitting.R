@@ -954,6 +954,10 @@ sub_blocking <- function(emc, n_blocks){
 .emc_empirical_covariance_ok <- function(S, subject = NULL, context = NULL) {
   if (!is.matrix(S) || !is.numeric(S) || nrow(S) != ncol(S) || !nrow(S))
     return(FALSE)
+  if (is.double(S)) {
+    ok <- emc_covariance_ok_cpp(S)
+    if (!is.null(ok)) return(ok)
+  }
   if (!all(is.finite(S)) || !all(S == t(S))) return(FALSE)
   values <- tryCatch(eigen(S, symmetric = TRUE, only.values = TRUE)$values,
                      error = function(e) NULL)

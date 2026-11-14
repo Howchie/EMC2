@@ -286,3 +286,121 @@ SEXP emc_collapsed_fit_subject_cpp(const Rcpp::NumericMatrix& A_in, const Rcpp::
   if (!all_finite(H)) return R_NilValue;
   return Rcpp::List::create(Rcpp::_["prec"] = prec, Rcpp::_["lin"] = lin);
 }
+
+namespace {
+
+// LINPACK's estimate of an upper triangular matrix's reciprocal condition in
+// the one norm (dtrco), which kappa() takes for a QR's triangular factor.
+double upper_rcond(const Vec& t, int n) {
+  auto T = [&](int i, int j) { return t[i + static_cast<std::size_t>(j) * n]; };
+  const int ione = 1;
+  double tnorm = 0.0;
+  for (int j = 0; j < n; ++j) {
+    const int l = j + 1;
+    tnorm = std::max(tnorm, F77_CALL(dasum)(&l, &t[static_cast<std::size_t>(j) * n], &ione));
+  }
+  // The transposed system for a right-hand side of growing signs.
+  double ek = 1.0;
+  Vec z(n, 0.0);
+  for (int k = 0; k < n; ++k) {
+    if (z[k] != 0.0) ek = std::copysign(std::fabs(ek), -z[k]);
+    if (std::fabs(ek - z[k]) > std::fabs(T(k, k))) {
+      double s = std::fabs(T(k, k)) / std::fabs(ek - z[k]);
+      F77_CALL(dscal)(&n, &s, z.data(), &ione);
+      ek = s * ek;
+    }
+    double wk = ek - z[k], wkm = -ek - z[k];
+    double s = std::fabs(wk), sm = std::fabs(wkm);
+    if (T(k, k) != 0.0) {
+      wk = wk / T(k, k);
+      wkm = wkm / T(k, k);
+    } else {
+      wk = 1.0;
+      wkm = 1.0;
+    }
+    if (k != n - 1) {
+      for (int j = k + 1; j < n; ++j) {
+        sm = sm + std::fabs(z[j] + wkm * T(k, j));
+        z[j] = z[j] + wk * T(k, j);
+        s = s + std::fabs(z[j]);
+      }
+      if (s < sm) {
+        const double w = wkm - wk;
+        wk = wkm;
+        for (int j = k + 1; j < n; ++j) z[j] = z[j] + w * T(k, j);
+      }
+    }
+    z[k] = wk;
+  }
+  double s = 1.0 / F77_CALL(dasum)(&n, z.data(), &ione);
+  F77_CALL(dscal)(&n, &s, z.data(), &ione);
+  double ynorm = 1.0;
+  // The system itself.
+  for (int kk = 1; kk <= n; ++kk) {
+    const int k = n - kk;
+    if (std::fabs(z[k]) > std::fabs(T(k, k))) {
+      s = std::fabs(T(k, k)) / std::fabs(z[k]);
+      F77_CALL(dscal)(&n, &s, z.data(), &ione);
+      ynorm = s * ynorm;
+    }
+    if (T(k, k) != 0.0) z[k] = z[k] / T(k, k);
+    if (T(k, k) == 0.0) z[k] = 1.0;
+    if (kk < n) {
+      const int len = n - kk;
+      double w = -z[k];
+      F77_CALL(daxpy)(&len, &w, &t[static_cast<std::size_t>(k) * n], &ione, z.data(), &ione);
+    }
+  }
+  s = 1.0 / F77_CALL(dasum)(&n, z.data(), &ione);
+  F77_CALL(dscal)(&n, &s, z.data(), &ione);
+  ynorm = s * ynorm;
+  return tnorm != 0.0 ? ynorm / tnorm : 0.0;
+}
+
+}  // namespace
+
+// .emc_empirical_covariance_ok(): whether a square matrix is finite, exactly
+// symmetric, has no eigenvalue under 1e-8 and a reciprocal condition (from
+// the triangular factor of its QR, as kappa() estimates it) of at least
+// 1e-12. NULL where a decomposition fails, which the R form reports.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_covariance_ok_cpp(const Rcpp::NumericMatrix& S) {
+  int n = S.nrow();
+  if (n < 1 || S.ncol() != n) return Rf_ScalarLogical(FALSE);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i)
+      if (!R_FINITE(S(i, j)) || S(i, j) != S(j, i)) return Rf_ScalarLogical(FALSE);
+  // The eigenvalues alone.
+  {
+    Vec a(S.begin(), S.end()), w(n);
+    std::vector<int> isuppz(2 * static_cast<std::size_t>(n));
+    int m = 0, il = 0, iu = 0, info = 0, lwork = -1, liwork = -1, iw0 = 0;
+    double vl = 0.0, vu = 0.0, abstol = 0.0, w0 = 0.0, z = 0.0;
+    F77_CALL(dsyevr)("N", "A", "L", &n, a.data(), &n, &vl, &vu, &il, &iu, &abstol, &m, w.data(),
+                     &z, &n, isuppz.data(), &w0, &lwork, &iw0, &liwork, &info FCONE FCONE FCONE);
+    if (info != 0) return R_NilValue;
+    lwork = static_cast<int>(w0);
+    liwork = iw0;
+    Vec work(lwork);
+    std::vector<int> iwork(liwork);
+    F77_CALL(dsyevr)("N", "A", "L", &n, a.data(), &n, &vl, &vu, &il, &iu, &abstol, &m, w.data(),
+                     &z, &n, isuppz.data(), work.data(), &lwork, iwork.data(), &liwork,
+                     &info FCONE FCONE FCONE);
+    if (info != 0) return R_NilValue;
+    for (double v : w)
+      if (!R_FINITE(v) || v < 1e-8) return Rf_ScalarLogical(FALSE);
+  }
+  // The condition estimate of the QR's triangular factor in the one norm.
+  Vec X(S.begin(), S.end()), qraux(n), work(2 * static_cast<std::size_t>(n));
+  std::vector<int> pivot(n);
+  for (int j = 0; j < n; ++j) pivot[j] = j + 1;
+  double tol = 1e-7;
+  int rank = 0, info = 0;
+  F77_CALL(dqrdc2)(X.data(), &n, &n, &n, &tol, &rank, qraux.data(), pivot.data(), work.data());
+  for (int j = 0; j < n; ++j)
+    for (int i = j + 1; i < n; ++i) X[i + static_cast<std::size_t>(j) * n] = 0.0;
+  volatile double rc = upper_rcond(X, n);
+  volatile double kappa = 1 / rc;
+  volatile double rcond = 1 / kappa;
+  return Rf_ScalarLogical(R_FINITE(rcond) && rcond >= 1e-12);
+}
