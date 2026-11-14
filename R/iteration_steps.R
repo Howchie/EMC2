@@ -54,8 +54,9 @@
                        rows = pmwgs$par_names[!pmwgs$nuisance])
   plain <- !any(pmwgs$nuisance) && is.null(pmwgs$pooled)
   # The moves' native forms are those of a standard hierarchy over all its
-  # parameters; its store's also with nuisance or pooled parameters.
-  out$moves_native <- plain && identical(pmwgs$type, "standard")
+  # parameters, with or without pooled coefficients; its store's also with
+  # nuisance parameters.
+  out$moves_native <- !any(pmwgs$nuisance) && identical(pmwgs$type, "standard")
   out$store_native <- identical(pmwgs$type, "standard") ||
     (pmwgs$type %in% c("single", "diagonal-gamma") && plain)
   if (plain && identical(pmwgs$type, "diagonal-gamma")) {

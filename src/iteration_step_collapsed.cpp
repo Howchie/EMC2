@@ -255,7 +255,8 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
   }
   SEXP rng = lget(pmwgs, "rng"), seed = lget(rng, "gibbs"), iterations = lget(cst, "iterations");
   SEXP pars = var(st, "pars"), proposals = var(st, "proposals"), wpool = var(st, "wpool");
-  SEXP data = lget(cx, "data"), model = lget(pmwgs, "model"), prior = lget(pmwgs, "prior");
+  SEXP data_now = var(st, "data");
+  SEXP data = data_now != R_NilValue ? data_now : lget(cx, "data"), model = lget(pmwgs, "model"), prior = lget(pmwgs, "prior");
   SEXP par_names = lget(pmwgs, "par_names"), tmu = lget(pars, "tmu"), tvar = lget(pars, "tvar");
   SEXP blk = lget(plan, "block"), C = lget(plan, "C");
   const int p = Rf_asInteger(lget(pmwgs, "n_pars")), n = Rf_asInteger(lget(pmwgs, "n_subjects"));

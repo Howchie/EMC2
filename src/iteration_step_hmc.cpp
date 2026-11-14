@@ -148,7 +148,10 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
     return true;
   }
 
-  SEXP budget = lget(cx, "pool_budget"), data = lget(cx, "data"),
+  // The data carry the pooled coefficients' current values once those have
+  // moved in this block.
+  SEXP data_now = var(st, "data");
+  SEXP budget = lget(cx, "pool_budget"), data = data_now != R_NilValue ? data_now : lget(cx, "data"),
        par_names = lget(cx, "par_names"), model = lget(pmwgs, "model");
   SEXP subj_mu = lget(pars, "subj_mu"), tvar = lget(pars, "tvar");
   SEXP hmc_state = lget(pmwgs, "subject_hmc");
