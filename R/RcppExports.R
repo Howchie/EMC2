@@ -771,6 +771,10 @@ emc2_native_particle_subjects <- function(statics, alpha, prev_ll, population_mu
     .Call(`_EMC2_emc2_native_particle_subjects`, statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in)
 }
 
+emc_same_objects <- function(a, b) {
+    .Call(`_EMC2_emc_same_objects`, a, b)
+}
+
 ParamTable_create_from_p_types <- function(n_trials, p_types) {
     .Call(`_EMC2_ParamTable_create_from_p_types`, n_trials, p_types)
 }

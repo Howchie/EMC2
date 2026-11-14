@@ -1790,6 +1790,29 @@ reject_sample_iteration <- function(samples, j) {
   value
 }
 
+# .emc_native_static for a message's subjects. While the context's inputs
+# are the very objects of the last call, its result is reused whole.
+.emc_native_statics <- function(subs, ctx, par_names) {
+  inputs <- list(ctx$data, ctx$model, ctx$eff_mu, ctx$eff_var, ctx$chains_mu,
+                 ctx$chains_var, ctx$chol_caches)
+  hit <- .emc_native_static_cache[[".batch"]]
+  if (!is.null(hit) && emc_same_objects(hit$inputs, inputs) &&
+      identical(hit$subs, subs) && identical(hit$par_names, par_names)) {
+    if (!is.null(hit$m)) set_stop_method_from_model(hit$m)
+    return(hit$value)
+  }
+  value <- lapply(subs, .emc_native_static, ctx = ctx, par_names = par_names)
+  m <- NULL
+  for (s in subs) {
+    m_s <- .emc_native_static_cache[[as.character(s)]]$m
+    if (!is.null(m_s)) m <- m_s
+  }
+  assign(".batch", list(inputs = inputs, subs = subs, par_names = par_names,
+                        value = value, m = m),
+         envir = .emc_native_static_cache)
+  value
+}
+
 # The particle steps of one message's subjects in a single native call.
 # Returns NULL when the message cannot run natively, else per subject: done
 # (FALSE where the R step must run from the subject's untouched stream), the
@@ -1823,7 +1846,7 @@ reject_sample_iteration <- function(samples, j) {
                   ESS_scale = as.numeric(tune$ESS_scale),
                   max_particles = as.numeric(tune$max_particles))
   if (!all(lengths(tune_in) == 1L)) return(NULL)
-  statics <- lapply(subs, .emc_native_static, ctx = ctx, par_names = par_names)
+  statics <- .emc_native_statics(subs, ctx, par_names)
   skip <- if (is.null(msg$skip)) logical(n) else as.logical(msg$skip)
   skip[is.na(skip)] <- FALSE
   res <- tryCatch(emc2_native_particle_subjects(

@@ -2544,7 +2544,32 @@
     .emc_ensemble_ll_candidate(msg$extra[[k]], data_s, ctx$model,
                                ll_cache_validated = isTRUE(ctx$ll_cache_validated))
   }
-  for (k in seq_along(subs)) {
+  # Every subject either stepped natively or was skipped, with its candidate
+  # likelihoods already in hand: the results are assembled whole.
+  whole <- FALSE
+  if (!is.null(native) && !isTRUE(msg$rows_only)) {
+    done <- native$done %in% TRUE
+    skipped <- !done & (if (is.null(msg$skip)) FALSE else msg$skip %in% TRUE)
+    whole <- all(done | skipped) &&
+      (is.null(extra_ll) || (length(extra_fast) == length(subs) &&
+                               !any(vapply(extra_fast, is.null, logical(1))) &&
+                               !any(vapply(msg$extra, is.null, logical(1)))))
+  }
+  if (whole) {
+    rows <- seq_len(ctx$n_pars)
+    props[rows, done] <- native$alpha[, done]
+    props[ctx$n_pars + 1L, done] <- native$ll[done]
+    pm[done] <- native$pm_settings[done]
+    seeds[done] <- native$seeds[done]
+    times[done] <- native$cpu[done]
+    if (any(skipped)) {
+      props[rows, skipped] <- msg$alpha[, skipped]
+      props[ctx$n_pars + 1L, skipped] <- msg$prev_ll[skipped]
+      pm[skipped] <- msg$pm[skipped]
+      seeds[skipped] <- msg$seeds[skipped]
+    }
+    if (!is.null(extra_ll)) extra_ll <- extra_fast
+  } else for (k in seq_along(subs)) {
     s <- subs[k]
     data_s <- .emc_pooled_set_one(ctx$data[[s]], msg$pooled)
     if (isTRUE(native$done[k])) {
@@ -2863,7 +2888,11 @@
   cpu_total <- 0
   extra_ll <- if (is.null(extra)) NULL else vector("list", n_subjects)
 
-  population_mu <- matrix(vapply(seq_len(n_subjects), function(s) {
+  population_mu <- if (identical(ctx$type, "standard") && is.matrix(pars$subj_mu) &&
+                       is.double(pars$subj_mu) &&
+                       identical(dim(pars$subj_mu), c(as.integer(ctx$n_pars), n_subjects))) {
+    matrix(as.numeric(pars$subj_mu), ctx$n_pars, n_subjects)
+  } else matrix(vapply(seq_len(n_subjects), function(s) {
     as.numeric(get_group_level(pars, s, ctx$type)$mu)
   }, numeric(ctx$n_pars)), ctx$n_pars, n_subjects)
   alpha <- matrix(pars$alpha, ctx$n_pars, n_subjects, dimnames = dimnames(pars$alpha))

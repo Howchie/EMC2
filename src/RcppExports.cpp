@@ -3271,6 +3271,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_same_objects
+bool emc_same_objects(SEXP a, SEXP b);
+RcppExport SEXP _EMC2_emc_same_objects(SEXP aSEXP, SEXP bSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type a(aSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type b(bSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_same_objects(a, b));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ParamTable_create_from_p_types
 SEXP ParamTable_create_from_p_types(int n_trials, CharacterVector p_types);
 RcppExport SEXP _EMC2_ParamTable_create_from_p_types(SEXP n_trialsSEXP, SEXP p_typesSEXP) {
@@ -4470,6 +4481,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc2_native_hmc_subjects", (DL_FUNC) &_EMC2_emc2_native_hmc_subjects, 10},
     {"_EMC2_emc2_native_particle_block", (DL_FUNC) &_EMC2_emc2_native_particle_block, 11},
     {"_EMC2_emc2_native_particle_subjects", (DL_FUNC) &_EMC2_emc2_native_particle_subjects, 11},
+    {"_EMC2_emc_same_objects", (DL_FUNC) &_EMC2_emc_same_objects, 2},
     {"_EMC2_ParamTable_create_from_p_types", (DL_FUNC) &_EMC2_ParamTable_create_from_p_types, 2},
     {"_EMC2_ParamTable_create_from_matrix", (DL_FUNC) &_EMC2_ParamTable_create_from_matrix, 2},
     {"_EMC2_ParamTable_materialize", (DL_FUNC) &_EMC2_ParamTable_materialize, 1},

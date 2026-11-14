@@ -1162,3 +1162,13 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
                       _["pm"] = pm_out, _["sel"] = sel_out,
                       _["seeds"] = seeds_out, _["cpu"] = cpu);
 }
+
+// Whether every element of `a` is the very object at the same position of
+// `b`. The caller keeps `a` alive, so a match cannot be a reused address.
+// [[Rcpp::export(rng = false)]]
+bool emc_same_objects(SEXP a, SEXP b) {
+  if (TYPEOF(a) != VECSXP || TYPEOF(b) != VECSXP || XLENGTH(a) != XLENGTH(b)) return false;
+  for (R_xlen_t i = 0; i < XLENGTH(a); ++i)
+    if (VECTOR_ELT(a, i) != VECTOR_ELT(b, i)) return false;
+  return true;
+}

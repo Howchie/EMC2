@@ -409,7 +409,7 @@
   # Pools: the current state at a uniform position among the M - 1 fresh
   # draws. Stacked pools, subject s in rows (s - 1) * M + 1:M.
   k0 <- integer(n)
-  for (s in seq_len(n)) k0[s] <- sample.int(M, 1L)
+  if (n > 0L) k0[seq_len(n)] <- sample.int(M, n, replace = TRUE)
   st <- emc_ensemble_stack_cpp(pools$rows, pools$lq, ll_new,
                                proposals[seq_len(n_pars + 1L), , drop = FALSE], k0,
                                pools$L, pools$mu, pools$logdet, pools$c,
