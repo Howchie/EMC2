@@ -53,6 +53,10 @@ emc_alloc_within_share_cpp <- function(chains) {
     .Call(`_EMC2_emc_alloc_within_share_cpp`, chains)
 }
 
+emc_alloc_unit_summary_cpp <- function(units) {
+    .Call(`_EMC2_emc_alloc_unit_summary_cpp`, units)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

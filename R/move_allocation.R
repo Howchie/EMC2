@@ -660,18 +660,26 @@
     .emc_alloc_range_of(pc, movable)
   })
   r0 <- ranges[[1L]]
-  c_p0 <- sum(vapply(units, function(u)
+  # The units' fields read once; NULL leaves each to its own pass below.
+  us <- if (getOption("emc2.native_alloc_summary", TRUE)) emc_alloc_unit_summary_cpp(units)
+  c_p0 <- sum(if (!is.null(us)) us$c_p else vapply(units, function(u)
     if (identical(u$kind, "subject") && !is.null(u$p) && !is.null(u$c_p)) u$c_p else 0,
     numeric(1)))
   # The plan with nothing chosen still runs every move's exploration.
-  x0 <- vapply(units, function(u)
+  x0 <- if (!is.null(us)) us$x0 else vapply(units, function(u)
     if (identical(u$kind, "shear") && !is.null(u$floor)) u$floor else 0, numeric(1))
-  r_min <- vapply(units, function(u)
+  r_min <- if (!is.null(us)) us$r_min else vapply(units, function(u)
     if (identical(u$kind, "subject") && !is.null(u$h) && !is.null(u$r_min)) u$r_min else 0,
     numeric(1))
-  activation <- function(X) .emc_alloc_activation(units, X, r_min, shear_fixed, hmc_fixed)
+  act_rows <- if (!is.null(us)) list(shear = us$shear, hmc = us$hmc) else
+    .emc_alloc_act_rows(units)
+  activation <- function(X) .emc_alloc_act_sum(
+    .emc_alloc_act_part(X[act_rows$shear, , drop = FALSE], 0, shear_fixed),
+    .emc_alloc_act_part(X[act_rows$hmc, , drop = FALSE], r_min[act_rows$hmc], hmc_fixed),
+    ncol(X))
   j_fixed <- function(xc) if (xc > 0 && !is.null(joint$fixed)) joint$fixed * min(1, xc) else 0
-  c_f0 <- sum(x0 * vapply(units, function(u) if (is.null(u$cost)) 0 else u$cost, numeric(1))) +
+  c_f0 <- sum(x0 * (if (!is.null(us)) us$cost else
+    vapply(units, function(u) if (is.null(u$cost)) 0 else u$cost, numeric(1)))) +
     (if (j_floor > 0) j_floor * joint$cost else 0) + j_fixed(j_floor) +
     activation(matrix(x0, ncol = 1L))
   r00 <- if (j_floor > 0) ranges[[1L]] else r0
@@ -683,8 +691,9 @@
   # The plan with nothing chosen runs every particle step and no HMC, so
   # particle rates held below one, or HMC rates held above zero (the group
   # was credited at them), leave it as the reference only.
-  held <- .emc_alloc_particle_held(units) || any(vapply(units, function(x)
-    identical(x$kind, "subject") && !is.null(x$h) && isTRUE(x$r_fixed > 0), logical(1)))
+  held <- if (!is.null(us)) us$held else
+    .emc_alloc_particle_held(units) || any(vapply(units, function(x)
+      identical(x$kind, "subject") && !is.null(x$h) && isTRUE(x$r_fixed > 0), logical(1)))
   best <- if (held) list(objective = Inf) else zero
   if (r0$hi > lo + 1e-12 || c_p0 > 0 || held) {
     tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(r0$hi)),
@@ -702,7 +711,6 @@
     base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
     # A family's activation term is the same at every collapsed rate unless
     # the collapsed move shifts one of its units.
-    act_rows <- .emc_alloc_act_rows(units)
     act_add <- list(shear = 0, hmc = r_min[act_rows$hmc])
     act_fixed <- list(shear = shear_fixed, hmc = hmc_fixed)
     act_part <- function(nd, f) {

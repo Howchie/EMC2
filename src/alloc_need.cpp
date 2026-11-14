@@ -940,4 +940,60 @@ SEXP emc_alloc_within_share_cpp(const Rcpp::List& chains) {
                             Rcpp::Named("b_share") = share);
 }
 
+// What .emc_alloc_solve_now() reads off its units before pricing them: each
+// unit's priced particle cost (c_p), exploration floor (x0), held HMC rate
+// (r_min) and cost per move (cost), the shear units and the subjects with HMC
+// (shear, hmc, numbered from one), and whether a particle rate is held below
+// one or an HMC rate above zero (held). NULL for named units or fields that
+// are not one double, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_unit_summary_cpp(const Rcpp::List& units) {
+  if (Rf_getAttrib(units, R_NamesSymbol) != R_NilValue) return R_NilValue;
+  const int n = units.size();
+  Rcpp::NumericVector c_p(n), x0(n), r_min(n), cost(n);
+  std::vector<int> shear, hmc;
+  bool held = false;
+  auto one = [](SEXP v) {
+    return TYPEOF(v) == REALSXP && XLENGTH(v) == 1 && !Rf_isObject(v);
+  };
+  for (int i = 0; i < n; ++i) {
+    SEXP u = units[i];
+    if (TYPEOF(u) != VECSXP) return R_NilValue;
+    const bool is_shear = kind_is(u, "shear"), subject = kind_is(u, "subject");
+    SEXP p = unit_field(u, "p"), h = unit_field(u, "h"), cp = unit_field(u, "c_p");
+    SEXP fl = unit_field(u, "floor"), rm = unit_field(u, "r_min"), co = unit_field(u, "cost");
+    SEXP qf = unit_field(u, "q_fixed"), rf = unit_field(u, "r_fixed");
+    if (subject && p != R_NilValue && cp != R_NilValue) {
+      if (!one(cp)) return R_NilValue;
+      c_p[i] = REAL(cp)[0];
+    }
+    if (is_shear && fl != R_NilValue) {
+      if (!one(fl)) return R_NilValue;
+      x0[i] = REAL(fl)[0];
+    }
+    if (subject && h != R_NilValue && rm != R_NilValue) {
+      if (!one(rm)) return R_NilValue;
+      r_min[i] = REAL(rm)[0];
+    }
+    if (co != R_NilValue) {
+      if (!one(co)) return R_NilValue;
+      cost[i] = REAL(co)[0];
+    }
+    if (is_shear) shear.push_back(i + 1);
+    if (subject && h != R_NilValue) hmc.push_back(i + 1);
+    if (subject && qf != R_NilValue) {
+      if (!one(qf)) return R_NilValue;
+      if (R_FINITE(REAL(qf)[0]) && REAL(qf)[0] < 1) held = true;
+    }
+    if (subject && h != R_NilValue && rf != R_NilValue) {
+      if (!one(rf)) return R_NilValue;
+      if (REAL(rf)[0] > 0) held = true;
+    }
+  }
+  return Rcpp::List::create(
+    Rcpp::Named("c_p") = c_p, Rcpp::Named("x0") = x0, Rcpp::Named("r_min") = r_min,
+    Rcpp::Named("cost") = cost, Rcpp::Named("shear") = Rcpp::wrap(shear),
+    Rcpp::Named("hmc") = Rcpp::wrap(hmc), Rcpp::Named("held") = held);
+}
+
 #pragma GCC pop_options
