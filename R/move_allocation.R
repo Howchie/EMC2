@@ -728,16 +728,25 @@
       need_c[moved_idx] <- nm
       act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
         if (is.null(act_held[[f]])) act_part(need_c, f) else act_held[[f]][[1L]])
-      cost <- base + xcs[c] * (if (xcs[c] > 0) joint$cost else 0) + j_fixed(xcs[c]) +
-        Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
-        .emc_alloc_act_sum(act$shear, act$hmc, length(targets))
-      obj <- tau_t * cost
-      k <- which.min(obj)
-      if (!length(k) || !is.finite(obj[k]) || obj[k] >= best$objective * (1 - 1e-9)) next
+      c_joint <- xcs[c] * (if (xcs[c] > 0) joint$cost else 0)
+      c_fixed <- j_fixed(xcs[c])
+      at <- if (getOption("emc2.native_alloc_candidate", TRUE) && is.double(c_joint) &&
+                length(c_joint) == 1L && is.double(c_fixed) && length(c_fixed) == 1L)
+        emc_alloc_candidate_cpp(base, c_joint, c_fixed, nm, act$shear, act$hmc, tau_t)
+      if (is.null(at)) {
+        cost <- base + c_joint + c_fixed +
+          Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
+          .emc_alloc_act_sum(act$shear, act$hmc, length(targets))
+        obj <- tau_t * cost
+        k <- which.min(obj)
+        at <- if (length(k)) list(k = k, cost = cost[k], objective = obj[k]) else list(k = 0L)
+      }
+      k <- at$k
+      if (k < 1L || !is.finite(at$objective) || at$objective >= best$objective * (1 - 1e-9)) next
       best_nm <- nm
       best_k <- k
-      best <- list(x = NULL, q = NULL, rho = targets[k], tau = tau_t[k], cost = cost[k],
-                   objective = obj[k], joint = xcs[c])
+      best <- list(x = NULL, q = NULL, rho = targets[k], tau = tau_t[k], cost = at$cost,
+                   objective = at$objective, joint = xcs[c])
     }
     # The winning plan's allocation, read once.
     if (!is.null(best_k)) {

@@ -996,4 +996,59 @@ SEXP emc_alloc_unit_summary_cpp(const Rcpp::List& units) {
     Rcpp::Named("hmc") = Rcpp::wrap(hmc), Rcpp::Named("held") = held);
 }
 
+// One candidate collapsed rate's plan in .emc_alloc_solve_now(): the cost at
+// each target, base + joint + fixed + the moved units' costs (need[[i]]$cost,
+// summed in order from zero) + the families' activation terms (NULL without
+// one), and the target with the least tau * cost. list(k, cost, objective) at
+// that target, k zero where no objective is a number. NULL for vectors that
+// are not doubles of the targets' length, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::List& need,
+                             SEXP act_shear, SEXP act_hmc, SEXP tau) {
+  if (TYPEOF(base) != REALSXP || TYPEOF(tau) != REALSXP) return R_NilValue;
+  const R_xlen_t n = XLENGTH(tau);
+  auto fits = [n](SEXP v) { return TYPEOF(v) == REALSXP && XLENGTH(v) == n; };
+  if (n < 1 || !fits(base) || (act_shear != R_NilValue && !fits(act_shear)) ||
+      (act_hmc != R_NilValue && !fits(act_hmc)))
+    return R_NilValue;
+  std::vector<const double*> costs(need.size());
+  for (R_xlen_t i = 0; i < need.size(); ++i) {
+    SEXP c = unit_field(need[i], "cost");
+    if (!fits(c)) return R_NilValue;
+    costs[i] = REAL(c);
+  }
+  R_xlen_t best = -1;
+  double best_obj = 0.0, best_cost = 0.0;
+  for (R_xlen_t t = 0; t < n; ++t) {
+    volatile double moved = 0.0;
+    for (const double* c : costs) {
+      volatile double next = moved + c[t];
+      moved = next;
+    }
+    volatile double act = 0.0;
+    if (act_shear != R_NilValue) {
+      volatile double next = act + REAL(act_shear)[t];
+      act = next;
+    }
+    if (act_hmc != R_NilValue) {
+      volatile double next = act + REAL(act_hmc)[t];
+      act = next;
+    }
+    volatile double c1 = REAL(base)[t] + joint;
+    volatile double c2 = c1 + fixed;
+    volatile double c3 = c2 + moved;
+    volatile double cost = c3 + act;
+    volatile double obj = REAL(tau)[t] * cost;
+    const double o = obj;
+    if (!ISNAN(o) && (best < 0 || o < best_obj)) {
+      best = t;
+      best_obj = o;
+      best_cost = cost;
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("k") = static_cast<int>(best + 1),
+                            Rcpp::Named("cost") = best_cost,
+                            Rcpp::Named("objective") = best_obj);
+}
+
 #pragma GCC pop_options

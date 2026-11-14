@@ -57,6 +57,10 @@ emc_alloc_unit_summary_cpp <- function(units) {
     .Call(`_EMC2_emc_alloc_unit_summary_cpp`, units)
 }
 
+emc_alloc_candidate_cpp <- function(base, joint, fixed, need, act_shear, act_hmc, tau) {
+    .Call(`_EMC2_emc_alloc_candidate_cpp`, base, joint, fixed, need, act_shear, act_hmc, tau)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

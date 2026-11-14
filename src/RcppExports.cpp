@@ -207,6 +207,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_candidate_cpp
+SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::List& need, SEXP act_shear, SEXP act_hmc, SEXP tau);
+RcppExport SEXP _EMC2_emc_alloc_candidate_cpp(SEXP baseSEXP, SEXP jointSEXP, SEXP fixedSEXP, SEXP needSEXP, SEXP act_shearSEXP, SEXP act_hmcSEXP, SEXP tauSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type base(baseSEXP);
+    Rcpp::traits::input_parameter< double >::type joint(jointSEXP);
+    Rcpp::traits::input_parameter< double >::type fixed(fixedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type need(needSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type act_shear(act_shearSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type act_hmc(act_hmcSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type tau(tauSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_candidate_cpp(base, joint, fixed, need, act_shear, act_hmc, tau));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_record_particle_cpp
 SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
 RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
@@ -4790,6 +4806,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_range_parts_cpp", (DL_FUNC) &_EMC2_emc_alloc_range_parts_cpp, 2},
     {"_EMC2_emc_alloc_within_share_cpp", (DL_FUNC) &_EMC2_emc_alloc_within_share_cpp, 1},
     {"_EMC2_emc_alloc_unit_summary_cpp", (DL_FUNC) &_EMC2_emc_alloc_unit_summary_cpp, 1},
+    {"_EMC2_emc_alloc_candidate_cpp", (DL_FUNC) &_EMC2_emc_alloc_candidate_cpp, 7},
     {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
     {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
     {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},
