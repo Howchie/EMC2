@@ -1179,22 +1179,28 @@ run_stage <- function(pmwgs,
                               wpool_part, ens_pools,
                               ll_cache_validated = TRUE)
     ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
+    # Each move's results go to the loop's own variables: storing the sampler
+    # into another list has R walk all of it.
+    pmwgs <- ens$sampler
+    pars <- ens$pars
+    proposals <- ens$proposals
+    wpool <- ens$wpool
+    ens <- NULL
     # Then the shear (R/shear_move.R): the non-centred move of the same
     # group state.
     shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
     shear_build_el <- shear_ll_el <- 0
     shear_rounds <- 0L
-    if (alloc_on) ens$sampler <- .emc_alloc_record_group(ens$sampler, ens$pars)
-    if (.emc_shear_active(ens$sampler)) {
+    if (alloc_on) pmwgs <- .emc_alloc_record_group(pmwgs, pars)
+    if (.emc_shear_active(pmwgs)) {
       shear_started <- .emc_cpu_self()
       shear_el0 <- proc.time()[["elapsed"]]
       sll_shear <- .emc_subject_ll_cpu()
-      sh <- .emc_shear_move(ens$sampler, ens$pars, ens$proposals, stage,
-                            ens$wpool, wpool_part)
-      ens$sampler <- sh$sampler
-      ens$pars <- sh$pars
-      ens$proposals <- sh$proposals
-      ens$wpool <- sh$wpool
+      sh <- .emc_shear_move(pmwgs, pars, proposals, stage, wpool, wpool_part)
+      pmwgs <- sh$sampler
+      pars <- sh$pars
+      proposals <- sh$proposals
+      wpool <- sh$wpool
       shear_rounds <- if (is.null(sh$rounds)) 0L else sh$rounds
       shear_round_el <- if (is.null(sh$round_el)) 0 else sh$round_el
       shear_build_el <- if (is.null(sh$build_el)) 0 else sh$build_el
@@ -1210,16 +1216,15 @@ run_stage <- function(pmwgs,
     # with the subjects in their conditional frames.
     coll_cpu <- coll_el <- coll_round_cpu <- 0
     coll_moves <- 0L
-    if (.emc_collapsed_active(ens$sampler)) {
+    if (.emc_collapsed_active(pmwgs)) {
       coll_el0 <- proc.time()[["elapsed"]]
-      moves_before <- ens$sampler$collapsed$plan$block$n
-      cm <- .emc_collapsed_move(ens$sampler, ens$pars, ens$proposals, stage,
-                                ens$wpool, wpool_part)
-      ens$sampler <- cm$sampler
-      ens$pars <- cm$pars
-      ens$proposals <- cm$proposals
-      ens$wpool <- cm$wpool
-      moves_after <- ens$sampler$collapsed$plan$block$n
+      moves_before <- pmwgs$collapsed$plan$block$n
+      cm <- .emc_collapsed_move(pmwgs, pars, proposals, stage, wpool, wpool_part)
+      pmwgs <- cm$sampler
+      pars <- cm$pars
+      proposals <- cm$proposals
+      wpool <- cm$wpool
+      moves_after <- pmwgs$collapsed$plan$block$n
       if (length(moves_before) && length(moves_after))
         coll_moves <- as.integer(moves_after - moves_before)
       coll_el <- proc.time()[["elapsed"]] - coll_el0
@@ -1237,10 +1242,6 @@ run_stage <- function(pmwgs,
     collapsed_delta <- .emc_reject_delta(collapsed_rejects, "collapsed")
     collapsed_rejects <- .emc_reject_counts("collapsed")
     stage_rejects$collapsed <- stage_rejects$collapsed + collapsed_delta
-    pmwgs <- ens$sampler
-    pars <- ens$pars
-    proposals <- ens$proposals
-    wpool <- ens$wpool
 
     # Pooled coefficients given the final subject states (R/pooled.R).
     pooled_delta <- NULL
