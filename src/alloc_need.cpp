@@ -641,3 +641,90 @@ SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& n
   }
   return out;
 }
+
+namespace {
+
+#pragma GCC push_options
+#pragma GCC optimize("no-fast-math", "fp-contract=off")
+
+// The mean net squared jump over twice the variance that moves of factor g
+// and correlation x give, for iterations with k moves in proportions w[k-1].
+// A function of its own: the file's floating-point settings do not reach a
+// lambda's body.
+double saturation_curve(const std::vector<double>& w, double g, double x) {
+  long double s = 0.0;
+  for (std::size_t j = 0; j < w.size(); ++j) {
+    const double k = static_cast<double>(j + 1);
+    volatile double pw = k == 2.0 ? x * x : R_pow(x, k);
+    volatile double rest = 1 - pw;
+    volatile double term = w[j] * rest;
+    s += term;
+  }
+  volatile double total = static_cast<double>(s);
+  volatile double left = 1 - g;
+  volatile double scaled = left * total;
+  volatile double den = 1 - x;
+  return scaled / den;
+}
+
+}  // namespace
+
+// .emc_alloc_saturation(): the moves' correlation a in [0, g] per coordinate
+// from D, the mean net squared jump over twice the variance, and K, the
+// iterations' move counts (one row per coordinate, or one row for all),
+// solved by bisection. NULL for inputs with missing values or without rows
+// for every coordinate, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_saturation_cpp(SEXP g, SEXP D, SEXP K) {
+  if (TYPEOF(g) != REALSXP || TYPEOF(D) != REALSXP || !Rf_isMatrix(K) ||
+      (TYPEOF(K) != INTSXP && TYPEOF(K) != REALSXP))
+    return R_NilValue;
+  const R_xlen_t n = XLENGTH(g), nd = XLENGTH(D);
+  const int nr = Rf_nrows(K), nc = Rf_ncols(K);
+  if (nr < 1 || nc < 1 || (nr != 1 && nr < n)) return R_NilValue;
+  for (R_xlen_t i = 0; i < n; ++i)
+    if (ISNAN(REAL(g)[i])) return R_NilValue;
+  std::vector<double> counts(static_cast<std::size_t>(nr) * nc);
+  for (R_xlen_t e = 0; e < XLENGTH(K); ++e) {
+    if (TYPEOF(K) == INTSXP) {
+      if (INTEGER(K)[e] == NA_INTEGER) return R_NilValue;
+      counts[e] = INTEGER(K)[e];
+    } else {
+      if (ISNAN(REAL(K)[e])) return R_NilValue;
+      counts[e] = REAL(K)[e];
+    }
+  }
+  SEXP out = PROTECT(Rf_duplicate(g));
+  std::vector<double> w(nc);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const int row = nr == 1 ? 0 : static_cast<int>(i);
+    long double total = 0.0, later = 0.0;
+    for (int j = 0; j < nc; ++j) {
+      const double v = counts[row + static_cast<std::size_t>(j) * nr];
+      total += v;
+      if (j > 0) later += v;
+    }
+    const double gi = REAL(g)[i];
+    if (static_cast<double>(total) <= 0 || static_cast<double>(later) <= 0 || i >= nd ||
+        !R_FINITE(REAL(D)[i]) || gi >= 1 - 1e-9)
+      continue;
+    const double Di = REAL(D)[i], sum_w = static_cast<double>(total);
+    for (int j = 0; j < nc; ++j) w[j] = counts[row + static_cast<std::size_t>(j) * nr] / sum_w;
+    auto h = [&](double x) { return saturation_curve(w, gi, x); };
+    if (Di <= h(0.0)) {
+      REAL(out)[i] = 0.0;
+      continue;
+    }
+    if (Di >= h(gi)) continue;
+    double lo = 0.0, hi = gi;
+    for (int it = 0; it < 60; ++it) {
+      const double mid = (lo + hi) / 2;
+      if (h(mid) < Di) lo = mid; else hi = mid;
+    }
+    REAL(out)[i] = (lo + hi) / 2;
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+#pragma GCC pop_options

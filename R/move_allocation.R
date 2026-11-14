@@ -514,6 +514,9 @@
   a <- g
   if (is.null(K) || !length(D)) return(a)
   K <- as.matrix(K)
+  out <- if (getOption("emc2.native_alloc_saturation", TRUE) && is.double(g) && is.double(D))
+    emc_alloc_saturation_cpp(g, D, K)
+  if (!is.null(out)) return(out)
   for (i in seq_along(g)) {
     w <- K[if (nrow(K) == 1L) 1L else i, ]
     if (sum(w) <= 0 || sum(w[-1L]) <= 0 || !is.finite(D[i]) || g[i] >= 1 - 1e-9) next
