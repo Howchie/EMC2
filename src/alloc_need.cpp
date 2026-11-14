@@ -1180,4 +1180,63 @@ SEXP emc_alloc_lsd_draws_cpp(SEXP V, SEXP k) {
   return out;
 }
 
+// .emc_alloc_pool_factors(): the factors fs[idx] each weighed against their
+// pooled factor, the mean of the factors weighted by the transitions ns
+// behind each, the pooled factor counting as n0 transitions. NULL for
+// factors that are not plain vectors of doubles of one length without
+// missing values, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_pool_factors_cpp(const Rcpp::List& fs, SEXP ns, SEXP idx, double n0) {
+  if (TYPEOF(ns) != REALSXP || TYPEOF(idx) != INTSXP || XLENGTH(idx) < 1 || ISNAN(n0))
+    return R_NilValue;
+  const R_xlen_t m = XLENGTH(idx);
+  R_xlen_t len = -1;
+  long double total = 0.0;
+  for (R_xlen_t j = 0; j < m; ++j) {
+    const int i = INTEGER(idx)[j];
+    if (i == NA_INTEGER || i < 1 || i > fs.size() || i > XLENGTH(ns) || ISNAN(REAL(ns)[i - 1]))
+      return R_NilValue;
+    SEXP f = fs[i - 1];
+    if (!plain_field(f, -1)) return R_NilValue;
+    if (len < 0) len = XLENGTH(f);
+    if (XLENGTH(f) != len) return R_NilValue;
+    total += REAL(ns)[i - 1];
+  }
+  volatile double weight = static_cast<double>(total);
+  std::vector<double> ref(len);
+  for (R_xlen_t c = 0; c < len; ++c) {
+    volatile double sum = 0.0;
+    for (R_xlen_t j = 0; j < m; ++j) {
+      const int i = INTEGER(idx)[j];
+      volatile double term = REAL(ns)[i - 1] * REAL(VECTOR_ELT(fs, i - 1))[c];
+      if (j == 0) {
+        sum = term;
+      } else {
+        volatile double next = sum + term;
+        sum = next;
+      }
+    }
+    volatile double mean = sum / weight;
+    ref[c] = mean;
+  }
+  Rcpp::List out(m);
+  for (R_xlen_t j = 0; j < m; ++j) {
+    const int i = INTEGER(idx)[j];
+    const double n_i = REAL(ns)[i - 1];
+    const double* f = REAL(VECTOR_ELT(fs, i - 1));
+    Rcpp::NumericVector pooled(len);
+    volatile double den = n_i + n0;
+    for (R_xlen_t c = 0; c < len; ++c) {
+      volatile double own = n_i * f[c];
+      volatile double prior = n0 * ref[c];
+      volatile double num = own + prior;
+      volatile double value = num / den;
+      if (ISNAN(static_cast<double>(value))) return R_NilValue;
+      pooled[c] = value;
+    }
+    out[j] = pooled;
+  }
+  return out;
+}
+
 #pragma GCC pop_options

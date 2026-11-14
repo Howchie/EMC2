@@ -73,6 +73,10 @@ emc_alloc_lsd_draws_cpp <- function(V, k) {
     .Call(`_EMC2_emc_alloc_lsd_draws_cpp`, V, k)
 }
 
+emc_alloc_pool_factors_cpp <- function(fs, ns, idx, n0) {
+    .Call(`_EMC2_emc_alloc_pool_factors_cpp`, fs, ns, idx, n0)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

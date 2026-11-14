@@ -1501,6 +1501,16 @@
   .emc_alloc_rho(.emc_alloc_quad_diag(W, ev$M) / ev$n, var)
 }
 
+# The factors fs[idx] each weighed against their pooled factor (the mean
+# weighted by the transitions ns behind each), which counts as n0 transitions.
+.emc_alloc_pool_factors <- function(fs, ns, idx, n0) {
+  out <- if (getOption("emc2.native_alloc_pool", TRUE) && is.double(ns) && is.integer(idx))
+    emc_alloc_pool_factors_cpp(fs, ns, idx, n0)
+  if (!is.null(out)) return(out)
+  ref <- Reduce(`+`, lapply(idx, function(i) ns[i] * fs[[i]])) / sum(ns[idx])
+  lapply(idx, function(i) (ns[i] * fs[[i]] + n0 * ref) / (ns[i] + n0))
+}
+
 # The units and costs the solver sees for one chain. optimistic: an eligible
 # subject without enough HMC evidence counts as h = 0.
 # B: transitions until the next rebuild. A move with fewer than
@@ -1623,17 +1633,14 @@
     if (is.null(x$h_n)) 0 else x$h_n, numeric(1))
   with_h <- which(ns > 0 & !vapply(hs, is.null, logical(1)))
   if (length(with_h)) {
-    h_ref <- Reduce(`+`, lapply(with_h, function(i) ns[i] * hs[[i]])) / sum(ns[with_h])
+    pooled <- .emc_alloc_pool_factors(hs, ns, with_h, n0)
+    for (j in seq_along(with_h)) units[[length(ms$g_rho) + with_h[j]]]$h <- pooled[[j]]
     # The deviation factors have their own variances, so their own reference.
     hd <- lapply(units[-seq_along(ms$g_rho)], function(x) x$h_dev)
     with_d <- with_h[!vapply(hd[with_h], is.null, logical(1))]
-    hd_ref <- if (length(with_d))
-      Reduce(`+`, lapply(with_d, function(i) ns[i] * hd[[i]])) / sum(ns[with_d])
-    for (i in with_h) {
-      k <- length(ms$g_rho) + i
-      units[[k]]$h <- (ns[i] * hs[[i]] + n0 * h_ref) / (ns[i] + n0)
-      if (!is.null(units[[k]]$h_dev) && !is.null(hd_ref))
-        units[[k]]$h_dev <- (ns[i] * units[[k]]$h_dev + n0 * hd_ref) / (ns[i] + n0)
+    if (length(with_d)) {
+      pooled <- .emc_alloc_pool_factors(hd, ns, with_d, n0)
+      for (j in seq_along(with_d)) units[[length(ms$g_rho) + with_d[j]]]$h_dev <- pooled[[j]]
     }
   }
   for (k in length(ms$g_rho) + seq_len(n)) units[[k]] <- .emc_alloc_dev_rows(units[[k]])
