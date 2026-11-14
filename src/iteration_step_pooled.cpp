@@ -1,6 +1,9 @@
 // The iteration's pooled-coefficient move (.emc_step_pooled, R/pooled.R):
 // candidates around a shifted point, each scored over all subjects, one drawn
 // in proportion to its posterior weight.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize ("no-fast-math")
+#endif
 #pragma GCC optimize("fp-contract=off")
 #include <Rcpp.h>
 #include <R_ext/BLAS.h>
