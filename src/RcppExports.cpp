@@ -300,6 +300,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_collapsed_fit_subject_cpp
+SEXP emc_collapsed_fit_subject_cpp(const Rcpp::NumericMatrix& A_in, const Rcpp::NumericVector& y_in);
+RcppExport SEXP _EMC2_emc_collapsed_fit_subject_cpp(SEXP A_inSEXP, SEXP y_inSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type A_in(A_inSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type y_in(y_inSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_collapsed_fit_subject_cpp(A_in, y_in));
+    return rcpp_result_gen;
+END_RCPP
+}
 // collapsed_surrogate_cpp
 Rcpp::List collapsed_surrogate_cpp(const arma::vec& phi, const Rcpp::List& model);
 RcppExport SEXP _EMC2_collapsed_surrogate_cpp(SEXP phiSEXP, SEXP modelSEXP) {
@@ -4631,6 +4642,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},
     {"_EMC2_emc_claim_reset", (DL_FUNC) &_EMC2_emc_claim_reset, 2},
     {"_EMC2_emc_claim_next", (DL_FUNC) &_EMC2_emc_claim_next, 3},
+    {"_EMC2_emc_collapsed_fit_subject_cpp", (DL_FUNC) &_EMC2_emc_collapsed_fit_subject_cpp, 2},
     {"_EMC2_collapsed_surrogate_cpp", (DL_FUNC) &_EMC2_collapsed_surrogate_cpp, 2},
     {"_EMC2_collapsed_trajectories_cpp", (DL_FUNC) &_EMC2_collapsed_trajectories_cpp, 6},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},

@@ -220,6 +220,15 @@
 # the draws' covariance, then projected to a concave quadratic with the
 # linear part refitted. NULL without enough distinct draws.
 .emc_collapsed_fit_subject <- function(A, y) {
+  fit <- if (getOption("emc2.native_collapsed_fit", TRUE) && is.matrix(A) && is.double(A) &&
+             is.double(y) && length(y) == nrow(A))
+    emc_collapsed_fit_subject_cpp(A, y)
+  if (!is.null(fit)) return(fit)
+  .emc_collapsed_fit_subject_r(A, y)
+}
+
+# The fit in R, which also decides the cases without one.
+.emc_collapsed_fit_subject_r <- function(A, y) {
   ok <- is.finite(y) & stats::complete.cases(A)
   A <- A[ok, , drop = FALSE]
   y <- y[ok]

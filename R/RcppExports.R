@@ -80,6 +80,10 @@ emc_claim_next <- function(map, key, n) {
     .Call(`_EMC2_emc_claim_next`, map, key, n)
 }
 
+emc_collapsed_fit_subject_cpp <- function(A_in, y_in) {
+    .Call(`_EMC2_emc_collapsed_fit_subject_cpp`, A_in, y_in)
+}
+
 collapsed_surrogate_cpp <- function(phi, model) {
     .Call(`_EMC2_collapsed_surrogate_cpp`, phi, model)
 }
