@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#include "iteration_latent.h"
 #include "iteration_state.h"
 
 using namespace Rcpp;
@@ -34,6 +35,13 @@ Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const arma::cube& L
                                        const arma::vec& logdet, int M1, double tail_weight,
                                        double tail_df, double tail_excess,
                                        const Rcpp::CharacterVector& par_names);
+SEXP emc_gibbs_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::List& state,
+                          const Rcpp::LogicalMatrix& free_entry, const Rcpp::List& prior);
+SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::List& state,
+                                const Rcpp::List& prior);
+SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates,
+                       const Rcpp::List& state, const Rcpp::List& free,
+                       const Rcpp::List& prior, const Rcpp::List& blocks);
 
 namespace emc_iter {
 
@@ -266,11 +274,175 @@ bool group_nuisance(SEXP st, SEXP cx, int i) {
   return true;
 }
 
+// The last stored slice of a sample array as a plain vector.
+SEXP stored_slice(SEXP samples, const char* name, R_xlen_t at) {
+  SEXP x = lget(samples, name), dims = Rf_getAttrib(x, R_DimSymbol);
+  if (TYPEOF(x) != REALSXP || TYPEOF(dims) != INTSXP || XLENGTH(dims) < 2)
+    throw LatentDecline();
+  R_xlen_t len = 1;
+  for (R_xlen_t d = 0; d + 1 < XLENGTH(dims); ++d) len *= INTEGER(dims)[d];
+  if (at < 0 || XLENGTH(x) < (at + 1) * len) throw LatentDecline();
+  Shield<SEXP> out(Rf_allocVector(REALSXP, len));
+  std::copy(REAL(x) + at * len, REAL(x) + (at + 1) * len, REAL(out));
+  return out;
+}
+
+// A latent-factor hierarchy's group step: its own draw (src/gibbs_factor.cpp)
+// from the stored state, in the form the hierarchy's R draw returns.
+bool group_latent(SEXP st, SEXP cx, int i) {
+  SEXP pmwgs = var(st, "pmwgs"), latent = lget(cx, "latent"), pools = lget(cx, "pools");
+  if (TYPEOF(pmwgs) != VECSXP || pools == R_NilValue || !flag(lget(cx, "chol_simple")))
+    return false;
+  SEXP samples = lget(pmwgs, "samples"), rng = lget(pmwgs, "rng");
+  SEXP s_alpha = lget(samples, "alpha"), idx = lget(samples, "idx");
+  SEXP dims = Rf_getAttrib(s_alpha, R_DimSymbol), seed = lget(rng, "gibbs");
+  SEXP dn = Rf_getAttrib(s_alpha, R_DimNamesSymbol);
+  const int kind = Rf_asInteger(lget(latent, "kind"));
+  if (TYPEOF(s_alpha) != REALSXP || TYPEOF(dims) != INTSXP || XLENGTH(dims) != 3 ||
+      Rf_length(idx) != 1 || TYPEOF(seed) != INTSXP || kind < 0 || kind > 2 ||
+      TYPEOF(dn) != VECSXP || XLENGTH(dn) < 2 || TYPEOF(VECTOR_ELT(dn, 0)) != STRSXP)
+    return false;
+  const int p = INTEGER(dims)[0], n = INTEGER(dims)[1];
+  const int k = Rf_asInteger(lget(latent, "k")), n_cov = Rf_asInteger(lget(latent, "n_cov"));
+  Shield<SEXP> j(iteration_index(cx, i));
+  const R_xlen_t prev = static_cast<R_xlen_t>(Rf_asReal(j)) - 2;
+  const R_xlen_t at = static_cast<R_xlen_t>(Rf_asReal(idx)) - 1;
+  const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
+  if (prev < 0 || at < 0 || XLENGTH(s_alpha) < (prev + 1) * slice || p < 2 || n < 1)
+    return false;
+  // The stored state under the names the draws return it by.
+  List start;
+  try {
+    List last;
+    if (kind == 0)
+      last = List::create(_["tmu"] = stored_slice(samples, "theta_mu", at),
+                          _["eta"] = stored_slice(samples, "eta", at),
+                          _["lambda_untransf"] = stored_slice(samples, "lambda_untransf", at),
+                          _["sig_err_inv"] = stored_slice(samples, "epsilon_inv", at),
+                          _["psi_inv"] = stored_slice(samples, "psi_inv", at));
+    else if (kind == 1)
+      last = List::create(_["tmu"] = stored_slice(samples, "theta_mu", at),
+                          _["psi"] = stored_slice(samples, "psi", at),
+                          _["lambda"] = stored_slice(samples, "lambda", at),
+                          _["epsilon_inv"] = stored_slice(samples, "epsilon_inv", at),
+                          _["delta"] = stored_slice(samples, "delta", at));
+    else
+      last = List::create(_["tmu"] = stored_slice(samples, "theta_mu", at),
+                          _["lambda"] = stored_slice(samples, "lambda", at),
+                          _["B"] = stored_slice(samples, "B", at),
+                          _["K"] = stored_slice(samples, "K", at),
+                          _["G"] = stored_slice(samples, "G", at),
+                          _["delta_inv"] = stored_slice(samples, "delta_inv", at),
+                          _["epsilon_inv"] = stored_slice(samples, "epsilon_inv", at));
+    start = latent_state(last, kind, n, p, k, n_cov);
+  } catch (LatentDecline&) {
+    return false;
+  }
+  const Clock started = clock_now();
+
+  // The subjects' last states, named as the store names them, and their
+  // transpose for the draws.
+  Shield<SEXP> alpha_prev(Rf_allocMatrix(REALSXP, p, n));
+  std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice, REAL(alpha_prev));
+  {
+    Shield<SEXP> dn2(Rf_allocVector(VECSXP, 2));
+    SET_VECTOR_ELT(dn2, 0, VECTOR_ELT(dn, 0));
+    SET_VECTOR_ELT(dn2, 1, VECTOR_ELT(dn, 1));
+    SEXP dnn = Rf_getAttrib(dn, R_NamesSymbol);
+    if (dnn != R_NilValue) {
+      Shield<SEXP> dnn2(Rf_allocVector(STRSXP, 2));
+      SET_STRING_ELT(dnn2, 0, STRING_ELT(dnn, 0));
+      SET_STRING_ELT(dnn2, 1, STRING_ELT(dnn, 1));
+      Rf_setAttrib(dn2, R_NamesSymbol, dnn2);
+    }
+    Rf_setAttrib(alpha_prev, R_DimNamesSymbol, dn2);
+  }
+  NumericMatrix alpha_t(n, p);
+  for (int s = 0; s < n; ++s)
+    for (int q = 0; q < p; ++q) alpha_t(s, q) = REAL(alpha_prev)[q + static_cast<R_xlen_t>(s) * p];
+
+  set_global_seed(seed);
+  GetRNGstate();
+  RObject res;
+  List drawn;
+  RObject factors = var(st, "ens_factors");
+  const bool pooled = TYPEOF(pools) == VECSXP;
+  bool ok = true;
+  try {
+    if (kind == 0) {
+      res = emc_gibbs_factor_cpp(alpha_t, start, LogicalMatrix(lget(latent, "free")),
+                                 List(lget(latent, "prior")));
+    } else if (kind == 1) {
+      res = emc_gibbs_infnt_factor_cpp(alpha_t, start, List(lget(latent, "prior")));
+    } else {
+      const List sem(lget(latent, "sem"));
+      res = emc_gibbs_sem_cpp(alpha_t, as<NumericMatrix>(sem["covariates"]), start,
+                              as<List>(sem["free"]), List(lget(latent, "prior")),
+                              as<List>(sem["blocks"]));
+    }
+    if (static_cast<SEXP>(res) == R_NilValue) ok = false;
+    if (ok && pooled) {
+      if (static_cast<SEXP>(factors) == R_NilValue) {
+        const List f = emc_ensemble_factors_cpp(List(lget(pools, "var")));
+        factors = List::create(_["L"] = f["L"], _["logdet"] = f["logdet"]);
+      }
+      drawn = emc_ensemble_draw_pools_cpp(
+          List(lget(pools, "mu")), as<arma::cube>(lget(factors, "L")),
+          as<arma::vec>(lget(factors, "logdet")), Rf_asInteger(lget(pools, "size")),
+          Rf_asReal(lget(pools, "tail_weight")), Rf_asReal(lget(pools, "tail_df")),
+          Rf_asReal(lget(pools, "tail_excess")), CharacterVector(lget(pools, "par_names")));
+    }
+  } catch (std::exception&) {
+    ok = false;
+  }
+  PutRNGstate();
+  if (!ok) return false;
+  Shield<SEXP> seed_after(global_seed());
+
+  List pars;
+  try {
+    pars = latent_pars(List(res), kind, VECTOR_ELT(dn, 0), lget(latent, "delta_form"),
+                       VECTOR_ELT(dn, 1), alpha_prev);
+  } catch (LatentDecline&) {
+    return false;
+  }
+  // The subjects' prior covariance: the structural model's excludes the
+  // covariates' spread.
+  SEXP gvar = lget(pars, kind == 2 ? "subj_var" : "tvar");
+  if (TYPEOF(gvar) != REALSXP || !Rf_isMatrix(gvar) || Rf_nrows(gvar) != p) return false;
+  RObject group_chol = var(st, "group_chol_it");
+  if (static_cast<SEXP>(group_chol) == R_NilValue ||
+      !R_compute_identical(lget(group_chol, "ref"), gvar, 0)) {
+    Shield<SEXP> f(chol_factor(gvar));
+    if (f == R_NilValue) return false;
+    group_chol = List::create(_["idx_list"] = lget(cx, "idx_list_blk"), _["ref"] = gvar,
+                              _["marginal_idx"] = lget(cx, "marginal_idx_blk"),
+                              _["include_full"] = false, _["full"] = R_NilValue,
+                              _["f"] = List::create(f));
+  }
+  RObject ens_pools;
+  if (pooled) {
+    ens_pools = List::create(_["rows"] = drawn["rows"], _["lq"] = drawn["lq"],
+                             _["ll"] = R_NilValue, _["L"] = lget(factors, "L"),
+                             _["mu"] = drawn["mu"], _["logdet"] = lget(factors, "logdet"),
+                             _["c"] = drawn["c"]);
+    set_var(st, "ens_factors", factors);
+  }
+  Shield<SEXP> rng2(lset(rng, "gibbs", seed_after));
+  set_var(st, "pmwgs", lset(pmwgs, "rng", rng2));
+  set_var(st, "pars", pars);
+  set_var(st, "ens_pools", ens_pools);
+  set_var(st, "group_chol_it", group_chol);
+  iteration_costs(st, cx, started);
+  return true;
+}
+
 }  // namespace
 
 bool step_group(SEXP st, SEXP cx, int i) {
   if (lget(cx, "single") != R_NilValue) return group_single(st, cx, i);
   if (lget(cx, "nuis") != R_NilValue) return group_nuisance(st, cx, i);
+  if (TYPEOF(lget(cx, "latent")) == VECSXP) return group_latent(st, cx, i);
   SEXP pmwgs = var(st, "pmwgs");
   SEXP gibbs = lget(cx, "gibbs"), pools = lget(cx, "pools");
   // A diagonal-gamma hierarchy: independent variances with gamma precisions.

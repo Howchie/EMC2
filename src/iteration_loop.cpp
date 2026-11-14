@@ -226,7 +226,31 @@ bool step_store(SEXP st, SEXP cx, int i) {
     set_var(st, "pmwgs", lset(pmwgs, "samples", s2));
     return true;
   }
-  if (!flag(lget(cx, "store_native"))) return false;
+  // A latent-factor hierarchy's draw goes into its own arrays
+  // (fill_samples_factor, _infnt_factor, _SEM); without pools its scores
+  // are redrawn first, which the R step does.
+  SEXP latent = lget(cx, "latent");
+  const bool lat = TYPEOF(latent) == VECSXP;
+  static const char* const lat_store[3][7] = {
+      {"lambda", "lambda_untransf", "epsilon_inv", "psi_inv", "eta", nullptr, nullptr},
+      {"lambda", "epsilon_inv", "psi", "eta", "delta", nullptr, nullptr},
+      {"lambda", "B", "K", "G", "epsilon_inv", "delta_inv", "eta"}};
+  static const char* const lat_pars[3][7] = {
+      {"lambda", "lambda_untransf", "sig_err_inv", "psi_inv", "eta", nullptr, nullptr},
+      {"lambda", "epsilon_inv", "psi", "eta", "delta", nullptr, nullptr},
+      {"lambda", "B", "K", "G", "epsilon_inv", "delta_inv", "eta"}};
+  const int kind = lat ? Rf_asInteger(lget(latent, "kind")) : -1;
+  if (lat) {
+    if (kind < 0 || kind > 2 || var(st, "ens_pools") == R_NilValue ||
+        lget(pmwgs, "pooled") != R_NilValue || TYPEOF(pars) != VECSXP)
+      return false;
+    for (int q = 0; q < 7 && lat_store[kind][q] != nullptr; ++q)
+      if (TYPEOF(lget(samples, lat_store[kind][q])) != REALSXP ||
+          TYPEOF(lget(pars, lat_pars[kind][q])) != REALSXP)
+        return false;
+  } else if (!flag(lget(cx, "store_native"))) {
+    return false;
+  }
   SEXP pooled = lget(pmwgs, "pooled"), s_pooled = lget(samples, "pooled");
   SEXP pooled_value = lget(pooled, "value");
   if (pooled != R_NilValue &&
@@ -240,13 +264,13 @@ bool step_store(SEXP st, SEXP cx, int i) {
        tvinv = lget(pars, "tvinv");
   // A diagonal-gamma hierarchy stores no mixing weights.
   const bool dg = lget(cx, "dgamma") != R_NilValue;
-  if ((!dg && (TYPEOF(a_half) != REALSXP || TYPEOF(p_a_half) != REALSXP)) ||
+  if ((!dg && !lat && (TYPEOF(a_half) != REALSXP || TYPEOF(p_a_half) != REALSXP)) ||
       TYPEOF(theta_mu) != REALSXP ||
       TYPEOF(theta_var) != REALSXP || TYPEOF(alpha) != REALSXP ||
       TYPEOF(subj_ll) != REALSXP ||
-      TYPEOF(tmu) != REALSXP || TYPEOF(tvar) != REALSXP || tvinv == R_NilValue ||
+      TYPEOF(tmu) != REALSXP || TYPEOF(tvar) != REALSXP ||
       TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) ||
-      lget(samples, "last_theta_var_inv") == R_NilValue ||
+      (!lat && (tvinv == R_NilValue || lget(samples, "last_theta_var_inv") == R_NilValue)) ||
       lget(samples, "idx") == R_NilValue)
     return false;
   const bool alloc_on = flag(lget(cx, "alloc_on"));
@@ -273,12 +297,18 @@ bool step_store(SEXP st, SEXP cx, int i) {
   Shield<SEXP> j(iteration_index(cx, i));
   const int jj = static_cast<int>(Rf_asReal(j));
   const int n_pars = Rf_asInteger(lget(pmwgs, "n_pars"));
-  if (!dg) emc_set_last_slice(a_half, jj, p_a_half);
+  if (lat) {
+    for (int q = 0; q < 7 && lat_store[kind][q] != nullptr; ++q)
+      emc_set_last_slice(lget(samples, lat_store[kind][q]), jj,
+                         lget(pars, lat_pars[kind][q]));
+  } else if (!dg) {
+    emc_set_last_slice(a_half, jj, p_a_half);
+  }
   emc_set_last_slice(theta_mu, jj, tmu);
   emc_set_last_slice(theta_var, jj, tvar);
   emc_set_particle_slice(alpha, subj_ll, proposals, jj, n_pars);
   if (pooled != R_NilValue) emc_set_last_slice(s_pooled, jj, pooled_value);
-  Shield<SEXP> s1(lset(samples, "last_theta_var_inv", tvinv));
+  Shield<SEXP> s1(lat ? samples : lset(samples, "last_theta_var_inv", tvinv));
   Shield<SEXP> s2(lset(s1, "idx", j));
   RObject result = lset(pmwgs, "samples", s2);
   if (alloc_on) {

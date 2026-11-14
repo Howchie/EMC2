@@ -65,6 +65,7 @@
       prior$theta_mu_invar <- diag(as.numeric(prior$theta_mu_invar), p)
     out$dgamma <- list(prior = prior, rows = pmwgs$par_names[!pmwgs$nuisance])
   }
+  out$latent <- .emc_steps_latent(pmwgs)
   if (!is.null(out$single)) {
   } else if (any(pmwgs$nuisance) && identical(pmwgs$type, "standard") &&
              identical(pmwgs$sampler_nuis$type, "single") && is.null(pmwgs$gd) &&
@@ -128,6 +129,38 @@
     is.logical(idx_list_blk[[1L]]) && length(idx_list_blk[[1L]]) == p &&
     all(idx_list_blk[[1L]]) && !any(marginal_idx_blk)
   out
+}
+
+# What the native ensemble step takes for a latent-factor hierarchy's rounds
+# (src/gibbs_factor.cpp): the kind of hierarchy, its sizes, the fixed inputs
+# of its group draw, and the form its stored state gives the factors'
+# shrinkage. NULL for other hierarchies and where the native draw does not
+# cover the model.
+.emc_steps_latent <- function(pmwgs) {
+  type <- pmwgs$type
+  if (!type %in% c("factor", "infnt_factor", "SEM") || any(pmwgs$nuisance) ||
+      !isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
+    return(NULL)
+  base <- list(par_names = pmwgs$par_names, n_cov = 0L)
+  if (type == "factor") {
+    inp <- .emc_gibbs_factor_inputs(pmwgs, last_sample_factor(pmwgs$samples))
+    if (is.null(inp) || pmwgs$n_factors < 1L) return(NULL)
+    return(c(base, list(kind = 0L, k = as.integer(pmwgs$n_factors), free = inp$free,
+                        prior = inp$prior)))
+  }
+  if (type == "infnt_factor") {
+    last <- last_sample_infnt_factor(pmwgs$samples)
+    inp <- .emc_gibbs_infnt_factor_inputs(pmwgs, last)
+    k <- NCOL(inp$state$lambda)
+    if (is.null(inp) || k < 1L) return(NULL)
+    return(c(base, list(kind = 1L, k = as.integer(k), prior = inp$prior,
+                        delta_form = last$delta)))
+  }
+  fixed <- .sem_gibbs_fixed(pmwgs)
+  if (is.null(fixed)) return(NULL)
+  list(par_names = pmwgs$par_names, n_cov = as.integer(fixed$n_cov), kind = 2L,
+       k = as.integer(pmwgs$n_factors), prior = fixed$prior,
+       sem = fixed[c("covariates", "free", "blocks")])
 }
 
 # The acceptance rate so far, on the block's progress bar.

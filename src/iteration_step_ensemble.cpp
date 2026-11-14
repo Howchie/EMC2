@@ -1,5 +1,6 @@
 // The iteration's ensemble step (R/iteration_steps.R .emc_step_ensemble) for
-// hierarchies whose Gibbs rounds run natively: each subject's pool with its
+// hierarchies whose Gibbs rounds run natively (standard, diagonal-gamma and
+// the latent-factor ones): each subject's pool with its
 // current state at a uniform position, the rounds on the group state and
 // the pool positions, the selected states, and the group state's jump into
 // the allocation window.
@@ -12,6 +13,7 @@
 #include <cfloat>
 #include <cmath>
 #include <vector>
+#include "iteration_latent.h"
 #include "iteration_state.h"
 
 using namespace Rcpp;
@@ -27,6 +29,98 @@ Rcpp::List emc_ensemble_rounds_cpp(const arma::mat& pool_stack, const arma::vec&
                                    int type, const Rcpp::List& state, const Rcpp::List& prior,
                                    const Rcpp::LogicalVector& is_blocked,
                                    const Rcpp::IntegerVector& par_group);
+
+SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
+                                    const Rcpp::NumericVector& base_w,
+                                    const Rcpp::IntegerVector& k0, int M, int rounds,
+                                    const Rcpp::List& state, SEXP free_entry,
+                                    const Rcpp::List& prior, SEXP sem);
+
+namespace {
+
+// as.numeric(x) shaped nr x nc (a plain vector with nc < 0), for a state the
+// latent hierarchies' rounds read.
+SEXP numeric_part(SEXP x, int nr, int nc) {
+  const R_xlen_t len = nc < 0 ? nr : static_cast<R_xlen_t>(nr) * nc;
+  if (TYPEOF(x) != REALSXP || XLENGTH(x) != len) throw emc_iter::LatentDecline();
+  Shield<SEXP> out(nc < 0 ? Rf_allocVector(REALSXP, len) : Rf_allocMatrix(REALSXP, nr, nc));
+  std::copy(REAL(x), REAL(x) + len, REAL(out));
+  return out;
+}
+
+// The means as a one-row matrix with the parameters' names on its columns.
+SEXP named_row(SEXP mu, SEXP names) {
+  const int p = Rf_length(mu);
+  Shield<SEXP> out(Rf_allocMatrix(REALSXP, 1, p));
+  std::copy(REAL(mu), REAL(mu) + p, REAL(out));
+  Shield<SEXP> dn(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(dn, 1, names);
+  Rf_setAttrib(out, R_DimNamesSymbol, dn);
+  return out;
+}
+
+}  // namespace
+
+namespace emc_iter {
+
+List latent_state(SEXP pars, int kind, int n, int p, int k, int n_cov) {
+  if (kind == 0)
+    return List::create(_["eta"] = numeric_part(lget(pars, "eta"), n, k),
+                        _["lambda"] = numeric_part(lget(pars, "lambda_untransf"), p, k),
+                        _["mu"] = numeric_part(lget(pars, "tmu"), p, -1),
+                        _["sig_err_inv"] = numeric_part(lget(pars, "sig_err_inv"), p, -1),
+                        _["psi_inv"] = numeric_part(lget(pars, "psi_inv"), k, -1));
+  if (kind == 1)
+    return List::create(_["psi"] = numeric_part(lget(pars, "psi"), p, k),
+                        _["lambda"] = numeric_part(lget(pars, "lambda"), p, k),
+                        _["mu"] = numeric_part(lget(pars, "tmu"), p, -1),
+                        _["epsilon_inv"] = numeric_part(lget(pars, "epsilon_inv"), p, -1),
+                        _["delta"] = numeric_part(lget(pars, "delta"), k, -1));
+  return List::create(_["lambda"] = numeric_part(lget(pars, "lambda"), p, k),
+                      _["B"] = numeric_part(lget(pars, "B"), k, k),
+                      _["K"] = numeric_part(lget(pars, "K"), p, n_cov),
+                      _["G"] = numeric_part(lget(pars, "G"), k, n_cov),
+                      _["delta_inv"] = numeric_part(lget(pars, "delta_inv"), k, k),
+                      _["mu"] = numeric_part(lget(pars, "tmu"), p, -1),
+                      _["epsilon_inv"] = numeric_part(lget(pars, "epsilon_inv"), p, -1));
+}
+
+List latent_pars(const List& state, int kind, SEXP names, SEXP delta_form, SEXP eta_rows,
+                 SEXP alpha) {
+  if (kind == 0)
+    return List::create(_["tmu"] = named_row(state["mu"], names), _["tvar"] = state["var"],
+                        _["lambda_untransf"] = state["lambda"],
+                        _["lambda"] = state["lambda_scaled"], _["eta"] = state["eta"],
+                        _["sig_err_inv"] = state["sig_err_inv"],
+                        _["psi_inv"] = state["psi_inv"], _["alpha"] = alpha);
+  if (kind == 1) {
+    // The factors' shrinkage keeps the store's form.
+    SEXP values = state["delta"];
+    if (TYPEOF(delta_form) != REALSXP || XLENGTH(delta_form) != XLENGTH(values))
+      throw emc_iter::LatentDecline();
+    Shield<SEXP> delta(Rf_duplicate(delta_form));
+    std::copy(REAL(values), REAL(values) + XLENGTH(values), REAL(delta));
+    RObject eta = state["eta"];
+    if (eta_rows != R_NilValue) {
+      eta = Rf_duplicate(eta);
+      Shield<SEXP> dn(Rf_allocVector(VECSXP, 2));
+      SET_VECTOR_ELT(dn, 0, eta_rows);
+      Rf_setAttrib(eta, R_DimNamesSymbol, dn);
+    }
+    return List::create(_["tmu"] = named_row(state["mu"], names), _["tvar"] = state["var"],
+                        _["lambda"] = state["lambda"], _["eta"] = eta,
+                        _["epsilon_inv"] = state["epsilon_inv"], _["psi"] = state["psi"],
+                        _["alpha"] = alpha, _["delta"] = delta);
+  }
+  return List::create(_["tmu"] = state["tmu"], _["lambda"] = state["lambda"],
+                      _["eta"] = state["eta"], _["B"] = state["B"], _["K"] = state["K"],
+                      _["G"] = state["G"], _["epsilon_inv"] = state["epsilon_inv"],
+                      _["delta_inv"] = state["delta_inv"], _["alpha"] = alpha,
+                      _["subj_mu"] = state["subj_mu"], _["subj_var"] = state["subj_var"],
+                      _["pop_mean"] = state["pop_mean"], _["tvar"] = state["tvar"]);
+}
+
+}  // namespace emc_iter
 
 namespace {
 
@@ -63,7 +157,11 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   // A diagonal-gamma hierarchy's rounds draw independent precisions.
   SEXP dgamma = lget(cx, "dgamma");
   const bool dg = TYPEOF(dgamma) == VECSXP;
-  if (TYPEOF(pmwgs) != VECSXP || (!dg && TYPEOF(gibbs) != VECSXP) || TYPEOF(cfg) != VECSXP ||
+  // A latent-factor hierarchy's rounds run on its own group draw.
+  SEXP latent = lget(cx, "latent");
+  const bool lat = TYPEOF(latent) == VECSXP;
+  if (TYPEOF(pmwgs) != VECSXP || (!dg && !lat && TYPEOF(gibbs) != VECSXP) ||
+      TYPEOF(cfg) != VECSXP ||
       TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals))
     return false;
   const int p = Rf_nrows(proposals) - 1, n = Rf_ncols(proposals);
@@ -88,7 +186,21 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
     }
   }
   SEXP tvinv = lget(pars, "tvinv"), a_half = lget(pars, "a_half");
-  if (TYPEOF(tvinv) != REALSXP || (!dg && TYPEOF(a_half) != REALSXP)) return false;
+  if (!lat && (TYPEOF(tvinv) != REALSXP || (!dg && TYPEOF(a_half) != REALSXP))) return false;
+  const int kind = lat ? Rf_asInteger(lget(latent, "kind")) : -1;
+  SEXP par_names = lat ? lget(latent, "par_names") : R_NilValue;
+  List start;
+  if (lat) {
+    if (kind < 0 || kind > 2 || TYPEOF(par_names) != STRSXP || XLENGTH(par_names) != p ||
+        TYPEOF(pars) != VECSXP)
+      return false;
+    try {
+      start = latent_state(pars, kind, n, p, Rf_asInteger(lget(latent, "k")),
+                           Rf_asInteger(lget(latent, "n_cov")));
+    } catch (LatentDecline&) {
+      return false;
+    }
+  }
   if (dg && (!Rf_isMatrix(tvinv) || Rf_nrows(tvinv) != p || Rf_ncols(tvinv) != p ||
              TYPEOF(prior) != VECSXP || TYPEOF(lget(dgamma, "rows")) != STRSXP ||
              XLENGTH(lget(dgamma, "rows")) != p))
@@ -123,7 +235,14 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
                                      Rf_asReal(lget(pools, "c")),
                                      Rf_asReal(lget(cfg, "tail_weight")),
                                      Rf_asReal(lget(cfg, "tail_df")));
-    if (dg) {
+    if (lat) {
+      SEXP out = emc_ensemble_rounds_latent_cpp(
+          as<NumericMatrix>(stacked["pool_stack"]), as<NumericVector>(stacked["base_w"]), k0,
+          M, Rf_asInteger(lget(cfg, "rounds")), start, lget(latent, "free"),
+          List(lget(latent, "prior")), lget(latent, "sem"));
+      if (out == R_NilValue) ok = false;
+      else res = out;
+    } else if (dg) {
       NumericVector prec(p);
       for (int k = 0; k < p; ++k) prec[k] = REAL(tvinv)[k + static_cast<R_xlen_t>(k) * p];
       res = emc_ensemble_rounds_cpp(as<arma::mat>(stacked["pool_stack"]),
@@ -152,8 +271,16 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   const NumericVector wess = res["wess"];
   const NumericMatrix pool_stack = stacked["pool_stack"];
   const NumericVector ll_stack = stacked["ll_stack"];
-  RObject tmu_keep = res["tmu"], tvar_keep, tvinv_keep;
-  if (dg) {
+  RObject tmu_keep, tvar_keep, tvinv_keep;
+  if (lat) {
+    const List state = res["state"];
+    tmu_keep = kind == 2 ? state["tmu"] : state["mu"];
+    tvar_keep = kind == 2 ? state["tvar"] : state["var"];
+  } else {
+    tmu_keep = res["tmu"];
+  }
+  if (lat) {
+  } else if (dg) {
     // The named means and the diagonal matrices of the variances and
     // precisions, as the hierarchy's own draw gives them.
     SEXP prec = res["tvinv"];
@@ -192,11 +319,22 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   for (int s = 0; s < n; ++s)
     std::copy(REAL(tmu), REAL(tmu) + p, REAL(subj_mu) + static_cast<R_xlen_t>(s) * p);
   Shield<SEXP> alpha(proposal_rows(props2, p));
-  List pars2 = dg ? List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = tvinv_keep,
-                                 _["alpha"] = alpha)
-                  : List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
-                                 _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
-                                 _["alpha"] = alpha);
+  List pars2;
+  if (lat) {
+    try {
+      pars2 = latent_pars(List(res["state"]), kind, par_names, lget(latent, "delta_form"),
+                          R_NilValue, alpha);
+    } catch (LatentDecline&) {
+      return false;
+    }
+  } else if (dg) {
+    pars2 = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = tvinv_keep,
+                         _["alpha"] = alpha);
+  } else {
+    pars2 = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
+                         _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
+                         _["alpha"] = alpha);
+  }
 
   // The move's running statistics.
   RObject stats = lget(pmwgs, "ensemble_stats");
