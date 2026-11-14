@@ -16,6 +16,8 @@
 #define FCONE
 #endif
 #include <cmath>
+#include <cstring>
+#include <vector>
 #include "iteration_state.h"
 
 using namespace Rcpp;
@@ -119,10 +121,154 @@ bool group_single(SEXP st, SEXP cx, int i) {
   return true;
 }
 
+// The step of a standard hierarchy beside nuisance parameters without a
+// group level: the hierarchy's draw on its own rows, the nuisance prior mean
+// on the others, and the two merged for the subjects (merge_group_level).
+bool group_nuisance(SEXP st, SEXP cx, int i) {
+  SEXP pmwgs = var(st, "pmwgs"), nz = lget(cx, "nuis");
+  SEXP is = lget(nz, "is"), tmu_nuis = lget(nz, "tmu");
+  SEXP samples = lget(pmwgs, "samples"), rng = lget(pmwgs, "rng"), prior = lget(pmwgs, "prior");
+  SEXP s_alpha = lget(samples, "alpha"), s_a_half = lget(samples, "a_half"),
+       tvinv = lget(samples, "last_theta_var_inv"), idx = lget(samples, "idx");
+  SEXP dims = Rf_getAttrib(s_alpha, R_DimSymbol), dn = Rf_getAttrib(s_alpha, R_DimNamesSymbol);
+  SEXP seed = lget(rng, "gibbs"), nuis = lget(pmwgs, "sampler_nuis");
+  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(is) != LGLSXP || TYPEOF(tmu_nuis) != REALSXP ||
+      TYPEOF(s_alpha) != REALSXP || TYPEOF(dims) != INTSXP || XLENGTH(dims) != 3 ||
+      TYPEOF(s_a_half) != REALSXP || TYPEOF(tvinv) != REALSXP || !Rf_isMatrix(tvinv) ||
+      Rf_length(idx) != 1 || TYPEOF(seed) != INTSXP || TYPEOF(prior) != VECSXP ||
+      TYPEOF(nuis) != VECSXP || dn == R_NilValue || XLENGTH(dn) != 3 ||
+      VECTOR_ELT(dn, 0) == R_NilValue)
+    return false;
+  const int p = INTEGER(dims)[0], n = INTEGER(dims)[1];
+  if (XLENGTH(is) != p || n < 2 || p < 2) return false;
+  std::vector<int> main_rows, nuis_rows;
+  for (int k = 0; k < p; ++k) (LOGICAL(is)[k] == TRUE ? nuis_rows : main_rows).push_back(k);
+  const int pm = static_cast<int>(main_rows.size()), pn = static_cast<int>(nuis_rows.size());
+  Shield<SEXP> j(iteration_index(cx, i));
+  const R_xlen_t prev = static_cast<R_xlen_t>(Rf_asReal(j)) - 2;
+  const R_xlen_t at = static_cast<R_xlen_t>(Rf_asReal(idx)) - 1;
+  const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
+  if (pm < 1 || pn < 1 || XLENGTH(tmu_nuis) != pn || prev < 0 || at < 0 ||
+      XLENGTH(s_alpha) < (prev + 1) * slice || XLENGTH(s_a_half) < (at + 1) * pm ||
+      Rf_nrows(tvinv) != pm || Rf_ncols(tvinv) != pm)
+    return false;
+  const Clock started = clock_now();
+
+  // Every parameter's last states, and the hierarchy's rows of them.
+  Shield<SEXP> alpha_all(Rf_allocMatrix(REALSXP, p, n));
+  std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice, REAL(alpha_all));
+  Shield<SEXP> dn_all(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(dn_all, 0, VECTOR_ELT(dn, 0));
+  SET_VECTOR_ELT(dn_all, 1, VECTOR_ELT(dn, 1));
+  Shield<SEXP> dnn2(Rf_allocVector(STRSXP, 2));
+  SEXP dnn = Rf_getAttrib(dn, R_NamesSymbol);
+  if (dnn != R_NilValue) {
+    SET_STRING_ELT(dnn2, 0, STRING_ELT(dnn, 0));
+    SET_STRING_ELT(dnn2, 1, STRING_ELT(dnn, 1));
+    Rf_setAttrib(dn_all, R_NamesSymbol, dnn2);
+  }
+  Rf_setAttrib(alpha_all, R_DimNamesSymbol, dn_all);
+  Shield<SEXP> alpha_main(Rf_allocMatrix(REALSXP, pm, n));
+  for (int s = 0; s < n; ++s)
+    for (int k = 0; k < pm; ++k)
+      REAL(alpha_main)[k + static_cast<R_xlen_t>(s) * pm] =
+          REAL(alpha_all)[main_rows[k] + static_cast<R_xlen_t>(s) * p];
+  {
+    Shield<SEXP> rows(Rf_allocVector(STRSXP, pm));
+    for (int k = 0; k < pm; ++k)
+      SET_STRING_ELT(rows, k, STRING_ELT(VECTOR_ELT(dn, 0), main_rows[k]));
+    Shield<SEXP> dn_main(Rf_allocVector(VECSXP, 2));
+    SET_VECTOR_ELT(dn_main, 0, rows);
+    SET_VECTOR_ELT(dn_main, 1, VECTOR_ELT(dn, 1));
+    if (dnn != R_NilValue) Rf_setAttrib(dn_main, R_NamesSymbol, dnn2);
+    Rf_setAttrib(alpha_main, R_DimNamesSymbol, dn_main);
+  }
+
+  set_global_seed(seed);
+  GetRNGstate();
+  List res;
+  bool ok = true;
+  try {
+    const arma::mat a(REAL(alpha_main), pm, n, false, true);
+    const arma::mat tv(REAL(tvinv), pm, pm, false, true);
+    const arma::vec ah(REAL(s_a_half) + at * pm, pm);
+    res = emc_gibbs_standard_cpp(a, tv, ah, List(prior), LogicalVector(lget(nz, "blocked")),
+                                 IntegerVector(lget(nz, "group")));
+  } catch (std::exception&) {
+    ok = false;
+  }
+  PutRNGstate();
+  if (!ok) return false;
+  Shield<SEXP> seed_after(global_seed());
+  SEXP tmu = res["tmu"], tvar = res["tvar"];
+  if (TYPEOF(tmu) != REALSXP || XLENGTH(tmu) != pm || TYPEOF(tvar) != REALSXP ||
+      !Rf_isMatrix(tvar) || Rf_nrows(tvar) != pm)
+    return false;
+  Shield<SEXP> subj_mu(Rf_allocMatrix(REALSXP, pm, n));
+  for (int s = 0; s < n; ++s)
+    std::copy(REAL(tmu), REAL(tmu) + pm, REAL(subj_mu) + static_cast<R_xlen_t>(s) * pm);
+  List pars = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
+                           _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
+                           _["alpha"] = alpha_main);
+
+  // The merged state: the nuisance rows carry their prior mean and no
+  // covariance.
+  Shield<SEXP> tmu_c(Rf_allocVector(REALSXP, p)), tvar_c(Rf_allocMatrix(REALSXP, p, p)),
+      mu_c(Rf_allocMatrix(REALSXP, p, n));
+  std::fill(REAL(tvar_c), REAL(tvar_c) + static_cast<R_xlen_t>(p) * p, 0.0);
+  for (int k = 0; k < pm; ++k) REAL(tmu_c)[main_rows[k]] = REAL(tmu)[k];
+  for (int k = 0; k < pn; ++k) REAL(tmu_c)[nuis_rows[k]] = REAL(tmu_nuis)[k];
+  for (int c = 0; c < pm; ++c)
+    for (int r = 0; r < pm; ++r)
+      REAL(tvar_c)[main_rows[r] + static_cast<R_xlen_t>(main_rows[c]) * p] =
+          REAL(tvar)[r + static_cast<R_xlen_t>(c) * pm];
+  for (int s = 0; s < n; ++s)
+    for (int k = 0; k < p; ++k)
+      REAL(mu_c)[k + static_cast<R_xlen_t>(s) * p] = REAL(tmu_c)[k];
+  List pars_comb = List::create(_["tmu"] = tmu_c, _["tvar"] = tvar_c, _["subj_mu"] = mu_c,
+                                _["alpha"] = alpha_all);
+
+  RObject group_chol = var(st, "group_chol_it");
+  if (static_cast<SEXP>(group_chol) == R_NilValue ||
+      !R_compute_identical(lget(group_chol, "ref"), tvar_c, 0)) {
+    static Function build = package_function("build_group_chol_cache");
+    group_chol = build(tvar_c, lget(cx, "idx_list_blk"), lget(cx, "marginal_idx_blk"),
+                       _["include_full"] = lget(cx, "include_full"));
+  }
+
+  // The nuisance sampler's store holds only its place in the chain.
+  const R_xlen_t n_f = XLENGTH(nuis);
+  SEXP f_names = Rf_getAttrib(nuis, R_NamesSymbol);
+  std::vector<R_xlen_t> keep;
+  for (R_xlen_t k = 0; k < n_f; ++k)
+    if (std::strcmp(CHAR(STRING_ELT(f_names, k)), "samples") != 0) keep.push_back(k);
+  Shield<SEXP> nuis2(Rf_allocVector(VECSXP, keep.size() + 1)),
+      names2(Rf_allocVector(STRSXP, keep.size() + 1));
+  for (size_t k = 0; k < keep.size(); ++k) {
+    SET_VECTOR_ELT(nuis2, k, VECTOR_ELT(nuis, keep[k]));
+    SET_STRING_ELT(names2, k, STRING_ELT(f_names, keep[k]));
+  }
+  SET_VECTOR_ELT(nuis2, keep.size(), List::create(_["idx"] = static_cast<SEXP>(j)));
+  SET_STRING_ELT(names2, keep.size(), Rf_mkChar("samples"));
+  Rf_setAttrib(nuis2, R_NamesSymbol, names2);
+
+  Shield<SEXP> rng2(lset(rng, "gibbs", seed_after));
+  RObject sampler = lset(pmwgs, "rng", rng2);
+  sampler = lset(sampler, "sampler_nuis", nuis2);
+  set_var(st, "pmwgs", sampler);
+  set_var(st, "pars", pars);
+  set_var(st, "pars_comb", pars_comb);
+  set_var(st, "ens_pools", R_NilValue);
+  set_var(st, "group_chol_it", group_chol);
+  iteration_costs(st, cx, started);
+  return true;
+}
+
 }  // namespace
 
 bool step_group(SEXP st, SEXP cx, int i) {
   if (lget(cx, "single") != R_NilValue) return group_single(st, cx, i);
+  if (lget(cx, "nuis") != R_NilValue) return group_nuisance(st, cx, i);
   SEXP pmwgs = var(st, "pmwgs");
   SEXP gibbs = lget(cx, "gibbs"), pools = lget(cx, "pools");
   if (TYPEOF(pmwgs) != VECSXP || TYPEOF(gibbs) != VECSXP || pools == R_NilValue ||

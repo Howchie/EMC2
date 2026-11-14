@@ -59,8 +59,22 @@
   out$store_native <- identical(pmwgs$type, "standard") ||
     (identical(pmwgs$type, "single") && plain)
   if (!is.null(out$single)) {
-  } else if (plain && identical(pmwgs$type, "standard") && is.null(pmwgs$gd) &&
-             !length(pmwgs$group_designs)) {
+  } else if (any(pmwgs$nuisance) && identical(pmwgs$type, "standard") &&
+             identical(pmwgs$sampler_nuis$type, "single") && is.null(pmwgs$gd) &&
+             !length(pmwgs$group_designs) && n > 1L && sum(!pmwgs$nuisance) > 0L) {
+    # Nuisance parameters without a group level beside a standard hierarchy
+    # on the others: the hierarchy's blocks and the nuisance prior mean.
+    main <- !pmwgs$nuisance
+    is_blocked <- pmwgs$is_blocked[main]
+    par_group <- pmwgs$par_group[main]
+    if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, sum(main))
+    if (is.null(par_group)) par_group <- rep(1L, sum(main))
+    out$nuis <- list(is = as.logical(pmwgs$nuisance),
+                     tmu = as.numeric(pmwgs$sampler_nuis$prior$theta_mu_mean),
+                     blocked = as.logical(is_blocked),
+                     group = as.integer(factor(par_group, levels = unique(par_group))))
+  } else if (!any(pmwgs$nuisance) && identical(pmwgs$type, "standard") &&
+             is.null(pmwgs$gd) && !length(pmwgs$group_designs)) {
     is_blocked <- pmwgs$is_blocked[!pmwgs$nuisance]
     par_group <- pmwgs$par_group[!pmwgs$nuisance]
     if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
