@@ -5,6 +5,9 @@
 #include <limits>
 #include <vector>
 
+// The weights reproduce R's arithmetic operation for operation.
+#pragma GCC optimize ("no-fast-math")
+
 arma::vec fast_dmvnorm_rooti(const arma::mat& x, const arma::rowvec& mean,
                              const arma::mat& rooti, double log_const);
 
@@ -66,9 +69,10 @@ Rcpp::NumericVector emc2_particle_log_weights(
       }
       if (value > largest) largest = value;
     }
-    double sum = 0.0;
+    // rowSums() accumulates in extended precision.
+    long double sum = 0.0L;
     for (const auto& term : log_mix_terms) sum += std::exp(term[i] - largest);
-    log_mixture[i] = largest + std::log(sum);
+    log_mixture[i] = largest + std::log(static_cast<double>(sum));
   }
 
   double smallest_finite = std::numeric_limits<double>::infinity();

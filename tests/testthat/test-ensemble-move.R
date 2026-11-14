@@ -1,3 +1,4 @@
+local_rng_guard()  # see helper-rng.R: keep this file's RNG changes inside it
 # Ensemble group update (R/ensemble_move.R): posterior invariance on a
 # conjugate Gaussian hierarchy, using the package's own group Gibbs step.
 
