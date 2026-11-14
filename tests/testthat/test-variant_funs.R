@@ -176,3 +176,36 @@ test_that("the native infinite-factor group draw is the R form's draw", {
     expect_identical(.Random.seed, after)
   }
 })
+
+test_that("the native multivariate normal draw is mvtnorm's", {
+  set.seed(4)
+  for (i in 1:40) {
+    k <- sample(1:5, 1)
+    n <- sample(c(1, 3, 12), 1)
+    sigma <- crossprod(matrix(rnorm(k * (k + 2)), k + 2, k))
+    mean <- if (i %% 2) rnorm(k)
+    seed <- .Random.seed
+    theirs <- if (is.null(mean)) mvtnorm::rmvnorm(n, sigma = sigma) else
+      mvtnorm::rmvnorm(n, mean, sigma)
+    after <- .Random.seed
+    assign(".Random.seed", seed, envir = globalenv())
+    native <- EMC2:::emc_rmvnorm_cpp(n, mean, sigma)
+    expect_identical(native, theirs)
+    expect_identical(.Random.seed, after)
+  }
+  # A covariance mvtnorm refuses is left to it.
+  expect_null(EMC2:::emc_rmvnorm_cpp(1L, NULL, matrix(c(1, 0.5, 0, 1), 2)))
+})
+
+test_that("an SEM without covariates takes a group draw", {
+  skip_on_os("windows")
+  L <- matrix(c(1, Inf, Inf, Inf), 4, 1)
+  sem <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = "SEM",
+                  sem_settings = list(Lambda_mat = L))
+  sem <- init_chains(sem, cores_for_chains = 1, particles = 5)
+  sampler <- sem[[1]]
+  set.seed(5)
+  pars <- EMC2:::gibbs_step_SEM(sampler, sampler$samples$alpha[, , sampler$samples$idx])
+  expect_true(all(is.finite(pars$tmu)))
+  expect_true(all(is.finite(pars$tvar)))
+})

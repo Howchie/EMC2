@@ -5,7 +5,7 @@ test_that("marginal ensemble scores use the selected subjects and current group 
   precision <- c(2, 0.5, 3)
   sampler <- list(n_pars = 3L, n_subjects = 2L, n_factors = 2L)
   drawn_covariance <- NULL
-  local_mocked_bindings(rmvnorm = function(n, sigma, ...) {
+  local_mocked_bindings(.emc_rmvnorm = function(n, sigma, ...) {
     drawn_covariance <<- sigma
     matrix(0, n, nrow(sigma))
   }, .package = "EMC2")
@@ -44,7 +44,7 @@ test_that("SEM score restoration conditions on covariates and correlated disturb
   V <- solve(P + t(pars$lambda) %*% E %*% pars$lambda)
   expected <- t(V %*% (P %*% m0 + t(pars$lambda) %*% E %*%
                          (alpha - pars$tmu - pars$K %*% x)))
-  local_mocked_bindings(rmvnorm = function(n, sigma, ...) matrix(0, n, nrow(sigma)),
+  local_mocked_bindings(.emc_rmvnorm = function(n, sigma, ...) matrix(0, n, nrow(sigma)),
                        .package = "EMC2")
   out <- EMC2:::.emc_ensemble_refresh_scores(pars, sampler, alpha)
   expect_equal(out$eta, expected, tolerance = 1e-12)

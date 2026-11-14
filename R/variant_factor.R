@@ -184,6 +184,23 @@ fill_samples_factor <- function(samples, group_level, proposals, j = 1, n_pars){
   return(samples)
 }
 
+# mvtnorm::rmvnorm(n, mean, sigma) for the group draws: the native form
+# (src/gibbs_factor.cpp) of its default method, the same draw on the same
+# random stream without the R function's overhead, else that function from
+# the stream's state before the call.
+.emc_rmvnorm <- function(n, mean = NULL, sigma) {
+  seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
+  out <- if (!is.null(seed) && is.matrix(sigma) && is.double(sigma) &&
+             length(n) == 1L && (is.null(mean) || is.double(mean)))
+    emc_rmvnorm_cpp(n, if (!is.null(mean)) as.numeric(mean), sigma)
+  if (!is.null(out)) {
+    if (!is.null(names(mean))) colnames(out) <- names(mean)
+    return(out)
+  }
+  if (!is.null(seed)) assign(".Random.seed", seed, envir = globalenv())
+  if (is.null(mean)) rmvnorm(n, sigma = sigma) else rmvnorm(n, mean, sigma)
+}
+
 # The group draw: the native form (src/gibbs_factor.cpp), which gives the R
 # form's draw on the same random stream, else the R form from the stream's
 # state before the call.

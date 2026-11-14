@@ -186,7 +186,7 @@
     score_precision <- if (type == "factor") pars$psi_inv else rep(1, nf)
     weighted <- sweep(loadings, 1, error_precision, "*")
     covariance <- solve(diag(as.numeric(score_precision), nf) + crossprod(loadings, weighted))
-    scores <- residual %*% weighted %*% covariance + rmvnorm(n, sigma = covariance)
+    scores <- residual %*% weighted %*% covariance + .emc_rmvnorm(n, sigma = covariance)
   }
   pars$eta[,] <- scores
   pars

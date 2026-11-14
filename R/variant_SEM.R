@@ -412,7 +412,7 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
     t(lambda) %*% epsilon_inv %*% t(ytilde - covariates %*% t(K)) +
       Psi0_inv %*% B0_inv %*% G %*% t(covariates)
   )
-  matrix(t(eta_mean_mat) + rmvnorm(n_subjects, sigma = eta_sig),
+  matrix(t(eta_mean_mat) + .emc_rmvnorm(n_subjects, sigma = eta_sig),
          n_subjects, n_factors)
 }
 
@@ -425,8 +425,10 @@ gibbs_step_SEM <- function(sampler, alpha){
   n_subjects    <- sampler$n_subjects
   n_pars        <- sum(!sampler$nuisance)
   n_factors     <- sampler$n_factors
-  covariates    <- as.matrix(sem_settings$covariates)
-  n_cov         <- if (!is.null(covariates)) ncol(covariates) else 0
+  # Without covariates, a matrix with no columns.
+  covariates    <- if (is.null(sem_settings$covariates)) matrix(0, n_subjects, 0) else
+    as.matrix(sem_settings$covariates)
+  n_cov         <- ncol(covariates)
 
   ## free-parameter masks ----------------------------------------------------
   isFree_Lambda <- sem_settings$Lambda_mat == Inf
@@ -460,7 +462,7 @@ gibbs_step_SEM <- function(sampler, alpha){
             (epsilon_inv %*%
                colSums(y - covariates %*% t(K) - eta %*% t(lambda)) +
              diag(1/prior$theta_mu_var, n_pars) %*% prior$theta_mu_mean)
-  mu <- drop(rmvnorm(1, mu_mu, mu_sig))
+  mu <- drop(.emc_rmvnorm(1, mu_mu, mu_sig))
   ytilde <- sweep(y, 2, mu)
 
   ## ---- update eta ---------------------------------------------------------
@@ -493,7 +495,7 @@ gibbs_step_SEM <- function(sampler, alpha){
       lam_sig <- solve(epsilon_inv[j,j] * crossprod(etaS) +
                        diag(1/lambda_y_prior[j,isFree], sum(isFree)))
       lam_mu  <- lam_sig %*% (epsilon_inv[j,j] * crossprod(etaS, y_j))
-      lambda_y[j, isFree] <- rmvnorm(1, lam_mu, lam_sig)
+      lambda_y[j, isFree] <- .emc_rmvnorm(1, lam_mu, lam_sig)
     }
   }
   if(n_cov > 0){
@@ -545,7 +547,7 @@ gibbs_step_SEM <- function(sampler, alpha){
     B_sig <- solve(delta_pp * crossprod(Z_p) +
                      diag(1 / prior_vec, length(prior_vec)))
     B_mu  <- B_sig %*% crossprod(Z_p, y_star)
-    coef_sample <- rmvnorm(1, B_mu, B_sig)      # 1 x ncol(Z_p)
+    coef_sample <- .emc_rmvnorm(1, B_mu, B_sig)      # 1 x ncol(Z_p)
 
     ## 5.  Split the draw into G-part and B-part -------------------
     n_free_G <- sum(free_Gp)          # could be 0

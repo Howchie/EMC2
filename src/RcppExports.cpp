@@ -681,6 +681,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_rmvnorm_cpp
+SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma);
+RcppExport SEXP _EMC2_emc_rmvnorm_cpp(SEXP nSEXP, SEXP meanSEXP, SEXP sigmaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type mean(meanSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type sigma(sigmaSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_rmvnorm_cpp(n, mean, sigma));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_gibbs_infnt_factor_cpp
 SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::NumericMatrix& psi, const Rcpp::NumericVector& epsilon_inv, const Rcpp::NumericMatrix& lambda, const Rcpp::NumericVector& mu, const Rcpp::NumericVector& delta, const Rcpp::NumericVector& mu_invar, const Rcpp::NumericVector& mu_mean, double df, double ad1, double bd1, SEXP ad2, double bd2, const Rcpp::NumericVector& shape_err, const Rcpp::NumericVector& rate_err);
 RcppExport SEXP _EMC2_emc_gibbs_infnt_factor_cpp(SEXP alphaSEXP, SEXP psiSEXP, SEXP epsilon_invSEXP, SEXP lambdaSEXP, SEXP muSEXP, SEXP deltaSEXP, SEXP mu_invarSEXP, SEXP mu_meanSEXP, SEXP dfSEXP, SEXP ad1SEXP, SEXP bd1SEXP, SEXP ad2SEXP, SEXP bd2SEXP, SEXP shape_errSEXP, SEXP rate_errSEXP) {
@@ -4504,6 +4517,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
+    {"_EMC2_emc_rmvnorm_cpp", (DL_FUNC) &_EMC2_emc_rmvnorm_cpp, 3},
     {"_EMC2_emc_gibbs_infnt_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_infnt_factor_cpp, 15},
     {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 14},
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},

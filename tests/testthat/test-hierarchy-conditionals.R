@@ -40,7 +40,7 @@ test_that("factor loadings regress on the response net of fixed loadings", {
   s$samples$lambda_untransf[, , 1] <- ifelse(Lmat == Inf, 0.2, Lmat)
   local_mocked_bindings(rmvnorm = hc_mean_rmvnorm, .package = "EMC2")
   set.seed(9)
-  out <- EMC2:::gibbs_step_factor(s, alpha)
+  out <- EMC2:::gibbs_step_factor_r(s, alpha)
   eta <- out$eta
   yt <- sweep(t(alpha), 2, as.numeric(out$tmu))
   for (j in 2:4) {
@@ -70,7 +70,7 @@ test_that("infinite-factor shrinkage rates use the refreshed cumulative products
     }
     stats::rgamma(n, shape, rate)
   }, .package = "EMC2")
-  out <- EMC2:::gibbs_step_infnt_factor(s, alpha)
+  out <- EMC2:::gibbs_step_infnt_factor_r(s, alpha)
   expect_equal(out$delta, draws)
   cs <- colSums(out$psi * out$lambda^2)
   pr <- s$prior
@@ -115,7 +115,7 @@ test_that("SEM loading, K, G and B rows subtract fixed contributions", {
   alpha <- matrix(rnorm(36), 4, 9)
   D0 <- s$samples$delta_inv[, , 1]
   B0 <- s$samples$B[, , 1]; G0 <- matrix(s$samples$G[, , 1], 2)
-  local_mocked_bindings(rmvnorm = hc_mean_rmvnorm, .package = "EMC2")
+  local_mocked_bindings(.emc_rmvnorm = hc_mean_rmvnorm, .package = "EMC2")
   set.seed(1)
   out <- EMC2:::gibbs_step_SEM(s, alpha)
   eta <- out$eta

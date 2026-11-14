@@ -639,6 +639,24 @@ bool gibbs_infinite(InfiniteState& state, const Mat& alpha, const InfinitePrior&
 
 }  // namespace emc_factor
 
+// mvtnorm::rmvnorm(n, mean, sigma) by its default method, on the same random
+// stream: `mean` NULL for the zero vector. NULL where that function would
+// raise a condition; the stream is then spent.
+// [[Rcpp::export]]
+SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma) {
+  const int k = sigma.nrow();
+  if (n < 1 || k < 1 || sigma.ncol() != k ||
+      (mean != R_NilValue && (TYPEOF(mean) != REALSXP || XLENGTH(mean) != k)))
+    return R_NilValue;
+  try {
+    const Mat out = normal_rows(n, mean == R_NilValue ? NULL : REAL(mean),
+                                normal_factor(as_mat(sigma)));
+    return as_r(out);
+  } catch (Decline&) {
+    return R_NilValue;
+  }
+}
+
 // gibbs_step_infnt_factor()'s draw: `alpha` subjects x parameters, the state
 // as the store holds it and the prior's vectors at full length (`ad2` NULL
 // for a prior without it). NULL when the draw is left to the R form.
