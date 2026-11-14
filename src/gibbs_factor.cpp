@@ -1,5 +1,7 @@
-// The group draw of a factor hierarchy (R/variant_factor.R gibbs_step_factor):
-// parameter-expanded factor analysis with loadings fixed or free by entry.
+// The group draws of the factor hierarchies: parameter-expanded factor
+// analysis with loadings fixed or free by entry (R/variant_factor.R
+// gibbs_step_factor) and the shrinkage prior over an unbounded number of
+// factors (R/variant_infnt_factor.R gibbs_step_infnt_factor).
 // Every product, inverse and eigendecomposition goes through the routine R's
 // own operators call, in R's order, so the draw equals the R form's bit for
 // bit on the same random stream. The draw declines where the R form would
@@ -13,6 +15,7 @@
 #define USE_FC_LEN_T
 #endif
 #include <Rcpp.h>
+#include <R_ext/Applic.h>
 #include <R_ext/BLAS.h>
 #include <R_ext/Lapack.h>
 #ifndef FCONE
@@ -333,6 +336,248 @@ void draw(emc_factor::State& s, const Mat& alpha, const emc_factor::Prior& prior
   s.lambda_scaled = mult(s.lambda, diagonal(sd));
 }
 
+// chol(): the upper factor, refused where the matrix is not positive
+// definite.
+Mat chol_upper(const Mat& x) {
+  if (x.r != x.c || x.r == 0) throw Decline();
+  int n = x.r, info = 0;
+  Mat u = x;
+  for (int j = 0; j < n; ++j)
+    for (int i = j + 1; i < n; ++i) u(i, j) = 0.0;
+  F77_CALL(dpotrf)("U", &n, u.v.data(), &n, &info FCONE);
+  if (info != 0) throw Decline();
+  return u;
+}
+
+// backsolve() and forwardsolve() on the triangle of `r`.
+Mat tri_solve(const Mat& r, const Mat& b, bool upper) {
+  if (r.r != r.c || b.r != r.r) throw Decline();
+  int k = r.r, ncb = b.c;
+  for (int i = 0; i < k; ++i)
+    if (r(i, i) == 0.0) throw Decline();
+  Mat z = b;
+  double one = 1.0;
+  F77_CALL(dtrsm)("L", upper ? "U" : "L", "N", "N", &k, &ncb, &one, r.v.data(), &k,
+                  z.v.data(), &k FCONE FCONE FCONE FCONE);
+  return z;
+}
+
+// qr.R(qr(x)) of a square matrix.
+Mat qr_upper(const Mat& x) {
+  if (x.r != x.c || x.r == 0) throw Decline();
+  int n = x.r, p = x.c, rank = 0;
+  double tol = 1e-07;
+  Mat q = x;
+  std::vector<double> qraux(p), work(2 * static_cast<size_t>(p));
+  std::vector<int> pivot(p);
+  for (int j = 0; j < p; ++j) pivot[j] = j + 1;
+  F77_CALL(dqrdc2)(q.v.data(), &n, &n, &p, &tol, &rank, qraux.data(), pivot.data(),
+                   work.data());
+  for (int j = 0; j < p; ++j)
+    for (int i = j + 1; i < n; ++i) q(i, j) = 0.0;
+  return q;
+}
+
+// MASS::ginv() of a square matrix whose singular values all count.
+Mat pseudo_inverse(const Mat& x) {
+  if (x.r != x.c || x.r == 0) throw Decline();
+  require_finite(x);
+  int n = x.r, info = 0, lwork = -1;
+  Mat a = x, u(n, n), vt(n, n);
+  std::vector<double> d(n);
+  std::vector<int> iwork(8 * static_cast<size_t>(n));
+  double tmp = 0.0;
+  F77_CALL(dgesdd)("S", &n, &n, a.v.data(), &n, d.data(), u.v.data(), &n, vt.v.data(), &n,
+                   &tmp, &lwork, iwork.data(), &info FCONE);
+  if (info != 0) throw Decline();
+  lwork = static_cast<int>(tmp);
+  std::vector<double> work(lwork);
+  F77_CALL(dgesdd)("S", &n, &n, a.v.data(), &n, d.data(), u.v.data(), &n, vt.v.data(), &n,
+                   work.data(), &lwork, iwork.data(), &info FCONE);
+  if (info != 0) throw Decline();
+  const double tiny = std::sqrt(DBL_EPSILON) * d[0];
+  for (int i = 0; i < n; ++i)
+    if (!(d[i] > (tiny > 0.0 ? tiny : 0.0))) throw Decline();
+  Mat w(n, n);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) w(i, j) = (1.0 / d[i]) * u(j, i);
+  return mult(transpose(vt), w);
+}
+
+// crossprod(x) (`of_rows` false) and tcrossprod(x).
+Mat sym_product(const Mat& x, bool of_rows) {
+  if (x.r == 0 || x.c == 0) throw Decline();
+  require_finite(x);
+  int nr = x.r, nc = x.c, n = of_rows ? nr : nc;
+  double one = 1.0, zero = 0.0;
+  Mat z(n, n);
+  if (of_rows)
+    F77_CALL(dsyrk)("U", "N", &nr, &nc, &one, x.v.data(), &nr, &zero, z.v.data(), &nr FCONE FCONE);
+  else
+    F77_CALL(dsyrk)("U", "T", &nc, &nr, &one, x.v.data(), &nr, &zero, z.v.data(), &nc FCONE FCONE);
+  for (int i = 1; i < n; ++i)
+    for (int j = 0; j < i; ++j) z(i, j) = z(j, i);
+  return z;
+}
+
+// cumprod().
+std::vector<double> cum_prod(const std::vector<double>& x) {
+  std::vector<double> out(x.size());
+  long double prod = 1.0;
+  for (size_t i = 0; i < x.size(); ++i) {
+    prod *= x[i];
+    out[i] = static_cast<double>(prod);
+  }
+  return out;
+}
+
+void draw_infinite(emc_factor::InfiniteState& s, const Mat& alpha,
+                   const emc_factor::InfinitePrior& prior) {
+  const int n = alpha.r, p = alpha.c, K = s.lambda.c;
+  std::vector<double> tauh = cum_prod(s.delta);
+  const Mat plam = mult(s.psi, diagonal(tauh));
+  const Mat weighted = mult(diagonal(s.epsilon_inv), s.lambda);
+
+  // The scores' conditional covariance S S' through the factor S.
+  Mat v1 = mult(transpose(weighted), s.lambda);
+  for (int j = 0; j < K; ++j)
+    for (int i = 0; i < K; ++i) v1(i, j) = (i == j ? 1.0 : 0.0) + v1(i, j);
+  const Mat S = pseudo_inverse(qr_upper(chol_upper(v1)));
+  const Mat cov = sym_product(S, true), St = transpose(S);
+  auto centred = [&](const std::vector<double>& mu) {
+    Mat c(n, p);
+    for (int j = 0; j < p; ++j)
+      for (int i = 0; i < n; ++i) c(i, j) = alpha(i, j) - mu[j];
+    return c;
+  };
+  auto scores = [&](const Mat& resid) {
+    const Mat mean = mult(mult(resid, weighted), cov);
+    Mat z(n, K);
+    for (double& e : z.v) e = norm_rand();
+    const Mat noise = mult(z, St);
+    for (size_t e = 0; e < s.eta.v.size(); ++e) s.eta.v[e] = mean.v[e] + noise.v[e];
+  };
+  auto residual = [&](const Mat& base) {
+    const Mat fitted = mult(s.eta, transpose(s.lambda));
+    Mat r(n, p);
+    for (size_t e = 0; e < r.v.size(); ++e) r.v[e] = base.v[e] - fitted.v[e];
+    return r;
+  };
+
+  // The scores given the subjects' states, before the means condition on
+  // them.
+  s.eta = Mat(n, K);
+  scores(centred(s.mu));
+
+  // The group means, independent given the scores.
+  {
+    const std::vector<double> sums = col_sums(residual(alpha));
+    std::vector<double> mu_mu(p), mu_sig(p);
+    for (int j = 0; j < p; ++j) {
+      volatile double precision = n * s.epsilon_inv[j];
+      mu_sig[j] = 1.0 / (precision + prior.mu_invar[j]);
+      volatile double data = s.epsilon_inv[j] * sums[j];
+      volatile double prior_part = prior.mu_invar[j] * prior.mu_mean[j];
+      volatile double total = data + prior_part;
+      mu_mu[j] = mu_sig[j] * total;
+    }
+    const Mat mu = normal_rows(1, mu_mu.data(), normal_factor(diagonal(mu_sig)));
+    s.mu = mu.v;
+  }
+  const Mat tilde = centred(s.mu);
+
+  // The scores given the new means.
+  scores(tilde);
+
+  // Each parameter's loadings.
+  const Mat eta2 = sym_product(s.eta, false), eta_t = transpose(s.eta);
+  for (int j = 0; j < p; ++j) {
+    const double ej = s.epsilon_inv[j];
+    Mat q(K, K), y(n, 1);
+    for (int b = 0; b < K; ++b)
+      for (int a = 0; a < K; ++a) {
+        volatile double scaled = ej * eta2(a, b);
+        q(a, b) = (a == b ? plam(j, a) : 0.0) + scaled;
+      }
+    for (int i = 0; i < n; ++i) y(i, 0) = tilde(i, j);
+    Mat rhs = mult(eta_t, y);
+    for (double& e : rhs.v) e = ej * e;
+    const Mat upper = chol_upper(q), lower = transpose(upper);
+    Mat z(K, 1);
+    for (double& e : z.v) e = norm_rand();
+    const Mat mean = tri_solve(upper, tri_solve(lower, rhs, false), true);
+    const Mat noise = tri_solve(upper, z, true);
+    for (int f = 0; f < K; ++f) s.lambda(j, f) = noise(f, 0) + mean(f, 0);
+  }
+
+  // The local shrinkage of each loading.
+  for (int h = 0; h < K; ++h)
+    for (int j = 0; j < p; ++j) {
+      volatile double l2 = s.lambda(j, h) * s.lambda(j, h);
+      volatile double scaled = tauh[h] * l2;
+      s.psi(j, h) = gamma_draw((prior.df + 1) / 2, (prior.df + scaled) / 2);
+    }
+
+  // The factors' global shrinkage.
+  {
+    Mat m(p, K);
+    for (size_t e = 0; e < m.v.size(); ++e) {
+      volatile double l2 = s.lambda.v[e] * s.lambda.v[e];
+      volatile double w = s.psi.v[e] * l2;
+      m.v[e] = w;
+    }
+    const std::vector<double> sums = col_sums(m);
+    auto tail = [&](int from) {
+      long double total = 0.0;
+      for (int h = from; h < K; ++h) {
+        volatile double term = tauh[h] * sums[h];
+        total += term;
+      }
+      return static_cast<double>(total);
+    };
+    {
+      volatile double count = 0.5 * p;
+      volatile double shape_part = count * K;
+      volatile double half = 0.5 * (1 / s.delta[0]);
+      volatile double rate_part = half * tail(0);
+      s.delta[0] = gamma_draw(prior.ad1 + shape_part, prior.bd1 + rate_part);
+    }
+    tauh = cum_prod(s.delta);
+    if (prior.has_ad2) {
+      for (int h = 1; h < K; ++h) {
+        volatile double count = 0.5 * p;
+        volatile double shape_part = count * (K - h);
+        volatile double half = 0.5 * (1 / s.delta[h]);
+        volatile double rate_part = half * tail(h);
+        s.delta[h] = gamma_draw(prior.ad2 + shape_part, prior.bd2 + rate_part);
+        tauh = cum_prod(s.delta);
+      }
+    } else {
+      for (int h = 1; h < K; ++h) s.delta[h] = 1.0;
+    }
+  }
+
+  // The error precisions.
+  {
+    Mat sq = residual(tilde);
+    for (double& e : sq.v) {
+      volatile double e2 = e * e;
+      e = e2;
+    }
+    const std::vector<double> ss = col_sums(sq);
+    for (int j = 0; j < p; ++j) {
+      volatile double half = .5 * ss[j];
+      s.epsilon_inv[j] = gamma_draw(prior.shape_err[j], prior.rate_err[j] + half);
+    }
+  }
+
+  // The implied group covariance.
+  s.var = mult(s.lambda, transpose(s.lambda));
+  for (int j = 0; j < p; ++j)
+    for (int i = 0; i < p; ++i)
+      s.var(i, j) = s.var(i, j) + (i == j ? 1.0 / s.epsilon_inv[i] : 0.0);
+}
+
 Mat as_mat(const Rcpp::NumericMatrix& x) {
   Mat z(x.nrow(), x.ncol());
   std::copy(x.begin(), x.end(), z.v.begin());
@@ -376,7 +621,65 @@ bool gibbs(State& state, const Mat& alpha, const Prior& prior,
   return true;
 }
 
+bool gibbs_infinite(InfiniteState& state, const Mat& alpha, const InfinitePrior& prior) {
+  const int n = alpha.r, p = alpha.c, K = state.lambda.c;
+  auto len = [](const std::vector<double>& x) { return static_cast<int>(x.size()); };
+  if (n < 1 || p < 2 || K < 1 || state.lambda.r != p || state.psi.r != p || state.psi.c != K ||
+      len(state.mu) != p || len(state.epsilon_inv) != p || len(state.delta) != K ||
+      len(prior.mu_invar) != p || len(prior.mu_mean) != p || len(prior.shape_err) != p ||
+      len(prior.rate_err) != p)
+    return false;
+  try {
+    draw_infinite(state, alpha, prior);
+  } catch (Decline&) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace emc_factor
+
+// gibbs_step_infnt_factor()'s draw: `alpha` subjects x parameters, the state
+// as the store holds it and the prior's vectors at full length (`ad2` NULL
+// for a prior without it). NULL when the draw is left to the R form.
+// [[Rcpp::export]]
+SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha,
+                                const Rcpp::NumericMatrix& psi,
+                                const Rcpp::NumericVector& epsilon_inv,
+                                const Rcpp::NumericMatrix& lambda,
+                                const Rcpp::NumericVector& mu,
+                                const Rcpp::NumericVector& delta,
+                                const Rcpp::NumericVector& mu_invar,
+                                const Rcpp::NumericVector& mu_mean, double df, double ad1,
+                                double bd1, SEXP ad2, double bd2,
+                                const Rcpp::NumericVector& shape_err,
+                                const Rcpp::NumericVector& rate_err) {
+  emc_factor::InfiniteState s;
+  s.psi = as_mat(psi);
+  s.lambda = as_mat(lambda);
+  s.mu = as_std(mu);
+  s.epsilon_inv = as_std(epsilon_inv);
+  s.delta = as_std(delta);
+  emc_factor::InfinitePrior prior;
+  prior.mu_invar = as_std(mu_invar);
+  prior.mu_mean = as_std(mu_mean);
+  prior.shape_err = as_std(shape_err);
+  prior.rate_err = as_std(rate_err);
+  prior.df = df;
+  prior.ad1 = ad1;
+  prior.bd1 = bd1;
+  prior.has_ad2 = ad2 != R_NilValue;
+  prior.ad2 = prior.has_ad2 ? Rf_asReal(ad2) : 0.0;
+  prior.bd2 = bd2;
+  if (!emc_factor::gibbs_infinite(s, as_mat(alpha), prior)) return R_NilValue;
+  return Rcpp::List::create(
+      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
+      Rcpp::_["var"] = as_r(s.var), Rcpp::_["lambda"] = as_r(s.lambda),
+      Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["epsilon_inv"] = Rcpp::NumericVector(s.epsilon_inv.begin(), s.epsilon_inv.end()),
+      Rcpp::_["psi"] = as_r(s.psi),
+      Rcpp::_["delta"] = Rcpp::NumericVector(s.delta.begin(), s.delta.end()));
+}
 
 // gibbs_step_factor()'s draw: `alpha` subjects x parameters, the state as the
 // store holds it and the prior's vectors at full length. NULL when the draw

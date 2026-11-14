@@ -179,6 +179,10 @@ pbvn_hybrid <- function(h, k, rho) {
     .Call(`_EMC2_pbvn_hybrid`, h, k, rho)
 }
 
+emc_gibbs_infnt_factor_cpp <- function(alpha, psi, epsilon_inv, lambda, mu, delta, mu_invar, mu_mean, df, ad1, bd1, ad2, bd2, shape_err, rate_err) {
+    .Call(`_EMC2_emc_gibbs_infnt_factor_cpp`, alpha, psi, epsilon_inv, lambda, mu, delta, mu_invar, mu_mean, df, ad1, bd1, ad2, bd2, shape_err, rate_err)
+}
+
 emc_gibbs_factor_cpp <- function(alpha, eta, psi_inv, sig_err_inv, lambda, mu, free_entry, mu_invar, mu_mean, shape_err, rate_err, lambda_invar, shape_psi, rate_psi) {
     .Call(`_EMC2_emc_gibbs_factor_cpp`, alpha, eta, psi_inv, sig_err_inv, lambda, mu, free_entry, mu_invar, mu_mean, shape_err, rate_err, lambda_invar, shape_psi, rate_psi)
 }

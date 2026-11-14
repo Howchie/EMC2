@@ -1,4 +1,4 @@
-// The group draw of a factor hierarchy (src/gibbs_factor.cpp).
+// The group draws of the factor hierarchies (src/gibbs_factor.cpp).
 #ifndef EMC2_GIBBS_FACTOR_H
 #define EMC2_GIBBS_FACTOR_H
 
@@ -38,6 +38,27 @@ struct Prior {
 // left to the R form; the state and the random stream are then spent.
 bool gibbs(State& state, const Mat& alpha, const Prior& prior,
            const std::vector<int>& free_entry);
+
+// The shrinkage-prior hierarchy's state: scores, loadings, the loadings'
+// local shrinkage (parameters x factors), means, error precisions and the
+// factors' global shrinkage; the draw adds the implied covariance.
+struct InfiniteState {
+  Mat eta, lambda, psi, var;
+  std::vector<double> mu, epsilon_inv, delta;
+};
+
+// Its prior: the means' precisions and means, the local shrinkage's degrees
+// of freedom, the global shrinkage's shapes and rates (the second pair only
+// when `has_ad2`), and the error precisions' shapes (with the subjects' half
+// count added) and rates.
+struct InfinitePrior {
+  std::vector<double> mu_invar, mu_mean, shape_err, rate_err;
+  double df, ad1, bd1, ad2, bd2;
+  bool has_ad2;
+};
+
+// The draw given the subjects' states; FALSE as for gibbs().
+bool gibbs_infinite(InfiniteState& state, const Mat& alpha, const InfinitePrior& prior);
 
 }  // namespace emc_factor
 
