@@ -45,6 +45,10 @@ emc_alloc_saturation_cpp <- function(g, D, K) {
     .Call(`_EMC2_emc_alloc_saturation_cpp`, g, D, K)
 }
 
+emc_alloc_range_parts_cpp <- function(units, max_rounds) {
+    .Call(`_EMC2_emc_alloc_range_parts_cpp`, units, max_rounds)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

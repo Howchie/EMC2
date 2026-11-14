@@ -831,7 +831,14 @@
   .emc_alloc_range_of(.emc_alloc_range_parts(units, max_rounds), movable)
 
 # Each unit's unallocated rho (levels) and least reachable rho (best).
-.emc_alloc_range_parts <- function(units, max_rounds) list(
+.emc_alloc_range_parts <- function(units, max_rounds) {
+  out <- if (getOption("emc2.native_alloc_range", TRUE) && is.list(units))
+    emc_alloc_range_parts_cpp(units, max_rounds)
+  if (!is.null(out)) return(out)
+  .emc_alloc_range_parts_r(units, max_rounds)
+}
+
+.emc_alloc_range_parts_r <- function(units, max_rounds) list(
   levels = vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1)),
   best = vapply(units, function(u) switch(u$kind,
     fixed = max(.emc_alloc_unit_rho(u)),
@@ -851,6 +858,17 @@
 # floor and cap do not depend on rho. Falls back to the full computation
 # for any other units.
 .emc_alloc_scaled_parts <- function(units, max_rounds) {
+  r_form <- NULL
+  function(us) {
+    out <- if (getOption("emc2.native_alloc_range", TRUE) && is.list(us))
+      emc_alloc_range_parts_cpp(us, max_rounds)
+    if (!is.null(out)) return(out)
+    if (is.null(r_form)) r_form <<- .emc_alloc_scaled_parts_r(units, max_rounds)
+    r_form(us)
+  }
+}
+
+.emc_alloc_scaled_parts_r <- function(units, max_rounds) {
   kind <- vapply(units, function(u) u$kind, character(1))
   if (!all(kind %in% c("shear", "fixed")) || any(lengths(lapply(units, `[[`, "rho")) != 1L))
     return(function(us) .emc_alloc_range_parts(us, max_rounds))

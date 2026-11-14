@@ -201,7 +201,7 @@ Rcpp::NumericVector emc_alloc_act_term_list_cpp(const Rcpp::List& xs,
   return out;
 }
 
-// The shear pricing below reproduces R's arithmetic exactly: no fused
+// The pricing below reproduces R's arithmetic exactly: no fused
 // multiply-adds or fast-math rewrites, which the package flags allow.
 #pragma GCC push_options
 #pragma GCC optimize("no-fast-math", "fp-contract=off")
@@ -289,8 +289,6 @@ Rcpp::List emc_alloc_fixed_need_cpp(const Rcpp::NumericVector& rho_max,
   }
   return out;
 }
-
-#pragma GCC pop_options
 
 namespace {
 
@@ -644,9 +642,6 @@ SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& n
 
 namespace {
 
-#pragma GCC push_options
-#pragma GCC optimize("no-fast-math", "fp-contract=off")
-
 // The mean net squared jump over twice the variance that moves of factor g
 // and correlation x give, for iterations with k moves in proportions w[k-1].
 // A function of its own: the file's floating-point settings do not reach a
@@ -725,6 +720,127 @@ SEXP emc_alloc_saturation_cpp(SEXP g, SEXP D, SEXP K) {
   }
   UNPROTECT(1);
   return out;
+}
+
+namespace {
+
+// A unit's field at coordinate c, a field of length one serving every
+// coordinate.
+inline double field_at(SEXP v, R_xlen_t c) { return REAL(v)[XLENGTH(v) == 1 ? 0 : c]; }
+
+// b + (1 - b) rho, or rho without a between-chain share.
+inline double with_share(SEXP b, R_xlen_t c, double rho) {
+  if (b == R_NilValue) return rho;
+  const double bc = field_at(b, c);
+  volatile double rest = 1 - bc;
+  volatile double v = rest * rho;
+  volatile double sum = bc + v;
+  return sum;
+}
+
+// A shear unit's factor at x rounds; false when it is left to the R form.
+bool shear_factor(SEXP u, R_xlen_t k, double x, std::vector<double>& out) {
+  SEXP g = unit_field(u, "g"), a = unit_field(u, "a");
+  if (!plain_field(g, k) || (a != R_NilValue && !plain_field(a, k)) || ISNAN(x)) return false;
+  Rcpp::NumericVector xv = Rcpp::NumericVector::create(x);
+  Rcpp::RObject keep = emc_alloc_factor_cpp(g, xv, a == R_NilValue ? g : a);
+  SEXP f = keep;
+  if (f == R_NilValue || (XLENGTH(f) != 1 && XLENGTH(f) != k)) return false;
+  out.assign(k, 0.0);
+  for (R_xlen_t c = 0; c < k; ++c) out[c] = field_at(f, c);
+  return true;
+}
+
+// A unit's optional field that must be one double when present.
+bool one_double(SEXP v) { return TYPEOF(v) == REALSXP && XLENGTH(v) == 1 && !ISNAN(REAL(v)[0]); }
+
+}  // namespace
+
+// .emc_alloc_range_parts(): each unit's rho with nothing allocated (levels)
+// and the least rho its own moves reach (best), the largest over its
+// coordinates. NULL for units whose fields are not plain numbers of the
+// coordinates' length or of length one, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_range_parts_cpp(const Rcpp::List& units, SEXP max_rounds) {
+  if (!one_double(max_rounds) || Rf_getAttrib(units, R_NamesSymbol) != R_NilValue)
+    return R_NilValue;
+  const int n = units.size();
+  Rcpp::NumericVector levels(n), best(n);
+  std::vector<double> f_floor, f_cap;
+  for (int i = 0; i < n; ++i) {
+    SEXP u = units[i];
+    SEXP r = unit_field(u, "rho"), b = unit_field(u, "b_share");
+    if (!plain_field(r, -1)) return R_NilValue;
+    const R_xlen_t k = XLENGTH(r);
+    if (b != R_NilValue && !plain_field(b, k)) return R_NilValue;
+    const bool shear = kind_is(u, "shear"), subject = kind_is(u, "subject");
+    if (!shear && !subject && !kind_is(u, "fixed")) return R_NilValue;
+    double level = R_NegInf, least = R_NegInf;
+    auto raise = [](double& top, double v) { if (v > top) top = v; };
+    bool bad = false;
+    auto seen = [&bad](double v) { if (ISNAN(v)) bad = true; return v; };
+    if (shear) {
+      SEXP fl = unit_field(u, "floor"), cap = unit_field(u, "cap"), rt = unit_field(u, "rho_t");
+      if ((fl != R_NilValue && !one_double(fl)) || (cap != R_NilValue && !one_double(cap)))
+        return R_NilValue;
+      const bool floored = fl != R_NilValue && REAL(fl)[0] > 0;
+      if (floored && !shear_factor(u, k, REAL(fl)[0], f_floor)) return R_NilValue;
+      if (!shear_factor(u, k, REAL(cap == R_NilValue ? max_rounds : cap)[0], f_cap))
+        return R_NilValue;
+      double tail = NA_REAL;
+      if (rt != R_NilValue) {
+        if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
+        if (R_FINITE(REAL(rt)[0])) tail = REAL(rt)[0];
+      }
+      least = 0.0;
+      for (R_xlen_t c = 0; c < k; ++c) {
+        const double rho = REAL(r)[c];
+        volatile double at_floor = floored ? rho * f_floor[c] : rho;
+        raise(level, seen(with_share(b, c, at_floor)));
+        volatile double at_cap = rho * f_cap[c];
+        raise(least, seen(with_share(b, c, at_cap)));
+        if (!ISNAN(tail)) {
+          volatile double t_floor = floored ? tail * f_floor[c] : tail;
+          raise(level, seen(t_floor));
+          volatile double t_cap = tail * f_cap[c];
+          raise(least, seen(t_cap));
+        }
+      }
+    } else if (subject) {
+      SEXP p = unit_field(u, "p"), h = unit_field(u, "h"), rm = unit_field(u, "r_min");
+      if ((p != R_NilValue && !plain_field(p, k)) || (h != R_NilValue && !plain_field(h, k)) ||
+          (rm != R_NilValue && !plain_field(rm, k)))
+        return R_NilValue;
+      for (R_xlen_t c = 0; c < k; ++c) {
+        const double rho = REAL(r)[c];
+        volatile double base = p == R_NilValue ? rho : rho * field_at(p, c);
+        double lv;
+        if (rm != R_NilValue && h != R_NilValue) {
+          volatile double miss = 1 - field_at(h, c);
+          volatile double cut = field_at(rm, c) * miss;
+          volatile double kept = 1 - cut;
+          volatile double held = base * kept;
+          lv = with_share(b, c, held);
+        } else {
+          lv = with_share(b, c, base);
+        }
+        raise(level, seen(lv));
+        if (h == R_NilValue) {
+          raise(least, lv);
+        } else {
+          volatile double reached = base * field_at(h, c);
+          raise(least, seen(with_share(b, c, reached)));
+        }
+      }
+    } else {
+      for (R_xlen_t c = 0; c < k; ++c) raise(level, seen(with_share(b, c, REAL(r)[c])));
+      least = level;
+    }
+    if (bad) return R_NilValue;
+    levels[i] = level;
+    best[i] = least;
+  }
+  return Rcpp::List::create(Rcpp::Named("levels") = levels, Rcpp::Named("best") = best);
 }
 
 #pragma GCC pop_options
