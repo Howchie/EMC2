@@ -108,6 +108,10 @@ emc_collapsed_to_phi_cpp <- function(mu, V, chart) {
     .Call(`_EMC2_emc_collapsed_to_phi_cpp`, mu, V, chart)
 }
 
+emc_alloc_quad_diag_cpp <- function(A, S) {
+    .Call(`_EMC2_emc_alloc_quad_diag_cpp`, A, S)
+}
+
 collapsed_surrogate_cpp <- function(phi, model) {
     .Call(`_EMC2_collapsed_surrogate_cpp`, phi, model)
 }

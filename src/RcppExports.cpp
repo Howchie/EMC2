@@ -383,6 +383,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_quad_diag_cpp
+SEXP emc_alloc_quad_diag_cpp(SEXP A, SEXP S);
+RcppExport SEXP _EMC2_emc_alloc_quad_diag_cpp(SEXP ASEXP, SEXP SSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type A(ASEXP);
+    Rcpp::traits::input_parameter< SEXP >::type S(SSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_quad_diag_cpp(A, S));
+    return rcpp_result_gen;
+END_RCPP
+}
 // collapsed_surrogate_cpp
 Rcpp::List collapsed_surrogate_cpp(const arma::vec& phi, const Rcpp::List& model);
 RcppExport SEXP _EMC2_collapsed_surrogate_cpp(SEXP phiSEXP, SEXP modelSEXP) {
@@ -4780,6 +4791,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_collapsed_fit_subject_cpp", (DL_FUNC) &_EMC2_emc_collapsed_fit_subject_cpp, 2},
     {"_EMC2_emc_covariance_ok_cpp", (DL_FUNC) &_EMC2_emc_covariance_ok_cpp, 1},
     {"_EMC2_emc_collapsed_to_phi_cpp", (DL_FUNC) &_EMC2_emc_collapsed_to_phi_cpp, 3},
+    {"_EMC2_emc_alloc_quad_diag_cpp", (DL_FUNC) &_EMC2_emc_alloc_quad_diag_cpp, 2},
     {"_EMC2_collapsed_surrogate_cpp", (DL_FUNC) &_EMC2_collapsed_surrogate_cpp, 2},
     {"_EMC2_collapsed_trajectories_cpp", (DL_FUNC) &_EMC2_collapsed_trajectories_cpp, 6},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},

@@ -1140,7 +1140,12 @@
 }
 
 # Diagonal of A S A', the variances of A x for x with covariance S.
-.emc_alloc_quad_diag <- function(A, S) rowSums((A %*% S) * A)
+.emc_alloc_quad_diag <- function(A, S) {
+  out <- if (getOption("emc2.native_alloc_quad", TRUE)) emc_alloc_quad_diag_cpp(A, S)
+  if (is.null(out)) return(rowSums((A %*% S) * A))
+  if (!is.null(rownames(A))) names(out) <- rownames(A)
+  out
+}
 
 # The draws' statistics every chain's measurement shares: the pooled
 # covariances of mu, of each subject's alpha and (dev) of alpha minus mu,
@@ -1468,7 +1473,7 @@
 # HMC factors h for subject s from its evidence; NULL without enough.
 .emc_alloc_hmc_factor <- function(ev, W, var, min_n) {
   if (is.null(ev) || ev$n < min_n) return(NULL)
-  esjd <- rowSums((W %*% ev$M) * W) / ev$n
+  esjd <- .emc_alloc_quad_diag(W, ev$M) / ev$n
   pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
 }
 

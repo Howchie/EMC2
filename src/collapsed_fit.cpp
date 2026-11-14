@@ -463,3 +463,29 @@ SEXP emc_collapsed_to_phi_cpp(const Rcpp::NumericVector& mu, const Rcpp::Numeric
   }
   return phi;
 }
+
+// .emc_alloc_quad_diag(): the diagonal of A S A', as the row sums of
+// (A %*% S) * A. Unnamed; NULL for operands that are not finite matrices of
+// doubles with S square of A's columns, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_quad_diag_cpp(SEXP A, SEXP S) {
+  if (TYPEOF(A) != REALSXP || TYPEOF(S) != REALSXP || !Rf_isMatrix(A) || !Rf_isMatrix(S) ||
+      Rf_isObject(A) || Rf_isObject(S))
+    return R_NilValue;
+  const int n = Rf_nrows(A), p = Rf_ncols(A);
+  if (Rf_nrows(S) != p || Rf_ncols(S) != p) return R_NilValue;
+  const Vec a(REAL(A), REAL(A) + XLENGTH(A)), s(REAL(S), REAL(S) + XLENGTH(S));
+  Vec as;
+  if (!matprod(a, n, p, s, p, p, as)) return R_NilValue;
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
+  for (int i = 0; i < n; ++i) {
+    long double total = 0.0;
+    for (int j = 0; j < p; ++j) {
+      volatile double term = as[i + static_cast<std::size_t>(j) * n] * a[i + static_cast<std::size_t>(j) * n];
+      total += term;
+    }
+    REAL(out)[i] = static_cast<double>(total);
+  }
+  UNPROTECT(1);
+  return out;
+}
