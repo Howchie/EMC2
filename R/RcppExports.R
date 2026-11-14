@@ -25,6 +25,22 @@ emc_alloc_fixed_need_cpp <- function(rho_max, rs) {
     .Call(`_EMC2_emc_alloc_fixed_need_cpp`, rho_max, rs)
 }
 
+emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
+    .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
+}
+
+emc_alloc_record_subjects_cpp <- function(A, D, alpha, old, shift) {
+    .Call(`_EMC2_emc_alloc_record_subjects_cpp`, A, D, alpha, old, shift)
+}
+
+emc_alloc_record_tasks_cpp <- function(cpu_hmc, hmc_att, rows_hmc, tasks) {
+    .Call(`_EMC2_emc_alloc_record_tasks_cpp`, cpu_hmc, hmc_att, rows_hmc, tasks)
+}
+
+emc_hmc_record_tasks_cpp <- function(st, tasks) {
+    .Call(`_EMC2_emc_hmc_record_tasks_cpp`, st, tasks)
+}
+
 bou_pdf_cdf_vec <- function(rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 256L, dt_target = 1e-3, grade = 1.0, tgrade = 8.0, n_sv = 5L, n_sz = 5L, n_st0 = 7L, anchor_at_z = FALSE, anchor_fix = NA_real_, want_cdf = TRUE) {
     .Call(`_EMC2_bou_pdf_cdf_vec`, rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, bkind, aInf, tau, pw, nx, dt_target, grade, tgrade, n_sv, n_sz, n_st0, anchor_at_z, anchor_fix, want_cdf)
 }

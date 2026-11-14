@@ -137,7 +137,11 @@
     isTRUE(.emc_hmc_support(sampler)$ok)
 }
 
-.emc_alloc_lsd <- function(V) 0.5 * log(pmax(diag(as.matrix(V)), .Machine$double.xmin))
+.emc_alloc_lsd <- function(V) {
+  d <- diag(if (is.matrix(V)) V else as.matrix(V))
+  d[d < .Machine$double.xmin] <- .Machine$double.xmin
+  0.5 * log(d)
+}
 
 # .emc_alloc_lsd of draws k of a p x p x T variance array, as a p x length(k)
 # matrix.
@@ -179,6 +183,15 @@
   }
   idx <- which(ran)
   if (!length(idx)) return(sampler)
+  if (is.matrix(before) && is.matrix(after) && is.double(before) && is.double(after)) {
+    r <- emc_alloc_record_particle_cpp(w$P, w$nP, w$cpu_part, before, after, ran,
+                                       as.numeric(cost), times)
+    if (!is.null(r)) {
+      w$P <- r$P; w$nP <- r$nP; w$cpu_part <- r$cpu_part
+      sampler$alloc$window <- w
+      return(sampler)
+    }
+  }
   t_ran <- pmax(0, times[idx])
   share <- if (sum(t_ran) > 0) t_ran / sum(t_ran) else rep(1 / length(idx), length(idx))
   for (k in seq_along(idx)) {
@@ -230,6 +243,17 @@
   if (is.null(w$D)) w$D <- replicate(ncol(alpha), matrix(0, nrow(alpha), nrow(alpha)),
                                      simplify = FALSE)
   old <- matrix(sampler$samples$alpha[, , idx], nrow(alpha))
+  r <- if (is.double(alpha) && is.double(old)) emc_alloc_record_subjects_cpp(
+    w$A, w$D, alpha, old,
+    if (is.null(mu)) NULL else as.numeric(mu) - as.numeric(sampler$samples$theta_mu[, idx]))
+  if (!is.null(r)) {
+    if (r$finite) {
+      w$A <- r$A; w$D <- r$D
+      w$nA <- w$nA + 1L
+    }
+    sampler$alloc$window <- w
+    return(sampler)
+  }
   d <- alpha - old
   if (all(is.finite(d))) {
     dd <- if (is.null(mu)) d else
@@ -275,7 +299,14 @@
   if (is.null(w$fam)) w$fam <- .emc_alloc_fam_empty()
   work <- 0
   attempts <- 0L
-  for (s in seq_along(tasks)) {
+  r <- if (is.list(tasks) && !is.null(w$rows_hmc) && is.double(w$cpu_hmc) &&
+           is.integer(w$hmc_att) && is.double(w$rows_hmc))
+    emc_alloc_record_tasks_cpp(w$cpu_hmc, w$hmc_att, w$rows_hmc, tasks)
+  if (!is.null(r)) {
+    w$cpu_hmc <- r$cpu_hmc; w$hmc_att <- r$hmc_att; w$rows_hmc <- r$rows_hmc
+    work <- r$work
+    attempts <- r$attempts
+  } else for (s in seq_along(tasks)) {
     tk <- tasks[[s]]
     if (is.null(tk)) next
     c_s <- if (!is.null(tk$work)) tk$work else if (!is.null(tk$cost)) tk$cost else tk$cpu

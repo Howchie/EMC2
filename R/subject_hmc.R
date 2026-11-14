@@ -481,6 +481,10 @@
 # Add one round's transitions to each subject's evidence and the totals.
 .emc_hmc_record_tasks <- function(st, tasks) {
   if (is.null(st) || !isTRUE(st$supported)) return(st)
+  if (is.list(tasks)) {
+    r <- emc_hmc_record_tasks_cpp(st, tasks)
+    if (!is.null(r)) return(r)
+  }
   for (s in seq_along(tasks)) {
     tk <- tasks[[s]]
     if (is.null(tk)) next

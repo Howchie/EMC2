@@ -108,6 +108,61 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_record_particle_cpp
+SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
+RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type P(PSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type nP(nPSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type cpu_part(cpu_partSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type before(beforeSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type after(afterSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type ran(ranSEXP);
+    Rcpp::traits::input_parameter< double >::type cost(costSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type times(timesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_particle_cpp(P, nP, cpu_part, before, after, ran, cost, times));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_alloc_record_subjects_cpp
+SEXP emc_alloc_record_subjects_cpp(List A, List D, NumericMatrix alpha, NumericVector old, SEXP shift);
+RcppExport SEXP _EMC2_emc_alloc_record_subjects_cpp(SEXP ASEXP, SEXP DSEXP, SEXP alphaSEXP, SEXP oldSEXP, SEXP shiftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type A(ASEXP);
+    Rcpp::traits::input_parameter< List >::type D(DSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type old(oldSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type shift(shiftSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_subjects_cpp(A, D, alpha, old, shift));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_alloc_record_tasks_cpp
+SEXP emc_alloc_record_tasks_cpp(NumericVector cpu_hmc, IntegerVector hmc_att, NumericVector rows_hmc, List tasks);
+RcppExport SEXP _EMC2_emc_alloc_record_tasks_cpp(SEXP cpu_hmcSEXP, SEXP hmc_attSEXP, SEXP rows_hmcSEXP, SEXP tasksSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type cpu_hmc(cpu_hmcSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type hmc_att(hmc_attSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type rows_hmc(rows_hmcSEXP);
+    Rcpp::traits::input_parameter< List >::type tasks(tasksSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_tasks_cpp(cpu_hmc, hmc_att, rows_hmc, tasks));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_hmc_record_tasks_cpp
+SEXP emc_hmc_record_tasks_cpp(List st, List tasks);
+RcppExport SEXP _EMC2_emc_hmc_record_tasks_cpp(SEXP stSEXP, SEXP tasksSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type st(stSEXP);
+    Rcpp::traits::input_parameter< List >::type tasks(tasksSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_hmc_record_tasks_cpp(st, tasks));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bou_pdf_cdf_vec
 Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R, NumericVector v, NumericVector a, NumericVector Z, NumericVector sv, NumericVector SZ, NumericVector t0, NumericVector st0, NumericVector s, NumericVector beta, int bkind, NumericVector aInf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade, int n_sv, int n_sz, int n_st0, bool anchor_at_z, double anchor_fix, bool want_cdf);
 RcppExport SEXP _EMC2_bou_pdf_cdf_vec(SEXP rtSEXP, SEXP RSEXP, SEXP vSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP svSEXP, SEXP SZSEXP, SEXP t0SEXP, SEXP st0SEXP, SEXP sSEXP, SEXP betaSEXP, SEXP bkindSEXP, SEXP aInfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP n_svSEXP, SEXP n_szSEXP, SEXP n_st0SEXP, SEXP anchor_at_zSEXP, SEXP anchor_fixSEXP, SEXP want_cdfSEXP) {
@@ -4234,6 +4289,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_act_term_list_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_list_cpp, 2},
     {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 8},
     {"_EMC2_emc_alloc_fixed_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_fixed_need_cpp, 2},
+    {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
+    {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
+    {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},
+    {"_EMC2_emc_hmc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_hmc_record_tasks_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},
