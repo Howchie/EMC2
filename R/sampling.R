@@ -936,7 +936,38 @@ run_stage <- function(pmwgs,
       wpool_streams[[1L]] <- nb$stream
     }
   }
-  for (i in 1:iter) {
+  # Configurations the step sequence covers run it (R/iteration_steps.R); the
+  # loop below is the same iteration for the rest.
+  steps_done <- FALSE
+  if (.emc_steps_ok(pmwgs, nuisance, sampler_profile, verboseProgress, wpool, llpool)) {
+    st <- new.env(parent = emptyenv())
+    st$pmwgs <- pmwgs
+    st$pm_settings <- pm_settings
+    st$streams <- wpool_streams
+    st$hmc_plan <- hmc_plan
+    st$wpool <- wpool
+    st$wpool_part <- wpool_part
+    st$wpool_cost <- wpool_cost
+    st$pool_iteration <- pool_iteration
+    st$stage_rejects <- stage_rejects
+    st$rejects <- list(gibbs = gibbs_rejects, ensemble = ensemble_rejects,
+                       shear = shear_rejects, collapsed = collapsed_rejects)
+    cx <- list(stage = stage, iter = as.integer(iter), start_iter = start_iter,
+               n_cores = n_cores, core_ctl = core_ctl, alloc_on = alloc_on,
+               idx_list_blk = idx_list_blk, marginal_idx_blk = marginal_idx_blk,
+               include_full = length(unique(tune$components)) > 1L,
+               chains_mu = chains_mu, chains_var = chains_var, wpool_ctx = wpool_ctx,
+               persistent_workers = persistent_workers, recycle_every = recycle_every,
+               pool_budget = pool_budget, par_names = par_names, data = data)
+    # The exit handlers stop the pool the steps leave, whatever ends them.
+    tryCatch(.emc_steps_run(st, cx), finally = wpool <- st$wpool)
+    pmwgs <- st$pmwgs
+    pm_settings <- st$pm_settings
+    wpool_streams <- st$streams
+    stage_rejects <- st$stage_rejects
+    steps_done <- TRUE
+  }
+  for (i in if (steps_done) integer(0) else 1:iter) {
     if (persistent_workers) pool_iteration <- pool_iteration + 1L
     if (i <= native_done) next
     iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
