@@ -84,7 +84,25 @@ SEXP prior_means(SEXP pars, SEXP cx, SEXP pmwgs) {
       std::copy(REAL(tmu), REAL(tmu) + p, REAL(out) + static_cast<R_xlen_t>(s) * p);
     return out;
   }
-  // The other hierarchies' own rule (get_group_level).
+  // The structural model's means given each subject's covariates, or one
+  // mean for all; the factor and gamma hierarchies' group mean.
+  const bool structural = kind == "SEM";
+  if (structural && TYPEOF(subj_mu) == REALSXP && Rf_isMatrix(subj_mu) &&
+      Rf_nrows(subj_mu) == p && Rf_ncols(subj_mu) >= n) {
+    Shield<SEXP> out(Rf_allocMatrix(REALSXP, p, n));
+    std::copy(REAL(subj_mu), REAL(subj_mu) + static_cast<R_xlen_t>(p) * n, REAL(out));
+    return out;
+  }
+  SEXP common = structural ? subj_mu : tmu;
+  if ((kind == "factor" || kind == "infnt_factor" || kind == "diagonal-gamma" ||
+       (structural && !Rf_isMatrix(subj_mu))) &&
+      TYPEOF(common) == REALSXP && XLENGTH(common) == p) {
+    Shield<SEXP> out(Rf_allocMatrix(REALSXP, p, n));
+    for (int s = 0; s < n; ++s)
+      std::copy(REAL(common), REAL(common) + p, REAL(out) + static_cast<R_xlen_t>(s) * p);
+    return out;
+  }
+  // Any other state by the hierarchy type's own rule (get_group_level).
   static Function means = package_function(".emc_steps_prior_means");
   return means(pars, type, n);
 }
