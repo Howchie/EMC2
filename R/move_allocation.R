@@ -439,6 +439,8 @@
 # header): k moves have factor 1 - c (1 - a^k) with c = (1 - g) / (1 - a),
 # and a = g composes them geometrically, g^k.
 .emc_alloc_factor <- function(g, x, a = g) {
+  out <- emc_alloc_factor_cpp(g, x, a)
+  if (!is.null(out)) return(out)
   m <- floor(x)
   f <- x - m
   (1 - f) * .emc_alloc_factor_k(g, a, m) + f * .emc_alloc_factor_k(g, a, m + 1)

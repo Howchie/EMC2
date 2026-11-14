@@ -398,3 +398,55 @@ SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::Nume
   }
   return out;
 }
+
+// .emc_alloc_factor(): the factor on a coordinate's rho from x expected moves
+// (floor(x) moves, and one more with probability x - floor(x)), given one
+// move's factor g and the moves' correlation a. Plain numeric vectors of one
+// length (or length one) without missing values; NULL otherwise, which the R
+// form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_factor_cpp(SEXP g, SEXP x, SEXP a) {
+  auto plain = [](SEXP v) {
+    return TYPEOF(v) == REALSXP && XLENGTH(v) >= 1 && !Rf_isObject(v) &&
+           Rf_getAttrib(v, R_NamesSymbol) == R_NilValue &&
+           Rf_getAttrib(v, R_DimSymbol) == R_NilValue;
+  };
+  if (!plain(g) || !plain(x) || !plain(a)) return R_NilValue;
+  const R_xlen_t ng = XLENGTH(g), nx = XLENGTH(x), na = XLENGTH(a);
+  const R_xlen_t n = std::max(ng, std::max(nx, na));
+  if ((ng != 1 && ng != n) || (nx != 1 && nx != n) || (na != 1 && na != n)) return R_NilValue;
+  const double *gp = REAL(g), *xp = REAL(x), *ap = REAL(a);
+  for (R_xlen_t i = 0; i < ng; ++i) if (ISNAN(gp[i])) return R_NilValue;
+  for (R_xlen_t i = 0; i < nx; ++i) if (ISNAN(xp[i])) return R_NilValue;
+  for (R_xlen_t i = 0; i < na; ++i) if (ISNAN(ap[i])) return R_NilValue;
+  // k moves' factor: g^k, or the saturating form where the moves are less
+  // correlated than one move's factor.
+  auto moves = [](double gi, double ai, double k) {
+    volatile double edge = gi - 1e-12;
+    if (!(ai < edge)) return k == 2.0 ? gi * gi : R_pow(gi, k);
+    volatile double num = 1 - gi;
+    volatile double den = 1 - ai;
+    volatile double ratio = num / den;
+    volatile double pw = k == 2.0 ? ai * ai : R_pow(ai, k);
+    volatile double rest = 1 - pw;
+    volatile double prod = ratio * rest;
+    volatile double out = 1 - prod;
+    return static_cast<double>(out);
+  };
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const double gi = gp[ng == 1 ? 0 : i], xi = xp[nx == 1 ? 0 : i], ai = ap[na == 1 ? 0 : i];
+    volatile double m = std::floor(xi);
+    volatile double f = xi - m;
+    volatile double keep = 1 - f;
+    volatile double up = m + 1;
+    volatile double lo = moves(gi, ai, m);
+    volatile double hi = moves(gi, ai, up);
+    volatile double t1 = keep * lo;
+    volatile double t2 = f * hi;
+    volatile double sum = t1 + t2;
+    REAL(out)[i] = sum;
+  }
+  UNPROTECT(1);
+  return out;
+}
