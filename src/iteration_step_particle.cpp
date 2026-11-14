@@ -62,6 +62,80 @@ SEXP settings_after(SEXP pm_k, SEXP sel, SEXP out, const char* stage, bool adapt
   return res;
 }
 
+}  // namespace
+
+// A worker's reply for the subjects it claimed in one call of the claim
+// kernel (`res`, emc2_native_particle_claim): each stepped subject's state,
+// likelihood, settings, stream and time, each skipped subject's as they came
+// in, and the candidates' likelihoods the kernel scored. `todo` numbers the
+// claimed subjects that R finishes: those not stepped, and those whose
+// candidates were not scored (`complete` tells the two apart).
+// [[Rcpp::export(rng = false)]]
+SEXP emc_native_claim_reply_cpp(List res, NumericMatrix alpha, NumericVector prev_ll, List pm,
+                                List seeds, LogicalVector skip, SEXP extra, std::string stage) {
+  SEXP claimed = lget(res, "claimed"), done = lget(res, "done"), r_alpha = lget(res, "alpha");
+  SEXP r_ll = lget(res, "ll"), r_seeds = lget(res, "seeds"), r_cpu = lget(res, "cpu");
+  SEXP r_sel = lget(res, "sel"), r_pm = lget(res, "pm"), r_extra = lget(res, "extra_ll");
+  const int p = alpha.nrow(), n = alpha.ncol();
+  const bool scoring = extra != R_NilValue;
+  if (TYPEOF(claimed) != INTSXP || TYPEOF(done) != LGLSXP || XLENGTH(done) != n ||
+      TYPEOF(r_alpha) != REALSXP || XLENGTH(r_alpha) != static_cast<R_xlen_t>(p) * n ||
+      TYPEOF(r_ll) != REALSXP || XLENGTH(r_ll) != n || TYPEOF(r_seeds) != VECSXP ||
+      XLENGTH(r_seeds) != n || TYPEOF(r_cpu) != REALSXP || XLENGTH(r_cpu) != n ||
+      TYPEOF(r_sel) != VECSXP || XLENGTH(r_sel) != n || TYPEOF(r_pm) != VECSXP ||
+      XLENGTH(r_pm) != n || prev_ll.size() != n || pm.size() != n || seeds.size() != n ||
+      skip.size() != n ||
+      (scoring && (TYPEOF(extra) != VECSXP || XLENGTH(extra) != n ||
+                   (r_extra != R_NilValue && (TYPEOF(r_extra) != VECSXP || XLENGTH(r_extra) != n)))))
+    return R_NilValue;
+  const int g = static_cast<int>(XLENGTH(claimed));
+  const bool adapt = stage != "sample";
+  NumericMatrix props(p + 1, g);
+  List pm_out(g), seeds_out(g);
+  NumericVector times(g);
+  LogicalVector complete(g);
+  RObject extra_out;
+  if (scoring) extra_out = List(g);
+  std::vector<int> todo;
+  for (int j = 0; j < g; ++j) {
+    const int s = INTEGER(claimed)[j] - 1;
+    if (s < 0 || s >= n) return R_NilValue;
+    const bool stepped = LOGICAL(done)[s] == TRUE;
+    const bool skipped = !stepped && skip[s] == TRUE;
+    complete[j] = stepped || skipped;
+    if (stepped) {
+      SEXP pm_s = pm[s];
+      if (TYPEOF(pm_s) != VECSXP || XLENGTH(pm_s) < 1) return R_NilValue;
+      std::copy(REAL(r_alpha) + static_cast<R_xlen_t>(s) * p,
+                REAL(r_alpha) + static_cast<R_xlen_t>(s + 1) * p, props.begin() + static_cast<R_xlen_t>(j) * (p + 1));
+      props(p, j) = REAL(r_ll)[s];
+      pm_out[j] = settings_after(pm_s, VECTOR_ELT(r_sel, s), VECTOR_ELT(r_pm, s), stage.c_str(),
+                                 adapt);
+      seeds_out[j] = VECTOR_ELT(r_seeds, s);
+      times[j] = REAL(r_cpu)[s];
+    } else if (skipped) {
+      std::copy(alpha.begin() + static_cast<R_xlen_t>(s) * p,
+                alpha.begin() + static_cast<R_xlen_t>(s + 1) * p, props.begin() + static_cast<R_xlen_t>(j) * (p + 1));
+      props(p, j) = prev_ll[s];
+      pm_out[j] = pm[s];
+      seeds_out[j] = seeds[s];
+    }
+    bool unscored = false;
+    if (scoring && complete[j]) {
+      SEXP got = r_extra == R_NilValue ? R_NilValue : VECTOR_ELT(r_extra, s);
+      SET_VECTOR_ELT(extra_out, j, got);
+      unscored = VECTOR_ELT(extra, s) != R_NilValue && got == R_NilValue;
+    }
+    if (!complete[j] || unscored) todo.push_back(j + 1);
+  }
+  return List::create(_["subs"] = claimed, _["props"] = props, _["pm"] = pm_out,
+                      _["seeds"] = seeds_out, _["times"] = times, _["extra_ll"] = extra_out,
+                      _["todo"] = IntegerVector(todo.begin(), todo.end()),
+                      _["complete"] = complete);
+}
+
+namespace {
+
 // Each subject's prior mean, parameters x subjects: a standard hierarchy's
 // own, the prior mean of a fit without a group level, or the hierarchy
 // type's rule; NULL for states the R step handles.

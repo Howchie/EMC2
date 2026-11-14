@@ -845,6 +845,23 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// emc_native_claim_reply_cpp
+SEXP emc_native_claim_reply_cpp(List res, NumericMatrix alpha, NumericVector prev_ll, List pm, List seeds, LogicalVector skip, SEXP extra, std::string stage);
+RcppExport SEXP _EMC2_emc_native_claim_reply_cpp(SEXP resSEXP, SEXP alphaSEXP, SEXP prev_llSEXP, SEXP pmSEXP, SEXP seedsSEXP, SEXP skipSEXP, SEXP extraSEXP, SEXP stageSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< List >::type res(resSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type prev_ll(prev_llSEXP);
+    Rcpp::traits::input_parameter< List >::type pm(pmSEXP);
+    Rcpp::traits::input_parameter< List >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type skip(skipSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type extra(extraSEXP);
+    Rcpp::traits::input_parameter< std::string >::type stage(stageSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_native_claim_reply_cpp(res, alpha, prev_ll, pm, seeds, skip, extra, stage));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4609,6 +4626,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
     {"_EMC2_emc_iteration_loop_cpp", (DL_FUNC) &_EMC2_emc_iteration_loop_cpp, 6},
+    {"_EMC2_emc_native_claim_reply_cpp", (DL_FUNC) &_EMC2_emc_native_claim_reply_cpp, 8},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},

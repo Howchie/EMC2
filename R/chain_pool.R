@@ -2428,29 +2428,16 @@
       as.integer(msg$key), order, inp$extra, extra_cached, ctx$data, ctx$model))
     got <- res$claimed
     if (length(got)) {
-      res <- .emc_native_particle_settings(res, inp$pm, args$stage)
-      done <- res$done[got] %in% TRUE
-      skipped <- !done & args$skip[got]
-      complete <- done | skipped
-      unscored <- if (is.null(inp$extra)) logical(length(got)) else
-        complete & !vapply(inp$extra[got], is.null, logical(1)) &
-          vapply(res$extra_ll[got], is.null, logical(1))
-      props <- matrix(0, ctx$n_pars + 1L, length(got))
-      pm <- vector("list", length(got))
-      seeds <- vector("list", length(got))
-      times <- numeric(length(got))
-      extra_ll <- if (is.null(inp$extra)) NULL else vector("list", length(got))
-      props[rows, done] <- res$alpha[, got[done]]
-      props[ctx$n_pars + 1L, done] <- res$ll[got[done]]
-      pm[done] <- res$pm_settings[got[done]]
-      seeds[done] <- res$seeds[got[done]]
-      times[done] <- res$cpu[got[done]]
-      props[rows, skipped] <- inp$alpha[, got[skipped]]
-      props[ctx$n_pars + 1L, skipped] <- inp$prev_ll[got[skipped]]
-      pm[skipped] <- inp$pm[got[skipped]]
-      seeds[skipped] <- inp$seeds[got[skipped]]
-      if (!is.null(extra_ll)) extra_ll[complete] <- res$extra_ll[got[complete]]
-      for (j in which(!complete | unscored)) {
+      reply <- emc_native_claim_reply_cpp(res, inp$alpha, as.numeric(inp$prev_ll), inp$pm,
+                                          inp$seeds, args$skip, inp$extra, args$stage)
+      if (is.null(reply)) stop("the claim kernel's result does not match its request")
+      complete <- reply$complete
+      props <- reply$props
+      pm <- reply$pm
+      seeds <- reply$seeds
+      times <- reply$times
+      extra_ll <- reply$extra_ll
+      for (j in reply$todo) {
         s <- got[j]
         if (complete[j]) {
           before <- .emc_reject_counts("ensemble")
