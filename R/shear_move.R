@@ -880,11 +880,14 @@
 # One round along step direction v with scale step (see the header); x
 # carries the current state, its subject likelihoods and the worker pool.
 # Adds E, the selection-weighted squared move in t, and whether it moved.
-.emc_shear_round <- function(x, v, step, sampler, ctx) {
+.emc_shear_round <- function(x, v, step, sampler, ctx, t = NULL) {
   # Elapsed time building the candidates and in their likelihood round.
   build_el0 <- proc.time()[["elapsed"]]
-  t_aux <- step * stats::rnorm(1L)
-  t <- t_aux + step * stats::rnorm(.EMC_SHEAR_CANDIDATES)
+  # `t` holds the candidate steps when they have been drawn already.
+  if (is.null(t)) {
+    t_aux <- step * stats::rnorm(1L)
+    t <- t_aux + step * stats::rnorm(.EMC_SHEAR_CANDIDATES)
+  }
   p <- nrow(x$alpha)
   n <- ncol(x$alpha)
   # Mean steps lie on a line when no subject has a wall.
@@ -1010,6 +1013,52 @@
   x
 }
 
+# A run of rounds along the log-sd coordinates `ks` in one native call
+# (emc_shear_rounds_cpp), each from the state the last one left and on the
+# same random stream as .emc_shear_round() round by round. Returns x after
+# the rounds that ran, their count `done`, each one's net step, expected
+# squared jump and whether it moved, the adapted step sizes, and `t_next`,
+# the steps already drawn for a round the native path declined.
+.emc_shear_rounds_native <- function(x, ks, log_step, blk_n, adapt, sampler, ctx) {
+  el0 <- proc.time()[["elapsed"]]
+  p <- nrow(x$alpha)
+  cur <- x$cur
+  fits <- ctx$packed
+  if (is.null(fits$cube)) fits <- .emc_shear_pack(fits, p)
+  walls <- ctx$walls
+  if (is.null(walls)) {
+    has <- logical(0); U <- matrix(0, p, 0); b <- numeric(0)
+    Uc <- array(0, c(p, max(p - 1L, 0L), 0))
+  } else {
+    has <- walls$has; U <- walls$U; b <- ifelse(has, walls$b, 0)
+    Uc <- .emc_shear_uperp_cube(walls, p)
+  }
+  f0 <- .emc_shear_frame_arrays(cur)
+  o <- emc_shear_rounds_cpp(as.integer(ks), log_step, as.integer(blk_n), adapt,
+                            .EMC_SHEAR_LOG_STEP_RANGE, .EMC_SHEAR_MOVE_TARGET,
+                            .EMC_SHEAR_CANDIDATES, x$alpha, cur$mu, cur$V, cur$chol_V,
+                            f0$m, f0$R, f0$logdet, x$cur_hier, cur$lp,
+                            .emc_shear_log_prior_mu(cur$mu, sampler$prior), x$ll,
+                            fits$cube, fits$lin, has, U, b, Uc, ctx$spec,
+                            sampler$data, sampler$model, sampler$par_names)
+  el <- proc.time()[["elapsed"]] - el0
+  x$build_el <- x$build_el + max(0, el - o$ll_seconds)
+  x$ll_el <- x$ll_el + o$ll_seconds
+  x$rounds <- x$rounds + o$evaluated
+  if (o$any_moved) {
+    V <- o$V
+    dimnames(V) <- dimnames(cur$V)
+    fm <- list(m = o$m, R = o$R, logdet = o$logdet)
+    x$cur <- list(mu = o$mu, V = V, Vi = o$Vi, chol_V = o$chol_V, fm = fm,
+                  logdet = sum(fm$logdet), lp_v = o$lp_v, lp = o$lp)
+    x$alpha <- o$alpha
+    x$cur_hier <- o$cur_hier
+    x$ll <- o$ll
+  }
+  list(x = x, done = o$done, t = o$t, E = o$E, moved = o$moved, log_step = o$log_step,
+       t_next = if (length(o$t_next)) o$t_next)
+}
+
 # The round in two stages. The candidate (or the current state) is selected
 # with the subjects' likelihoods replaced by their quadratic fits, a step that
 # is reversible for the posterior under those fits; the selected candidate is
@@ -1116,18 +1165,49 @@
   blk <- .emc_shear_record(plan$block, p)
   net <- numeric(2L * p)
   round_el0 <- proc.time()[["elapsed"]]
-  for (k in take[sample.int(length(take))]) {
-    x <- .emc_shear_round(x, .emc_shear_coord_dir(plan, k), exp(plan$log_step[k]),
-                          sampler, ctx)
-    net[k] <- net[k] + x$t
-    blk$E[k] <- blk$E[k] + x$E
-    blk$n[k] <- blk$n[k] + 1L
-    blk$moved[k] <- blk$moved[k] + as.integer(x$moved)
+  order <- take[sample.int(length(take))]
+  one_round <- function(k, t = NULL) {
+    x <<- .emc_shear_round(x, .emc_shear_coord_dir(plan, k), exp(plan$log_step[k]),
+                           sampler, ctx, t)
+    net[k] <<- net[k] + x$t
+    blk$E[k] <<- blk$E[k] + x$E
+    blk$n[k] <<- blk$n[k] + 1L
+    blk$moved[k] <<- blk$moved[k] + as.integer(x$moved)
     if (adapt) {
-      plan$log_step[k] <- min(.EMC_SHEAR_LOG_STEP_RANGE[2], max(.EMC_SHEAR_LOG_STEP_RANGE[1],
+      plan$log_step[k] <<- min(.EMC_SHEAR_LOG_STEP_RANGE[2], max(.EMC_SHEAR_LOG_STEP_RANGE[1],
         plan$log_step[k] + (x$moved - .EMC_SHEAR_MOVE_TARGET) / sqrt(blk$n[k])))
     }
-    any_moved <- any_moved || x$moved
+    any_moved <<- any_moved || x$moved
+  }
+  # Runs of log-sd coordinates go to the native path in one call each.
+  sd_run <- order > p
+  i <- 1L
+  while (i <= length(order)) {
+    k <- order[i]
+    if (!sd_run[i] || !.emc_shear_round_native_ok(x, .emc_shear_coord_dir(plan, k), sampler)) {
+      one_round(k)
+      i <- i + 1L
+      next
+    }
+    last <- i
+    while (last < length(order) && sd_run[last + 1L]) last <- last + 1L
+    ks <- order[i:last]
+    o <- .emc_shear_rounds_native(x, ks, plan$log_step, blk$n, adapt, sampler, ctx)
+    x <- o$x
+    for (r in seq_len(o$done)) {
+      kr <- ks[r]
+      net[kr] <- net[kr] + o$t[r]
+      blk$E[kr] <- blk$E[kr] + o$E[r]
+      blk$n[kr] <- blk$n[kr] + 1L
+      blk$moved[kr] <- blk$moved[kr] + as.integer(o$moved[r])
+    }
+    plan$log_step <- o$log_step
+    any_moved <- any_moved || any(o$moved[seq_len(o$done)])
+    i <- i + o$done
+    if (!is.null(o$t_next)) {
+      one_round(order[i], o$t_next)
+      i <- i + 1L
+    }
   }
   round_el <- proc.time()[["elapsed"]] - round_el0
   # Each coordinate's net move over its rounds in this iteration, by how many

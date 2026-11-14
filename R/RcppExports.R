@@ -1031,6 +1031,10 @@ emc_shear_round_cpp <- function(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, 
     .Call(`_EMC2_emc_shear_round_cpp`, t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names)
 }
 
+emc_shear_rounds_cpp <- function(ks, log_step, blk_n, adapt, step_range, move_target, n_candidates, alpha, mu, V, chol_V, m0, R0, logdet0, cur_hier, cur_lp, lp_mu, ll, prec, lin, has, U, b, Uperp, spec, data, model, par_names) {
+    .Call(`_EMC2_emc_shear_rounds_cpp`, ks, log_step, blk_n, adapt, step_range, move_target, n_candidates, alpha, mu, V, chol_V, m0, R0, logdet0, cur_hier, cur_lp, lp_mu, ll, prec, lin, has, U, b, Uperp, spec, data, model, par_names)
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }

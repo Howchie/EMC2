@@ -9,7 +9,14 @@
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("no-fast-math")
 #endif
+#ifndef USE_FC_LEN_T
+#define USE_FC_LEN_T
+#endif
 #include <RcppArmadillo.h>
+#include <R_ext/BLAS.h>
+#ifndef FCONE
+#define FCONE
+#endif
 #include <chrono>
 #include <cmath>
 #include <vector>
@@ -183,6 +190,140 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
     out["lp"] = lp[j - 1];
     out["alpha"] = o["alpha"];
     out["ll"] = ll_sel;
+  }
+  return out;
+}
+
+namespace {
+
+// .emc_shear_log_hier: the subjects' joint log density under the group
+// state, by the same triangular solve and the same sums.
+double shear_log_hier(const NumericMatrix& alpha, const NumericVector& mu,
+                      const NumericMatrix& chol_V) {
+  const int p = alpha.nrow(), n = alpha.ncol();
+  std::vector<double> z(static_cast<size_t>(p) * n);
+  for (int s = 0; s < n; ++s)
+    for (int i = 0; i < p; ++i) z[i + static_cast<size_t>(s) * p] = alpha(i, s) - mu[i];
+  const double one = 1.0;
+  F77_CALL(dtrsm)("L", "U", "T", "N", &p, &n, &one, chol_V.begin(), &p, z.data(), &p
+                  FCONE FCONE FCONE FCONE);
+  long double ss = 0.0L;
+  for (size_t i = 0; i < z.size(); ++i) {
+    volatile double sq = z[i] * z[i];
+    ss += sq;
+  }
+  long double sl = 0.0L;
+  for (int i = 0; i < p; ++i) sl += std::log(chol_V(i, i));
+  volatile double a = -0.5 * static_cast<double>(ss);
+  volatile double b = n * static_cast<double>(sl);
+  return a - b;
+}
+
+}  // namespace
+
+// Consecutive shear rounds along log-sd coordinates `ks` (1-based, each
+// above the number of parameters), each as emc_shear_round_cpp from the
+// state the previous one left: the candidate steps are drawn here as
+// .emc_shear_round draws them, and the step sizes adapt as .emc_shear_move
+// adapts them. `done` rounds completed; when it is short of length(ks) the
+// next round's likelihoods need the R path and `t_next` holds its steps,
+// already drawn; the run also ends, without `t_next`, after a round that
+// changed the group mean, whose prior density `lp_mu` no longer holds. Returns each completed round's net step, expected squared
+// jump and whether it moved, the step sizes and counts, and the final state
+// when any round moved.
+// [[Rcpp::export]]
+List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
+                          bool adapt, NumericVector step_range, double move_target,
+                          int n_candidates,
+                          NumericMatrix alpha, NumericVector mu, NumericMatrix V,
+                          NumericMatrix chol_V, NumericMatrix m0, NumericVector R0,
+                          NumericVector logdet0, double cur_hier, double cur_lp,
+                          double lp_mu, NumericVector ll,
+                          const arma::cube& prec, const arma::mat& lin,
+                          const LogicalVector& has, const arma::mat& U,
+                          const arma::vec& b, const arma::cube& Uperp, List spec,
+                          List data, SEXP model, CharacterVector par_names) {
+  const int n_rounds = ks.size();
+  const int p = alpha.nrow();
+  NumericVector steps = clone(log_step);
+  IntegerVector counts = clone(blk_n);
+  NumericVector t_used(n_rounds), E(n_rounds);
+  LogicalVector moved(n_rounds);
+  NumericVector t_next;
+  int done = 0, evaluated = 0;
+  double ll_seconds = 0.0;
+  bool any_moved = false, mu_changed = false;
+  RObject Vi, lp_v;
+  NumericVector logdet_cur = logdet0;
+  for (; done < n_rounds; ++done) {
+    const int k = ks[done] - 1;
+    if (k < p || k >= 2 * p) Rcpp::stop("shear rounds: not a log-sd coordinate");
+    const double step = std::exp(steps[k]);
+    NumericVector t(n_candidates);
+    volatile double t_aux = step * norm_rand();
+    for (int c = 0; c < n_candidates; ++c) {
+      volatile double inc = step * norm_rand();
+      t[c] = t_aux + inc;
+    }
+    arma::vec v(2 * p, arma::fill::zeros);
+    v[k] = 1.0;
+    const arma::ivec dims = {static_cast<arma::sword>(p), static_cast<arma::sword>(p),
+                             static_cast<arma::sword>(alpha.ncol())};
+    const List o = emc_shear_round_cpp(
+        as<arma::vec>(t), v, as<arma::mat>(alpha), as<arma::vec>(mu), as<arma::mat>(V),
+        as<arma::mat>(m0), arma::cube(R0.begin(), p, p, alpha.ncol(), false, true),
+        as<arma::vec>(logdet_cur), prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier,
+        cur_lp, ll, data, model, par_names);
+    if (as<bool>(o["fallback"])) {
+      t_next = t;
+      break;
+    }
+    if (as<bool>(o["evaluated"])) ++evaluated;
+    ll_seconds += as<double>(o["ll_seconds"]);
+    const int j = as<int>(o["j"]);
+    E[done] = as<double>(o["E"]);
+    moved[done] = j > 0;
+    t_used[done] = j > 0 ? t[j - 1] : 0.0;
+    if (j > 0) {
+      any_moved = true;
+      const NumericVector mu_new = as<NumericVector>(o["mu"]);
+      for (int i = 0; i < p; ++i)
+        if (!(mu_new[i] == mu[i])) mu_changed = true;
+      mu = mu_new;
+      V = as<NumericMatrix>(o["V"]);
+      Vi = o["Vi"];
+      chol_V = as<NumericMatrix>(o["chol_V"]);
+      m0 = as<NumericMatrix>(o["m"]);
+      R0 = as<NumericVector>(o["R"]);
+      logdet_cur = as<NumericVector>(o["logdet"]);
+      lp_v = o["lp_v"];
+      cur_lp = as<double>(o["lp"]);
+      alpha = as<NumericMatrix>(o["alpha"]);
+      ll = as<NumericVector>(o["ll"]);
+      cur_hier = shear_log_hier(alpha, mu, chol_V);
+    }
+    counts[k] = counts[k] + 1;
+    if (adapt) {
+      volatile double gain = ((j > 0 ? 1 : 0) - move_target) / std::sqrt(static_cast<double>(counts[k]));
+      double next = steps[k] + gain;
+      if (next < step_range[0]) next = step_range[0];
+      if (next > step_range[1]) next = step_range[1];
+      steps[k] = next;
+    }
+    if (mu_changed) {
+      ++done;
+      break;
+    }
+  }
+  List out = List::create(Named("done") = done, Named("t") = t_used, Named("E") = E,
+                          Named("moved") = moved, Named("log_step") = steps,
+                          Named("evaluated") = evaluated,
+                          Named("ll_seconds") = ll_seconds, Named("t_next") = t_next,
+                          Named("any_moved") = any_moved);
+  if (any_moved) {
+    out["mu"] = mu; out["V"] = V; out["Vi"] = Vi; out["chol_V"] = chol_V;
+    out["m"] = m0; out["R"] = R0; out["logdet"] = logdet_cur; out["lp_v"] = lp_v;
+    out["lp"] = cur_lp; out["alpha"] = alpha; out["ll"] = ll; out["cur_hier"] = cur_hier;
   }
   return out;
 }

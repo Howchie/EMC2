@@ -4246,6 +4246,44 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_rounds_cpp
+List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVector blk_n, bool adapt, NumericVector step_range, double move_target, int n_candidates, NumericMatrix alpha, NumericVector mu, NumericMatrix V, NumericMatrix chol_V, NumericMatrix m0, NumericVector R0, NumericVector logdet0, double cur_hier, double cur_lp, double lp_mu, NumericVector ll, const arma::cube& prec, const arma::mat& lin, const LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp, List spec, List data, SEXP model, CharacterVector par_names);
+RcppExport SEXP _EMC2_emc_shear_rounds_cpp(SEXP ksSEXP, SEXP log_stepSEXP, SEXP blk_nSEXP, SEXP adaptSEXP, SEXP step_rangeSEXP, SEXP move_targetSEXP, SEXP n_candidatesSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP chol_VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP cur_hierSEXP, SEXP cur_lpSEXP, SEXP lp_muSEXP, SEXP llSEXP, SEXP precSEXP, SEXP linSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP, SEXP specSEXP, SEXP dataSEXP, SEXP modelSEXP, SEXP par_namesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type ks(ksSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type log_step(log_stepSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type blk_n(blk_nSEXP);
+    Rcpp::traits::input_parameter< bool >::type adapt(adaptSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type step_range(step_rangeSEXP);
+    Rcpp::traits::input_parameter< double >::type move_target(move_targetSEXP);
+    Rcpp::traits::input_parameter< int >::type n_candidates(n_candidatesSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type V(VSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type chol_V(chol_VSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type m0(m0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type R0(R0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type logdet0(logdet0SEXP);
+    Rcpp::traits::input_parameter< double >::type cur_hier(cur_hierSEXP);
+    Rcpp::traits::input_parameter< double >::type cur_lp(cur_lpSEXP);
+    Rcpp::traits::input_parameter< double >::type lp_mu(lp_muSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type ll(llSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type prec(precSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type lin(linSEXP);
+    Rcpp::traits::input_parameter< const LogicalVector& >::type has(hasSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type U(USEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type b(bSEXP);
+    Rcpp::traits::input_parameter< const arma::cube& >::type Uperp(UperpSEXP);
+    Rcpp::traits::input_parameter< List >::type spec(specSEXP);
+    Rcpp::traits::input_parameter< List >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type par_names(par_namesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_rounds_cpp(ks, log_step, blk_n, adapt, step_range, move_target, n_candidates, alpha, mu, V, chol_V, m0, R0, logdet0, cur_hier, cur_lp, lp_mu, ll, prec, lin, has, U, b, Uperp, spec, data, model, par_names));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -4542,6 +4580,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_collapsed_log_lhat_cpp", (DL_FUNC) &_EMC2_emc_collapsed_log_lhat_cpp, 4},
     {"_EMC2_emc_shear_surrogate_cpp", (DL_FUNC) &_EMC2_emc_shear_surrogate_cpp, 3},
     {"_EMC2_emc_shear_round_cpp", (DL_FUNC) &_EMC2_emc_shear_round_cpp, 22},
+    {"_EMC2_emc_shear_rounds_cpp", (DL_FUNC) &_EMC2_emc_shear_rounds_cpp, 28},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

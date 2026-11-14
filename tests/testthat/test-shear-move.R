@@ -1081,7 +1081,7 @@ test_that("unresolved orbit widths do not replace the existing tuning", {
   expect_true(all(extent[-1] / head(extent, -1) <= 4))
 })
 
-test_that("the native shear round is the R round on the same random stream", {
+test_that("the native shear rounds are the R rounds on the same random stream", {
   skip_on_cran()
   old <- options(emc2.fit_host = FALSE)
   on.exit(options(old), add = TRUE)
@@ -1093,32 +1093,32 @@ test_that("the native shear round is the R round on the same random stream", {
   rownames(pars) <- 1:5
   dat <- make_data(pars, des, n_trials = 60)
   emc <- make_emc(dat, des, rt_resolution = 0.001, n_chains = 2)
-  round_r <- EMC2:::.emc_shear_round
+  move_r <- EMC2:::.emc_shear_move
   native <- moved <- differing <- 0L
-  strip <- function(x) x[setdiff(names(x), c("build_el", "ll_el", "wpool"))]
-  both <- function(x, v, step, sampler, ctx) {
+  strip <- function(x) x[setdiff(names(x), c("round_el", "build_el", "ll_el", "wpool"))]
+  both <- function(sampler, pars, proposals, stage, ...) {
     seed <- get(".Random.seed", envir = globalenv())
     options(emc2.native_shear_round = FALSE)
-    a <- round_r(x, v, step, sampler, ctx)
+    a <- move_r(sampler, pars, proposals, stage, ...)
     seed_a <- get(".Random.seed", envir = globalenv())
     assign(".Random.seed", seed, envir = globalenv())
     options(emc2.native_shear_round = TRUE)
-    if (EMC2:::.emc_shear_round_native_ok(x, v, sampler)) native <<- native + 1L
-    b <- round_r(x, v, step, sampler, ctx)
-    moved <<- moved + isTRUE(b$moved)
+    b <- move_r(sampler, pars, proposals, stage, ...)
+    if (!is.null(b$rounds)) native <<- native + b$rounds
+    moved <<- moved + !identical(b$pars$tvar, pars$tvar)
     if (!identical(strip(a), strip(b)) ||
         !identical(seed_a, get(".Random.seed", envir = globalenv())))
       differing <<- differing + 1L
     b
   }
-  local_mocked_bindings(.emc_shear_round = both, .package = "EMC2")
+  local_mocked_bindings(.emc_shear_move = both, .package = "EMC2")
   fitted <- suppressWarnings(fit(emc, verbose = FALSE, cores_for_chains = 1,
                                  stop_criteria = list(preburn = list(iter = 20),
                                                       burn = list(iter = 60),
                                                       adapt = list(iter = 60),
                                                       sample = list(iter = 100))))
   options(emc2.native_shear_round = NULL)
-  # The comparison covered native rounds that moved the state.
+  # The comparison covered rounds that moved the state.
   expect_gt(native, 20L)
   expect_gt(moved, 10L)
   expect_identical(differing, 0L)
