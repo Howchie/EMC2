@@ -911,6 +911,14 @@ emc2_particle_log_weights <- function(proposals, log_likelihood, group_log_densi
     .Call(`_EMC2_emc2_particle_log_weights`, proposals, log_likelihood, group_log_density, mix, components, means, rootis, log_constants, auxiliary_components, reference_log_likelihood)
 }
 
+emc_wpool_recv_cpp <- function(con, deadline, alive, busy, read_chunk, max_frame) {
+    .Call(`_EMC2_emc_wpool_recv_cpp`, con, deadline, alive, busy, read_chunk, max_frame)
+}
+
+emc_wpool_send_cpp <- function(con, payload, deadline, max_segment, write_chunk) {
+    .Call(`_EMC2_emc_wpool_send_cpp`, con, payload, deadline, max_segment, write_chunk)
+}
+
 #' Ask the kernel to signal this process when its parent dies, and let
 #' SIGTERM terminate it
 #'

@@ -40,6 +40,17 @@ List shear_rounds_from(IntegerVector ks, NumericVector log_step, IntegerVector b
                        CharacterVector par_names, SubjectLl* src);
 double shear_log_hier(const NumericMatrix& alpha, const NumericVector& mu,
                       const NumericMatrix& chol_V);
+List shear_round_from(const arma::vec& t, const arma::vec& v,
+                      const arma::mat& alpha, const arma::vec& mu,
+                      const arma::mat& V, const arma::mat& m0,
+                      const arma::cube& R0, const arma::vec& logdet0,
+                      const arma::cube& prec, const arma::mat& lin,
+                      const LogicalVector& has, const arma::mat& U,
+                      const arma::vec& b, const arma::cube& Uperp,
+                      List spec, double lp_mu, double cur_hier, double cur_lp,
+                      NumericVector ll_cur, List data, SEXP model,
+                      CharacterVector par_names, SubjectLl* src,
+                      const double* lp_mu_each);
 List shear_mean_round(const NumericVector& t, const NumericVector& d,
                       const NumericMatrix& alpha, const NumericVector& mu,
                       const NumericMatrix& chol_V, const NumericMatrix& Vi,
@@ -187,7 +198,8 @@ bool step_shear(SEXP st, SEXP cx, int i) {
       flag(Rf_GetOption1(Rf_install("emc2.shear_delayed"))) ||
       TYPEOF(data) != VECSXP || XLENGTH(data) != n ||
       TYPEOF(par_names) != STRSXP || TYPEOF(seed) != INTSXP ||
-      TYPEOF(lget(sst, "iterations")) != INTSXP || TYPEOF(lget(sst, "rounds")) != INTSXP ||
+      (lget(sst, "iterations") != R_NilValue &&
+       (TYPEOF(lget(sst, "iterations")) != INTSXP || TYPEOF(lget(sst, "rounds")) != INTSXP)) ||
       TYPEOF(log_step) != REALSXP || XLENGTH(log_step) != q ||
       TYPEOF(bE) != REALSXP || XLENGTH(bE) != q || TYPEOF(bn) != INTSXP || XLENGTH(bn) != q ||
       TYPEOF(bmoved) != INTSXP || XLENGTH(bmoved) != q || TYPEOF(bN) != REALSXP ||
@@ -198,6 +210,13 @@ bool step_shear(SEXP st, SEXP cx, int i) {
       TYPEOF(tvar) != REALSXP || !Rf_isMatrix(tvar) || TYPEOF(tmu) != REALSXP ||
       XLENGTH(tmu) != p)
     return false;
+  // The move's counters start at zero.
+  RObject sst_counted = sst;
+  if (lget(sst, "iterations") == R_NilValue) {
+    sst_counted = lset(sst_counted, "rounds", Rf_ScalarInteger(0));
+    sst_counted = lset(sst_counted, "iterations", Rf_ScalarInteger(0));
+    sst = sst_counted;
+  }
   const Clock started = clock_now();
   static Function shear_context = package_function(".emc_shear_context");
   static Function r_log_prior_mu = package_function(".emc_shear_log_prior_mu");
@@ -391,11 +410,69 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     }
     any_moved = any_moved || moved;
   };
+  // A mean-direction round with transport walls: the general candidates,
+  // each with the prior density of its own mean.
+  auto walled_round = [&](int k) {
+    const double step = std::exp(steps[k - 1]);
+    NumericVector t(kCandidates), lp_each(kCandidates);
+    volatile double t_aux = step * norm_rand();
+    for (int c = 0; c < kCandidates; ++c) {
+      volatile double inc = step * norm_rand();
+      t[c] = t_aux + inc;
+    }
+    arma::vec v(q, arma::fill::zeros);
+    for (int r = 0; r < p; ++r) v[r] = REAL(dirs)[r + static_cast<R_xlen_t>(k - 1) * p];
+    bool native_prior = true;
+    for (int c = 0; c < kCandidates && native_prior; ++c) {
+      NumericVector mu_c(p);
+      for (int r = 0; r < p; ++r) {
+        volatile double shift = t[c] * v[r];
+        mu_c[r] = REAL(x.mu)[r] + shift;
+      }
+      native_prior = emc_iter::log_prior_mu(mu_c, prior, lp_each[c]);
+    }
+    if (!native_prior) {
+      r_round(k, t);
+      return;
+    }
+    const List o = shear_round_from(
+        as<arma::vec>(t), v, as<arma::mat>(x.alpha), as<arma::vec>(x.mu), as<arma::mat>(x.V),
+        as<arma::mat>(x.m), as<arma::cube>(x.R), as<arma::vec>(x.logdet), cube, lin, has, U,
+        wall_b, Uc, List(spec), 0.0, x.cur_hier, x.lp, NumericVector(static_cast<SEXP>(x.ll)),
+        List(data), model, CharacterVector(par_names), &lls, lp_each.begin());
+    if (as<bool>(o["evaluated"])) ++evaluated;
+    const int j = as<int>(o["j"]);
+    const bool moved = j > 0;
+    if (moved) {
+      SEXP V2 = o["V"];
+      Shield<SEXP> Vn(Rf_duplicate(V2));
+      Rf_setAttrib(Vn, R_DimNamesSymbol, Rf_getAttrib(x.V, R_DimNamesSymbol));
+      x.mu = o["mu"]; x.V = Vn; x.Vi = o["Vi"]; x.chol_V = o["chol_V"];
+      x.m = o["m"]; x.R = o["R"]; x.logdet = o["logdet"]; x.lp_v = o["lp_v"];
+      x.lp = as<double>(o["lp"]);
+      x.alpha = o["alpha"]; x.ll = o["ll"];
+      x.cur_hier = shear_log_hier(NumericMatrix(static_cast<SEXP>(x.alpha)),
+                                  NumericVector(static_cast<SEXP>(x.mu)),
+                                  NumericMatrix(static_cast<SEXP>(x.chol_V)));
+      net[k - 1] += t[j - 1];
+    }
+    E[k - 1] = E[k - 1] + as<double>(o["E"]);
+    cnt[k - 1] = cnt[k - 1] + 1;
+    mv[k - 1] = mv[k - 1] + (moved ? 1 : 0);
+    if (adapt) {
+      volatile double gain = ((moved ? 1 : 0) - kMoveTarget) /
+                             std::sqrt(static_cast<double>(cnt[k - 1]));
+      steps[k - 1] = std::min(hi, std::max(lo, steps[k - 1] + gain));
+    }
+    any_moved = any_moved || moved;
+  };
   int at = 0;
   while (at < total) {
     const int k = order[at];
     if (k <= p) {
-      if (mean_line) mean_round(k); else r_round(k, R_NilValue);
+      if (mean_line) mean_round(k);
+      else if (lget(ctx, "walls") != R_NilValue) walled_round(k);
+      else r_round(k, R_NilValue);
       ++at;
       continue;
     }

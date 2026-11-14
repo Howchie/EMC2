@@ -183,7 +183,8 @@ bool emc_subject_lls(const List& rows, const List& data, SEXP model, int n_cand,
 // (0 = stay), whether any candidate was valid, the seconds spent in the
 // likelihoods and, for a move, the selected state, subjects and likelihoods.
 // With a likelihood source the round never falls back: the source serves
-// whatever the stored-argument path does not.
+// whatever the stored-argument path does not. A `v` with a mean part takes
+// each candidate's mean-prior density from `lp_mu_each`.
 List shear_round_from(const arma::vec& t, const arma::vec& v,
                       const arma::mat& alpha, const arma::vec& mu,
                       const arma::mat& V, const arma::mat& m0,
@@ -193,7 +194,8 @@ List shear_round_from(const arma::vec& t, const arma::vec& v,
                       const arma::vec& b, const arma::cube& Uperp,
                       List spec, double lp_mu, double cur_hier, double cur_lp,
                       NumericVector ll_cur, List data, SEXP model,
-                      CharacterVector par_names, SubjectLl* src) {
+                      CharacterVector par_names, SubjectLl* src,
+                      const double* lp_mu_each) {
   const int K = static_cast<int>(t.n_elem);
   const int p = static_cast<int>(alpha.n_rows), n = static_cast<int>(alpha.n_cols);
   if (static_cast<int>(v.n_elem) != 2 * p || data.size() != n || ll_cur.size() != n)
@@ -207,7 +209,7 @@ List shear_round_from(const arma::vec& t, const arma::vec& v,
     const List o = cands[k];
     if (!as<bool>(o["ok"])) continue;
     const double lp_v = as<double>(o["lp_v"]);
-    lp[k] = lp_mu + lp_v;
+    lp[k] = (lp_mu_each != nullptr ? lp_mu_each[k] : lp_mu) + lp_v;
     if (!R_FINITE(lp[k])) continue;
     long double acc = 0.0L;
     for (int i = 0; i < p; ++i) {
@@ -245,7 +247,10 @@ List shear_round_from(const arma::vec& t, const arma::vec& v,
     NumericVector ll_sel(n);
     for (int s = 0; s < n; ++s) ll_sel[s] = ll_new(s, col);
     NumericVector mu1(p);
-    for (int i = 0; i < p; ++i) mu1[i] = mu[i] + t[j - 1] * v[i];
+    for (int i = 0; i < p; ++i) {
+      volatile double step = t[j - 1] * v[i];
+      mu1[i] = mu[i] + step;
+    }
     out["mu"] = mu1;
     out["V"] = o["V"];
     out["Vi"] = o["Vi"];
@@ -274,7 +279,7 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
                          CharacterVector par_names) {
   return shear_round_from(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp,
                           spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names,
-                          nullptr);
+                          nullptr, nullptr);
 }
 
 // .emc_shear_log_hier: the subjects' joint log density under the group
@@ -487,7 +492,7 @@ List shear_rounds_from(IntegerVector ks, NumericVector log_step, IntegerVector b
         as<arma::vec>(t), v, as<arma::mat>(alpha), as<arma::vec>(mu), as<arma::mat>(V),
         as<arma::mat>(m0), arma::cube(R0.begin(), p, p, alpha.ncol(), false, true),
         as<arma::vec>(logdet_cur), prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier,
-        cur_lp, ll, data, model, par_names, src);
+        cur_lp, ll, data, model, par_names, src, nullptr);
     if (as<bool>(o["fallback"])) {
       t_next = t;
       break;

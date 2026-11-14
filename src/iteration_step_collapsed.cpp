@@ -257,6 +257,12 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
   const int m = 2 * p;
   SEXP bE = lget(blk, "E"), bn = lget(blk, "n"), bacc = lget(blk, "acc"),
        bmoved = lget(blk, "moved"), bN = lget(blk, "N"), bK = lget(blk, "K");
+  // The move's counters start at zero.
+  RObject cst_counted = cst;
+  for (const char* name : {"iterations", "rounds", "accepted"})
+    if (lget(cst, name) == R_NilValue) cst_counted = lset(cst_counted, name, Rf_ScalarInteger(0));
+  cst = cst_counted;
+  iterations = lget(cst, "iterations");
   if (TYPEOF(seed) != INTSXP || TYPEOF(iterations) != INTSXP || XLENGTH(iterations) != 1 ||
       TYPEOF(lget(cst, "rounds")) != INTSXP || TYPEOF(lget(cst, "accepted")) != INTSXP ||
       TYPEOF(data) != VECSXP || XLENGTH(data) != n ||

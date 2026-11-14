@@ -567,80 +567,6 @@
   if (is.null(msg) || !nzchar(msg)) default else msg
 }
 
-.emc_wpool_put_bytes <- function(con, bytes, deadline = NULL) {
-  n <- length(bytes)
-  from <- 1
-  started <- proc.time()[["elapsed"]]
-  while (from <= n) {
-    if (!is.null(deadline) && from > 1 &&
-        proc.time()[["elapsed"]] - started > deadline) {
-      stop(sprintf("the request was still being written after %.0f s", deadline),
-           call. = FALSE)
-    }
-    to <- min(n, from + .EMC_WPOOL_WRITE_CHUNK - 1)
-    withCallingHandlers(
-      writeBin(bytes[from:to], con),
-      warning = function(w) stop(conditionMessage(w), call. = FALSE))
-    from <- to + 1
-  }
-  invisible(NULL)
-}
-
-.emc_wpool_get_bytes <- function(con, n, deadline = NULL, alive = NULL,
-                                 busy = NULL) {
-  if (n <= 0) return(raw(0))
-  out <- raw(n)
-  got <- 0
-  started <- proc.time()[["elapsed"]]
-  wait <- 0
-  idle <- 0L
-  while (got < n) {
-    chunk <- tryCatch(
-      readBin(con, "raw", min(n - got, .EMC_WPOOL_READ_CHUNK)),
-      error = function(e) {
-        if (!is.null(deadline) &&
-            isTRUE(tryCatch(isOpen(con), error = function(e2) FALSE))) {
-          return(raw(0))
-        }
-        .emc_wpool_transport_fail(conditionMessage(e))
-        NULL
-      })
-    if (is.null(chunk)) return(NULL)
-    k <- length(chunk)
-    if (k == n) return(chunk)
-    if (k == 0L) {
-      if (is.null(deadline)) {
-        .emc_wpool_transport_fail(if (got == 0) {
-          "the other end of the pipe closed"
-        } else "the pipe closed part-way through a message")
-        return(NULL)
-      }
-      idle <- idle + 1L
-      if ((idle %% 64L) == 0L && !is.null(alive) && !alive()) {
-        .emc_wpool_transport_fail(if (got == 0) {
-          "the worker exited without replying"
-        } else "the worker exited part-way through a message")
-        return(NULL)
-      }
-      if (proc.time()[["elapsed"]] - started > deadline) {
-        if (is.function(busy) && busy()) {
-          started <- proc.time()[["elapsed"]]
-          next
-        }
-        .emc_wpool_transport_fail(sprintf(
-          "no %s within %.0f s", if (got == 0) "reply" else "rest of the reply",
-          deadline))
-        return(NULL)
-      }
-      if (idle > 16L) { Sys.sleep(wait); wait <- min(max(wait * 2, 5e-5), 2e-3) }
-      next
-    }
-    out[(got + 1):(got + k)] <- chunk
-    got <- got + k
-  }
-  out
-}
-
 .emc_wpool_request <- function(pool, w, msg, deadline = NULL) {
   if (is.null(deadline)) deadline <- .emc_wpool_deadline()
   .emc_wpool_send(pool$wcs[[w]], msg, deadline = deadline)
@@ -703,46 +629,24 @@
 
 .emc_wpool_send <- function(con, obj, deadline = NULL) {
   payload <- serialize(obj, NULL)
-  total <- length(payload)
   tryCatch({
-    from <- 1
-    repeat {
-      to <- min(total, from + .EMC_WPOOL_MAX_SEGMENT - 1)
-      last <- to >= total
-      len <- if (last) to - from + 1 else -(to - from + 1)
-      .emc_wpool_put_bytes(con, writeBin(as.double(len), raw(), size = 8,
-                                         endian = "little"), deadline)
-      .emc_wpool_put_bytes(con, payload[from:to], deadline)
-      if (last) break
-      from <- to + 1
-    }
+    sent <- emc_wpool_send_cpp(con, payload, deadline, .EMC_WPOOL_MAX_SEGMENT,
+                               .EMC_WPOOL_WRITE_CHUNK)
+    if (!isTRUE(sent)) stop(sent, call. = FALSE)
     flush(con)
     TRUE
   }, error = function(e) .emc_wpool_transport_fail(conditionMessage(e)))
 }
 
 .emc_wpool_recv <- function(con, deadline = NULL, alive = NULL, busy = NULL) {
-  parts <- list()
-  repeat {
-    header <- .emc_wpool_get_bytes(con, 8, deadline, alive, busy)
-    if (is.null(header)) return(NULL)
-    n <- readBin(header, "double", 1L, size = 8, endian = "little")
-    more <- is.finite(n) && n < 0
-    if (more) n <- -n
-    if (!is.finite(n) || n < 0 || n > .EMC_WPOOL_MAX_FRAME) {
-      .emc_wpool_transport_fail("implausible message length on the pipe")
-      return(NULL)
-    }
-    payload <- .emc_wpool_get_bytes(con, n, deadline, alive, busy)
-    if (is.null(payload)) return(NULL)
-    if (!length(parts) && !more) {
-      parts <- list(payload)
-      break
-    }
-    parts[[length(parts) + 1L]] <- payload
-    if (!more) break
+  payload <- tryCatch(
+    emc_wpool_recv_cpp(con, deadline, alive, busy, .EMC_WPOOL_READ_CHUNK,
+                       .EMC_WPOOL_MAX_FRAME),
+    error = function(e) conditionMessage(e))
+  if (!is.raw(payload)) {
+    .emc_wpool_transport_fail(payload)
+    return(NULL)
   }
-  payload <- if (length(parts) == 1L) parts[[1L]] else unlist(parts, use.names = FALSE)
   tryCatch(unserialize(payload), error = function(e) {
     .emc_wpool_transport_fail(conditionMessage(e))
     NULL

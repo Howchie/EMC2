@@ -70,6 +70,36 @@ bool option_on(const char* name) {
 }
 
 
+// .emc_hmc_warmup_step(): one warmup update of a subject's step size from a
+// transition's acceptance probability (an aborted trajectory counts as zero),
+// with the warmup's constants `k` (target acceptance, moves, step range).
+SEXP warmup_step(SEXP ps, SEXP tk, SEXP k) {
+  SEXP n_warm = lget(ps, "n_warm"), eps = lget(ps, "eps");
+  if (TYPEOF(k) != REALSXP || XLENGTH(k) != 4 || TYPEOF(n_warm) != INTSXP ||
+      XLENGTH(n_warm) != 1 || TYPEOF(eps) != REALSXP || XLENGTH(eps) != 1 ||
+      lget(ps, "warmup") == R_NilValue || lget(ps, "rate") == R_NilValue) {
+    static Function r_step = package_function(".emc_hmc_warmup_step");
+    return r_step(ps, tk);
+  }
+  SEXP ap = lget(tk, "acc_prob");
+  double acc = (Rf_length(ap) == 1 && (TYPEOF(ap) == REALSXP || TYPEOF(ap) == INTSXP ||
+                                       TYPEOF(ap) == LGLSXP)) ? Rf_asReal(ap) : 0.0;
+  if (!R_FINITE(acc)) acc = 0.0;
+  const int n = INTEGER(n_warm)[0] + 1;
+  volatile double gap = acc - REAL(k)[0];
+  volatile double scaled = gap / std::sqrt(static_cast<double>(n));
+  volatile double factor = std::exp(scaled);
+  double next = REAL(eps)[0] * factor;
+  if (R_FINITE(next)) next = std::min(REAL(k)[3], std::max(REAL(k)[2], next));
+  RObject out = lset(ps, "n_warm", Rf_ScalarInteger(n));
+  out = lset(out, "eps", Rf_ScalarReal(next));
+  if (n >= REAL(k)[1]) {
+    out = lset(out, "warmup", Rf_ScalarLogical(FALSE));
+    out = lset(out, "rate", Rf_ScalarReal(0.0));
+  }
+  return out;
+}
+
 bool step_hmc(SEXP st, SEXP cx, int i) {
   SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), proposals = var(st, "proposals");
   SEXP plan = var(st, "hmc_plan"), streams = var(st, "streams"), wpool = var(st, "wpool");
@@ -254,8 +284,7 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
         np[p + static_cast<R_xlen_t>(s) * (p + 1)] = Rf_asReal(lget(tk, "ll"));
       }
       if (flag(lget(VECTOR_ELT(plan, s), "warmup"))) {
-        static Function warmup_step = package_function(".emc_hmc_warmup_step");
-        Shield<SEXP> ps(warmup_step(VECTOR_ELT(new_plan, s), tk));
+        RObject ps = warmup_step(VECTOR_ELT(new_plan, s), tk, lget(cx, "hmc_warmup"));
         SET_VECTOR_ELT(new_plan, s, ps);
         tk = lset(tk, "eps_next", lget(ps, "eps"));
       }

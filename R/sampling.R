@@ -794,7 +794,7 @@ run_stage <- function(pmwgs,
   sampler_profile <- .emc_profile_enabled()
   startup_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
   n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
-  wpool_part <- NULL
+  wpool_part <- wpool_cost <- NULL
   persistent_workers <- isTRUE(.emc_pool_state$chain_persistent)
   wpool <- NULL
   llpool <- NULL
@@ -936,510 +936,60 @@ run_stage <- function(pmwgs,
       wpool_streams[[1L]] <- nb$stream
     }
   }
-  # Configurations the step sequence covers run it (R/iteration_steps.R); the
-  # loop below is the same iteration for the rest.
-  steps_done <- FALSE
-  if (.emc_steps_ok(pmwgs, nuisance, sampler_profile, verboseProgress, wpool, llpool)) {
-    st <- new.env(parent = emptyenv())
-    st$pmwgs <- pmwgs
-    st$pm_settings <- pm_settings
-    st$streams <- wpool_streams
-    st$hmc_plan <- hmc_plan
-    st$wpool <- wpool
-    st$wpool_part <- wpool_part
-    st$wpool_cost <- wpool_cost
-    st$pool_iteration <- pool_iteration
-    st$stage_rejects <- stage_rejects
-    st$rejects <- list(gibbs = gibbs_rejects, ensemble = ensemble_rejects,
-                       shear = shear_rejects, collapsed = collapsed_rejects)
-    cx <- list(stage = stage, iter = as.integer(iter), start_iter = start_iter,
-               n_cores = n_cores, core_ctl = core_ctl, alloc_on = alloc_on,
-               idx_list_blk = idx_list_blk, marginal_idx_blk = marginal_idx_blk,
-               include_full = length(unique(tune$components)) > 1L,
-               chains_mu = chains_mu, chains_var = chains_var, wpool_ctx = wpool_ctx,
-               persistent_workers = persistent_workers, recycle_every = recycle_every,
-               pool_budget = pool_budget, par_names = par_names, data = data)
+  # The block's iterations (R/iteration_steps.R, src/iteration_loop.cpp).
+  st <- new.env(parent = emptyenv())
+  st$pmwgs <- pmwgs
+  st$pm_settings <- pm_settings
+  st$streams <- wpool_streams
+  st$hmc_plan <- hmc_plan
+  st$wpool <- wpool
+  st$llpool <- llpool
+  st$wpool_part <- wpool_part
+  st$wpool_cost <- wpool_cost
+  st$pool_iteration <- if (persistent_workers) pool_iteration + native_done else
+    pool_iteration
+  st$stage_rejects <- stage_rejects
+  st$rejects <- list(gibbs = gibbs_rejects, ensemble = ensemble_rejects,
+                     shear = shear_rejects, collapsed = collapsed_rejects,
+                     pooled = pooled_rejects)
+  st$profile_rows <- profile_rows
+  cx <- list(stage = stage, iter = as.integer(iter), start_iter = start_iter,
+             n_cores = n_cores, r_cores = r_cores, core_ctl = core_ctl,
+             alloc_on = alloc_on, n_pars = n_pars,
+             nuisance = nuisance, any_nuisance = any(nuisance),
+             pooled = !is.null(pmwgs$pooled),
+             sampler_profile = isTRUE(sampler_profile),
+             verbose_progress = isTRUE(verboseProgress),
+             pb = if (verboseProgress) pb, mem_every = mem_every,
+             startup_elapsed = startup_elapsed, tune = tune,
+             eff_mu = eff_mu, eff_var = eff_var, chol_caches = chol_caches,
+             idx_list_blk = idx_list_blk, marginal_idx_blk = marginal_idx_blk,
+             include_full = length(unique(tune$components)) > 1L,
+             chains_mu = chains_mu, chains_var = chains_var, wpool_ctx = wpool_ctx,
+             persistent_workers = persistent_workers, recycle_every = recycle_every,
+             pool_budget = pool_budget, par_names = par_names, data = data,
+             native_ok = .emc_steps_native_ok(pmwgs, nuisance, isTRUE(sampler_profile),
+                                              wpool, llpool))
+  if (cx$native_ok)
     cx <- c(cx, .emc_steps_constants(pmwgs, stage, chains_mu, chains_var, idx_list_blk,
                                      marginal_idx_blk, cx$include_full, wpool_ctx,
                                      persistent_workers))
-    # The exit handlers stop the pool the steps leave, whatever ends them.
-    tryCatch(.emc_steps_run(st, cx), finally = wpool <- st$wpool)
-    pmwgs <- st$pmwgs
-    pm_settings <- st$pm_settings
-    wpool_streams <- st$streams
-    stage_rejects <- st$stage_rejects
-    if (isTRUE(getOption("emc2.native_steps_trace", FALSE)))
-      .emc_pool_state$native_runs <- rbind(.emc_pool_state$native_runs,
-                                           c(st$native_runs, iter = iter))
-    steps_done <- TRUE
-  }
-  for (i in if (steps_done) integer(0) else 1:iter) {
-    if (persistent_workers) pool_iteration <- pool_iteration + 1L
-    if (i <= native_done) next
-    iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    if (verboseProgress) {
-      accRate <- mean(accept_rate(pmwgs))
-      update_progress_bar(pb, i, extra = accRate)
-    }
-    j <- start_iter + i
-    if (alloc_on) {
-      # The allocation charges wall time on the chain's own share of the
-      # cores: those it takes over when other chains finish their block would
-      # otherwise idle, so they cost the fit nothing.
-      el_iter <- proc.time()[["elapsed"]]
-      cores_it <- if (is.null(core_ctl)) n_cores else
-        max(1L, core_ctl$total %/% core_ctl$n_slots)
-    }
-
-    assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
-    gibbs_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    # Parameters x subjects, kept a matrix with one parameter or one subject.
-    alpha_prev <- matrix(pmwgs$samples$alpha[, , j - 1], nrow = dim(pmwgs$samples$alpha)[1],
-                         dimnames = dimnames(pmwgs$samples$alpha)[1:2])
-    pars_attempt <- tryCatch(
-      gibbs_step(pmwgs, alpha_prev[!nuisance, , drop = FALSE], pmwgs$type),
-      error = identity
-    )
-    if (inherits(pars_attempt, c("error", "try-error"))) {
-      .emc_reject_record(pars_attempt, "gibbs")
-      .emc_gibbs_abort(pars_attempt, stage = stage, iteration = j)
-    }
-    pars <- pars_comb <- pars_attempt
-    if(any(nuisance)){
-      pars_nuis_attempt <- tryCatch(
-        gibbs_step(pmwgs$sampler_nuis, alpha_prev[nuisance, , drop = FALSE], pmwgs$sampler_nuis$type),
-        error = identity
-      )
-      if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
-        .emc_reject_record(pars_nuis_attempt, "gibbs")
-        .emc_gibbs_abort(pars_nuis_attempt, stage = stage, iteration = j,
-                         nuisance = TRUE)
-      }
-      pars_nuis <- pars_nuis_attempt
-      # pars_comb only feeds the particle step, so it carries the subject prior
-      # covariance (SEM: subj_var, which excludes covariate spread).
-      pars_comb <- merge_group_level(pars$tmu, pars_nuis$tmu,
-                                     if (is.null(pars$subj_var)) pars$tvar else pars$subj_var,
-                                     pars_nuis$tvar, nuisance, pars$subj_mu)
-      pars_comb$alpha <- pmwgs$samples$alpha[,,j-1]
-      pmwgs$sampler_nuis$samples <- fill_samples(samples = pmwgs$sampler_nuis$samples,
-                                                                        group_level = pars_nuis,
-                                                                        j = j,
-                                                                        proposals = NULL,
-                                                                        n_pars = n_pars, type = pmwgs$sampler_nuis$type)
-      pmwgs$sampler_nuis$samples$idx <- j
-    }
-    # Ensemble pool members come from the group-step stream and depend only on
-    # the frozen proposals, so their likelihoods ride along with the subject
-    # step below.
-    # The proposals are frozen for this call, so their factors from the first
-    # draw serve the rest.
-    ens_q <- pmwgs$ensemble_q
-    ens_pools <- .emc_ensemble_draw_pools(pmwgs, stage,
-                                          if (is.null(ens_q)) chains_mu else ens_q$mu,
-                                          if (is.null(ens_q)) chains_var else ens_q$var,
-                                          factors = ens_factors)
-    if (!is.null(ens_pools) && is.null(ens_factors))
-      ens_factors <- list(L = ens_pools$L, logdet = ens_pools$logdet)
-    pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
-    gibbs_elapsed <- if (sampler_profile) {
-      proc.time()[["elapsed"]] - gibbs_started
-    } else NA_real_
-    cache_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    group_var_it <- tryCatch(get_group_level(pars_comb, 1L, pmwgs$type)$var,
-                             error = function(e) NULL)
-    # The factors depend only on the group variance, which is fixed when there
-    # is no group level.
-    if (is.null(group_chol_it) || !identical(group_chol_it$ref, group_var_it))
-      group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk,
-                                              marginal_idx_blk,
-                                              include_full = length(unique(tune$components)) > 1L)
-    cache_elapsed <- if (sampler_profile) {
-      proc.time()[["elapsed"]] - cache_started
-    } else NA_real_
-    recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
-    pool_profile <- NULL
-    # Subjects whose particle step the allocation (R/move_allocation.R) skips
-    # this iteration, each drawn from the subject's own stream. A subject
-    # that also takes HMC at rate r draws one uniform U for both kernels:
-    # the particle step runs if U < q and HMC if U >= 1 - r, which keeps
-    # both rates and runs at least one of them whenever q + r >= 1. A
-    # subject whose allocated HMC rate has since dropped to zero (its warmup
-    # ended) takes its particle step.
-    part_skip <- NULL
-    hmc_pick <- NULL
-    q_part <- if (alloc_on) pmwgs$alloc$particle$rate
-    if (length(q_part) == pmwgs$n_subjects && any(q_part < 1)) {
-      part_skip <- logical(pmwgs$n_subjects)
-      r_now <- .emc_hmc_plan_rates(hmc_plan, pmwgs$n_subjects)
-      r_alloc <- pmwgs$alloc$last$rate
-      if (length(r_alloc) != pmwgs$n_subjects) r_alloc <- r_now
-      .emc_with_preserved_rng(for (s in which(q_part < 1)) {
-        if (r_alloc[s] > 0 && !(r_now[s] > 0)) next
-        assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
-        u <- stats::runif(1)
-        wpool_streams[[s]] <- get(".Random.seed", envir = globalenv())
-        part_skip[s] <- u >= q_part[s]
-        if (r_now[s] > 0 && r_now[s] < 1) {
-          if (is.null(hmc_pick)) hmc_pick <- rep(NA, pmwgs$n_subjects)
-          hmc_pick[s] <- u >= 1 - r_now[s]
-        }
-      })
-    }
-    part_started <- proc.time()[["elapsed"]]
-    part_cpu_share <- 1
-    if (!is.null(llpool)) {
-      llpool <- .emc_wpool_recycle(
-        llpool, if (persistent_workers) pool_iteration else i,
-        recycle_every, wpool_ctx)
-      llpool <- .emc_wpool_grow(llpool, .emc_cores_now(core_ctl, n_cores),
-                                wpool_ctx)
-      if (persistent_workers) llpool$iterations <- pool_iteration
-      .emc_ll_pool_set(llpool, 1L, reset = FALSE)
-    }
-    if (!is.null(wpool)) {
-      recycle_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-      wpool <- .emc_wpool_recycle(
-        wpool, if (persistent_workers) pool_iteration else i,
-        recycle_every, wpool_ctx)
-      if (sampler_profile) {
-        recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
-      }
-      chain_cores <- .emc_cores_now(core_ctl, n_cores)
-      target_workers <- min(
-        pmwgs$n_subjects,
-        max(1L, chain_cores %/% max(1L, pool_budget$likelihood))
-      )
-      n_before <- wpool$n
-      grow_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-      wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
-      if (persistent_workers) wpool$iterations <- pool_iteration
-      if (sampler_profile) {
-        grow_elapsed <- proc.time()[["elapsed"]] - grow_started
-      }
-      if (wpool$n != n_before || !is.null(part_skip)) {
-        wpool_part <- .emc_lpt_partition(
-          if (is.null(part_skip)) wpool_cost else wpool_cost * !part_skip, wpool$n)
-      }
-      it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
-                            group_chol_it, pm_settings,
-                            pmwgs$samples$subj_ll[, j - 1], wpool_streams,
-                            extra = ens_pools$rows,
-                            pooled = pmwgs$pooled$value, skip = part_skip)
-      if (!is.null(ens_pools)) ens_pools$ll <- it$extra_ll
-      proposals <- it$props
-      pm_settings <- it$pm_settings
-      wpool_streams <- it$seeds
-      wpool$alive <- it$alive
-      pool_profile <- it$profile
-      if (!is.null(it$rejects))
-        stage_rejects$particle <- stage_rejects$particle + it$rejects
-      if (!is.null(it$ensemble_rejects))
-        .emc_reject_add(it$ensemble_rejects, "ensemble")
-      ran <- if (is.null(part_skip)) rep(TRUE, length(it$times)) else !part_skip
-      if (any(it$times[ran] > 0)) {
-        fresh <- pmax(it$times, min(it$times[ran & it$times > 0]))
-        wpool_cost[ran] <- fresh[ran]
-      }
-      wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
-      # The pass also computes the ensemble candidates: the particle steps'
-      # share of it is their share of the workers' CPU.
-      if (is.numeric(it$worker_cpu) && it$worker_cpu > 0)
-        part_cpu_share <- min(1, sum(it$times) / it$worker_cpu)
-    } else {
-    core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
-                                         r_cores = r_cores,
-                                         total_cores = n_cores)
-    # Keep each result whole, including its subject tag and post-draw RNG state,
-    # so a missing worker cannot shift or recycle another subject's result.
-    raw_proposals <- auto_mclapply(seq_len(pmwgs$n_subjects), function(s) {
-      assign(".Random.seed", wpool_streams[[s]], envir = globalenv())
-      out <- if (isTRUE(part_skip[s])) {
-        r <- reject_particle(pmwgs$samples$alpha[, s, j - 1L],
-                             pmwgs$samples$subj_ll[s, j - 1L], pm_settings[[s]])
-        r$subject <- s
-        r
-      } else safe_new_particle(
-        s = s, data = data[[s]], pm_settings = pm_settings[[s]],
-        eff_mu = eff_mu[[s]], eff_var = eff_var[[s]],
-        chains_mu = chains_mu[[s]], chains_var = chains_var[[s]],
-        prev_ll = pmwgs$samples$subj_ll[s, j - 1L], parameters = pars_comb,
-        model = pmwgs$model, stage = stage, type = pmwgs$type, tune = tune,
-        marginalise = pmwgs$marginalise,
-        r_cores = core_budget$likelihood, chol_cache = chol_caches[[s]],
-        group_chol = group_chol_it, ll_cache_validated = TRUE)
-      out$rng_seed <- get(".Random.seed", envir = globalenv())
-      if (!is.null(ens_pools))
-        out$extra_ll <- .emc_ensemble_ll_candidate(ens_pools$rows[[s]], data[[s]],
-                                                   pmwgs$model,
-                                                   ll_cache_validated = TRUE)
-      out
-    }, mc.cores = core_budget$subject, mc.set.seed = FALSE)
-    if (!is.null(ens_pools)) {
-      ens_pools$ll <- vector("list", pmwgs$n_subjects)
-      for (res in raw_proposals) if (is.list(res) && is.numeric(res$subject) &&
-                                     length(res$subject) == 1L && !is.null(res$extra_ll))
-        ens_pools$ll[[as.integer(res$subject)]] <- res$extra_ll
-    }
-    next_streams <- wpool_streams
-    for (res in raw_proposals) {
-      if (!is.list(res)) next
-      s_res <- res$subject
-      if (!is.numeric(s_res) || length(s_res) != 1L || is.na(s_res) ||
-          s_res < 1L || s_res > pmwgs$n_subjects || is.null(res$rng_seed)) {
-        next
-      }
-      next_streams[[as.integer(s_res)]] <- res$rng_seed
-    }
-    wpool_streams <- next_streams
-    assembled <- .emc_assemble_proposals(
-      raw_proposals, n_pars = pmwgs$n_pars, n_subjects = pmwgs$n_subjects,
-      prev_alpha = matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
-      prev_ll = pmwgs$samples$subj_ll[, j - 1L], prev_pm = pm_settings,
-      stage = stage, iteration = j)
-    pm_settings <- assembled$pm_settings
-    proposals <- assembled$proposals
-    }
-    if (alloc_on) {
-      pmwgs <- .emc_alloc_record_particle(
-        pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
-        proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
-        if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip,
-        part_cpu_share * .emc_reserved_cost(proc.time()[["elapsed"]] - part_started, cores_it),
-        if (is.null(wpool)) NULL else it$times)
-    }
-
-    # Ensemble group update (R/ensemble_move.R): after the subject step, so the
-    # group Gibbs rounds and the final reselection close the sweep.
-    ens_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    ens <- .emc_ensemble_move(pmwgs, pars, proposals, stage, wpool, wpool_ctx,
-                              wpool_part, ens_pools,
-                              ll_cache_validated = TRUE)
-    ens_elapsed <- if (sampler_profile) proc.time()[["elapsed"]] - ens_started else NA_real_
-    # Each move's results go to the loop's own variables: storing the sampler
-    # into another list has R walk all of it.
-    pmwgs <- ens$sampler
-    pars <- ens$pars
-    proposals <- ens$proposals
-    wpool <- ens$wpool
-    ens <- NULL
-    # Then the shear (R/shear_move.R): the non-centred move of the same
-    # group state.
-    shear_cpu <- shear_raw <- shear_el <- shear_round_el <- shear_round_cpu <- 0
-    shear_build_el <- shear_ll_el <- 0
-    shear_rounds <- 0L
-    if (alloc_on) pmwgs <- .emc_alloc_record_group(pmwgs, pars)
-    if (.emc_shear_active(pmwgs)) {
-      shear_started <- .emc_cpu_self()
-      shear_el0 <- proc.time()[["elapsed"]]
-      sll_shear <- .emc_subject_ll_cpu()
-      sh <- .emc_shear_move(pmwgs, pars, proposals, stage, wpool, wpool_part)
-      pmwgs <- sh$sampler
-      pars <- sh$pars
-      proposals <- sh$proposals
-      wpool <- sh$wpool
-      shear_rounds <- if (is.null(sh$rounds)) 0L else sh$rounds
-      shear_round_el <- if (is.null(sh$round_el)) 0 else sh$round_el
-      shear_build_el <- if (is.null(sh$build_el)) 0 else sh$build_el
-      shear_ll_el <- if (is.null(sh$ll_el)) 0 else sh$ll_el
-      shear_raw <- .emc_cpu_self() - shear_started + .emc_subject_ll_cpu() - sll_shear
-      shear_el <- proc.time()[["elapsed"]] - shear_el0
-      if (alloc_on) {
-        shear_cpu <- .emc_reserved_cost(shear_el, cores_it)
-        shear_round_cpu <- .emc_reserved_cost(shear_round_el, cores_it)
-      }
-    }
-    # Then the collapsed move (R/collapsed_move.R): the whole group state
-    # with the subjects in their conditional frames.
-    coll_cpu <- coll_el <- coll_round_cpu <- 0
-    coll_moves <- 0L
-    if (.emc_collapsed_active(pmwgs)) {
-      coll_el0 <- proc.time()[["elapsed"]]
-      moves_before <- pmwgs$collapsed$plan$block$n
-      cm <- .emc_collapsed_move(pmwgs, pars, proposals, stage, wpool, wpool_part)
-      pmwgs <- cm$sampler
-      pars <- cm$pars
-      proposals <- cm$proposals
-      wpool <- cm$wpool
-      moves_after <- pmwgs$collapsed$plan$block$n
-      if (length(moves_before) && length(moves_after))
-        coll_moves <- as.integer(moves_after - moves_before)
-      coll_el <- proc.time()[["elapsed"]] - coll_el0
-      if (alloc_on) {
-        coll_cpu <- .emc_reserved_cost(coll_el, cores_it)
-        coll_round_cpu <- .emc_reserved_cost(if (is.null(cm$round_el)) 0 else cm$round_el, cores_it)
-      }
-    }
-    ensemble_delta <- .emc_reject_delta(ensemble_rejects, "ensemble")
-    ensemble_rejects <- .emc_reject_counts("ensemble")
-    stage_rejects$ensemble <- stage_rejects$ensemble + ensemble_delta
-    shear_delta <- .emc_reject_delta(shear_rejects, "shear")
-    shear_rejects <- .emc_reject_counts("shear")
-    stage_rejects$shear <- stage_rejects$shear + shear_delta
-    collapsed_delta <- .emc_reject_delta(collapsed_rejects, "collapsed")
-    collapsed_rejects <- .emc_reject_counts("collapsed")
-    stage_rejects$collapsed <- stage_rejects$collapsed + collapsed_delta
-
-    # Pooled coefficients given the final subject states (R/pooled.R).
-    pooled_delta <- NULL
-    if (!is.null(pmwgs$pooled)) {
-      pmv <- .emc_pooled_move(pmwgs, proposals, stage, pars, group_chol_it,
-                              pm_settings, wpool_streams, wpool, wpool_ctx,
-                              wpool_part, n_cores = n_cores,
-                              ll_cache_validated = TRUE)
-      pmwgs <- pmv$sampler
-      proposals <- pmv$proposals
-      pars <- pmv$pars
-      if (!is.null(wpool) && !is.null(pmv$alive)) wpool$alive <- pmv$alive
-      data <- pmwgs$data
-      wpool_ctx$data <- data
-      pooled_delta <- .emc_reject_delta(pooled_rejects, "pooled")
-      pooled_rejects <- .emc_reject_counts("pooled")
-      stage_rejects$pooled <- stage_rejects$pooled + pooled_delta
-    }
-
-    # Subject HMC (R/subject_hmc.R): the last update of the iteration, from
-    # the final group state.
-    hmc_tasks <- NULL
-    hmc_master <- hmc_el <- 0
-    if (alloc_on)
-      pmwgs <- .emc_alloc_record_subjects(pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
-                                          pars$tmu)
-    if (!is.null(hmc_plan)) {
-      hmc_started <- .emc_cpu_self()
-      hmc_el0 <- proc.time()[["elapsed"]]
-      hr <- .emc_hmc_round(hmc_plan, proposals, pars, pmwgs$type, wpool_streams,
-                           data, pmwgs$model, wpool = wpool,
-                           n_cores = pool_budget$subject, r_cores = pool_budget$likelihood,
-                           par_names = par_names, pick = hmc_pick,
-                           ll_cache_validated = TRUE)
-      proposals <- hr$proposals
-      wpool_streams <- hr$streams
-      hmc_tasks <- hr$tasks
-      hmc_plan <- hr$plan
-      if (!is.null(wpool) && !is.null(hr$pool)) wpool$alive <- hr$pool$alive
-      hmc_master <- .emc_cpu_self() - hmc_started
-      hmc_el <- proc.time()[["elapsed"]] - hmc_el0
-      attempted <- !vapply(hmc_tasks, is.null, logical(1))
-      if (any(attempted)) {
-        for (s in which(attempted)) {
-          hmc_tasks[[s]]$work <- hmc_tasks[[s]]$cpu
-          hmc_tasks[[s]]$cpu <- hmc_tasks[[s]]$cpu + hmc_master / sum(attempted)
-        }
-        # The round's wall time on the chain's cores, shared by CPU.
-        if (alloc_on) {
-          cpu_s <- vapply(hmc_tasks[attempted], function(x) x$cpu, numeric(1))
-          share <- if (sum(cpu_s) > 0) cpu_s / sum(cpu_s) else rep(1 / sum(attempted), sum(attempted))
-          for (k in seq_along(share))
-            hmc_tasks[[which(attempted)[k]]]$cost <- .emc_reserved_cost(hmc_el, cores_it) * share[k]
-        }
-      }
-      pmwgs$subject_hmc <- .emc_hmc_record_tasks(pmwgs$subject_hmc, hmc_tasks)
-    }
-
-    fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
-    if (is.null(ens_pools) && pmwgs$type %in% c("factor", "infnt_factor", "SEM") &&
-        !any(pmwgs$nuisance) && !any(as.logical(pmwgs$marginalised_idx), na.rm = TRUE)) {
-      assign(".Random.seed", pmwgs$rng$gibbs, envir = globalenv())
-      pars <- .emc_ensemble_refresh_scores(pars, pmwgs, proposals[seq_len(pmwgs$n_pars), , drop = FALSE])
-      pmwgs$rng$gibbs <- get(".Random.seed", envir = globalenv())
-    }
-    pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
-                                               proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
-    if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, j] <- pmwgs$pooled$value
-    if (alloc_on) {
-      rest_cpu <- .emc_reserved_cost(proc.time()[["elapsed"]] - el_iter - shear_el - coll_el -
-                                       hmc_el, cores_it)
-      pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, hmc_tasks, moves = list(
-        shear = c(cpu = shear_cpu, own = shear_round_cpu, n = shear_rounds),
-        collapsed = c(cpu = coll_cpu, own = coll_round_cpu, n = coll_moves),
-        hmc = .emc_reserved_cost(hmc_el, cores_it)))
-    }
-    fill_elapsed <- if (sampler_profile) {
-      proc.time()[["elapsed"]] - fill_started
-    } else NA_real_
-    gibbs_delta <- .emc_reject_delta(gibbs_rejects, "gibbs")
-    gibbs_rejects <- .emc_reject_counts("gibbs")
-    stage_rejects$gibbs <- stage_rejects$gibbs + gibbs_delta
-    if (sampler_profile) {
-      iteration_total <- proc.time()[["elapsed"]] - iteration_started
-      pp <- if (is.null(pool_profile)) list() else pool_profile
-      n_part <- vapply(pm_settings, function(x) {
-        if (is.null(x$n_particles)) NA_real_ else as.numeric(x$n_particles)
-      }, numeric(1))
-      mem <- if (.emc_profile_expensive() &&
-                 (i == 1L || i == iter || i %% mem_every == 0L)) {
-        .emc_profile_memory(if (is.null(wpool)) NULL else c(
-          vapply(wpool$jobs, .emc_wpool_job_pid, integer(1)),
-          .emc_wpool_job_pid(wpool$template$job)))
-      } else list(bytes = NA_real_, method = NA_character_)
-      route <- .emc_ll_route(wpool, llpool, pool_budget,
-                             if (exists("core_budget", inherits = FALSE)) core_budget else NULL,
-                             .emc_pool_state$ll_route)
-      profile_rows[[i]] <- do.call(.emc_profile_row, c(list(
-        iteration = j,
-        stage = stage,
-        subjects = pmwgs$n_subjects,
-        workers = if (is.null(wpool)) 0L else wpool$n,
-        route = route,
-        workers_active = pp$workers_active,
-        particles_max = if (all(is.na(n_part))) NA_real_ else max(n_part, na.rm = TRUE),
-        particles_sum = if (all(is.na(n_part))) NA_real_ else sum(n_part, na.rm = TRUE),
-        total = iteration_total,
-        gibbs = gibbs_elapsed,
-        group_cache = cache_elapsed,
-        recycle = recycle_elapsed,
-        grow = grow_elapsed,
-        startup = if (i == 1L) startup_elapsed else NA_real_,
-        particle = pp$elapsed,
-        fill = fill_elapsed,
-        shared_serialize = pp$shared_serialize,
-        request_send = pp$send,
-        response_wait = pp$receive,
-        subject_cpu_max = pp$subject_cpu_max,
-        subject_cpu_sum = pp$subject_cpu_sum,
-        worker_cpu_max = pp$worker_cpu_max,
-        worker_cpu_sum = pp$worker_cpu_sum,
-        worker_elapsed_max = pp$worker_elapsed_max,
-        worker_elapsed_sum = pp$worker_elapsed_sum,
-        dispatch_first = pp$dispatch_first,
-        dispatch_last = pp$dispatch_last,
-        finish_first = pp$finish_first,
-        finish_last = pp$finish_last,
-        queue_delay_max = pp$queue_delay_max,
-        queue_delay_mean = pp$queue_delay_mean,
-        shared_bytes = pp$shared_bytes,
-        private_bytes = pp$private_bytes,
-        wire_bytes = pp$wire_bytes,
-        private_memory = mem$bytes,
-        private_memory_method = mem$method,
-        particle_weight_ess = {
-          we <- vapply(pm_settings, function(x) {
-            if (is.null(x$weight_ess)) NA_real_ else as.numeric(x$weight_ess)
-          }, numeric(1))
-          if (all(is.na(we))) NA_real_ else mean(we, na.rm = TRUE)
-        },
-        fallback_workers = pp$fallback_workers,
-        fallback_subjects = pp$fallback_subjects,
-        degraded = pp$degraded,
-        shear_rounds = shear_rounds, shear_cpu = shear_raw,
-        shear_elapsed = shear_el, shear_build = shear_build_el, shear_ll = shear_ll_el,
-        ensemble_elapsed = ens_elapsed,
-        collapsed_elapsed = coll_el, collapsed_moves = coll_moves,
-        hmc_elapsed = hmc_el,
-        hmc_task_cpu_max = max(c(0, vapply(hmc_tasks, function(x)
-          if (is.null(x) || is.null(x$work)) 0 else x$work, numeric(1)))),
-        hmc_attempts = sum(!vapply(hmc_tasks, is.null, logical(1))),
-        hmc_accepted = sum(vapply(hmc_tasks, function(x) isTRUE(x$accepted), logical(1))),
-        hmc_cpu = sum(vapply(hmc_tasks, function(x) if (is.null(x)) 0 else x$cpu, numeric(1)))),
-        .emc_reject_row_fields(pp$rejects, "particle"),
-        .emc_reject_row_fields(gibbs_delta, "gibbs"),
-        .emc_reject_row_fields(ensemble_delta, "ensemble"),
-        .emc_reject_row_fields(shear_delta, "shear"),
-        .emc_reject_row_fields(collapsed_delta, "collapsed"),
-        .emc_reject_row_fields(pooled_delta, "pooled")))
-    }
-  }
+  # The exit handlers stop the pools the steps leave, whatever ends them.
+  tryCatch(.emc_steps_run(st, cx, from = native_done + 1L), finally = {
+    wpool <- st$wpool
+    llpool <- st$llpool
+  })
+  pmwgs <- st$pmwgs
+  pm_settings <- st$pm_settings
+  wpool_streams <- st$streams
+  stage_rejects <- st$stage_rejects
+  profile_rows <- st$profile_rows
+  if (isTRUE(getOption("emc2.native_steps_trace", FALSE)))
+    .emc_pool_state$native_runs <- rbind(
+      .emc_pool_state$native_runs,
+      c(unlist(lapply(.EMC_NATIVE_STEPS, function(nm)
+        if (is.null(st$native_runs) || is.na(st$native_runs[nm])) 0L else
+          st$native_runs[[nm]])), iter = iter))
   .emc_failure_report_stage(stage_rejects, stage)
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   pmwgs$rng$subjects <- wpool_streams

@@ -3772,6 +3772,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_wpool_recv_cpp
+SEXP emc_wpool_recv_cpp(SEXP con, SEXP deadline, SEXP alive, SEXP busy, double read_chunk, double max_frame);
+RcppExport SEXP _EMC2_emc_wpool_recv_cpp(SEXP conSEXP, SEXP deadlineSEXP, SEXP aliveSEXP, SEXP busySEXP, SEXP read_chunkSEXP, SEXP max_frameSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type con(conSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type deadline(deadlineSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type alive(aliveSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type busy(busySEXP);
+    Rcpp::traits::input_parameter< double >::type read_chunk(read_chunkSEXP);
+    Rcpp::traits::input_parameter< double >::type max_frame(max_frameSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_wpool_recv_cpp(con, deadline, alive, busy, read_chunk, max_frame));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_wpool_send_cpp
+SEXP emc_wpool_send_cpp(SEXP con, RawVector payload, SEXP deadline, double max_segment, double write_chunk);
+RcppExport SEXP _EMC2_emc_wpool_send_cpp(SEXP conSEXP, SEXP payloadSEXP, SEXP deadlineSEXP, SEXP max_segmentSEXP, SEXP write_chunkSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type con(conSEXP);
+    Rcpp::traits::input_parameter< RawVector >::type payload(payloadSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type deadline(deadlineSEXP);
+    Rcpp::traits::input_parameter< double >::type max_segment(max_segmentSEXP);
+    Rcpp::traits::input_parameter< double >::type write_chunk(write_chunkSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_wpool_send_cpp(con, payload, deadline, max_segment, write_chunk));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_arm_parent_death
 int emc_arm_parent_death();
 RcppExport SEXP _EMC2_emc_arm_parent_death() {
@@ -4569,6 +4598,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_emc2_particle_log_weights", (DL_FUNC) &_EMC2_emc2_particle_log_weights, 10},
+    {"_EMC2_emc_wpool_recv_cpp", (DL_FUNC) &_EMC2_emc_wpool_recv_cpp, 6},
+    {"_EMC2_emc_wpool_send_cpp", (DL_FUNC) &_EMC2_emc_wpool_send_cpp, 5},
     {"_EMC2_emc_arm_parent_death", (DL_FUNC) &_EMC2_emc_arm_parent_death, 0},
     {"_EMC2_emc_host_detach", (DL_FUNC) &_EMC2_emc_host_detach, 0},
     {"_EMC2_emc_kill_group", (DL_FUNC) &_EMC2_emc_kill_group, 1},
