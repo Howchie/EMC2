@@ -957,6 +957,25 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// emc_collapsed_tune_eps_cpp
+double emc_collapsed_tune_eps_cpp(const arma::vec& phi0, const arma::mat& C, double eps0, const Rcpp::List& model, int pilot, double len, double target, double eps_lo, double eps_hi);
+RcppExport SEXP _EMC2_emc_collapsed_tune_eps_cpp(SEXP phi0SEXP, SEXP CSEXP, SEXP eps0SEXP, SEXP modelSEXP, SEXP pilotSEXP, SEXP lenSEXP, SEXP targetSEXP, SEXP eps_loSEXP, SEXP eps_hiSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type phi0(phi0SEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type C(CSEXP);
+    Rcpp::traits::input_parameter< double >::type eps0(eps0SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< int >::type pilot(pilotSEXP);
+    Rcpp::traits::input_parameter< double >::type len(lenSEXP);
+    Rcpp::traits::input_parameter< double >::type target(targetSEXP);
+    Rcpp::traits::input_parameter< double >::type eps_lo(eps_loSEXP);
+    Rcpp::traits::input_parameter< double >::type eps_hi(eps_hiSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_collapsed_tune_eps_cpp(phi0, C, eps0, model, pilot, len, target, eps_lo, eps_hi));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_native_claim_reply_cpp
 SEXP emc_native_claim_reply_cpp(List res, NumericMatrix alpha, NumericVector prev_ll, List pm, List seeds, LogicalVector skip, SEXP extra, std::string stage);
 RcppExport SEXP _EMC2_emc_native_claim_reply_cpp(SEXP resSEXP, SEXP alphaSEXP, SEXP prev_llSEXP, SEXP pmSEXP, SEXP seedsSEXP, SEXP skipSEXP, SEXP extraSEXP, SEXP stageSEXP) {
@@ -4747,6 +4766,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
     {"_EMC2_emc_iteration_loop_cpp", (DL_FUNC) &_EMC2_emc_iteration_loop_cpp, 6},
+    {"_EMC2_emc_collapsed_tune_eps_cpp", (DL_FUNC) &_EMC2_emc_collapsed_tune_eps_cpp, 9},
     {"_EMC2_emc_native_claim_reply_cpp", (DL_FUNC) &_EMC2_emc_native_claim_reply_cpp, 8},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},

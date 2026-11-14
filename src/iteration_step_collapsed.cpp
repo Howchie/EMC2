@@ -545,3 +545,50 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
 }
 
 }  // namespace emc_iter
+
+namespace {
+
+// R's max() and min() of two numbers: a missing value is the answer.
+inline double r_max2(double a, double b) { return ISNAN(a) ? a : ISNAN(b) ? b : (a > b ? a : b); }
+inline double r_min2(double a, double b) { return ISNAN(a) ? a : ISNAN(b) ? b : (a < b ? a : b); }
+
+}  // namespace
+
+// .emc_collapsed_tune_eps(): dual averaging of the collapsed move's step size
+// towards the inner acceptance `target` over `pilot` single trajectories of
+// length `len` from phi, the result held within [eps_lo, eps_hi].
+// [[Rcpp::export]]
+double emc_collapsed_tune_eps_cpp(const arma::vec& phi0, const arma::mat& C, double eps0,
+                                  const Rcpp::List& model, int pilot, double len,
+                                  double target, double eps_lo, double eps_hi) {
+  arma::vec phi = phi0;
+  volatile double scaled = 10 * eps0;
+  const double mu_da = std::log(static_cast<double>(scaled));
+  const double log_lo = std::log(eps_lo), log_hi = std::log(eps_hi);
+  double h_bar = 0.0, log_eps = std::log(eps0), log_bar = log_eps;
+  for (int k = 1; k <= pilot; ++k) {
+    const List tr = collapsed_trajectories_cpp(phi, C, std::exp(log_eps), 1, len, model);
+    phi = as<arma::vec>(tr["phi"]);
+    const double acc = as<NumericVector>(tr["acc"])[0];
+    volatile double n = k + 10.0;
+    volatile double inv = 1 / n;
+    volatile double keep = 1 - inv;
+    volatile double old = keep * h_bar;
+    volatile double gap = target - acc;
+    volatile double step = gap / n;
+    volatile double h = old + step;
+    h_bar = h;
+    volatile double root = std::sqrt(static_cast<double>(k));
+    volatile double gain = root / 0.05;
+    volatile double pull = gain * h_bar;
+    volatile double raw = mu_da - pull;
+    log_eps = r_min2(log_hi, r_max2(log_lo, raw));
+    volatile double wk = R_pow(static_cast<double>(k), -0.75);
+    volatile double now = wk * log_eps;
+    volatile double rest = 1 - wk;
+    volatile double before = rest * log_bar;
+    volatile double mix = now + before;
+    log_bar = mix;
+  }
+  return r_min2(eps_hi, r_max2(eps_lo, std::exp(log_bar)));
+}

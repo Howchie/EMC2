@@ -259,6 +259,10 @@ emc_iteration_loop_cpp <- function(st, cx, from, steps, native, rejects) {
     invisible(.Call(`_EMC2_emc_iteration_loop_cpp`, st, cx, from, steps, native, rejects))
 }
 
+emc_collapsed_tune_eps_cpp <- function(phi0, C, eps0, model, pilot, len, target, eps_lo, eps_hi) {
+    .Call(`_EMC2_emc_collapsed_tune_eps_cpp`, phi0, C, eps0, model, pilot, len, target, eps_lo, eps_hi)
+}
+
 emc_native_claim_reply_cpp <- function(res, alpha, prev_ll, pm, seeds, skip, extra, stage) {
     .Call(`_EMC2_emc_native_claim_reply_cpp`, res, alpha, prev_ll, pm, seeds, skip, extra, stage)
 }

@@ -429,6 +429,11 @@
 # Dual averaging (Hoffman & Gelman 2014) of the step size towards the target
 # inner acceptance, on phat alone, from the chain's current state.
 .emc_collapsed_tune_eps <- function(phi, C, eps0, ctx) {
+  if (getOption("emc2.native_collapsed_tune", TRUE) && is.double(phi) && is.matrix(C) &&
+      is.double(C) && is.double(eps0) && length(eps0) == 1L)
+    return(emc_collapsed_tune_eps_cpp(phi, C, eps0, ctx$cpp, .EMC_COLLAPSED_PILOT,
+                                      .EMC_COLLAPSED_LENGTH, .EMC_COLLAPSED_TARGET,
+                                      .EMC_COLLAPSED_EPS_RANGE[1], .EMC_COLLAPSED_EPS_RANGE[2]))
   mu_da <- log(10 * eps0)
   h_bar <- 0
   log_eps <- log(eps0)
