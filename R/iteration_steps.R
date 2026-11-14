@@ -57,7 +57,13 @@
   # parameters; its store's also with nuisance or pooled parameters.
   out$moves_native <- plain && identical(pmwgs$type, "standard")
   out$store_native <- identical(pmwgs$type, "standard") ||
-    (identical(pmwgs$type, "single") && plain)
+    (pmwgs$type %in% c("single", "diagonal-gamma") && plain)
+  if (plain && identical(pmwgs$type, "diagonal-gamma")) {
+    prior <- pmwgs$prior
+    if (!is.matrix(prior$theta_mu_invar))
+      prior$theta_mu_invar <- diag(as.numeric(prior$theta_mu_invar), p)
+    out$dgamma <- list(prior = prior, rows = pmwgs$par_names[!pmwgs$nuisance])
+  }
   if (!is.null(out$single)) {
   } else if (any(pmwgs$nuisance) && identical(pmwgs$type, "standard") &&
              identical(pmwgs$sampler_nuis$type, "single") && is.null(pmwgs$gd) &&

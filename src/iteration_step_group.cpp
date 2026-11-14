@@ -27,6 +27,8 @@ Rcpp::List emc_gibbs_standard_cpp(const arma::mat& alpha, const arma::mat& tvinv
                                   const arma::vec& a_half0, const Rcpp::List& prior,
                                   const Rcpp::LogicalVector& is_blocked,
                                   const Rcpp::IntegerVector& par_group);
+Rcpp::List emc_gibbs_diag_gamma_cpp(const arma::mat& alpha, const arma::vec& tvinv0,
+                                    const Rcpp::List& prior);
 Rcpp::List emc_ensemble_factors_cpp(const Rcpp::List& var);
 Rcpp::List emc_ensemble_draw_pools_cpp(const Rcpp::List& mu, const arma::cube& L,
                                        const arma::vec& logdet, int M1, double tail_weight,
@@ -271,17 +273,22 @@ bool step_group(SEXP st, SEXP cx, int i) {
   if (lget(cx, "nuis") != R_NilValue) return group_nuisance(st, cx, i);
   SEXP pmwgs = var(st, "pmwgs");
   SEXP gibbs = lget(cx, "gibbs"), pools = lget(cx, "pools");
-  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(gibbs) != VECSXP || pools == R_NilValue ||
+  // A diagonal-gamma hierarchy: independent variances with gamma precisions.
+  SEXP dgamma = lget(cx, "dgamma");
+  const bool dg = TYPEOF(dgamma) == VECSXP;
+  if (TYPEOF(pmwgs) != VECSXP || (!dg && TYPEOF(gibbs) != VECSXP) || pools == R_NilValue ||
       !flag(lget(cx, "chol_simple")))
     return false;
-  SEXP samples = lget(pmwgs, "samples"), rng = lget(pmwgs, "rng"), prior = lget(pmwgs, "prior");
+  SEXP samples = lget(pmwgs, "samples"), rng = lget(pmwgs, "rng");
+  SEXP prior = dg ? lget(dgamma, "prior") : lget(pmwgs, "prior");
   SEXP s_alpha = lget(samples, "alpha"), s_a_half = lget(samples, "a_half"),
        tvinv = lget(samples, "last_theta_var_inv"), idx = lget(samples, "idx");
   SEXP dims = Rf_getAttrib(s_alpha, R_DimSymbol);
   SEXP seed = lget(rng, "gibbs");
   if (TYPEOF(s_alpha) != REALSXP || TYPEOF(dims) != INTSXP || XLENGTH(dims) != 3 ||
-      TYPEOF(s_a_half) != REALSXP || TYPEOF(tvinv) != REALSXP || !Rf_isMatrix(tvinv) ||
-      Rf_length(idx) != 1 || TYPEOF(seed) != INTSXP || TYPEOF(prior) != VECSXP)
+      (!dg && TYPEOF(s_a_half) != REALSXP) || TYPEOF(tvinv) != REALSXP ||
+      !Rf_isMatrix(tvinv) || Rf_length(idx) != 1 || TYPEOF(seed) != INTSXP ||
+      TYPEOF(prior) != VECSXP)
     return false;
   const int p = INTEGER(dims)[0], n = INTEGER(dims)[1];
   Shield<SEXP> j(iteration_index(cx, i));
@@ -289,7 +296,10 @@ bool step_group(SEXP st, SEXP cx, int i) {
   const R_xlen_t at = static_cast<R_xlen_t>(Rf_asReal(idx)) - 1;
   const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
   if (prev < 0 || at < 0 || XLENGTH(s_alpha) < (prev + 1) * slice ||
-      XLENGTH(s_a_half) < (at + 1) * p || Rf_nrows(tvinv) != p || Rf_ncols(tvinv) != p)
+      (!dg && XLENGTH(s_a_half) < (at + 1) * p) || Rf_nrows(tvinv) != p ||
+      Rf_ncols(tvinv) != p)
+    return false;
+  if (dg && (TYPEOF(lget(dgamma, "rows")) != STRSXP || XLENGTH(lget(dgamma, "rows")) != p))
     return false;
   const Clock started = clock_now();
 
@@ -320,9 +330,15 @@ bool step_group(SEXP st, SEXP cx, int i) {
   try {
     const arma::mat a(REAL(alpha_prev), p, n, false, true);
     const arma::mat tv(REAL(tvinv), p, p, false, true);
-    const arma::vec ah(REAL(s_a_half) + at * p, p);
-    res = emc_gibbs_standard_cpp(a, tv, ah, List(prior), LogicalVector(lget(gibbs, "blocked")),
-                                 IntegerVector(lget(gibbs, "group")));
+    if (dg) {
+      const arma::vec prec = tv.diag();
+      res = emc_gibbs_diag_gamma_cpp(a, prec, List(prior));
+    } else {
+      const arma::vec ah(REAL(s_a_half) + at * p, p);
+      res = emc_gibbs_standard_cpp(a, tv, ah, List(prior),
+                                   LogicalVector(lget(gibbs, "blocked")),
+                                   IntegerVector(lget(gibbs, "group")));
+    }
     if (pooled) {
       if (static_cast<SEXP>(factors) == R_NilValue) {
         const List f = emc_ensemble_factors_cpp(List(lget(pools, "var")));
@@ -341,16 +357,44 @@ bool step_group(SEXP st, SEXP cx, int i) {
   if (!ok) return false;
   Shield<SEXP> seed_after(global_seed());
 
-  SEXP tmu = res["tmu"], tvar = res["tvar"];
+  RObject tmu_keep, tvar_keep;
+  List pars;
+  if (dg) {
+    // gibbs_step_diag_gamma: the named means and the diagonal matrices of
+    // the variances and precisions.
+    SEXP mu = res["tmu"], prec = res["tvinv"];
+    if (TYPEOF(mu) != REALSXP || XLENGTH(mu) != p || TYPEOF(prec) != REALSXP ||
+        XLENGTH(prec) != p || Rf_getAttrib(prec, R_DimSymbol) != R_NilValue)
+      return false;
+    tmu_keep = Rf_duplicate(mu);
+    Rf_setAttrib(tmu_keep, R_NamesSymbol, lget(dgamma, "rows"));
+    Shield<SEXP> var_m(Rf_allocMatrix(REALSXP, p, p)), prec_m(Rf_allocMatrix(REALSXP, p, p));
+    std::fill(REAL(var_m), REAL(var_m) + static_cast<R_xlen_t>(p) * p, 0.0);
+    std::fill(REAL(prec_m), REAL(prec_m) + static_cast<R_xlen_t>(p) * p, 0.0);
+    for (int k = 0; k < p; ++k) {
+      volatile double v = 1.0 / REAL(prec)[k];
+      REAL(var_m)[k + static_cast<R_xlen_t>(k) * p] = v;
+      REAL(prec_m)[k + static_cast<R_xlen_t>(k) * p] = REAL(prec)[k];
+    }
+    tvar_keep = var_m;
+    pars = List::create(_["tmu"] = tmu_keep, _["tvar"] = tvar_keep, _["tvinv"] = prec_m,
+                        _["alpha"] = alpha_prev);
+  } else {
+    tmu_keep = res["tmu"];
+    tvar_keep = res["tvar"];
+  }
+  SEXP tmu = tmu_keep, tvar = tvar_keep;
   if (TYPEOF(tmu) != REALSXP || XLENGTH(tmu) != p || TYPEOF(tvar) != REALSXP ||
       !Rf_isMatrix(tvar))
     return false;
-  Shield<SEXP> subj_mu(Rf_allocMatrix(REALSXP, p, n));
-  for (int s = 0; s < n; ++s)
-    std::copy(REAL(tmu), REAL(tmu) + p, REAL(subj_mu) + static_cast<R_xlen_t>(s) * p);
-  List pars = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
-                           _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
-                           _["alpha"] = alpha_prev);
+  if (!dg) {
+    Shield<SEXP> subj_mu(Rf_allocMatrix(REALSXP, p, n));
+    for (int s = 0; s < n; ++s)
+      std::copy(REAL(tmu), REAL(tmu) + p, REAL(subj_mu) + static_cast<R_xlen_t>(s) * p);
+    pars = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
+                        _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
+                        _["alpha"] = alpha_prev);
+  }
 
   RObject group_chol = var(st, "group_chol_it");
   if (static_cast<SEXP>(group_chol) == R_NilValue ||

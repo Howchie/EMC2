@@ -238,9 +238,12 @@ bool step_store(SEXP st, SEXP cx, int i) {
        subj_ll = lget(samples, "subj_ll");
   SEXP p_a_half = lget(pars, "a_half"), tmu = lget(pars, "tmu"), tvar = lget(pars, "tvar"),
        tvinv = lget(pars, "tvinv");
-  if (TYPEOF(a_half) != REALSXP || TYPEOF(theta_mu) != REALSXP ||
+  // A diagonal-gamma hierarchy stores no mixing weights.
+  const bool dg = lget(cx, "dgamma") != R_NilValue;
+  if ((!dg && (TYPEOF(a_half) != REALSXP || TYPEOF(p_a_half) != REALSXP)) ||
+      TYPEOF(theta_mu) != REALSXP ||
       TYPEOF(theta_var) != REALSXP || TYPEOF(alpha) != REALSXP ||
-      TYPEOF(subj_ll) != REALSXP || TYPEOF(p_a_half) != REALSXP ||
+      TYPEOF(subj_ll) != REALSXP ||
       TYPEOF(tmu) != REALSXP || TYPEOF(tvar) != REALSXP || tvinv == R_NilValue ||
       TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) ||
       lget(samples, "last_theta_var_inv") == R_NilValue ||
@@ -270,7 +273,7 @@ bool step_store(SEXP st, SEXP cx, int i) {
   Shield<SEXP> j(iteration_index(cx, i));
   const int jj = static_cast<int>(Rf_asReal(j));
   const int n_pars = Rf_asInteger(lget(pmwgs, "n_pars"));
-  emc_set_last_slice(a_half, jj, p_a_half);
+  if (!dg) emc_set_last_slice(a_half, jj, p_a_half);
   emc_set_last_slice(theta_mu, jj, tmu);
   emc_set_last_slice(theta_var, jj, tvar);
   emc_set_particle_slice(alpha, subj_ll, proposals, jj, n_pars);
