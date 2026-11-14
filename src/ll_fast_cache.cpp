@@ -162,6 +162,43 @@ List emc2_ll_cached_subjects(List rows, List data, SEXP model) {
   return out;
 }
 
+int emc_claim_next(SEXP map, int key, int n);
+
+// The likelihoods of the subjects this process claims from the shared queue
+// (src/claim_counter.cpp): queue position i is subject order[i], whose rows
+// are evaluated as emc2_ll_cached_subjects() evaluates them. Claiming stops
+// at the first subject left NULL, so that the caller evaluates it before
+// this process takes another. Returns the claimed subjects in claim order,
+// their likelihoods and whether the queue ran out.
+// [[Rcpp::export(rng = false)]]
+List emc2_ll_cached_claim(SEXP claim, int key, IntegerVector order, List rows, List data,
+                          SEXP model) {
+  const int n = rows.size(), n_queue = order.size();
+  if (data.size() != n) Rcpp::stop("claim inputs do not cover the subjects");
+  std::vector<int> claimed;
+  std::vector<SEXP> values;
+  List keep(n_queue);
+  bool exhausted = false;
+  for (;;) {
+    const int i = emc_claim_next(claim, key, n_queue);
+    if (i < 0) {
+      exhausted = true;
+      break;
+    }
+    const int s = order[i];
+    if (s < 1 || s > n) Rcpp::stop("queued subject outside the round");
+    const List one = emc2_ll_cached_subjects(List::create(rows[s - 1]),
+                                             List::create(data[s - 1]), model);
+    keep[i] = one[0];
+    claimed.push_back(s);
+    values.push_back(VECTOR_ELT(keep, i));
+    if (Rf_isNull(VECTOR_ELT(keep, i))) break;
+  }
+  List ll(claimed.size());
+  for (size_t j = 0; j < claimed.size(); ++j) ll[j] = values[j];
+  return List::create(_["subs"] = wrap(claimed), _["ll"] = ll, _["exhausted"] = exhausted);
+}
+
 // The likelihood rows of each subject from K candidate states: `cand` holds K
 // matrices with one subject per column, and subject s gets a K-row matrix
 // with one parameter per column, named `par_names`.

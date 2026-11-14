@@ -2114,20 +2114,40 @@
       failures <- list()
       subs <- integer(0)
       ll <- list()
-      repeat {
+      checked <- function(s) tryCatch(
+        .emc_ensemble_ll_checked(b$rows[[s]],
+                                 .emc_pooled_set_one(ctx$data[[s]], b$pooled),
+                                 ctx$model,
+                                 ll_cache_validated = isTRUE(ctx$ll_cache_validated)),
+        error = function(e) {
+          failures[[length(failures) + 1L]] <<- e
+          rep(-Inf, nrow(b$rows[[s]]))
+        })
+      if (isTRUE(getOption("emc2.native_claim", TRUE)) &&
+          isTRUE(ctx$ll_cache_validated) && is.null(b$pooled) &&
+          is.null(ctx$marginalise) && is.list(b$rows) &&
+          length(b$rows) == length(ctx$data)) {
+        # The subjects are claimed and evaluated in native calls
+        # (src/ll_fast_cache.cpp), each returning at the first subject the
+        # checked path must evaluate.
+        order <- as.integer(unlist(b$order))[seq_len(msg$n)]
+        repeat {
+          res <- emc2_ll_cached_claim(map$ptr, as.integer(msg$key), order, b$rows,
+                                      ctx$data, ctx$model)
+          k <- length(res$subs)
+          if (k) {
+            if (is.null(res$ll[[k]])) res$ll[[k]] <- checked(res$subs[k])
+            subs <- c(subs, res$subs)
+            ll <- c(ll, res$ll)
+          }
+          if (isTRUE(res$exhausted)) break
+        }
+      } else repeat {
         i <- emc_claim_next(map$ptr, msg$key, msg$n)
         if (i < 0L) break
         s <- b$order[[i + 1L]]
         subs <- c(subs, s)
-        ll[[length(ll) + 1L]] <- tryCatch(
-          .emc_ensemble_ll_checked(b$rows[[s]],
-                                   .emc_pooled_set_one(ctx$data[[s]], b$pooled),
-                                   ctx$model,
-                                   ll_cache_validated = isTRUE(ctx$ll_cache_validated)),
-          error = function(e) {
-            failures[[length(failures) + 1L]] <<- e
-            rep(-Inf, nrow(b$rows[[s]]))
-          })
+        ll[[length(ll) + 1L]] <- checked(s)
       }
       spent <- proc.time() - started
       list(subs = subs, ll = ll, failures = failures,

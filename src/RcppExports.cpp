@@ -856,6 +856,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc2_ll_cached_claim
+List emc2_ll_cached_claim(SEXP claim, int key, IntegerVector order, List rows, List data, SEXP model);
+RcppExport SEXP _EMC2_emc2_ll_cached_claim(SEXP claimSEXP, SEXP keySEXP, SEXP orderSEXP, SEXP rowsSEXP, SEXP dataSEXP, SEXP modelSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type claim(claimSEXP);
+    Rcpp::traits::input_parameter< int >::type key(keySEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type order(orderSEXP);
+    Rcpp::traits::input_parameter< List >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< List >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_ll_cached_claim(claim, key, order, rows, data, model));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_candidate_rows_cpp
 List emc_candidate_rows_cpp(List cand, CharacterVector par_names);
 RcppExport SEXP _EMC2_emc_candidate_rows_cpp(SEXP candSEXP, SEXP par_namesSEXP) {
@@ -4581,6 +4596,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_iteration_loop_cpp", (DL_FUNC) &_EMC2_emc_iteration_loop_cpp, 6},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
+    {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},
     {"_EMC2_emc_candidate_rows_cpp", (DL_FUNC) &_EMC2_emc_candidate_rows_cpp, 2},
     {"_EMC2_emc2_ll_cache_put", (DL_FUNC) &_EMC2_emc2_ll_cache_put, 4},
     {"_EMC2_emc2_ll_cache_clear", (DL_FUNC) &_EMC2_emc2_ll_cache_clear, 0},

@@ -227,6 +227,10 @@ emc2_ll_cached_subjects <- function(rows, data, model) {
     .Call(`_EMC2_emc2_ll_cached_subjects`, rows, data, model)
 }
 
+emc2_ll_cached_claim <- function(claim, key, order, rows, data, model) {
+    .Call(`_EMC2_emc2_ll_cached_claim`, claim, key, order, rows, data, model)
+}
+
 emc_candidate_rows_cpp <- function(cand, par_names) {
     .Call(`_EMC2_emc_candidate_rows_cpp`, cand, par_names)
 }
