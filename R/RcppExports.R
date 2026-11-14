@@ -49,6 +49,10 @@ emc_alloc_range_parts_cpp <- function(units, max_rounds) {
     .Call(`_EMC2_emc_alloc_range_parts_cpp`, units, max_rounds)
 }
 
+emc_alloc_within_share_cpp <- function(chains) {
+    .Call(`_EMC2_emc_alloc_within_share_cpp`, chains)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

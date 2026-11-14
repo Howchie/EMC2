@@ -1115,6 +1115,16 @@
 }
 
 .emc_alloc_within_share <- function(chains) {
+  out <- if (getOption("emc2.native_alloc_within", TRUE) && is.list(chains))
+    emc_alloc_within_share_cpp(chains)
+  if (!is.null(out)) {
+    rn <- rownames(chains[[1L]])
+    if (!is.null(rn)) {
+      names(out$total) <- rn
+      if (length(rn) > 1L) names(out$var) <- rn
+    }
+    return(out)
+  }
   p <- nrow(chains[[1L]])
   all_draws <- do.call(cbind, chains)
   total <- .emc_alloc_row_var(all_draws)

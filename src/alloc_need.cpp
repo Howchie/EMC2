@@ -843,4 +843,101 @@ SEXP emc_alloc_range_parts_cpp(const Rcpp::List& units, SEXP max_rounds) {
   return Rcpp::List::create(Rcpp::Named("levels") = levels, Rcpp::Named("best") = best);
 }
 
+namespace {
+
+// .emc_alloc_row_var() of the columns [from, from + n) of `x` (p rows, column
+// major): each row's sample variance, sums accumulated as R's rowMeans() and
+// rowSums() do.
+void row_var(const double* x, int p, R_xlen_t n, std::vector<double>& out) {
+  out.assign(p, 0.0);
+  for (int i = 0; i < p; ++i) {
+    long double s = 0.0;
+    for (R_xlen_t j = 0; j < n; ++j) s += x[i + j * p];
+    s /= n;
+    const double mean = static_cast<double>(s);
+    long double ss = 0.0;
+    for (R_xlen_t j = 0; j < n; ++j) {
+      volatile double d = x[i + j * p] - mean;
+      volatile double sq = d * d;
+      ss += sq;
+    }
+    volatile double total = static_cast<double>(ss);
+    volatile double den = static_cast<double>(n - 1);
+    out[i] = total / den;
+  }
+}
+
+}  // namespace
+
+// .emc_alloc_within_share(): from the chains' draws of p coordinates (rows),
+// each coordinate's mean within-chain variance, its variance over all draws,
+// and the share of that between chains. Unnamed; NULL for draws that are not
+// finite matrices of doubles with one set of row names, for a chain with
+// fewer than two draws, or where a variance is not finite, which the R form
+// handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_within_share_cpp(const Rcpp::List& chains) {
+  const int n_c = chains.size();
+  if (n_c < 1) return R_NilValue;
+  int p = -1;
+  R_xlen_t n_all = 0;
+  SEXP first_names = R_NilValue;
+  for (int c = 0; c < n_c; ++c) {
+    SEXP x = chains[c];
+    if (TYPEOF(x) != REALSXP || !Rf_isMatrix(x) || Rf_isObject(x)) return R_NilValue;
+    if (p < 0) p = Rf_nrows(x);
+    if (Rf_nrows(x) != p || p < 1 || Rf_ncols(x) < 2) return R_NilValue;
+    SEXP dn = Rf_getAttrib(x, R_DimNamesSymbol);
+    SEXP rn = dn == R_NilValue ? R_NilValue : VECTOR_ELT(dn, 0);
+    if (c == 0) first_names = rn;
+    else if (!R_compute_identical(rn, first_names, 16)) return R_NilValue;
+    for (R_xlen_t e = 0; e < XLENGTH(x); ++e)
+      if (!R_FINITE(REAL(x)[e])) return R_NilValue;
+    n_all += Rf_ncols(x);
+  }
+  if (n_all < 2) return R_NilValue;
+  std::vector<double> all(static_cast<std::size_t>(p) * n_all);
+  R_xlen_t at = 0;
+  for (int c = 0; c < n_c; ++c) {
+    SEXP x = chains[c];
+    std::copy(REAL(x), REAL(x) + XLENGTH(x), all.begin() + at);
+    at += XLENGTH(x);
+  }
+  std::vector<double> total, one;
+  row_var(all.data(), p, n_all, total);
+  std::vector<long double> sum(p, 0.0L);
+  int counted = 0;
+  for (int c = 0; c < n_c; ++c) {
+    SEXP x = chains[c];
+    if (Rf_ncols(x) < 2) continue;
+    row_var(REAL(x), p, Rf_ncols(x), one);
+    for (int i = 0; i < p; ++i) {
+      if (ISNAN(one[i])) return R_NilValue;
+      sum[i] += one[i];
+    }
+    ++counted;
+  }
+  if (!counted) return R_NilValue;
+  Rcpp::NumericVector var(p), tot(p), share(p);
+  for (int i = 0; i < p; ++i) {
+    const double within = static_cast<double>(sum[i] / counted);
+    if (!R_FINITE(within) || !R_FINITE(total[i])) return R_NilValue;
+    volatile double gap = total[i] - within;
+    const double between = gap > 0 ? static_cast<double>(gap) : 0.0;
+    double b;
+    if (total[i] == 0) {
+      b = 0.0;
+    } else {
+      volatile double ratio = between / total[i];
+      b = ratio;
+    }
+    if (!R_FINITE(b)) return R_NilValue;
+    var[i] = within;
+    tot[i] = total[i];
+    share[i] = b > 1 ? 1.0 : (b < 0 ? 0.0 : b);
+  }
+  return Rcpp::List::create(Rcpp::Named("var") = var, Rcpp::Named("total") = tot,
+                            Rcpp::Named("b_share") = share);
+}
+
 #pragma GCC pop_options
