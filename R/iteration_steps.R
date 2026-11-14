@@ -8,7 +8,8 @@
 
 # The steps that have a native form.
 .EMC_NATIVE_STEPS <- c(group = "group", particle = "particle", ensemble = "ensemble",
-                       shear = "shear", collapsed = "collapsed", hmc = "hmc", store = "store")
+                       shear = "shear", collapsed = "collapsed", pooled = "pooled",
+                       hmc = "hmc", store = "store")
 
 # Whether native forms of the steps cover the block: every run but a profiled
 # one. A step whose native form does not take the state (a likelihood pool
@@ -530,13 +531,20 @@
   st$data <- pmwgs$data
   wpool_ctx$data <- pmwgs$data
   st$wpool_ctx <- wpool_ctx
+  delta <- .emc_step_pooled_rejects(st)
+  if (cx$sampler_profile) st$prof$pooled_delta <- delta
+  st$pmwgs <- pmwgs
+  invisible(NULL)
+}
+
+# The pooled move's rejected candidates since the last count, taken into the
+# state's tallies.
+.emc_step_pooled_rejects <- function(st) {
   now <- .emc_reject_counts("pooled")
   delta <- now - st$rejects$pooled
   st$rejects$pooled <- now
   st$stage_rejects$pooled <- st$stage_rejects$pooled + delta
-  if (cx$sampler_profile) st$prof$pooled_delta <- delta
-  st$pmwgs <- pmwgs
-  invisible(NULL)
+  delta
 }
 
 # Subject HMC, the last update of the iteration, from the final group state.

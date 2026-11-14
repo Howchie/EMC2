@@ -362,6 +362,7 @@ NativeStep native_step(const std::string& name) {
   if (name == "ensemble") return emc_iter::step_ensemble;
   if (name == "shear") return emc_iter::step_shear;
   if (name == "collapsed") return emc_iter::step_collapsed;
+  if (name == "pooled") return emc_iter::step_pooled;
   return NULL;
 }
 

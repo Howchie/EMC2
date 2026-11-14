@@ -61,6 +61,7 @@ bool step_particle(SEXP st, SEXP cx, int i);
 bool step_ensemble(SEXP st, SEXP cx, int i);
 bool step_shear(SEXP st, SEXP cx, int i);
 bool step_collapsed(SEXP st, SEXP cx, int i);
+bool step_pooled(SEXP st, SEXP cx, int i);
 bool step_hmc(SEXP st, SEXP cx, int i);
 
 // .chol_factor() of a covariance matrix: its upper Cholesky factor, the

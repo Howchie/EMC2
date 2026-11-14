@@ -2,18 +2,21 @@
 # (R/iteration_steps.R): each stage block run both ways from the same state
 # and random stream.
 
-native_steps_match <- function(cores_per_chain) {
+native_steps_match <- function(cores_per_chain, pooled = NULL) {
   old <- options(emc2.fit_host = FALSE, emc2.native_steps_trace = TRUE)
   on.exit(options(old), add = TRUE)
   assign("native_runs", NULL, envir = EMC2:::.emc_pool_state)
   des <- design(factors = list(subjects = 1:8, S = 1), Rlevels = 1, model = REXG,
                 formula = list(mu ~ 1, sigma ~ 1, tau ~ 1))
+  des_fit <- if (is.null(pooled)) des else
+    design(factors = list(subjects = 1:8, S = 1), Rlevels = 1, model = REXG,
+           formula = list(mu ~ 1, sigma ~ 1, tau ~ 1), pooled = pooled)
   set.seed(47)
   pars <- cbind(mu = log(0.4) + rnorm(8, 0, 0.15), sigma = log(0.05) + rnorm(8, 0, 0.3),
                 tau = log(0.2) + rnorm(8, 0, 0.3))
   rownames(pars) <- 1:8
   dat <- make_data(pars, des, n_trials = 60)
-  emc <- make_emc(dat, des, rt_resolution = 0.001, n_chains = 2)
+  emc <- make_emc(dat, des_fit, rt_resolution = 0.001, n_chains = 2)
   stage_r <- EMC2:::run_stage
   blocks <- differing <- 0L
   runs <- NULL
@@ -29,6 +32,7 @@ native_steps_match <- function(cores_per_chain) {
     if (!identical(a$samples, b$samples) || !identical(a$rng, b$rng) ||
         !identical(a$shear$plan, b$shear$plan) ||
         !identical(a$collapsed$plan, b$collapsed$plan) ||
+        !identical(a$pooled, b$pooled) ||
         !identical(seed_a, get(".Random.seed", envir = globalenv())))
       differing <<- differing + 1L
     b
@@ -46,7 +50,8 @@ native_steps_match <- function(cores_per_chain) {
   expect_identical(differing, 0L)
   # Every step ran natively in nearly every iteration of the native runs
   # (half of the iterations counted).
-  steps <- c("group", "particle", "ensemble", "shear", "collapsed", "hmc", "store")
+  steps <- c("group", "particle", "ensemble", "shear", "collapsed", "hmc", "store",
+             if (!is.null(pooled)) "pooled")
   expect_true(all(runs[steps] > 0))
   expect_gt(min(runs[steps]) / runs[["iter"]], 0.4)
 }
@@ -60,6 +65,11 @@ test_that("the native iteration steps are the R steps with a worker pool", {
   skip_on_cran()
   skip_on_os("windows")
   native_steps_match(2L)
+})
+
+test_that("the native pooled move is the R move on the same random stream", {
+  skip_on_cran()
+  native_steps_match(1L, pooled = "tau")
 })
 
 # The workers' native claim of the subject queue (emc2_native_particle_claim)
