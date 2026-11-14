@@ -3216,6 +3216,13 @@
 .emc_lpt_partition <- function(cost, n_workers) {
   n <- length(cost)
   if (n_workers <= 1L) return(list(seq_len(n)))
+  ord <- order(cost, decreasing = TRUE)
+  out <- if (getOption("emc2.native_lpt", TRUE) && is.double(cost) && length(n_workers) == 1L)
+    emc_lpt_partition_cpp(cost, ord, as.integer(n_workers))
+  if (!is.null(out)) {
+    attr(out, "order") <- ord
+    return(out)
+  }
   out <- vector("list", n_workers)
   load <- numeric(n_workers)
   for (s in order(cost, decreasing = TRUE)) {

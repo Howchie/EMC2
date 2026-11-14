@@ -186,3 +186,35 @@ SEXP emc_shear_half_spaces_cpp(SEXP X, SEXP cols, SEXP consts, SEXP lim, int p) 
   for (R_xlen_t i = 0; i < n_out; ++i) out[i] = VECTOR_ELT(keep, i);
   return out;
 }
+
+// .emc_lpt_partition()'s assignment: subjects taken in `order` (numbered from
+// one), each to the worker with the least load so far, the first of equals.
+// A list of each worker's subjects. NULL for costs with missing values or an
+// order that is not a permutation's worth of positions, which the R form
+// handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_lpt_partition_cpp(SEXP cost, SEXP order, int n_workers) {
+  if (TYPEOF(cost) != REALSXP || TYPEOF(order) != INTSXP || n_workers < 2 ||
+      XLENGTH(order) != XLENGTH(cost))
+    return R_NilValue;
+  const R_xlen_t n = XLENGTH(cost);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const int s = INTEGER(order)[i];
+    if (ISNAN(REAL(cost)[i]) || s == NA_INTEGER || s < 1 || s > n) return R_NilValue;
+  }
+  std::vector<std::vector<int> > mine(n_workers);
+  std::vector<double> load(n_workers, 0.0);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const int s = INTEGER(order)[i];
+    int w = 0;
+    for (int k = 1; k < n_workers; ++k)
+      if (load[k] < load[w]) w = k;
+    mine[w].push_back(s);
+    volatile double next = load[w] + REAL(cost)[s - 1];
+    load[w] = next;
+    if (ISNAN(load[w])) return R_NilValue;
+  }
+  Rcpp::List out(n_workers);
+  for (int k = 0; k < n_workers; ++k) out[k] = Rcpp::wrap(mine[k]);
+  return out;
+}

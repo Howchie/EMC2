@@ -299,6 +299,10 @@ emc_shear_half_spaces_cpp <- function(X, cols, consts, lim, p) {
     .Call(`_EMC2_emc_shear_half_spaces_cpp`, X, cols, consts, lim, p)
 }
 
+emc_lpt_partition_cpp <- function(cost, order, n_workers) {
+    .Call(`_EMC2_emc_lpt_partition_cpp`, cost, order, n_workers)
+}
+
 emc2_ll_cached <- function(proposals, dadm, model, varying) {
     .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
 }

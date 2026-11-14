@@ -1091,6 +1091,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_lpt_partition_cpp
+SEXP emc_lpt_partition_cpp(SEXP cost, SEXP order, int n_workers);
+RcppExport SEXP _EMC2_emc_lpt_partition_cpp(SEXP costSEXP, SEXP orderSEXP, SEXP n_workersSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type cost(costSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type order(orderSEXP);
+    Rcpp::traits::input_parameter< int >::type n_workers(n_workersSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_lpt_partition_cpp(cost, order, n_workers));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4874,6 +4886,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_laplace_check_store_cpp", (DL_FUNC) &_EMC2_emc_laplace_check_store_cpp, 5},
     {"_EMC2_emc_window_lsd_cpp", (DL_FUNC) &_EMC2_emc_window_lsd_cpp, 3},
     {"_EMC2_emc_shear_half_spaces_cpp", (DL_FUNC) &_EMC2_emc_shear_half_spaces_cpp, 5},
+    {"_EMC2_emc_lpt_partition_cpp", (DL_FUNC) &_EMC2_emc_lpt_partition_cpp, 3},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},
