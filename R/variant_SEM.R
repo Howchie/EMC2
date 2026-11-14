@@ -435,17 +435,24 @@ gibbs_step_SEM_r <- function(sampler, alpha) {
   .sem_gibbs_back(sampler, alpha, .sem_gibbs_front_r(sampler, alpha))
 }
 
-# What the native draw takes besides the subjects' states: the covariates
-# (no columns without any), the state (as last_sample_SEM() gives it), which
-# coefficients are free, the prior's precisions at full length, and the
-# factors' blocks with the disturbance prior and the covariates' summaries.
-# NULL where the native form does not cover the model.
-.sem_gibbs_inputs <- function(sampler, last) {
+# The native draw's inputs that a model fixes: the covariates (no columns
+# without any), which coefficients are free, the prior's precisions at full
+# length, and the factors' blocks with the disturbance prior and the
+# covariates' summaries. Kept for the last model asked about; NULL (not
+# kept) where the native form does not cover the model.
+.sem_gibbs_fixed_cache <- new.env(parent = emptyenv())
+
+.sem_gibbs_fixed <- function(sampler) {
   ss <- sampler$sem_settings
   prior <- sampler$prior
   n <- sampler$n_subjects
   p <- sum(!sampler$nuisance)
   k <- sampler$n_factors
+  key <- list(ss, prior)
+  dims <- c(n, p, k)
+  hit <- .sem_gibbs_fixed_cache$last
+  if (!is.null(hit) && emc_same_objects(hit$key, key) && identical(hit$dims, dims))
+    return(hit$value)
   x <- if (is.null(ss$covariates)) matrix(0, n, 0) else as.matrix(ss$covariates)
   n_cov <- ncol(x)
   full <- function(v, len) is.numeric(v) && length(v) %in% c(1L, len)
@@ -460,14 +467,8 @@ gibbs_step_SEM_r <- function(sampler, alpha) {
       !exact(prior$a_d, 1L) || !exact(prior$b_d, 1L) || length(ss$factor_groups) != k ||
       anyNA(ss$factor_groups))
     return(NULL)
-  list(
-    covariates = unname(x),
-    state = list(lambda = matrix(as.numeric(last$lambda), p, k),
-                 B = matrix(as.numeric(last$B), k, k),
-                 K = matrix(as.numeric(last$K), p, n_cov),
-                 G = matrix(as.numeric(last$G), k, n_cov),
-                 delta_inv = matrix(as.numeric(last$delta_inv), k, k),
-                 mu = as.numeric(last$mu), epsilon_inv = as.numeric(last$epsilon_inv)),
+  value <- list(
+    covariates = unname(x), n_cov = n_cov,
     free = list(lambda = ss$Lambda_mat == Inf, K = ss$K_mat == Inf, B = ss$B_mat == Inf,
                 G = ss$G_mat == Inf),
     prior = list(mu_prec = rep_len(1 / as.numeric(prior$theta_mu_var), p),
@@ -481,6 +482,27 @@ gibbs_step_SEM_r <- function(sampler, alpha) {
                   x_mean = if (n_cov) as.numeric(colMeans(x)) else numeric(0),
                   x_var = if (n_cov && n > 1) unname(stats::cov(x)) else
                     matrix(0, n_cov, n_cov)))
+  .sem_gibbs_fixed_cache$last <- list(key = key, dims = dims, value = value)
+  value
+}
+
+# What the native draw takes besides the subjects' states: the model's fixed
+# inputs and the state (as last_sample_SEM() gives it). NULL where the
+# native form does not cover the model.
+.sem_gibbs_inputs <- function(sampler, last) {
+  fixed <- .sem_gibbs_fixed(sampler)
+  if (is.null(fixed)) return(NULL)
+  p <- sum(!sampler$nuisance)
+  k <- sampler$n_factors
+  n_cov <- fixed$n_cov
+  c(fixed[c("covariates", "free", "prior", "blocks")],
+    list(state = list(lambda = matrix(as.numeric(last$lambda), p, k),
+                      B = matrix(as.numeric(last$B), k, k),
+                      K = matrix(as.numeric(last$K), p, n_cov),
+                      G = matrix(as.numeric(last$G), k, n_cov),
+                      delta_inv = matrix(as.numeric(last$delta_inv), k, k),
+                      mu = as.numeric(last$mu),
+                      epsilon_inv = as.numeric(last$epsilon_inv))))
 }
 
 # The native draw's state in the form gibbs_step_SEM_r() returns, given the
