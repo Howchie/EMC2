@@ -21,22 +21,23 @@
 #include <string>
 #include <vector>
 #include "iteration_state.h"
+#include "subject_ll.h"
 
 using namespace Rcpp;
 using namespace emc_iter;
 
 Rcpp::List emc_shear_state_cpp(Rcpp::NumericVector mu, Rcpp::NumericMatrix V,
                                const arma::cube& prec, const arma::mat& lin, Rcpp::List spec);
-List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
-                          bool adapt, NumericVector step_range, double move_target,
-                          int n_candidates, NumericMatrix alpha, NumericVector mu,
-                          NumericMatrix V, NumericMatrix chol_V, NumericMatrix m0,
-                          NumericVector R0, NumericVector logdet0, double cur_hier,
-                          double cur_lp, double lp_mu, NumericVector ll,
-                          const arma::cube& prec, const arma::mat& lin,
-                          const LogicalVector& has, const arma::mat& U, const arma::vec& b,
-                          const arma::cube& Uperp, List spec, List data, SEXP model,
-                          CharacterVector par_names);
+List shear_rounds_from(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
+                       bool adapt, NumericVector step_range, double move_target,
+                       int n_candidates, NumericMatrix alpha, NumericVector mu,
+                       NumericMatrix V, NumericMatrix chol_V, NumericMatrix m0,
+                       NumericVector R0, NumericVector logdet0, double cur_hier,
+                       double cur_lp, double lp_mu, NumericVector ll,
+                       const arma::cube& prec, const arma::mat& lin,
+                       const LogicalVector& has, const arma::mat& U, const arma::vec& b,
+                       const arma::cube& Uperp, List spec, List data, SEXP model,
+                       CharacterVector par_names, SubjectLl* src);
 double shear_log_hier(const NumericMatrix& alpha, const NumericVector& mu,
                       const NumericMatrix& chol_V);
 List shear_mean_round(const NumericVector& t, const NumericVector& d,
@@ -45,7 +46,7 @@ List shear_mean_round(const NumericVector& t, const NumericVector& d,
                       const NumericMatrix& m0, const NumericVector& R0,
                       const NumericVector& prior_mean, const NumericMatrix& prior_invar,
                       const NumericVector& ll_cur, const List& data, SEXP model,
-                      const CharacterVector& par_names);
+                      const CharacterVector& par_names, SubjectLl* src);
 
 namespace {
 
@@ -176,7 +177,6 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     zero_costs(st);
     return true;
   }
-  // The rounds below run here only on the stored-argument likelihood path.
   SEXP wpool = var(st, "wpool"), data = lget(pmwgs, "data"), model = lget(pmwgs, "model");
   SEXP par_names = lget(pmwgs, "par_names"), rng = lget(pmwgs, "rng"), seed = lget(rng, "gibbs");
   SEXP blk = lget(plan, "block"), prior = lget(pmwgs, "prior");
@@ -184,11 +184,8 @@ bool step_shear(SEXP st, SEXP cx, int i) {
        bN = lget(blk, "N"), bK = lget(blk, "K");
   SEXP tvar = lget(pars, "tvar"), tmu = lget(pars, "tmu");
   if (!option_on("emc2.native_shear_round") ||
-      flag(Rf_GetOption1(Rf_install("emc2.shear_delayed"))) || flag(lget(wpool, "alive")) ||
-      !flag(lget(pmwgs, "ll_cache_validated")) || lget(pmwgs, "marginalise") != R_NilValue ||
+      flag(Rf_GetOption1(Rf_install("emc2.shear_delayed"))) ||
       TYPEOF(data) != VECSXP || XLENGTH(data) != n ||
-      !Rf_inherits(VECTOR_ELT(data, 0), "data.frame") ||
-      Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) != R_NilValue ||
       TYPEOF(par_names) != STRSXP || TYPEOF(seed) != INTSXP ||
       TYPEOF(lget(sst, "iterations")) != INTSXP || TYPEOF(lget(sst, "rounds")) != INTSXP ||
       TYPEOF(log_step) != REALSXP || XLENGTH(log_step) != q ||
@@ -211,6 +208,16 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     return Rf_asReal(r_log_prior_mu(mu, prior));
   };
   static Function shear_round = package_function(".emc_shear_round");
+  static Function subject_ll = package_function(".emc_wpool_subject_ll");
+  // The rounds' likelihoods: here on the stored-argument path, else through
+  // the worker pool.
+  SubjectLl lls;
+  lls.pool = wpool;
+  lls.sampler = pmwgs;
+  lls.part = var(st, "wpool_part");
+  lls.source = "shear";
+  lls.in_process = emc_subject_ll_in_process(wpool, pmwgs);
+  lls.dispatch = subject_ll;
 
   set_global_seed(seed);
   GetRNGstate();
@@ -307,7 +314,6 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   int evaluated = 0;
   bool any_moved = false;
   const Clock rounds_started = clock_now();
-  RObject pool_now = wpool;
   // One round through .emc_shear_round(), with its steps when already drawn.
   auto r_round = [&](int k, SEXP t) {
     leave_rng();
@@ -317,11 +323,11 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     } else {
       v[k - 1] = 1.0;
     }
-    Shield<SEXP> xl(state_list(x, pool_now, var(st, "wpool_part")));
+    Shield<SEXP> xl(state_list(x, lls.pool, lls.part));
     Shield<SEXP> out(shear_round(xl, v, std::exp(steps[k - 1]), pmwgs, ctx, t));
     enter_rng();
     state_from(out, x);
-    pool_now = lget(out, "wpool");
+    lls.pool = lget(out, "wpool");
     evaluated += Rf_asInteger(lget(out, "rounds"));
     const bool moved = flag(lget(out, "moved"));
     net[k - 1] += Rf_asReal(lget(out, "t"));
@@ -356,7 +362,8 @@ bool step_shear(SEXP st, SEXP cx, int i) {
         NumericMatrix(static_cast<SEXP>(x.chol_V)), NumericMatrix(static_cast<SEXP>(x.Vi)),
         NumericMatrix(static_cast<SEXP>(x.m)), NumericVector(static_cast<SEXP>(x.R)),
         NumericVector(prior_mean), NumericMatrix(prior_invar),
-        NumericVector(static_cast<SEXP>(x.ll)), List(data), model, CharacterVector(par_names));
+        NumericVector(static_cast<SEXP>(x.ll)), List(data), model, CharacterVector(par_names),
+        &lls);
     if (as<bool>(o["fallback"])) {
       r_round(k, t);
       return;
@@ -399,14 +406,14 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     leave_rng();
     const double lp_mu = prior_mu(x.mu);
     enter_rng();
-    const List o = emc_shear_rounds_cpp(
+    const List o = shear_rounds_from(
         ks, steps, cnt, adapt, NumericVector(range), kMoveTarget, kCandidates,
         NumericMatrix(static_cast<SEXP>(x.alpha)), NumericVector(static_cast<SEXP>(x.mu)),
         NumericMatrix(static_cast<SEXP>(x.V)), NumericMatrix(static_cast<SEXP>(x.chol_V)),
         NumericMatrix(static_cast<SEXP>(x.m)), NumericVector(static_cast<SEXP>(x.R)),
         NumericVector(static_cast<SEXP>(x.logdet)), x.cur_hier, x.lp, lp_mu,
         NumericVector(static_cast<SEXP>(x.ll)), cube, lin, has, U, wall_b, Uc, List(spec),
-        List(data), model, CharacterVector(par_names));
+        List(data), model, CharacterVector(par_names), &lls);
     evaluated += as<int>(o["evaluated"]);
     if (as<bool>(o["any_moved"])) {
       SEXP V2 = o["V"];
@@ -514,7 +521,7 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   set_var(st, "pmwgs", sampler);
   set_var(st, "pars", pars2);
   set_var(st, "proposals", props2);
-  set_var(st, "wpool", pool_now);
+  set_var(st, "wpool", lls.pool);
   const double el = clock_now().elapsed - started.elapsed;
   const double cores = num(var(st, "cores_it"), 1.0);
   const bool alloc_on = flag(lget(cx, "alloc_on"));

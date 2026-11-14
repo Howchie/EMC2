@@ -69,10 +69,6 @@ bool option_on(const char* name) {
   return v == R_NilValue || flag(v);
 }
 
-Function package_function(const char* name) {
-  Environment ns = Environment::namespace_env("EMC2");
-  return ns[name];
-}
 
 bool step_hmc(SEXP st, SEXP cx, int i) {
   SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), proposals = var(st, "proposals");
@@ -120,23 +116,28 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
     return true;
   }
 
-  // Only rounds that run here, on the stored-argument likelihood path.
   SEXP budget = lget(cx, "pool_budget"), data = lget(cx, "data"),
        par_names = lget(cx, "par_names"), model = lget(pmwgs, "model");
   SEXP subj_mu = lget(pars, "subj_mu"), tvar = lget(pars, "tvar");
   SEXP hmc_state = lget(pmwgs, "subject_hmc");
   if (TYPEOF(plan) != VECSXP || XLENGTH(plan) != n || TYPEOF(streams) != VECSXP ||
-      XLENGTH(streams) != n ||
-      (flag(lget(wpool, "alive")) && num(lget(wpool, "n"), 1.0) > 1.0) ||
-      num(lget(budget, "subject"), 1.0) > 1.0 || num(lget(budget, "likelihood"), 1.0) > 1.0 ||
-      !option_on("emc2.native_particle_block") || TYPEOF(data) != VECSXP ||
-      XLENGTH(data) != n || !Rf_inherits(VECTOR_ELT(data, 0), "data.frame") ||
-      Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) != R_NilValue ||
-      TYPEOF(par_names) != STRSXP || XLENGTH(par_names) != p ||
-      TYPEOF(subj_mu) != REALSXP || !Rf_isMatrix(subj_mu) || Rf_nrows(subj_mu) != p ||
-      Rf_ncols(subj_mu) != n || TYPEOF(tvar) != REALSXP || !Rf_isMatrix(tvar) ||
-      Rf_nrows(tvar) != p || Rf_ncols(tvar) != p || !flag(lget(hmc_state, "supported")))
+      XLENGTH(streams) != n || TYPEOF(data) != VECSXP || XLENGTH(data) != n ||
+      !flag(lget(hmc_state, "supported")))
     return false;
+  // Whether the selected transitions run here, on the stored-argument
+  // likelihood path; otherwise, and for a transition that path does not
+  // serve, through .emc_hmc_dispatch() and so the worker pool.
+  const bool local =
+      !(flag(lget(wpool, "alive")) && num(lget(wpool, "n"), 1.0) > 1.0) &&
+      !(num(lget(budget, "subject"), 1.0) > 1.0) &&
+      !(num(lget(budget, "likelihood"), 1.0) > 1.0) &&
+      option_on("emc2.native_particle_block") &&
+      Rf_inherits(VECTOR_ELT(data, 0), "data.frame") &&
+      Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) == R_NilValue &&
+      TYPEOF(par_names) == STRSXP && XLENGTH(par_names) == p &&
+      TYPEOF(subj_mu) == REALSXP && Rf_isMatrix(subj_mu) && Rf_nrows(subj_mu) == p &&
+      Rf_ncols(subj_mu) == n && TYPEOF(tvar) == REALSXP && Rf_isMatrix(tvar) &&
+      Rf_nrows(tvar) == p && Rf_ncols(tvar) == p;
 
   const Clock started = clock_now();
   Shield<SEXP> seed0(global_seed());
@@ -162,43 +163,78 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
   }
   const int m = static_cast<int>(subs.size());
   Shield<SEXP> tasks(Rf_allocVector(VECSXP, n));
-  RObject new_proposals = proposals, new_plan = plan;
+  RObject new_proposals = proposals, new_plan = plan, new_pool = wpool;
   double hmc_el = 0.0;
   if (m > 0) {
-    NumericMatrix a(p, m), mu(p, m);
-    NumericVector ll(m), eps(m);
-    List seeds(m), plans(m), data_m(m);
-    const double* pr = REAL(proposals);
-    for (int k = 0; k < m; ++k) {
-      const int s = subs[k];
-      for (int q = 0; q < p; ++q) {
-        a(q, k) = pr[q + static_cast<R_xlen_t>(s) * (p + 1)];
-        mu(q, k) = REAL(subj_mu)[q + static_cast<R_xlen_t>(s) * p];
+    // Each selected subject's task and stream after its transition.
+    List res_tasks(m), res_seeds(m);
+    bool ran = false;
+    if (local) {
+      NumericMatrix a(p, m), mu(p, m);
+      NumericVector ll(m), eps(m);
+      List seeds(m), plans(m), data_m(m);
+      const double* pr = REAL(proposals);
+      for (int k = 0; k < m; ++k) {
+        const int s = subs[k];
+        for (int q = 0; q < p; ++q) {
+          a(q, k) = pr[q + static_cast<R_xlen_t>(s) * (p + 1)];
+          mu(q, k) = REAL(subj_mu)[q + static_cast<R_xlen_t>(s) * p];
+        }
+        ll[k] = pr[p + static_cast<R_xlen_t>(s) * (p + 1)];
+        SEXP ps = VECTOR_ELT(plan, s);
+        eps[k] = num(lget(ps, "eps"), NA_REAL);
+        seeds[k] = VECTOR_ELT(streams2, s);
+        plans[k] = ps;
+        data_m[k] = VECTOR_ELT(data, s);
       }
-      ll[k] = pr[p + static_cast<R_xlen_t>(s) * (p + 1)];
-      SEXP ps = VECTOR_ELT(plan, s);
-      eps[k] = num(lget(ps, "eps"), NA_REAL);
-      seeds[k] = VECTOR_ELT(streams2, s);
-      plans[k] = ps;
-      data_m[k] = VECTOR_ELT(data, s);
+      List res;
+      ran = true;
+      try {
+        res = emc2_native_hmc_subjects(a, ll, mu, NumericMatrix(tvar), seeds, eps, plans,
+                                       data_m, model, CharacterVector(par_names));
+      } catch (std::exception&) {
+        ran = false;
+      }
+      if (ran) {
+        const LogicalVector done = res["done"];
+        for (int k = 0; k < m; ++k) if (!done[k]) ran = false;
+      }
+      if (ran) {
+        res_tasks = as<List>(res["tasks"]);
+        res_seeds = as<List>(res["seeds"]);
+      }
     }
-    List res;
-    bool ok = true;
-    try {
-      res = emc2_native_hmc_subjects(a, ll, mu, NumericMatrix(tvar), seeds, eps, plans,
-                                     data_m, model, CharacterVector(par_names));
-    } catch (std::exception&) {
-      ok = false;
+    if (!ran) {
+      static Function dispatch = package_function(".emc_hmc_dispatch");
+      IntegerVector subs1(m);
+      for (int k = 0; k < m; ++k) subs1[k] = subs[k] + 1;
+      const List sent = dispatch(subs1, plan, proposals, pars, lget(pmwgs, "type"), streams2,
+                                 data, model, wpool, lget(budget, "subject"),
+                                 lget(budget, "likelihood"), par_names, true);
+      const List results = sent["results"];
+      std::vector<int> at(n, -1);
+      for (int k = 0; k < m; ++k) at[subs[k]] = k;
+      int filled = 0;
+      for (R_xlen_t r = 0; r < results.size(); ++r) {
+        const List one = results[r];
+        const IntegerVector r_subs = as<IntegerVector>(one["subs"]);
+        const List reply = one["res"];
+        const List r_tasks = reply["tasks"], r_seeds = reply["seeds"];
+        if (r_tasks.size() != r_subs.size() || r_seeds.size() != r_subs.size())
+          Rcpp::stop("subject HMC: a reply differs from its request");
+        for (R_xlen_t k = 0; k < r_subs.size(); ++k) {
+          const int s = r_subs[k] - 1;
+          if (s < 0 || s >= n || at[s] < 0) Rcpp::stop("subject HMC: an unrequested subject");
+          res_tasks[at[s]] = r_tasks[k];
+          res_seeds[at[s]] = r_seeds[k];
+          ++filled;
+        }
+      }
+      if (filled != m) Rcpp::stop("subject HMC: a selected subject has no reply");
+      SEXP pool = sent["pool"];
+      if (pool != R_NilValue && lget(pool, "alive") != R_NilValue)
+        new_pool = lset(wpool, "alive", lget(pool, "alive"));
     }
-    if (ok) {
-      const LogicalVector done = res["done"];
-      for (int k = 0; k < m; ++k) if (!done[k]) ok = false;
-    }
-    if (!ok) {
-      set_global_seed(seed0);
-      return false;
-    }
-    const List res_tasks = res["tasks"], res_seeds = res["seeds"];
     bool any_accepted = false, any_warm = false;
     for (int k = 0; k < m; ++k) {
       if (flag(lget(res_tasks[k], "accepted"))) any_accepted = true;
@@ -263,6 +299,7 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
   set_var(st, "proposals", new_proposals);
   set_var(st, "streams", streams2);
   set_var(st, "hmc_plan", new_plan);
+  if (static_cast<SEXP>(new_pool) != wpool) set_var(st, "wpool", new_pool);
   set_var(st, "hmc_tasks", tasks);
   set_var(st, "hmc_el", Rf_ScalarReal(hmc_el));
   return true;

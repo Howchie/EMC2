@@ -19,7 +19,9 @@
 #endif
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <vector>
+#include "subject_ll.h"
 
 using namespace Rcpp;
 
@@ -66,8 +68,8 @@ int sample_one(const std::vector<double>& w) {
 // Every subject's likelihood of its candidate rows on the stored-argument
 // path, a column per candidate. False when a subject's likelihood is not
 // served there.
-bool candidate_lls(const List& rows, const List& data, SEXP model, int n_ok,
-                   NumericMatrix& ll_new) {
+bool stored_lls(const List& rows, const List& data, SEXP model, int n_ok,
+                NumericMatrix& ll_new) {
   const int n = ll_new.nrow();
   for (int s = 0; s < n; ++s) {
     RObject ll;
@@ -136,23 +138,62 @@ int select_candidate(const double* t, int K, const std::vector<int>& ok,
 
 }  // namespace
 
+bool emc_subject_ll_in_process(SEXP pool, SEXP sampler) {
+  auto get = [](SEXP x, const char* name) -> SEXP {
+    if (TYPEOF(x) != VECSXP) return R_NilValue;
+    SEXP names = Rf_getAttrib(x, R_NamesSymbol);
+    for (R_xlen_t i = 0; i < Rf_xlength(names); ++i)
+      if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) return VECTOR_ELT(x, i);
+    return R_NilValue;
+  };
+  auto is_true = [](SEXP x) {
+    return TYPEOF(x) == LGLSXP && Rf_length(x) == 1 && LOGICAL(x)[0] == TRUE;
+  };
+  SEXP data = get(sampler, "data");
+  return !is_true(get(pool, "alive")) && is_true(get(sampler, "ll_cache_validated")) &&
+    get(sampler, "marginalise") == R_NilValue && TYPEOF(data) == VECSXP &&
+    XLENGTH(data) > 0 && Rf_inherits(VECTOR_ELT(data, 0), "data.frame") &&
+    Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) == R_NilValue;
+}
+
+bool emc_subject_lls(const List& rows, const List& data, SEXP model, int n_cand,
+                     NumericMatrix& ll, SubjectLl* src) {
+  if (src == nullptr || src->in_process) {
+    if (stored_lls(rows, data, model, n_cand, ll)) return true;
+    if (src == nullptr) return false;
+  }
+  const R_xlen_t n = ll.nrow();
+  PutRNGstate();
+  Function dispatch(src->dispatch);
+  const List got = dispatch(src->pool, rows, src->sampler, src->part,
+                            Named("source") = std::string(src->source));
+  GetRNGstate();
+  src->pool = got["pool"];
+  SEXP v = got["ll"];
+  if (TYPEOF(v) != REALSXP || XLENGTH(v) != n * n_cand)
+    Rcpp::stop("subject likelihoods: the round's values differ in shape");
+  std::copy(REAL(v), REAL(v) + XLENGTH(v), ll.begin());
+  return true;
+}
+
 // `v` has no mean part, so every candidate keeps mu and its mean-prior
 // density lp_mu. Returns fallback = TRUE, before any random number is drawn,
 // when a subject's likelihood is not served by the stored-argument path; the
 // caller then runs the round in R. Otherwise: E, the selected candidate
 // (0 = stay), whether any candidate was valid, the seconds spent in the
 // likelihoods and, for a move, the selected state, subjects and likelihoods.
-// [[Rcpp::export]]
-List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
-                         const arma::mat& alpha, const arma::vec& mu,
-                         const arma::mat& V, const arma::mat& m0,
-                         const arma::cube& R0, const arma::vec& logdet0,
-                         const arma::cube& prec, const arma::mat& lin,
-                         const LogicalVector& has, const arma::mat& U,
-                         const arma::vec& b, const arma::cube& Uperp,
-                         List spec, double lp_mu, double cur_hier, double cur_lp,
-                         NumericVector ll_cur, List data, SEXP model,
-                         CharacterVector par_names) {
+// With a likelihood source the round never falls back: the source serves
+// whatever the stored-argument path does not.
+List shear_round_from(const arma::vec& t, const arma::vec& v,
+                      const arma::mat& alpha, const arma::vec& mu,
+                      const arma::mat& V, const arma::mat& m0,
+                      const arma::cube& R0, const arma::vec& logdet0,
+                      const arma::cube& prec, const arma::mat& lin,
+                      const LogicalVector& has, const arma::mat& U,
+                      const arma::vec& b, const arma::cube& Uperp,
+                      List spec, double lp_mu, double cur_hier, double cur_lp,
+                      NumericVector ll_cur, List data, SEXP model,
+                      CharacterVector par_names, SubjectLl* src) {
   const int K = static_cast<int>(t.n_elem);
   const int p = static_cast<int>(alpha.n_rows), n = static_cast<int>(alpha.n_cols);
   if (static_cast<int>(v.n_elem) != 2 * p || data.size() != n || ll_cur.size() != n)
@@ -186,7 +227,7 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
     for (int c = 0; c < n_ok; ++c) moved[c] = as<List>(cands[ok[c]])["alpha"];
     const List rows = emc_candidate_rows_cpp(moved, par_names);
     const auto ll_t0 = std::chrono::steady_clock::now();
-    if (!candidate_lls(rows, data, model, n_ok, ll_new))
+    if (!emc_subject_lls(rows, data, model, n_ok, ll_new, src))
       return List::create(Named("fallback") = true);
     ll_seconds = seconds_since(ll_t0);
   }
@@ -218,6 +259,22 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
     out["ll"] = ll_sel;
   }
   return out;
+}
+
+// [[Rcpp::export]]
+List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
+                         const arma::mat& alpha, const arma::vec& mu,
+                         const arma::mat& V, const arma::mat& m0,
+                         const arma::cube& R0, const arma::vec& logdet0,
+                         const arma::cube& prec, const arma::mat& lin,
+                         const LogicalVector& has, const arma::mat& U,
+                         const arma::vec& b, const arma::cube& Uperp,
+                         List spec, double lp_mu, double cur_hier, double cur_lp,
+                         NumericVector ll_cur, List data, SEXP model,
+                         CharacterVector par_names) {
+  return shear_round_from(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp,
+                          spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names,
+                          nullptr);
 }
 
 // .emc_shear_log_hier: the subjects' joint log density under the group
@@ -257,7 +314,7 @@ List shear_mean_round(const NumericVector& t, const NumericVector& d,
                       const NumericMatrix& m0, const NumericVector& R0,
                       const NumericVector& prior_mean, const NumericMatrix& prior_invar,
                       const NumericVector& ll_cur, const List& data, SEXP model,
-                      const CharacterVector& par_names) {
+                      const CharacterVector& par_names, SubjectLl* src) {
   const int K = t.size();
   int p = alpha.nrow(), n = alpha.ncol();
   const double one = 1.0, zero = 0.0;
@@ -349,7 +406,7 @@ List shear_mean_round(const NumericVector& t, const NumericVector& d,
     List moved(n_ok);
     for (int c = 0; c < n_ok; ++c) moved[c] = moved_alpha(t[ok[c]]);
     const List rows = emc_candidate_rows_cpp(moved, par_names);
-    if (!candidate_lls(rows, data, model, n_ok, ll_new)) return fallback;
+    if (!emc_subject_lls(rows, data, model, n_ok, ll_new, src)) return fallback;
   }
   double E = 0.0;
   const int j = select_candidate(t.begin(), K, ok, prior_delta, ll_new, ll_cur, E);
@@ -389,18 +446,17 @@ List shear_mean_round(const NumericVector& t, const NumericVector& d,
 // changed the group mean, whose prior density `lp_mu` no longer holds. Returns each completed round's net step, expected squared
 // jump and whether it moved, the step sizes and counts, and the final state
 // when any round moved.
-// [[Rcpp::export]]
-List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
-                          bool adapt, NumericVector step_range, double move_target,
-                          int n_candidates,
-                          NumericMatrix alpha, NumericVector mu, NumericMatrix V,
-                          NumericMatrix chol_V, NumericMatrix m0, NumericVector R0,
-                          NumericVector logdet0, double cur_hier, double cur_lp,
-                          double lp_mu, NumericVector ll,
-                          const arma::cube& prec, const arma::mat& lin,
-                          const LogicalVector& has, const arma::mat& U,
-                          const arma::vec& b, const arma::cube& Uperp, List spec,
-                          List data, SEXP model, CharacterVector par_names) {
+List shear_rounds_from(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
+                       bool adapt, NumericVector step_range, double move_target,
+                       int n_candidates,
+                       NumericMatrix alpha, NumericVector mu, NumericMatrix V,
+                       NumericMatrix chol_V, NumericMatrix m0, NumericVector R0,
+                       NumericVector logdet0, double cur_hier, double cur_lp,
+                       double lp_mu, NumericVector ll,
+                       const arma::cube& prec, const arma::mat& lin,
+                       const LogicalVector& has, const arma::mat& U,
+                       const arma::vec& b, const arma::cube& Uperp, List spec,
+                       List data, SEXP model, CharacterVector par_names, SubjectLl* src) {
   const int n_rounds = ks.size();
   const int p = alpha.nrow();
   NumericVector steps = clone(log_step);
@@ -427,11 +483,11 @@ List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVecto
     v[k] = 1.0;
     const arma::ivec dims = {static_cast<arma::sword>(p), static_cast<arma::sword>(p),
                              static_cast<arma::sword>(alpha.ncol())};
-    const List o = emc_shear_round_cpp(
+    const List o = shear_round_from(
         as<arma::vec>(t), v, as<arma::mat>(alpha), as<arma::vec>(mu), as<arma::mat>(V),
         as<arma::mat>(m0), arma::cube(R0.begin(), p, p, alpha.ncol(), false, true),
         as<arma::vec>(logdet_cur), prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier,
-        cur_lp, ll, data, model, par_names);
+        cur_lp, ll, data, model, par_names, src);
     if (as<bool>(o["fallback"])) {
       t_next = t;
       break;
@@ -484,4 +540,21 @@ List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVecto
     out["lp"] = cur_lp; out["alpha"] = alpha; out["ll"] = ll; out["cur_hier"] = cur_hier;
   }
   return out;
+}
+
+// [[Rcpp::export]]
+List emc_shear_rounds_cpp(IntegerVector ks, NumericVector log_step, IntegerVector blk_n,
+                          bool adapt, NumericVector step_range, double move_target,
+                          int n_candidates,
+                          NumericMatrix alpha, NumericVector mu, NumericMatrix V,
+                          NumericMatrix chol_V, NumericMatrix m0, NumericVector R0,
+                          NumericVector logdet0, double cur_hier, double cur_lp,
+                          double lp_mu, NumericVector ll,
+                          const arma::cube& prec, const arma::mat& lin,
+                          const LogicalVector& has, const arma::mat& U,
+                          const arma::vec& b, const arma::cube& Uperp, List spec,
+                          List data, SEXP model, CharacterVector par_names) {
+  return shear_rounds_from(ks, log_step, blk_n, adapt, step_range, move_target, n_candidates,
+                           alpha, mu, V, chol_V, m0, R0, logdet0, cur_hier, cur_lp, lp_mu, ll,
+                           prec, lin, has, U, b, Uperp, spec, data, model, par_names, nullptr);
 }

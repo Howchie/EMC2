@@ -61,11 +61,48 @@ SEXP settings_after(SEXP pm_k, SEXP sel, SEXP out, const char* stage, bool adapt
   return res;
 }
 
-}  // namespace
+// The allocation's skips of the subjects' particle steps and the joint
+// selection with subject HMC, each from the subject's own stream (advanced in
+// streams2). Whether any subject may skip.
+bool draw_skips(SEXP pmwgs, SEXP plan, bool alloc_on, int n, SEXP streams2,
+                LogicalVector& skip, RObject& hmc_pick) {
+  SEXP alloc = lget(pmwgs, "alloc");
+  bool skipping = false;
+  SEXP q_part = alloc_on ? lget(lget(alloc, "particle"), "rate") : R_NilValue;
+  if (TYPEOF(q_part) == REALSXP && XLENGTH(q_part) == n) {
+    for (int s = 0; s < n; ++s) if (REAL(q_part)[s] < 1) skipping = true;
+  }
+  if (!skipping) return false;
+  std::vector<double> r_now(n, 0.0);
+  if (TYPEOF(plan) == VECSXP)
+    for (int s = 0; s < n && s < XLENGTH(plan); ++s)
+      if (VECTOR_ELT(plan, s) != R_NilValue)
+        r_now[s] = num(lget(VECTOR_ELT(plan, s), "rate"), 0.0);
+  SEXP r_alloc = lget(lget(alloc, "last"), "rate");
+  const bool have_alloc = TYPEOF(r_alloc) == REALSXP && XLENGTH(r_alloc) == n;
+  for (int s = 0; s < n; ++s) {
+    const double q = REAL(q_part)[s];
+    if (!(q < 1)) continue;
+    const double ra = have_alloc ? REAL(r_alloc)[s] : r_now[s];
+    if (ra > 0 && !(r_now[s] > 0)) continue;
+    RObject next;
+    const double u = stream_unif(VECTOR_ELT(streams2, s), next);
+    SET_VECTOR_ELT(streams2, s, next);
+    skip[s] = u >= q;
+    if (r_now[s] > 0 && r_now[s] < 1) {
+      if (static_cast<SEXP>(hmc_pick) == R_NilValue) {
+        LogicalVector fresh(n, NA_LOGICAL);
+        hmc_pick = fresh;
+      }
+      LOGICAL(hmc_pick)[s] = u >= 1 - r_now[s];
+    }
+  }
+  return true;
+}
 
-namespace emc_iter {
-
-bool step_particle(SEXP st, SEXP cx, int i) {
+// The step with the subjects' particle steps in this process. FALSE, with the
+// state untouched, when they need the worker pool or the full path.
+bool particle_local(SEXP st, SEXP cx, int i) {
   SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), wpool = var(st, "wpool");
   SEXP consts = lget(cx, "particle"), ctx = lget(cx, "wpool_ctx");
   SEXP group_chol = var(st, "group_chol_it"), pm_settings = var(st, "pm_settings");
@@ -107,42 +144,10 @@ bool step_particle(SEXP st, SEXP cx, int i) {
   }
   Shield<SEXP> seed0(global_seed());
 
-  // The allocation's skips, and the joint selection with subject HMC.
-  SEXP plan = var(st, "hmc_plan");
   Shield<SEXP> streams2(Rf_shallow_duplicate(streams));
   LogicalVector skip(n);
   RObject hmc_pick;
-  bool skipping = false;
-  SEXP q_part = alloc_on ? lget(lget(alloc, "particle"), "rate") : R_NilValue;
-  if (TYPEOF(q_part) == REALSXP && XLENGTH(q_part) == n) {
-    for (int s = 0; s < n; ++s) if (REAL(q_part)[s] < 1) skipping = true;
-  }
-  if (skipping) {
-    std::vector<double> r_now(n, 0.0);
-    if (TYPEOF(plan) == VECSXP)
-      for (int s = 0; s < n && s < XLENGTH(plan); ++s)
-        if (VECTOR_ELT(plan, s) != R_NilValue)
-          r_now[s] = num(lget(VECTOR_ELT(plan, s), "rate"), 0.0);
-    SEXP r_alloc = lget(lget(alloc, "last"), "rate");
-    const bool have_alloc = TYPEOF(r_alloc) == REALSXP && XLENGTH(r_alloc) == n;
-    for (int s = 0; s < n; ++s) {
-      const double q = REAL(q_part)[s];
-      if (!(q < 1)) continue;
-      const double ra = have_alloc ? REAL(r_alloc)[s] : r_now[s];
-      if (ra > 0 && !(r_now[s] > 0)) continue;
-      RObject next;
-      const double u = stream_unif(VECTOR_ELT(streams2, s), next);
-      SET_VECTOR_ELT(streams2, s, next);
-      skip[s] = u >= q;
-      if (r_now[s] > 0 && r_now[s] < 1) {
-        if (static_cast<SEXP>(hmc_pick) == R_NilValue) {
-          LogicalVector fresh(n, NA_LOGICAL);
-          hmc_pick = fresh;
-        }
-        LOGICAL(hmc_pick)[s] = u >= 1 - r_now[s];
-      }
-    }
-  }
+  draw_skips(pmwgs, var(st, "hmc_plan"), alloc_on, n, streams2, skip, hmc_pick);
   const Clock started = clock_now();
 
   // The subjects' states and prior means as .emc_wpool_iter sends them.
@@ -268,6 +273,34 @@ bool step_particle(SEXP st, SEXP cx, int i) {
   set_var(st, "pm_settings", pm2);
   set_var(st, "streams", streams2);
   set_var(st, "hmc_pick", hmc_pick);
+  return true;
+}
+
+}  // namespace
+
+namespace emc_iter {
+
+// In this process where the subjects' steps run here; else the draws here
+// and the steps through .emc_step_particle_run(), which holds the worker
+// pool's transport.
+bool step_particle(SEXP st, SEXP cx, int i) {
+  if (particle_local(st, cx, i)) return true;
+  SEXP pmwgs = var(st, "pmwgs"), streams = var(st, "streams");
+  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(streams) != VECSXP ||
+      Rf_length(lget(pmwgs, "n_subjects")) != 1)
+    return false;
+  const int n = Rf_asInteger(lget(pmwgs, "n_subjects"));
+  if (XLENGTH(streams) != n) return false;
+  Shield<SEXP> seed0(global_seed());
+  Shield<SEXP> streams2(Rf_shallow_duplicate(streams));
+  LogicalVector skip(n);
+  RObject hmc_pick;
+  const bool skipping = draw_skips(pmwgs, var(st, "hmc_plan"), flag(lget(cx, "alloc_on")), n,
+                                   streams2, skip, hmc_pick);
+  set_global_seed(seed0);
+  static Function run = package_function(".emc_step_particle_run");
+  run(st, cx, Rf_ScalarInteger(i), skipping ? static_cast<SEXP>(skip) : R_NilValue, hmc_pick,
+      streams2);
   return true;
 }
 

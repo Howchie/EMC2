@@ -2,10 +2,10 @@
 # (R/iteration_steps.R): each stage block run both ways from the same state
 # and random stream.
 
-test_that("the native iteration steps are the R steps on the same random stream", {
-  skip_on_cran()
+native_steps_match <- function(cores_per_chain) {
   old <- options(emc2.fit_host = FALSE, emc2.native_steps_trace = TRUE)
   on.exit(options(old), add = TRUE)
+  assign("native_runs", NULL, envir = EMC2:::.emc_pool_state)
   des <- design(factors = list(subjects = 1:8, S = 1), Rlevels = 1, model = REXG,
                 formula = list(mu ~ 1, sigma ~ 1, tau ~ 1))
   set.seed(47)
@@ -35,6 +35,7 @@ test_that("the native iteration steps are the R steps on the same random stream"
   }
   local_mocked_bindings(run_stage = both, .package = "EMC2")
   fitted <- suppressWarnings(fit(emc, verbose = FALSE, cores_for_chains = 1,
+                                 cores_per_chain = cores_per_chain,
                                  stop_criteria = list(preburn = list(iter = 20),
                                                       burn = list(iter = 60),
                                                       adapt = list(iter = 60),
@@ -48,4 +49,15 @@ test_that("the native iteration steps are the R steps on the same random stream"
   steps <- c("group", "particle", "ensemble", "shear", "collapsed", "hmc", "store")
   expect_true(all(runs[steps] > 0))
   expect_gt(min(runs[steps]) / runs[["iter"]], 0.4)
+}
+
+test_that("the native iteration steps are the R steps on the same random stream", {
+  skip_on_cran()
+  native_steps_match(1L)
+})
+
+test_that("the native iteration steps are the R steps with a worker pool", {
+  skip_on_cran()
+  skip_on_os("windows")
+  native_steps_match(2L)
 })

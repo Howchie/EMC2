@@ -114,7 +114,6 @@
 # The subjects' particle steps, with the allocation's skips drawn from each
 # subject's own stream, and the ensemble candidates' likelihoods.
 .emc_step_particle <- function(st, cx, i) {
-  j <- cx$start_iter + i
   pmwgs <- st$pmwgs
   wpool_streams <- st$streams
   hmc_plan <- st$hmc_plan
@@ -138,6 +137,16 @@
       }
     })
   }
+  .emc_step_particle_run(st, cx, i, part_skip, hmc_pick, wpool_streams)
+}
+
+# The particle step given the allocation's skips (NULL when no subject may
+# skip), the joint selection with subject HMC and the subjects' streams after
+# those draws: the steps on the worker pool or in this process, and their
+# records.
+.emc_step_particle_run <- function(st, cx, i, part_skip, hmc_pick, wpool_streams) {
+  j <- cx$start_iter + i
+  pmwgs <- st$pmwgs
   part_started <- proc.time()[["elapsed"]]
   part_cpu_share <- 1
   wpool <- st$wpool

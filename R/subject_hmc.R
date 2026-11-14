@@ -306,39 +306,13 @@
     error = function(e) NULL)
 }
 
-# The round, from the final state of the other updates. Draws each
-# subject's selection uniform from its own stream on the master, runs the
-# selected transitions on the workers (or in-process), and returns the
-# updated proposals and streams with one task per subject (NULL when no
-# transition ran). pick: per subject, whether the iteration's joint draw
-# with the particle step (R/sampling.R) selected HMC (NA where the round
-# draws its own selection).
-.emc_hmc_round <- function(plan, proposals, pars, type, streams, data, model,
-                           wpool = NULL, n_cores = 1L, r_cores = 1L, par_names,
-                           pick = NULL, ll_cache_validated = FALSE) {
-  n <- length(streams)
+# The transitions of the selected subjects `subs`, on the workers or in this
+# process: per request its subjects and their reply (tasks and streams, in
+# the request's order), and the pool as the requests left it.
+.emc_hmc_dispatch <- function(subs, plan, proposals, pars, type, streams, data, model,
+                              wpool = NULL, n_cores = 1L, r_cores = 1L, par_names,
+                              ll_cache_validated = FALSE) {
   p <- nrow(proposals) - 1L
-  tasks <- vector("list", n)
-  go <- logical(n)
-  .emc_with_preserved_rng(for (s in seq_len(n)) {
-    ps <- plan[[s]]
-    if (is.null(ps) || !(ps$rate > 0)) next
-    if (ps$rate >= 1) {
-      go[s] <- TRUE
-      next
-    }
-    if (length(pick) >= s && !is.na(pick[s])) {
-      go[s] <- pick[s]
-      next
-    }
-    assign(".Random.seed", streams[[s]], envir = globalenv())
-    go[s] <- stats::runif(1L) < ps$rate
-    streams[[s]] <- get(".Random.seed", envir = globalenv())
-  })
-  subs <- which(go)
-  if (!length(subs))
-    return(list(proposals = proposals, streams = streams, tasks = tasks, pool = wpool,
-                plan = plan))
   gl <- lapply(subs, function(s) get_group_level(pars, s, type))
   # Workers hold the data of their template, so the current pooled values
   # travel with each request.
@@ -394,6 +368,46 @@
         results[[k]] <- list(subs = subs[k], res = out[[k]])
     }
   }
+  list(results = results, pool = wpool)
+}
+
+# The round, from the final state of the other updates. Draws each
+# subject's selection uniform from its own stream on the master, runs the
+# selected transitions on the workers (or in-process), and returns the
+# updated proposals and streams with one task per subject (NULL when no
+# transition ran). pick: per subject, whether the iteration's joint draw
+# with the particle step (R/sampling.R) selected HMC (NA where the round
+# draws its own selection).
+.emc_hmc_round <- function(plan, proposals, pars, type, streams, data, model,
+                           wpool = NULL, n_cores = 1L, r_cores = 1L, par_names,
+                           pick = NULL, ll_cache_validated = FALSE) {
+  n <- length(streams)
+  p <- nrow(proposals) - 1L
+  tasks <- vector("list", n)
+  go <- logical(n)
+  .emc_with_preserved_rng(for (s in seq_len(n)) {
+    ps <- plan[[s]]
+    if (is.null(ps) || !(ps$rate > 0)) next
+    if (ps$rate >= 1) {
+      go[s] <- TRUE
+      next
+    }
+    if (length(pick) >= s && !is.na(pick[s])) {
+      go[s] <- pick[s]
+      next
+    }
+    assign(".Random.seed", streams[[s]], envir = globalenv())
+    go[s] <- stats::runif(1L) < ps$rate
+    streams[[s]] <- get(".Random.seed", envir = globalenv())
+  })
+  subs <- which(go)
+  if (!length(subs))
+    return(list(proposals = proposals, streams = streams, tasks = tasks, pool = wpool,
+                plan = plan))
+  sent <- .emc_hmc_dispatch(subs, plan, proposals, pars, type, streams, data, model, wpool,
+                            n_cores, r_cores, par_names, ll_cache_validated)
+  results <- sent$results
+  wpool <- sent$pool
   for (r in results) for (k in seq_along(r$subs)) {
     s <- r$subs[k]
     tk <- r$res$tasks[[k]]

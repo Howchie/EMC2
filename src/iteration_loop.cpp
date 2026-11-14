@@ -121,6 +121,23 @@ Clock clock_now() {
 Clock clock_now() { return r_proc_time(); }
 #endif
 
+namespace {
+SEXP package_namespace = R_NilValue;
+}  // namespace
+
+void set_package_namespace(SEXP ns) {
+  if (package_namespace != R_NilValue || TYPEOF(ns) != ENVSXP) return;
+  R_PreserveObject(ns);
+  package_namespace = ns;
+}
+
+Function package_function(const char* name) {
+  if (package_namespace == R_NilValue) Rcpp::stop("the package's namespace is not set");
+  SEXP f = R_getVarEx(Rf_install(name), package_namespace, FALSE, R_NilValue);
+  if (TYPEOF(f) == PROMSXP) f = Rf_eval(f, package_namespace);
+  return Function(f);
+}
+
 double reserved_cost(double elapsed, double cores) {
   return std::max(1.0, cores) * std::max(0.0, elapsed);
 }
@@ -266,6 +283,11 @@ NativeStep native_step(const std::string& name) {
 // [[Rcpp::export]]
 void emc_iteration_loop_cpp(Environment st, List cx, int from, List steps,
                             LogicalVector native, Function rejects) {
+#if R_VERSION >= R_Version(4, 5, 0)
+  set_package_namespace(Rf_topenv(R_NilValue, R_ClosureEnv(rejects)));
+#else
+  set_package_namespace(Rf_topenv(R_NilValue, CLOENV(rejects)));
+#endif
   const int iter = Rf_asInteger(emc_iter::lget(cx, "iter"));
   const int n_steps = steps.size();
   const CharacterVector names = steps.names();

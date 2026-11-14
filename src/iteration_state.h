@@ -42,7 +42,9 @@ double stream_unif(SEXP seed, Rcpp::RObject& next);
 SEXP proposal_rows(SEXP proposals, int p);
 // Whether a logical option is unset or TRUE.
 bool option_on(const char* name);
-// A function of the package's namespace.
+// A function of the package's namespace, which the loop sets from the
+// environment of a package function it is handed.
+void set_package_namespace(SEXP ns);
 Rcpp::Function package_function(const char* name);
 
 // The native steps: TRUE when the step ran, FALSE when it left the state

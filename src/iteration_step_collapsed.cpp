@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include "iteration_state.h"
+#include "subject_ll.h"
 
 using namespace Rcpp;
 using namespace emc_iter;
@@ -45,7 +46,6 @@ Rcpp::NumericVector emc_collapsed_log_lhat_cpp(Rcpp::NumericMatrix alpha,
                                                Rcpp::NumericMatrix lin,
                                                Rcpp::IntegerVector has);
 List emc_candidate_rows_cpp(List cand, CharacterVector par_names);
-SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 
 namespace {
 
@@ -259,9 +259,7 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
        bmoved = lget(blk, "moved"), bN = lget(blk, "N"), bK = lget(blk, "K");
   if (TYPEOF(seed) != INTSXP || TYPEOF(iterations) != INTSXP || XLENGTH(iterations) != 1 ||
       TYPEOF(lget(cst, "rounds")) != INTSXP || TYPEOF(lget(cst, "accepted")) != INTSXP ||
-      flag(lget(wpool, "alive")) || !flag(lget(pmwgs, "ll_cache_validated")) ||
-      lget(pmwgs, "marginalise") != R_NilValue || TYPEOF(data) != VECSXP || XLENGTH(data) != n ||
-      Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) != R_NilValue ||
+      TYPEOF(data) != VECSXP || XLENGTH(data) != n ||
       TYPEOF(par_names) != STRSXP || TYPEOF(C) != REALSXP ||
       Rf_length(lget(plan, "eps")) != 1 || Rf_length(lget(plan, "dim")) != 1 ||
       TYPEOF(blk) != VECSXP || TYPEOF(bE) != REALSXP || !Rf_isMatrix(bE) ||
@@ -277,6 +275,14 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
     return false;
   const Clock started = clock_now();
   static Function collapsed_context = package_function(".emc_collapsed_context");
+  static Function subject_ll = package_function(".emc_wpool_subject_ll");
+  SubjectLl lls;
+  lls.pool = wpool;
+  lls.sampler = pmwgs;
+  lls.part = var(st, "wpool_part");
+  lls.source = "collapsed";
+  lls.in_process = emc_subject_ll_in_process(wpool, pmwgs);
+  lls.dispatch = subject_ll;
 
   set_global_seed(seed);
   GetRNGstate();
@@ -414,20 +420,10 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
             }
           }
           const List rows = emc_candidate_rows_cpp(List::create(alpha_new), CharacterVector(par_names));
+          NumericMatrix ll_mat(n, 1);
+          emc_subject_lls(rows, List(data), model, 1, ll_mat, &lls);
           NumericVector ll_new(n);
-          for (int s = 0; s < n; ++s) {
-            RObject v;
-            try {
-              v = emc2_ll_cached(rows[s], VECTOR_ELT(data, s), model, R_NilValue);
-            } catch (...) {
-              bail = true;
-              return;
-            }
-            if (TYPEOF(v) != REALSXP || XLENGTH(v) != 1 || ANY_ATTRIB(v) || ISNAN(REAL(v)[0]) ||
-                REAL(v)[0] == R_PosInf)
-              { bail = true; return; }
-            ll_new[s] = REAL(v)[0];
-          }
+          std::copy(ll_mat.begin(), ll_mat.end(), ll_new.begin());
           ++evaluated;
           const NumericVector lhat_new = emc_collapsed_log_lhat_cpp(alpha_new, lhat_H, lhat_lin, lhat_has);
           const NumericVector lhat_old = emc_collapsed_log_lhat_cpp(alpha, lhat_H, lhat_lin, lhat_has);
@@ -524,6 +520,7 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
   set_var(st, "pmwgs", sampler);
   set_var(st, "pars", pars2);
   set_var(st, "proposals", props2);
+  set_var(st, "wpool", lls.pool);
   const double el = clock_now().elapsed - started.elapsed;
   const double cores = num(var(st, "cores_it"), 1.0);
   const bool alloc_on = flag(lget(cx, "alloc_on"));
