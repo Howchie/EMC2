@@ -1019,6 +1019,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_half_spaces_cpp
+SEXP emc_shear_half_spaces_cpp(SEXP X, SEXP cols, SEXP consts, SEXP lim, int p);
+RcppExport SEXP _EMC2_emc_shear_half_spaces_cpp(SEXP XSEXP, SEXP colsSEXP, SEXP constsSEXP, SEXP limSEXP, SEXP pSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type X(XSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type cols(colsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type consts(constsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type lim(limSEXP);
+    Rcpp::traits::input_parameter< int >::type p(pSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_half_spaces_cpp(X, cols, consts, lim, p));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4796,6 +4810,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_native_claim_reply_cpp", (DL_FUNC) &_EMC2_emc_native_claim_reply_cpp, 8},
     {"_EMC2_emc_laplace_check_store_cpp", (DL_FUNC) &_EMC2_emc_laplace_check_store_cpp, 5},
     {"_EMC2_emc_window_lsd_cpp", (DL_FUNC) &_EMC2_emc_window_lsd_cpp, 3},
+    {"_EMC2_emc_shear_half_spaces_cpp", (DL_FUNC) &_EMC2_emc_shear_half_spaces_cpp, 5},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},

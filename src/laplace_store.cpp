@@ -2,7 +2,9 @@
 // shear move's window (R/shear_move.R).
 #include <Rcpp.h>
 #include <cmath>
+#include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -112,5 +114,75 @@ SEXP emc_window_lsd_cpp(SEXP theta_var, SEXP idx, int n_pars) {
     }
   }
   UNPROTECT(1);
+  return out;
+}
+
+// One bounded parameter type's half-spaces for a subject
+// (.emc_shear_support): per row of its design X, the normal u over the p
+// sampled parameters (X's columns placed at cols, NA for constants) and the
+// offsets of the finite limits in lim, shifted by the constant columns'
+// contribution (their values in consts, in column order). NULL for a design
+// that is not a matrix of doubles without missing values, which the R form
+// handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_shear_half_spaces_cpp(SEXP X, SEXP cols, SEXP consts, SEXP lim, int p) {
+  if (TYPEOF(X) != REALSXP || !Rf_isMatrix(X) || TYPEOF(cols) != INTSXP ||
+      TYPEOF(consts) != REALSXP || TYPEOF(lim) != REALSXP || XLENGTH(lim) != 2 || p < 1)
+    return R_NilValue;
+  const int nr = Rf_nrows(X), nc = Rf_ncols(X);
+  if (XLENGTH(cols) != nc) return R_NilValue;
+  R_xlen_t n_const = 0;
+  for (int j = 0; j < nc; ++j) {
+    const int c = INTEGER(cols)[j];
+    if (c == NA_INTEGER) ++n_const;
+    else if (c < 1 || c > p) return R_NilValue;
+  }
+  if (XLENGTH(consts) != n_const) return R_NilValue;
+  const double* x = REAL(X);
+  for (R_xlen_t e = 0; e < XLENGTH(X); ++e)
+    if (ISNAN(x[e])) return R_NilValue;
+  for (R_xlen_t e = 0; e < n_const; ++e)
+    if (ISNAN(REAL(consts)[e])) return R_NilValue;
+  const double lo = REAL(lim)[0], hi = REAL(lim)[1];
+  if (ISNAN(lo) || ISNAN(hi)) return R_NilValue;
+  Rcpp::Shield<SEXP> keep(Rf_allocVector(VECSXP, 2 * static_cast<R_xlen_t>(nr)));
+  R_xlen_t n_out = 0;
+  auto half_space = [&](const std::vector<double>& u, double sign, double b) {
+    Rcpp::NumericVector uv(p);
+    for (int i = 0; i < p; ++i) uv[i] = sign < 0 ? -u[i] : u[i];
+    SET_VECTOR_ELT(keep, n_out++,
+                   Rcpp::List::create(Rcpp::Named("u") = uv, Rcpp::Named("b") = b));
+  };
+  std::vector<double> u(p);
+  for (int r = 0; r < nr; ++r) {
+    std::fill(u.begin(), u.end(), 0.0);
+    long double total = 0.0;
+    R_xlen_t k = 0;
+    bool any = false;
+    for (int j = 0; j < nc; ++j) {
+      const double v = x[r + static_cast<R_xlen_t>(j) * nr];
+      const int c = INTEGER(cols)[j];
+      if (c == NA_INTEGER) {
+        volatile double term = v * REAL(consts)[k++];
+        total += term;
+      } else {
+        u[c - 1] = v;
+      }
+    }
+    for (int i = 0; i < p; ++i) if (u[i] != 0) any = true;
+    if (!any) continue;
+    const double shift = n_const ? static_cast<double>(total) : 0.0;
+    if (ISNAN(shift)) return R_NilValue;
+    if (R_FINITE(lo)) {
+      volatile double b = lo - shift;
+      half_space(u, 1.0, b);
+    }
+    if (R_FINITE(hi)) {
+      volatile double b = hi - shift;
+      half_space(u, -1.0, -b);
+    }
+  }
+  Rcpp::List out(n_out);
+  for (R_xlen_t i = 0; i < n_out; ++i) out[i] = VECTOR_ELT(keep, i);
   return out;
 }

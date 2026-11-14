@@ -168,6 +168,15 @@
       cols <- match(colnames(X), pn)
       known <- !is.na(cols) | colnames(X) %in% names(consts)
       if (!all(known)) next
+      found <- if (getOption("emc2.native_shear_support", TRUE) && is.double(lim) &&
+                   (all(!is.na(cols)) || is.numeric(consts)))
+        emc_shear_half_spaces_cpp(
+          X, cols, if (any(is.na(cols))) as.numeric(consts[colnames(X)[is.na(cols)]]) else numeric(0),
+          lim, p)
+      if (!is.null(found)) {
+        out <- c(out, found)
+        next
+      }
       for (r in seq_len(nrow(X))) {
         x <- X[r, ]
         u <- numeric(p)

@@ -275,6 +275,10 @@ emc_window_lsd_cpp <- function(theta_var, idx, n_pars) {
     .Call(`_EMC2_emc_window_lsd_cpp`, theta_var, idx, n_pars)
 }
 
+emc_shear_half_spaces_cpp <- function(X, cols, consts, lim, p) {
+    .Call(`_EMC2_emc_shear_half_spaces_cpp`, X, cols, consts, lim, p)
+}
+
 emc2_ll_cached <- function(proposals, dadm, model, varying) {
     .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
 }
