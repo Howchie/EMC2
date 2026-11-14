@@ -501,6 +501,9 @@
 
 # The group log sds over the draws idx (p x length(idx)).
 .emc_shear_window_lsd <- function(chain, idx) {
+  out <- if (getOption("emc2.native_window_lsd", TRUE))
+    emc_window_lsd_cpp(chain$samples$theta_var, idx, as.integer(chain$n_pars))
+  if (!is.null(out)) return(out)
   0.5 * log(matrix(apply(chain$samples$theta_var[, , idx, drop = FALSE], 3L, diag),
                    chain$n_pars))
 }

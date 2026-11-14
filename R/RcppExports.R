@@ -271,6 +271,10 @@ emc_laplace_check_store_cpp <- function(entries, key, check, draws, max_entries)
     .Call(`_EMC2_emc_laplace_check_store_cpp`, entries, key, check, draws, max_entries)
 }
 
+emc_window_lsd_cpp <- function(theta_var, idx, n_pars) {
+    .Call(`_EMC2_emc_window_lsd_cpp`, theta_var, idx, n_pars)
+}
+
 emc2_ll_cached <- function(proposals, dadm, model, varying) {
     .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
 }

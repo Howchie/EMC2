@@ -1007,6 +1007,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_window_lsd_cpp
+SEXP emc_window_lsd_cpp(SEXP theta_var, SEXP idx, int n_pars);
+RcppExport SEXP _EMC2_emc_window_lsd_cpp(SEXP theta_varSEXP, SEXP idxSEXP, SEXP n_parsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type theta_var(theta_varSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type idx(idxSEXP);
+    Rcpp::traits::input_parameter< int >::type n_pars(n_parsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_window_lsd_cpp(theta_var, idx, n_pars));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4783,6 +4795,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_collapsed_tune_eps_cpp", (DL_FUNC) &_EMC2_emc_collapsed_tune_eps_cpp, 9},
     {"_EMC2_emc_native_claim_reply_cpp", (DL_FUNC) &_EMC2_emc_native_claim_reply_cpp, 8},
     {"_EMC2_emc_laplace_check_store_cpp", (DL_FUNC) &_EMC2_emc_laplace_check_store_cpp, 5},
+    {"_EMC2_emc_window_lsd_cpp", (DL_FUNC) &_EMC2_emc_window_lsd_cpp, 3},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},
