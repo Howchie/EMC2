@@ -757,6 +757,11 @@
   fac_c <- if (xc > 0 && length(idx))
     rep_len(.emc_alloc_factor(joint$g, xc, if (is.null(joint$a)) joint$g else joint$a),
             length(idx))
+  out <- if (getOption("emc2.native_alloc_predict", TRUE) && is.list(units) &&
+             (is.null(sol$x) || is.double(sol$x)) && (is.null(sol$q) || is.double(sol$q)) &&
+             (is.null(fac_c) || is.double(fac_c)))
+    emc_alloc_predict_cpp(units, sol$x, sol$q, idx, fac_c)
+  if (!is.null(out)) return(out)
   lapply(seq_along(units), function(i) {
     u <- .emc_alloc_as_subject(units[[i]])
     rho <- u$rho

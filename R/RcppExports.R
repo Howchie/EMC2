@@ -33,6 +33,10 @@ emc_alloc_factor_cpp <- function(g, x, a) {
     .Call(`_EMC2_emc_alloc_factor_cpp`, g, x, a)
 }
 
+emc_alloc_predict_cpp <- function(units, sol_x, sol_q, idx, fac) {
+    .Call(`_EMC2_emc_alloc_predict_cpp`, units, sol_x, sol_q, idx, fac)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

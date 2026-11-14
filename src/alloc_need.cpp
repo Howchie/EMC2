@@ -450,3 +450,148 @@ SEXP emc_alloc_factor_cpp(SEXP g, SEXP x, SEXP a) {
   UNPROTECT(1);
   return out;
 }
+
+namespace {
+
+// A unit's numeric field without names, dimensions or class, of length one
+// or `k` (any length for k < 0); false otherwise or for missing values.
+bool plain_field(SEXP v, R_xlen_t k) {
+  if (TYPEOF(v) != REALSXP || Rf_isObject(v) || Rf_getAttrib(v, R_NamesSymbol) != R_NilValue ||
+      Rf_getAttrib(v, R_DimSymbol) != R_NilValue || XLENGTH(v) < 1)
+    return false;
+  if (k >= 0 && XLENGTH(v) != 1 && XLENGTH(v) != k) return false;
+  for (R_xlen_t i = 0; i < XLENGTH(v); ++i)
+    if (ISNAN(REAL(v)[i])) return false;
+  return true;
+}
+
+bool kind_is(SEXP u, const char* kind) {
+  SEXP k = unit_field(u, "kind");
+  return TYPEOF(k) == STRSXP && XLENGTH(k) == 1 && std::strcmp(CHAR(STRING_ELT(k, 0)), kind) == 0;
+}
+
+}  // namespace
+
+// .emc_alloc_predict(): each unit's lag-one rho under a solved plan, given
+// the plan's allocations x and particle rates q, and the collapsed move's
+// factor `fac` on the units numbered `idx` (NULL when it does not run). NULL
+// for units whose fields are not plain numbers, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP idx, SEXP fac) {
+  const int n = units.size();
+  if ((sol_x != R_NilValue && TYPEOF(sol_x) != REALSXP) ||
+      (sol_q != R_NilValue && TYPEOF(sol_q) != REALSXP) || TYPEOF(idx) != INTSXP ||
+      (fac != R_NilValue && (TYPEOF(fac) != REALSXP || XLENGTH(fac) != XLENGTH(idx))))
+    return R_NilValue;
+  const R_xlen_t nx = sol_x == R_NilValue ? 0 : XLENGTH(sol_x);
+  const R_xlen_t nq = sol_q == R_NilValue ? 0 : XLENGTH(sol_q);
+  Rcpp::List out(n);
+  for (int i = 0; i < n; ++i) {
+    SEXP u = units[i];
+    SEXP r = unit_field(u, "rho"), b = unit_field(u, "b_share");
+    if (!plain_field(r, -1)) return R_NilValue;
+    const R_xlen_t k = XLENGTH(r);
+    if (b != R_NilValue && !plain_field(b, k)) return R_NilValue;
+    // The collapsed move's factor on the unit, if it moves it.
+    double moved = NA_REAL;
+    if (fac != R_NilValue)
+      for (R_xlen_t j = 0; j < XLENGTH(idx); ++j)
+        if (INTEGER(idx)[j] == i + 1) {
+          moved = REAL(fac)[j];
+          if (ISNAN(moved)) return R_NilValue;
+          break;
+        }
+    double x = 0.0;
+    if (nx > i && R_FINITE(REAL(sol_x)[i])) x = REAL(sol_x)[i];
+    const bool hmc = kind_is(u, "hmc"), subject = hmc || kind_is(u, "subject");
+    const bool shear = kind_is(u, "shear"), fixed = kind_is(u, "fixed");
+    // The unit's own moves' factor on each coordinate.
+    std::vector<double> own(k, 1.0);
+    bool scaled = false;
+    double tail = NA_REAL;
+    Rcpp::RObject f_keep;
+    if (shear) {
+      SEXP g = unit_field(u, "g"), a = unit_field(u, "a"), rt = unit_field(u, "rho_t");
+      if (!plain_field(g, k) || (a != R_NilValue && !plain_field(a, k))) return R_NilValue;
+      Rcpp::NumericVector xv = Rcpp::NumericVector::create(x);
+      f_keep = emc_alloc_factor_cpp(g, xv, a == R_NilValue ? g : a);
+      SEXP f = f_keep;
+      if (f == R_NilValue || (XLENGTH(f) != 1 && XLENGTH(f) != k)) return R_NilValue;
+      for (R_xlen_t c = 0; c < k; ++c) own[c] = REAL(f)[XLENGTH(f) == 1 ? 0 : c];
+      scaled = true;
+      if (rt != R_NilValue) {
+        if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
+        if (R_FINITE(REAL(rt)[0])) {
+          if (XLENGTH(f) != 1 && k != XLENGTH(f)) return R_NilValue;
+          tail = REAL(rt)[0];
+        }
+      }
+    } else if (subject) {
+      SEXP p = hmc ? R_NilValue : unit_field(u, "p"), h = unit_field(u, "h");
+      SEXP rm = unit_field(u, "r_min");
+      if ((p != R_NilValue && !plain_field(p, k)) || (h != R_NilValue && !plain_field(h, k)))
+        return R_NilValue;
+      double r_min = 0.0;
+      if (rm != R_NilValue && !hmc) {
+        if (!plain_field(rm, 1)) return R_NilValue;
+        r_min = REAL(rm)[0];
+      }
+      const double q = (p == R_NilValue || nq <= i) ? 1.0 : REAL(sol_q)[i];
+      if (ISNAN(q)) return R_NilValue;
+      double rate = 0.0;
+      if (h != R_NilValue) {
+        volatile double total = x + r_min;
+        rate = std::min(1.0, static_cast<double>(total));
+      }
+      volatile double excess = q + rate;
+      volatile double over = excess - 1;
+      const double both = std::max(0.0, static_cast<double>(over));
+      volatile double a0 = 1 - q;
+      volatile double a1 = a0 - rate;
+      volatile double none = a1 + both;
+      volatile double only_p = q - both;
+      volatile double only_h = rate - both;
+      for (R_xlen_t c = 0; c < k; ++c) {
+        const double P = p == R_NilValue ? 1.0 : REAL(p)[XLENGTH(p) == 1 ? 0 : c];
+        const double H = h == R_NilValue ? 1.0 : REAL(h)[XLENGTH(h) == 1 ? 0 : c];
+        volatile double t1 = only_p * P;
+        volatile double t2 = only_h * H;
+        volatile double t3 = both * P;
+        volatile double t4 = t3 * H;
+        volatile double s1 = none + t1;
+        volatile double s2 = s1 + t2;
+        volatile double s3 = s2 + t4;
+        own[c] = s3;
+      }
+      scaled = true;
+    } else if (!fixed) {
+      SEXP kind = unit_field(u, "kind");
+      if (TYPEOF(kind) != STRSXP || XLENGTH(kind) != 1) return R_NilValue;
+    }
+    Rcpp::NumericVector res(k);
+    for (R_xlen_t c = 0; c < k; ++c) {
+      const double bc = b == R_NilValue ? 0.0 : REAL(b)[XLENGTH(b) == 1 ? 0 : c];
+      volatile double rho = REAL(r)[c];
+      if (!ISNAN(moved)) {
+        volatile double m = rho * moved;
+        rho = m;
+      }
+      volatile double rest = 1 - bc;
+      volatile double v = rest * rho;
+      if (scaled) {
+        volatile double w = v * own[c];
+        v = w;
+      }
+      volatile double sum = bc + v;
+      double val = sum;
+      if (!ISNAN(tail)) {
+        volatile double t = tail * own[c];
+        if (ISNAN(val) || ISNAN(static_cast<double>(t))) return R_NilValue;
+        val = std::max(val, static_cast<double>(t));
+      }
+      res[c] = val;
+    }
+    out[i] = res;
+  }
+  return out;
+}
