@@ -594,6 +594,83 @@ std::vector<double> as_std(const Rcpp::NumericVector& x) {
   return std::vector<double>(x.begin(), x.end());
 }
 
+emc_factor::State factor_state(const Rcpp::List& x) {
+  emc_factor::State s;
+  s.eta = as_mat(Rcpp::as<Rcpp::NumericMatrix>(x["eta"]));
+  s.lambda = as_mat(Rcpp::as<Rcpp::NumericMatrix>(x["lambda"]));
+  s.mu = as_std(x["mu"]);
+  s.sig_err_inv = as_std(x["sig_err_inv"]);
+  s.psi_inv = as_std(x["psi_inv"]);
+  return s;
+}
+
+emc_factor::Prior factor_prior(const Rcpp::List& x) {
+  emc_factor::Prior prior;
+  prior.mu_invar = as_mat(Rcpp::as<Rcpp::NumericMatrix>(x["mu_invar"]));
+  prior.mu_mean = as_std(x["mu_mean"]);
+  prior.shape_err = as_std(x["shape_err"]);
+  prior.rate_err = as_std(x["rate_err"]);
+  prior.lambda_invar = as_std(x["lambda_invar"]);
+  prior.shape_psi = as_std(x["shape_psi"]);
+  prior.rate_psi = as_std(x["rate_psi"]);
+  return prior;
+}
+
+// Which loadings are free; FALSE with a missing entry.
+bool free_entries(const Rcpp::LogicalMatrix& x, std::vector<int>& out) {
+  out.resize(x.size());
+  for (R_xlen_t i = 0; i < x.size(); ++i) {
+    if (x[i] == NA_LOGICAL) return false;
+    out[i] = x[i] == TRUE;
+  }
+  return true;
+}
+
+Rcpp::List factor_result(const emc_factor::State& s) {
+  return Rcpp::List::create(
+      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
+      Rcpp::_["var"] = as_r(s.var), Rcpp::_["lambda"] = as_r(s.lambda),
+      Rcpp::_["lambda_scaled"] = as_r(s.lambda_scaled), Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["sig_err_inv"] = Rcpp::NumericVector(s.sig_err_inv.begin(), s.sig_err_inv.end()),
+      Rcpp::_["psi_inv"] = Rcpp::NumericVector(s.psi_inv.begin(), s.psi_inv.end()));
+}
+
+emc_factor::InfiniteState infinite_state(const Rcpp::List& x) {
+  emc_factor::InfiniteState s;
+  s.psi = as_mat(Rcpp::as<Rcpp::NumericMatrix>(x["psi"]));
+  s.lambda = as_mat(Rcpp::as<Rcpp::NumericMatrix>(x["lambda"]));
+  s.mu = as_std(x["mu"]);
+  s.epsilon_inv = as_std(x["epsilon_inv"]);
+  s.delta = as_std(x["delta"]);
+  return s;
+}
+
+emc_factor::InfinitePrior infinite_prior(const Rcpp::List& x) {
+  emc_factor::InfinitePrior prior;
+  prior.mu_invar = as_std(x["mu_invar"]);
+  prior.mu_mean = as_std(x["mu_mean"]);
+  prior.shape_err = as_std(x["shape_err"]);
+  prior.rate_err = as_std(x["rate_err"]);
+  prior.df = Rcpp::as<double>(x["df"]);
+  prior.ad1 = Rcpp::as<double>(x["ad1"]);
+  prior.bd1 = Rcpp::as<double>(x["bd1"]);
+  SEXP ad2 = x["ad2"];
+  prior.has_ad2 = ad2 != R_NilValue;
+  prior.ad2 = prior.has_ad2 ? Rf_asReal(ad2) : 0.0;
+  prior.bd2 = prior.has_ad2 ? Rcpp::as<double>(x["bd2"]) : 0.0;
+  return prior;
+}
+
+Rcpp::List infinite_result(const emc_factor::InfiniteState& s) {
+  return Rcpp::List::create(
+      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
+      Rcpp::_["var"] = as_r(s.var), Rcpp::_["lambda"] = as_r(s.lambda),
+      Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["epsilon_inv"] = Rcpp::NumericVector(s.epsilon_inv.begin(), s.epsilon_inv.end()),
+      Rcpp::_["psi"] = as_r(s.psi),
+      Rcpp::_["delta"] = Rcpp::NumericVector(s.delta.begin(), s.delta.end()));
+}
+
 }  // namespace
 
 namespace emc_factor {
@@ -657,89 +734,158 @@ SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma) {
   }
 }
 
-// gibbs_step_infnt_factor()'s draw: `alpha` subjects x parameters, the state
-// as the store holds it and the prior's vectors at full length (`ad2` NULL
-// for a prior without it). NULL when the draw is left to the R form.
+// gibbs_step_factor()'s draw: `alpha` subjects x parameters, the state as
+// the store holds it (eta, lambda, mu, sig_err_inv, psi_inv), the free
+// loadings and the prior's vectors at full length. NULL when the draw is
+// left to the R form, which then starts again from the stream's state before
+// the call.
 // [[Rcpp::export]]
-SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha,
-                                const Rcpp::NumericMatrix& psi,
-                                const Rcpp::NumericVector& epsilon_inv,
-                                const Rcpp::NumericMatrix& lambda,
-                                const Rcpp::NumericVector& mu,
-                                const Rcpp::NumericVector& delta,
-                                const Rcpp::NumericVector& mu_invar,
-                                const Rcpp::NumericVector& mu_mean, double df, double ad1,
-                                double bd1, SEXP ad2, double bd2,
-                                const Rcpp::NumericVector& shape_err,
-                                const Rcpp::NumericVector& rate_err) {
-  emc_factor::InfiniteState s;
-  s.psi = as_mat(psi);
-  s.lambda = as_mat(lambda);
-  s.mu = as_std(mu);
-  s.epsilon_inv = as_std(epsilon_inv);
-  s.delta = as_std(delta);
-  emc_factor::InfinitePrior prior;
-  prior.mu_invar = as_std(mu_invar);
-  prior.mu_mean = as_std(mu_mean);
-  prior.shape_err = as_std(shape_err);
-  prior.rate_err = as_std(rate_err);
-  prior.df = df;
-  prior.ad1 = ad1;
-  prior.bd1 = bd1;
-  prior.has_ad2 = ad2 != R_NilValue;
-  prior.ad2 = prior.has_ad2 ? Rf_asReal(ad2) : 0.0;
-  prior.bd2 = bd2;
-  if (!emc_factor::gibbs_infinite(s, as_mat(alpha), prior)) return R_NilValue;
-  return Rcpp::List::create(
-      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
-      Rcpp::_["var"] = as_r(s.var), Rcpp::_["lambda"] = as_r(s.lambda),
-      Rcpp::_["eta"] = as_r(s.eta),
-      Rcpp::_["epsilon_inv"] = Rcpp::NumericVector(s.epsilon_inv.begin(), s.epsilon_inv.end()),
-      Rcpp::_["psi"] = as_r(s.psi),
-      Rcpp::_["delta"] = Rcpp::NumericVector(s.delta.begin(), s.delta.end()));
+SEXP emc_gibbs_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::List& state,
+                          const Rcpp::LogicalMatrix& free_entry, const Rcpp::List& prior) {
+  emc_factor::State s = factor_state(state);
+  std::vector<int> fr;
+  if (!free_entries(free_entry, fr)) return R_NilValue;
+  if (!emc_factor::gibbs(s, as_mat(alpha), factor_prior(prior), fr)) return R_NilValue;
+  return factor_result(s);
 }
 
-// gibbs_step_factor()'s draw: `alpha` subjects x parameters, the state as the
-// store holds it and the prior's vectors at full length. NULL when the draw
-// is left to the R form, which then starts again from the stream's state
-// before the call.
+// gibbs_step_infnt_factor()'s draw, likewise: the state is psi, lambda, mu,
+// epsilon_inv and delta; the prior's `ad2` is NULL for a prior without it.
 // [[Rcpp::export]]
-SEXP emc_gibbs_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::NumericMatrix& eta,
-                          const Rcpp::NumericVector& psi_inv,
-                          const Rcpp::NumericVector& sig_err_inv,
-                          const Rcpp::NumericMatrix& lambda, const Rcpp::NumericVector& mu,
-                          const Rcpp::LogicalMatrix& free_entry,
-                          const Rcpp::NumericMatrix& mu_invar,
-                          const Rcpp::NumericVector& mu_mean,
-                          const Rcpp::NumericVector& shape_err,
-                          const Rcpp::NumericVector& rate_err,
-                          const Rcpp::NumericVector& lambda_invar,
-                          const Rcpp::NumericVector& shape_psi,
-                          const Rcpp::NumericVector& rate_psi) {
-  emc_factor::State s;
-  s.eta = as_mat(eta);
-  s.lambda = as_mat(lambda);
-  s.mu = as_std(mu);
-  s.sig_err_inv = as_std(sig_err_inv);
-  s.psi_inv = as_std(psi_inv);
-  emc_factor::Prior prior;
-  prior.mu_invar = as_mat(mu_invar);
-  prior.mu_mean = as_std(mu_mean);
-  prior.shape_err = as_std(shape_err);
-  prior.rate_err = as_std(rate_err);
-  prior.lambda_invar = as_std(lambda_invar);
-  prior.shape_psi = as_std(shape_psi);
-  prior.rate_psi = as_std(rate_psi);
-  std::vector<int> fr(free_entry.size());
-  for (R_xlen_t i = 0; i < free_entry.size(); ++i) {
-    if (free_entry[i] == NA_LOGICAL) return R_NilValue;
-    fr[i] = free_entry[i] == TRUE;
+SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::List& state,
+                                const Rcpp::List& prior) {
+  emc_factor::InfiniteState s = infinite_state(state);
+  if (!emc_factor::gibbs_infinite(s, as_mat(alpha), infinite_prior(prior))) return R_NilValue;
+  return infinite_result(s);
+}
+
+// The ensemble move's Gibbs rounds for a factor hierarchy (`free_entry` a
+// matrix) or the shrinkage-prior one (`free_entry` NULL), as
+// .emc_ensemble_rounds_r() runs them: the group draw given the selected pool
+// members, every member's density under the subject prior given the scores,
+// and each subject's selection by the Gumbel-max trick, one uniform per pool
+// row in stack order. Returns the final and the last conditioning
+// selections, the group state and the pools' weight ESS under it; NULL when
+// a round is left to the R form.
+// [[Rcpp::export]]
+SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
+                                    const Rcpp::NumericVector& base_w,
+                                    const Rcpp::IntegerVector& k0, int M, int rounds,
+                                    const Rcpp::List& state, SEXP free_entry,
+                                    const Rcpp::List& prior) {
+  const int n = k0.size(), p = pool_stack.ncol();
+  const R_xlen_t nM = pool_stack.nrow();
+  const bool infinite = free_entry == R_NilValue;
+  if (n < 1 || M < 1 || rounds < 1 || nM != static_cast<R_xlen_t>(n) * M ||
+      base_w.size() != nM)
+    return R_NilValue;
+  emc_factor::State fs;
+  emc_factor::Prior fp;
+  emc_factor::InfiniteState is;
+  emc_factor::InfinitePrior ip;
+  std::vector<int> fr;
+  if (infinite) {
+    is = infinite_state(state);
+    ip = infinite_prior(prior);
+  } else {
+    fs = factor_state(state);
+    fp = factor_prior(prior);
+    if (!free_entries(Rcpp::LogicalMatrix(free_entry), fr)) return R_NilValue;
   }
-  if (!emc_factor::gibbs(s, as_mat(alpha), prior, fr)) return R_NilValue;
-  return Rcpp::List::create(
-      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
-      Rcpp::_["var"] = as_r(s.var), Rcpp::_["lambda"] = as_r(s.lambda),
-      Rcpp::_["lambda_scaled"] = as_r(s.lambda_scaled), Rcpp::_["eta"] = as_r(s.eta),
-      Rcpp::_["sig_err_inv"] = Rcpp::NumericVector(s.sig_err_inv.begin(), s.sig_err_inv.end()),
-      Rcpp::_["psi_inv"] = Rcpp::NumericVector(s.psi_inv.begin(), s.psi_inv.end()));
+  std::vector<int> selected(n), conditioned(n);
+  for (int s = 0; s < n; ++s) {
+    if (k0[s] < 1 || k0[s] > M) return R_NilValue;
+    selected[s] = k0[s] - 1;
+  }
+  Mat alpha(n, p);
+  std::vector<double> lw(nM), wess(n, 0.0), dvar(p), sd(p);
+  try {
+    for (int r = 1; r <= rounds; ++r) {
+      for (int s = 0; s < n; ++s)
+        for (int i = 0; i < p; ++i)
+          alpha(s, i) = pool_stack(static_cast<R_xlen_t>(s) * M + selected[s], i);
+      conditioned = selected;
+      const bool drawn = infinite ? emc_factor::gibbs_infinite(is, alpha, ip)
+                                  : emc_factor::gibbs(fs, alpha, fp, fr);
+      if (!drawn) return R_NilValue;
+      const Mat& lambda = infinite ? is.lambda : fs.lambda;
+      const Mat& eta = infinite ? is.eta : fs.eta;
+      const std::vector<double>& mu = infinite ? is.mu : fs.mu;
+      const std::vector<double>& precision = infinite ? is.epsilon_inv : fs.sig_err_inv;
+      // Each subject's prior mean given its scores; independent errors.
+      Mat mean = mult(lambda, transpose(eta));
+      for (int s = 0; s < n; ++s)
+        for (int i = 0; i < p; ++i) mean(i, s) = mu[i] + mean(i, s);
+      long double log_var = 0.0;
+      for (int i = 0; i < p; ++i) {
+        dvar[i] = 1 / precision[i];
+        sd[i] = std::sqrt(dvar[i]);
+        log_var += std::log(dvar[i]);
+      }
+      volatile double two_pi = 2 * M_PI;
+      volatile double scaled = p * std::log(two_pi);
+      const double norm = scaled + static_cast<double>(log_var);
+      for (R_xlen_t row = 0; row < nM; ++row) {
+        const int s = static_cast<int>(row / M);
+        long double q = 0.0;
+        for (int i = 0; i < p; ++i) {
+          const double z = (pool_stack(row, i) - mean(i, s)) / sd[i];
+          volatile double z2 = z * z;
+          q += z2;
+        }
+        volatile double density = -0.5 * (norm + static_cast<double>(q));
+        lw[row] = base_w[row] + density;
+      }
+      for (int s = 0; s < n; ++s) {
+        const R_xlen_t off = static_cast<R_xlen_t>(s) * M;
+        int best = 0;
+        double best_v = 0.0;
+        bool missing = false;
+        for (int j = 0; j < M; ++j) {
+          const double g = -std::log(-std::log(unif_rand()));
+          const double val = lw[off + j] + g;
+          if (ISNAN(val)) missing = true;
+          if (j == 0 || best_v < val) {
+            best_v = val;
+            best = j;
+          }
+        }
+        if (missing) {
+          // The rest of the round's uniforms are not drawn: the R form
+          // starts again from the stream's state before the rounds.
+          return R_NilValue;
+        }
+        selected[s] = best;
+      }
+      if (r == rounds) {
+        for (int s = 0; s < n; ++s) {
+          const R_xlen_t off = static_cast<R_xlen_t>(s) * M;
+          double mx = lw[off];
+          for (int j = 1; j < M; ++j)
+            if (lw[off + j] > mx) mx = lw[off + j];
+          long double sw = 0.0, sw2 = 0.0;
+          for (int j = 0; j < M; ++j) {
+            const double w = std::exp(lw[off + j] - mx);
+            volatile double w2 = w * w;
+            sw += w;
+            sw2 += w2;
+          }
+          const double a = static_cast<double>(sw), b = static_cast<double>(sw2);
+          volatile double a2 = a * a;
+          wess[s] = a2 / b;
+        }
+      }
+    }
+  } catch (Decline&) {
+    return R_NilValue;
+  }
+  Rcpp::IntegerVector sel(n), cond(n);
+  for (int s = 0; s < n; ++s) {
+    sel[s] = selected[s] + 1;
+    cond[s] = conditioned[s] + 1;
+  }
+  return Rcpp::List::create(Rcpp::_["selected"] = sel, Rcpp::_["conditioned"] = cond,
+                            Rcpp::_["state"] = infinite ? infinite_result(is)
+                                                        : factor_result(fs),
+                            Rcpp::_["wess"] = Rcpp::NumericVector(wess.begin(), wess.end()));
 }

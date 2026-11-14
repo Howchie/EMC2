@@ -209,3 +209,31 @@ test_that("an SEM without covariates takes a group draw", {
   expect_true(all(is.finite(pars$tmu)))
   expect_true(all(is.finite(pars$tvar)))
 })
+
+test_that("the native latent ensemble rounds are the R rounds", {
+  skip_on_os("windows")
+  for (type in c("factor", "infnt_factor")) {
+    fac <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = type,
+                    n_factors = 2)
+    fac <- init_chains(fac, cores_for_chains = 1, particles = 5)
+    sampler <- fac[[1]]
+    n <- sampler$n_subjects
+    p <- sampler$n_pars
+    M <- 4L
+    set.seed(21)
+    pars <- EMC2:::gibbs_step(sampler, sampler$samples$alpha[, , sampler$samples$idx], type)
+    stack <- matrix(rnorm(n * M * p, sd = 0.5), n * M, p,
+                    dimnames = list(NULL, sampler$par_names))
+    base_w <- rnorm(n * M)
+    k0 <- sample.int(M, n, replace = TRUE)
+    cfg <- list(rounds = 3L)
+    seed <- .Random.seed
+    r_form <- EMC2:::.emc_ensemble_rounds_r_form(sampler, pars, stack, base_w, k0, M, cfg)
+    after <- .Random.seed
+    assign(".Random.seed", seed, envir = globalenv())
+    native <- EMC2:::.emc_ensemble_rounds_latent(sampler, pars, stack, base_w, k0, M, cfg)
+    expect_false(is.null(native))
+    expect_identical(native, r_form)
+    expect_identical(.Random.seed, after)
+  }
+})

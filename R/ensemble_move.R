@@ -344,6 +344,49 @@
 # tested against. The scratch store only needs the group state: gibbs_step()
 # takes the subject states as an argument.
 .emc_ensemble_rounds_r <- function(sampler, pars, pool_stack, base_w, k0, M, cfg) {
+  seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
+  out <- if (!is.null(seed) && isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
+    .emc_ensemble_rounds_latent(sampler, pars, pool_stack, base_w, k0, M, cfg)
+  if (!is.null(out)) return(out)
+  if (!is.null(seed)) assign(".Random.seed", seed, envir = globalenv())
+  .emc_ensemble_rounds_r_form(sampler, pars, pool_stack, base_w, k0, M, cfg)
+}
+
+# The rounds of a factor or infinite-factor hierarchy in one native call
+# (src/gibbs_factor.cpp), the same rounds on the same random stream; NULL
+# for other hierarchies and where the native form declines.
+.emc_ensemble_rounds_latent <- function(sampler, pars, pool_stack, base_w, k0, M, cfg) {
+  type <- sampler$type
+  n <- length(k0)
+  if (!type %in% c("factor", "infnt_factor") || any(sampler$nuisance) ||
+      n != sampler$n_subjects || ncol(pool_stack) != sampler$n_pars || !is.double(pool_stack))
+    return(NULL)
+  # The state as the rounds' first draw reads it back from the store.
+  if (type == "factor") {
+    inp <- .emc_gibbs_factor_inputs(sampler, list(
+      mu = pars$tmu, eta = pars$eta, lambda = pars$lambda_untransf,
+      psi_inv = pars$psi_inv, sig_err_inv = pars$sig_err_inv))
+  } else {
+    inp <- .emc_gibbs_infnt_factor_inputs(sampler, list(
+      mu = pars$tmu, delta = pars$delta, lambda = pars$lambda, psi = pars$psi,
+      epsilon_inv = pars$epsilon_inv))
+    if (!is.null(inp)) inp$state$eta <- NULL
+  }
+  if (is.null(inp) || any(lengths(inp$state) == 0L)) return(NULL)
+  res <- emc_ensemble_rounds_latent_cpp(pool_stack, as.numeric(base_w), as.integer(k0),
+                                        as.integer(M), as.integer(cfg$rounds), inp$state,
+                                        inp$free, inp$prior)
+  if (is.null(res)) return(NULL)
+  offset <- (seq_len(n) - 1L) * M
+  alpha_k <- t(pool_stack[offset + res$conditioned, , drop = FALSE])
+  pars <- if (type == "factor") .emc_gibbs_factor_pars(res$state, t(alpha_k)) else
+    .emc_gibbs_infnt_factor_pars(res$state, alpha_k, t(alpha_k),
+                                 last_sample_infnt_factor(
+                                   .emc_ensemble_store(sampler$samples))$delta)
+  list(selected = res$selected, pars = pars, wess = res$wess)
+}
+
+.emc_ensemble_rounds_r_form <- function(sampler, pars, pool_stack, base_w, k0, M, cfg) {
   n <- length(k0)
   n_pars <- ncol(pool_stack)
   subj_of_row <- rep(seq_len(n), each = M)

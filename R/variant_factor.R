@@ -213,35 +213,56 @@ gibbs_step_factor <- function(sampler, alpha){
   gibbs_step_factor_r(sampler, alpha)
 }
 
-# The native draw in the form gibbs_step_factor_r() returns, or NULL where
-# the native form does not cover the hierarchy or declines the draw.
-.emc_gibbs_factor_native <- function(sampler, alpha) {
-  last <- last_sample_factor(sampler$samples)
+# What the native draw takes: the state (`last`, as last_sample_factor()
+# gives it), which loadings are free and the prior's vectors at full length.
+# NULL where the native form does not cover the hierarchy.
+.emc_gibbs_factor_inputs <- function(sampler, last) {
   prior <- sampler$prior
   free <- attr(sampler, "Lambda_mat") == Inf
   n <- sampler$n_subjects
   p <- sum(!sampler$nuisance)
   k <- sampler$n_factors
   full <- function(x, len) is.numeric(x) && length(x) %in% c(1L, len)
-  if (p < 2L || !is.matrix(alpha) || !all(dim(alpha) == c(p, n)) ||
-      !is.matrix(free) || !all(dim(free) == c(p, k)) || anyNA(free) ||
+  if (p < 2L || !is.matrix(free) || !all(dim(free) == c(p, k)) || anyNA(free) ||
       !is.matrix(prior$theta_mu_invar) || !all(dim(prior$theta_mu_invar) == c(p, p)) ||
       length(prior$theta_mu_mean) != p || length(prior$theta_lambda_invar) != p ||
       !full(prior$as, p) || !full(prior$bs, p) || !full(prior$ap, k) || !full(prior$bp, k))
     return(NULL)
-  alpha <- t(alpha)
-  res <- emc_gibbs_factor_cpp(
-    alpha, matrix(last$eta, n, k), as.numeric(last$psi_inv), as.numeric(last$sig_err_inv),
-    matrix(last$lambda, p, k), as.numeric(last$mu), free,
-    prior$theta_mu_invar, as.numeric(prior$theta_mu_mean),
-    rep_len(as.numeric(prior$as + n / 2), p), rep_len(as.numeric(prior$bs), p),
-    as.numeric(prior$theta_lambda_invar),
-    rep_len(as.numeric(prior$ap + n / 2), k), rep_len(as.numeric(prior$bp), k))
-  if (is.null(res)) return(NULL)
-  mu <- matrix(res$mu, 1L, dimnames = list(NULL, colnames(alpha)))
+  list(state = list(eta = matrix(as.numeric(last$eta), n, k),
+                    lambda = matrix(as.numeric(last$lambda), p, k),
+                    mu = as.numeric(last$mu), sig_err_inv = as.numeric(last$sig_err_inv),
+                    psi_inv = as.numeric(last$psi_inv)),
+       free = free,
+       prior = list(mu_invar = prior$theta_mu_invar,
+                    mu_mean = as.numeric(prior$theta_mu_mean),
+                    shape_err = rep_len(as.numeric(prior$as + n / 2), p),
+                    rate_err = rep_len(as.numeric(prior$bs), p),
+                    lambda_invar = as.numeric(prior$theta_lambda_invar),
+                    shape_psi = rep_len(as.numeric(prior$ap + n / 2), k),
+                    rate_psi = rep_len(as.numeric(prior$bp), k)))
+}
+
+# The native draw's state in the form gibbs_step_factor_r() returns, given
+# the subjects' states (subjects x parameters).
+.emc_gibbs_factor_pars <- function(res, alpha_t) {
+  mu <- matrix(res$mu, 1L, dimnames = list(NULL, colnames(alpha_t)))
   list(tmu = mu, tvar = res$var, lambda_untransf = res$lambda,
        lambda = res$lambda_scaled, eta = res$eta,
-       sig_err_inv = res$sig_err_inv, psi_inv = res$psi_inv, alpha = t(alpha))
+       sig_err_inv = res$sig_err_inv, psi_inv = res$psi_inv, alpha = t(alpha_t))
+}
+
+# The native draw, or NULL where the native form does not cover the
+# hierarchy or declines the draw.
+.emc_gibbs_factor_native <- function(sampler, alpha) {
+  n <- sampler$n_subjects
+  p <- sum(!sampler$nuisance)
+  if (!is.matrix(alpha) || !all(dim(alpha) == c(p, n))) return(NULL)
+  inp <- .emc_gibbs_factor_inputs(sampler, last_sample_factor(sampler$samples))
+  if (is.null(inp)) return(NULL)
+  alpha_t <- t(alpha)
+  res <- emc_gibbs_factor_cpp(alpha_t, inp$state, inp$free, inp$prior)
+  if (is.null(res)) return(NULL)
+  .emc_gibbs_factor_pars(res, alpha_t)
 }
 
 gibbs_step_factor_r <- function(sampler, alpha){

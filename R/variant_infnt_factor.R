@@ -184,39 +184,61 @@ gibbs_step_infnt_factor <- function(sampler, alpha){
   gibbs_step_infnt_factor_r(sampler, alpha)
 }
 
-# The native draw in the form gibbs_step_infnt_factor_r() returns, or NULL
-# where the native form does not cover the hierarchy or declines the draw.
-.emc_gibbs_infnt_factor_native <- function(sampler, alpha) {
-  last <- last_sample_infnt_factor(sampler$samples)
+# What the native draw takes: the state (`last`, as
+# last_sample_infnt_factor() gives it) and the prior's vectors at full
+# length. NULL where the native form does not cover the hierarchy.
+.emc_gibbs_infnt_factor_inputs <- function(sampler, last) {
   prior <- sampler$prior
   n <- sampler$n_subjects
   p <- sum(!sampler$nuisance)
   K <- attr(sampler, "max_factors")
   full <- function(x, len) is.numeric(x) && length(x) %in% c(1L, len)
   one <- function(x) is.numeric(x) && length(x) == 1L
-  if (p < 2L || !one(K) || !is.matrix(alpha) || !all(dim(alpha) == c(p, n)) ||
+  if (p < 2L || !one(K) ||
       !full(prior$theta_mu_invar, p) || is.matrix(prior$theta_mu_invar) ||
       !full(prior$theta_mu_mean, p) || !full(prior$as, p) || !full(prior$bs, p) ||
       !one(prior$df) || !one(prior$ad1) || !one(prior$bd1) ||
       !(is.null(prior$ad2) || (one(prior$ad2) && one(prior$bd2))))
     return(NULL)
-  alpha_t <- t(alpha)
-  res <- emc_gibbs_infnt_factor_cpp(
-    alpha_t, matrix(last$psi, p, K), as.numeric(last$epsilon_inv), matrix(last$lambda, p, K),
-    as.numeric(last$mu), as.numeric(last$delta),
-    rep_len(as.numeric(prior$theta_mu_invar), p), rep_len(as.numeric(prior$theta_mu_mean), p),
-    as.numeric(prior$df), as.numeric(prior$ad1), as.numeric(prior$bd1),
-    if (!is.null(prior$ad2)) as.numeric(prior$ad2),
-    if (is.null(prior$ad2)) 0 else as.numeric(prior$bd2),
-    rep_len(as.numeric(prior$as + .5 * n), p), rep_len(as.numeric(prior$bs), p))
-  if (is.null(res)) return(NULL)
+  list(state = list(psi = matrix(as.numeric(last$psi), p, K),
+                    lambda = matrix(as.numeric(last$lambda), p, K),
+                    mu = as.numeric(last$mu), epsilon_inv = as.numeric(last$epsilon_inv),
+                    delta = as.numeric(last$delta)),
+       prior = list(mu_invar = rep_len(as.numeric(prior$theta_mu_invar), p),
+                    mu_mean = rep_len(as.numeric(prior$theta_mu_mean), p),
+                    shape_err = rep_len(as.numeric(prior$as + .5 * n), p),
+                    rate_err = rep_len(as.numeric(prior$bs), p),
+                    df = as.numeric(prior$df), ad1 = as.numeric(prior$ad1),
+                    bd1 = as.numeric(prior$bd1),
+                    ad2 = if (!is.null(prior$ad2)) as.numeric(prior$ad2),
+                    bd2 = if (!is.null(prior$ad2)) as.numeric(prior$bd2)))
+}
+
+# The native draw's state in the form gibbs_step_infnt_factor_r() returns,
+# given the subjects' states both ways round and the previous shrinkage
+# vector, whose names the new one keeps.
+.emc_gibbs_infnt_factor_pars <- function(res, alpha, alpha_t, delta) {
   mu <- matrix(res$mu, 1L, dimnames = list(NULL, colnames(alpha_t)))
   eta <- res$eta
   if (!is.null(rownames(alpha_t))) dimnames(eta) <- list(rownames(alpha_t), NULL)
-  delta <- last$delta
   delta[] <- res$delta
   list(tmu = mu, tvar = res$var, lambda = res$lambda, eta = eta,
        epsilon_inv = res$epsilon_inv, psi = res$psi, alpha = alpha, delta = delta)
+}
+
+# The native draw, or NULL where the native form does not cover the
+# hierarchy or declines the draw.
+.emc_gibbs_infnt_factor_native <- function(sampler, alpha) {
+  n <- sampler$n_subjects
+  p <- sum(!sampler$nuisance)
+  if (!is.matrix(alpha) || !all(dim(alpha) == c(p, n))) return(NULL)
+  last <- last_sample_infnt_factor(sampler$samples)
+  inp <- .emc_gibbs_infnt_factor_inputs(sampler, last)
+  if (is.null(inp)) return(NULL)
+  alpha_t <- t(alpha)
+  res <- emc_gibbs_infnt_factor_cpp(alpha_t, inp$state, inp$prior)
+  if (is.null(res)) return(NULL)
+  .emc_gibbs_infnt_factor_pars(res, alpha, alpha_t, last$delta)
 }
 
 gibbs_step_infnt_factor_r <- function(sampler, alpha){

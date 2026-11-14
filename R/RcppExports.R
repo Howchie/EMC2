@@ -183,12 +183,16 @@ emc_rmvnorm_cpp <- function(n, mean, sigma) {
     .Call(`_EMC2_emc_rmvnorm_cpp`, n, mean, sigma)
 }
 
-emc_gibbs_infnt_factor_cpp <- function(alpha, psi, epsilon_inv, lambda, mu, delta, mu_invar, mu_mean, df, ad1, bd1, ad2, bd2, shape_err, rate_err) {
-    .Call(`_EMC2_emc_gibbs_infnt_factor_cpp`, alpha, psi, epsilon_inv, lambda, mu, delta, mu_invar, mu_mean, df, ad1, bd1, ad2, bd2, shape_err, rate_err)
+emc_gibbs_factor_cpp <- function(alpha, state, free_entry, prior) {
+    .Call(`_EMC2_emc_gibbs_factor_cpp`, alpha, state, free_entry, prior)
 }
 
-emc_gibbs_factor_cpp <- function(alpha, eta, psi_inv, sig_err_inv, lambda, mu, free_entry, mu_invar, mu_mean, shape_err, rate_err, lambda_invar, shape_psi, rate_psi) {
-    .Call(`_EMC2_emc_gibbs_factor_cpp`, alpha, eta, psi_inv, sig_err_inv, lambda, mu, free_entry, mu_invar, mu_mean, shape_err, rate_err, lambda_invar, shape_psi, rate_psi)
+emc_gibbs_infnt_factor_cpp <- function(alpha, state, prior) {
+    .Call(`_EMC2_emc_gibbs_infnt_factor_cpp`, alpha, state, prior)
+}
+
+emc_ensemble_rounds_latent_cpp <- function(pool_stack, base_w, k0, M, rounds, state, free_entry, prior) {
+    .Call(`_EMC2_emc_ensemble_rounds_latent_cpp`, pool_stack, base_w, k0, M, rounds, state, free_entry, prior)
 }
 
 gomp_pdf_cdf_vec <- function(rt, alpha, beta, K, B, A, t0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 512L, dt_target = 4e-3, grade = 8.0, tgrade = 32.0) {
