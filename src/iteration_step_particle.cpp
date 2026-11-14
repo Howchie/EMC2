@@ -62,6 +62,22 @@ SEXP settings_after(SEXP pm_k, SEXP sel, SEXP out, const char* stage, bool adapt
   return res;
 }
 
+// Each subject's prior mean, parameters x subjects: the group state's own, or
+// the prior mean of a fit without a group level; NULL for other states.
+SEXP prior_means(SEXP pars, SEXP cx) {
+  SEXP subj_mu = lget(pars, "subj_mu");
+  if (subj_mu != R_NilValue) return subj_mu;
+  SEXP single = lget(cx, "single"), tmu = lget(pars, "tmu"), alpha = lget(pars, "alpha");
+  if (single == R_NilValue || TYPEOF(tmu) != REALSXP || TYPEOF(alpha) != REALSXP ||
+      !Rf_isMatrix(alpha) || XLENGTH(tmu) != Rf_nrows(alpha))
+    return R_NilValue;
+  const int p = Rf_nrows(alpha), n = Rf_ncols(alpha);
+  Shield<SEXP> out(Rf_allocMatrix(REALSXP, p, n));
+  for (int s = 0; s < n; ++s)
+    std::copy(REAL(tmu), REAL(tmu) + p, REAL(out) + static_cast<R_xlen_t>(s) * p);
+  return out;
+}
+
 // The allocation's skips of the subjects' particle steps and the joint
 // selection with subject HMC, each from the subject's own stream (advanced in
 // streams2). Whether any subject may skip.
@@ -116,7 +132,8 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   const int n = static_cast<int>(XLENGTH(pm_settings));
   SEXP samples = lget(pmwgs, "samples");
   SEXP s_alpha = lget(samples, "alpha"), s_ll = lget(samples, "subj_ll");
-  SEXP alpha0 = lget(pars, "alpha"), subj_mu = lget(pars, "subj_mu");
+  SEXP alpha0 = lget(pars, "alpha");
+  Shield<SEXP> subj_mu(prior_means(pars, cx));
   SEXP gf = VECTOR_ELT(lget(group_chol, "f"), 0), gv = lget(group_chol, "ref");
   if (TYPEOF(alpha0) != REALSXP || !Rf_isMatrix(alpha0) || Rf_ncols(alpha0) != n ||
       XLENGTH(streams) != n || TYPEOF(s_alpha) != REALSXP || TYPEOF(s_ll) != REALSXP)
@@ -305,7 +322,8 @@ bool particle_pool(SEXP st, SEXP cx, int i) {
   const int n = static_cast<int>(XLENGTH(pm_settings));
   SEXP samples = lget(pmwgs, "samples");
   SEXP s_alpha = lget(samples, "alpha"), s_ll = lget(samples, "subj_ll");
-  SEXP alpha0 = lget(pars, "alpha"), subj_mu = lget(pars, "subj_mu");
+  SEXP alpha0 = lget(pars, "alpha");
+  Shield<SEXP> subj_mu(prior_means(pars, cx));
   if (TYPEOF(alpha0) != REALSXP || !Rf_isMatrix(alpha0) || Rf_ncols(alpha0) != n ||
       XLENGTH(streams) != n || TYPEOF(s_alpha) != REALSXP || TYPEOF(s_ll) != REALSXP ||
       TYPEOF(cost0) != REALSXP || XLENGTH(cost0) != n ||

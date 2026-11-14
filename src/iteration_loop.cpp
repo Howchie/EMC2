@@ -211,6 +211,21 @@ bool family_ok(SEXP f) {
 bool step_store(SEXP st, SEXP cx, int i) {
   SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), proposals = var(st, "proposals");
   SEXP samples = lget(pmwgs, "samples");
+  // Without a group level only the subjects' states are stored
+  // (fill_samples_RE).
+  if (lget(cx, "single") != R_NilValue) {
+    SEXP alpha = lget(samples, "alpha"), subj_ll = lget(samples, "subj_ll");
+    if (TYPEOF(alpha) != REALSXP || TYPEOF(subj_ll) != REALSXP ||
+        TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) ||
+        lget(samples, "idx") == R_NilValue || flag(lget(cx, "alloc_on")))
+      return false;
+    Shield<SEXP> j(iteration_index(cx, i));
+    emc_set_particle_slice(alpha, subj_ll, proposals, static_cast<int>(Rf_asReal(j)),
+                           Rf_asInteger(lget(pmwgs, "n_pars")));
+    Shield<SEXP> s2(lset(samples, "idx", j));
+    set_var(st, "pmwgs", lset(pmwgs, "samples", s2));
+    return true;
+  }
   SEXP a_half = lget(samples, "a_half"), theta_mu = lget(samples, "theta_mu"),
        theta_var = lget(samples, "theta_var"), alpha = lget(samples, "alpha"),
        subj_ll = lget(samples, "subj_ll");

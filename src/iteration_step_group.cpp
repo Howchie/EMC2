@@ -56,7 +56,73 @@ SEXP chol_factor(SEXP sigma) {
                       _["repaired"] = false);
 }
 
+namespace {
+
+// Wall-clock start of the iteration and the chain's cores, for the
+// allocation's costs.
+void iteration_costs(SEXP st, SEXP cx, const Clock& started) {
+  if (flag(lget(cx, "persistent_workers")))
+    set_var(st, "pool_iteration",
+            Rf_ScalarInteger(Rf_asInteger(var(st, "pool_iteration")) + 1));
+  if (!flag(lget(cx, "alloc_on"))) return;
+  SEXP ctl = lget(cx, "core_ctl");
+  double cores = num(lget(cx, "n_cores"), 1.0);
+  if (ctl != R_NilValue) {
+    const double total = num(lget(ctl, "total"), 1.0), slots = num(lget(ctl, "n_slots"), 1.0);
+    cores = std::max(1.0, std::floor(total / slots));
+  }
+  set_var(st, "el_iter", Rf_ScalarReal(started.elapsed));
+  set_var(st, "cores_it", Rf_ScalarReal(cores));
+}
+
+// The step of a fit without a group level (gibbs_step_single): the prior as
+// the group state and the subjects' last states.
+bool group_single(SEXP st, SEXP cx, int i) {
+  SEXP pmwgs = var(st, "pmwgs"), single = lget(cx, "single");
+  SEXP tmu = lget(single, "tmu"), tvar = lget(single, "tvar"), rows = lget(single, "rows");
+  SEXP samples = lget(pmwgs, "samples"), s_alpha = lget(samples, "alpha");
+  SEXP dims = Rf_getAttrib(s_alpha, R_DimSymbol);
+  SEXP seed = lget(lget(pmwgs, "rng"), "gibbs");
+  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(s_alpha) != REALSXP || TYPEOF(dims) != INTSXP ||
+      XLENGTH(dims) != 3 || TYPEOF(seed) != INTSXP || TYPEOF(tvar) != REALSXP ||
+      !Rf_isMatrix(tvar) || TYPEOF(rows) != STRSXP || !flag(lget(cx, "chol_simple")) ||
+      flag(lget(cx, "alloc_on")))
+    return false;
+  const int p = INTEGER(dims)[0], n = INTEGER(dims)[1];
+  Shield<SEXP> j(iteration_index(cx, i));
+  const R_xlen_t prev = static_cast<R_xlen_t>(Rf_asReal(j)) - 2;
+  const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
+  if (prev < 0 || XLENGTH(s_alpha) < (prev + 1) * slice || XLENGTH(rows) != p ||
+      Rf_nrows(tvar) != p || Rf_ncols(tvar) != p)
+    return false;
+  const Clock started = clock_now();
+  RObject group_chol = var(st, "group_chol_it");
+  if (static_cast<SEXP>(group_chol) == R_NilValue ||
+      !R_compute_identical(lget(group_chol, "ref"), tvar, 0)) {
+    Shield<SEXP> f(chol_factor(tvar));
+    if (f == R_NilValue) return false;
+    group_chol = List::create(_["idx_list"] = lget(cx, "idx_list_blk"), _["ref"] = tvar,
+                              _["marginal_idx"] = lget(cx, "marginal_idx_blk"),
+                              _["include_full"] = false, _["full"] = R_NilValue,
+                              _["f"] = List::create(f));
+  }
+  Shield<SEXP> alpha(Rf_allocMatrix(REALSXP, p, n));
+  std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice, REAL(alpha));
+  Shield<SEXP> dn(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(dn, 0, rows);
+  Rf_setAttrib(alpha, R_DimNamesSymbol, dn);
+  set_global_seed(seed);
+  set_var(st, "pars", List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["alpha"] = alpha));
+  set_var(st, "ens_pools", R_NilValue);
+  set_var(st, "group_chol_it", group_chol);
+  iteration_costs(st, cx, started);
+  return true;
+}
+
+}  // namespace
+
 bool step_group(SEXP st, SEXP cx, int i) {
+  if (lget(cx, "single") != R_NilValue) return group_single(st, cx, i);
   SEXP pmwgs = var(st, "pmwgs");
   SEXP gibbs = lget(cx, "gibbs"), pools = lget(cx, "pools");
   if (TYPEOF(pmwgs) != VECSXP || TYPEOF(gibbs) != VECSXP || pools == R_NilValue ||
@@ -164,19 +230,7 @@ bool step_group(SEXP st, SEXP cx, int i) {
   set_var(st, "pars", pars);
   set_var(st, "ens_pools", ens_pools);
   set_var(st, "group_chol_it", group_chol);
-  if (flag(lget(cx, "persistent_workers")))
-    set_var(st, "pool_iteration",
-            Rf_ScalarInteger(Rf_asInteger(var(st, "pool_iteration")) + 1));
-  if (flag(lget(cx, "alloc_on"))) {
-    SEXP ctl = lget(cx, "core_ctl");
-    double cores = num(lget(cx, "n_cores"), 1.0);
-    if (ctl != R_NilValue) {
-      const double total = num(lget(ctl, "total"), 1.0), slots = num(lget(ctl, "n_slots"), 1.0);
-      cores = std::max(1.0, std::floor(total / slots));
-    }
-    set_var(st, "el_iter", Rf_ScalarReal(started.elapsed));
-    set_var(st, "cores_it", Rf_ScalarReal(cores));
-  }
+  iteration_costs(st, cx, started);
   return true;
 }
 

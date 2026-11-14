@@ -11,11 +11,12 @@
                        shear = "shear", collapsed = "collapsed", hmc = "hmc", store = "store")
 
 # Whether the native forms of the steps cover the block: standard hierarchies
-# without nuisance or pooled parameters, outside profiled runs, with a
-# subject pool and no likelihood pool of a single subject.
+# and fits without a group level, without nuisance or pooled parameters,
+# outside profiled runs. A step whose native form does not take the state
+# (a likelihood pool of a single subject, no subject pool) runs in R.
 .emc_steps_native_ok <- function(pmwgs, nuisance, sampler_profile, wpool, llpool) {
-  identical(pmwgs$type, "standard") && !any(nuisance) && is.null(pmwgs$pooled) &&
-    !sampler_profile && is.null(llpool) && !is.null(wpool) && pmwgs$n_subjects > 1L
+  (identical(pmwgs$type, "standard") || identical(pmwgs$type, "single")) &&
+    !any(nuisance) && is.null(pmwgs$pooled) && !sampler_profile
 }
 
 # The state's own value of a block constant that a step may replace (the data
@@ -37,7 +38,11 @@
   p <- pmwgs$n_pars
   n <- pmwgs$n_subjects
   out <- list()
-  if (is.null(pmwgs$gd) && !length(pmwgs$group_designs)) {
+  # Without a group level the "group draw" is the prior itself.
+  if (identical(pmwgs$type, "single"))
+    out$single <- list(tmu = pmwgs$prior$theta_mu_mean, tvar = pmwgs$prior$theta_mu_var,
+                       rows = pmwgs$par_names[!pmwgs$nuisance])
+  else if (is.null(pmwgs$gd) && !length(pmwgs$group_designs)) {
     is_blocked <- pmwgs$is_blocked[!pmwgs$nuisance]
     par_group <- pmwgs$par_group[!pmwgs$nuisance]
     if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
