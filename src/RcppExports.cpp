@@ -681,6 +681,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_gibbs_factor_cpp
+SEXP emc_gibbs_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::NumericMatrix& eta, const Rcpp::NumericVector& psi_inv, const Rcpp::NumericVector& sig_err_inv, const Rcpp::NumericMatrix& lambda, const Rcpp::NumericVector& mu, const Rcpp::LogicalMatrix& free_entry, const Rcpp::NumericMatrix& mu_invar, const Rcpp::NumericVector& mu_mean, const Rcpp::NumericVector& shape_err, const Rcpp::NumericVector& rate_err, const Rcpp::NumericVector& lambda_invar, const Rcpp::NumericVector& shape_psi, const Rcpp::NumericVector& rate_psi);
+RcppExport SEXP _EMC2_emc_gibbs_factor_cpp(SEXP alphaSEXP, SEXP etaSEXP, SEXP psi_invSEXP, SEXP sig_err_invSEXP, SEXP lambdaSEXP, SEXP muSEXP, SEXP free_entrySEXP, SEXP mu_invarSEXP, SEXP mu_meanSEXP, SEXP shape_errSEXP, SEXP rate_errSEXP, SEXP lambda_invarSEXP, SEXP shape_psiSEXP, SEXP rate_psiSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type eta(etaSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type psi_inv(psi_invSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type sig_err_inv(sig_err_invSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalMatrix& >::type free_entry(free_entrySEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type mu_invar(mu_invarSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type mu_mean(mu_meanSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type shape_err(shape_errSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rate_err(rate_errSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type lambda_invar(lambda_invarSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type shape_psi(shape_psiSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rate_psi(rate_psiSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_gibbs_factor_cpp(alpha, eta, psi_inv, sig_err_inv, lambda, mu, free_entry, mu_invar, mu_mean, shape_err, rate_err, lambda_invar, shape_psi, rate_psi));
+    return rcpp_result_gen;
+END_RCPP
+}
 // gomp_pdf_cdf_vec
 Rcpp::List gomp_pdf_cdf_vec(NumericVector rt, NumericVector alpha, NumericVector beta, NumericVector K, NumericVector B, NumericVector A, NumericVector t0, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade);
 RcppExport SEXP _EMC2_gomp_pdf_cdf_vec(SEXP rtSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
@@ -4455,6 +4479,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
+    {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 14},
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},

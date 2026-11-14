@@ -184,7 +184,50 @@ fill_samples_factor <- function(samples, group_level, proposals, j = 1, n_pars){
   return(samples)
 }
 
+# The group draw: the native form (src/gibbs_factor.cpp), which gives the R
+# form's draw on the same random stream, else the R form from the stream's
+# state before the call.
 gibbs_step_factor <- function(sampler, alpha){
+  seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
+  out <- if (!is.null(seed) && isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
+    .emc_gibbs_factor_native(sampler, alpha)
+  if (!is.null(out)) return(out)
+  if (!is.null(seed)) assign(".Random.seed", seed, envir = globalenv())
+  gibbs_step_factor_r(sampler, alpha)
+}
+
+# The native draw in the form gibbs_step_factor_r() returns, or NULL where
+# the native form does not cover the hierarchy or declines the draw.
+.emc_gibbs_factor_native <- function(sampler, alpha) {
+  last <- last_sample_factor(sampler$samples)
+  prior <- sampler$prior
+  free <- attr(sampler, "Lambda_mat") == Inf
+  n <- sampler$n_subjects
+  p <- sum(!sampler$nuisance)
+  k <- sampler$n_factors
+  full <- function(x, len) is.numeric(x) && length(x) %in% c(1L, len)
+  if (p < 2L || !is.matrix(alpha) || !all(dim(alpha) == c(p, n)) ||
+      !is.matrix(free) || !all(dim(free) == c(p, k)) || anyNA(free) ||
+      !is.matrix(prior$theta_mu_invar) || !all(dim(prior$theta_mu_invar) == c(p, p)) ||
+      length(prior$theta_mu_mean) != p || length(prior$theta_lambda_invar) != p ||
+      !full(prior$as, p) || !full(prior$bs, p) || !full(prior$ap, k) || !full(prior$bp, k))
+    return(NULL)
+  alpha <- t(alpha)
+  res <- emc_gibbs_factor_cpp(
+    alpha, matrix(last$eta, n, k), as.numeric(last$psi_inv), as.numeric(last$sig_err_inv),
+    matrix(last$lambda, p, k), as.numeric(last$mu), free,
+    prior$theta_mu_invar, as.numeric(prior$theta_mu_mean),
+    rep_len(as.numeric(prior$as + n / 2), p), rep_len(as.numeric(prior$bs), p),
+    as.numeric(prior$theta_lambda_invar),
+    rep_len(as.numeric(prior$ap + n / 2), k), rep_len(as.numeric(prior$bp), k))
+  if (is.null(res)) return(NULL)
+  mu <- matrix(res$mu, 1L, dimnames = list(NULL, colnames(alpha)))
+  list(tmu = mu, tvar = res$var, lambda_untransf = res$lambda,
+       lambda = res$lambda_scaled, eta = res$eta,
+       sig_err_inv = res$sig_err_inv, psi_inv = res$psi_inv, alpha = t(alpha))
+}
+
+gibbs_step_factor_r <- function(sampler, alpha){
   # Gibbs step for group means with parameter expanded factor analysis from Ghosh & Dunson 2009
   # mu = theta_mu, var = theta_var
   last <- last_sample_factor(sampler$samples)

@@ -136,3 +136,23 @@ test_that("last_sample keeps a one-parameter group covariance as a 1 x 1 matrix"
     expect_equal(last$tvar, matrix(2, 1, 1, dimnames = list("v", "v")))
   }
 })
+
+test_that("the native factor group draw is the R form's draw", {
+  skip_on_os("windows")
+  for (k in 1:2) {
+    fac <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = "factor",
+                    n_factors = k)
+    fac <- init_chains(fac, cores_for_chains = 1, particles = 5)
+    sampler <- fac[[1]]
+    alpha <- sampler$samples$alpha[, , sampler$samples$idx]
+    set.seed(11)
+    seed <- .Random.seed
+    r_form <- EMC2:::gibbs_step_factor_r(sampler, alpha)
+    after <- .Random.seed
+    assign(".Random.seed", seed, envir = globalenv())
+    native <- EMC2:::.emc_gibbs_factor_native(sampler, alpha)
+    expect_false(is.null(native))
+    expect_identical(native, r_form)
+    expect_identical(.Random.seed, after)
+  }
+})
