@@ -1042,8 +1042,12 @@
                                          layout$b_share[k],
                                          layout$g[k], layout$a[k], layout$cost[k],
                                          layout$cap[k], layout$floor[k], as.numeric(rs))
-    for (i in sh) if (!is.null(us[[i]]$rho_t))
-      out[[i]] <- .emc_alloc_need_with_tail(out[[i]], us[[i]], rs, max_rounds)
+    tailed <- emc_alloc_shears_tail_need_cpp(us[sh], out[sh], layout$g[k], layout$a[k],
+                                             layout$cost[k], layout$cap[k], layout$floor[k],
+                                             as.numeric(rs))
+    if (!is.null(tailed)) out[sh] <- tailed else
+      for (i in sh) if (!is.null(us[[i]]$rho_t))
+        out[[i]] <- .emc_alloc_need_with_tail(out[[i]], us[[i]], rs, max_rounds)
   }
   idx <- which(subj)
   if (!length(idx)) return(out)

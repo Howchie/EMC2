@@ -595,3 +595,49 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
   }
   return out;
 }
+
+// The shear units' needs with their tails (.emc_alloc_need_with_tail): where
+// a unit carries a finite tail rho, the rounds both it and its tail need, the
+// tail priced as a coordinate of its own without a between-chain share, and
+// their cost. `need` holds the units' own needs (emc_alloc_shears_need_cpp)
+// and the other vectors their fixed fields. NULL for a tail that is not one
+// number or a need with missing values, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& need,
+                                    const Rcpp::NumericVector& g, const Rcpp::NumericVector& a,
+                                    const Rcpp::NumericVector& cost,
+                                    const Rcpp::NumericVector& cap,
+                                    const Rcpp::NumericVector& floor,
+                                    const Rcpp::NumericVector& rs) {
+  const int n = units.size(), n_t = rs.size();
+  if (need.size() != n || g.size() != n || a.size() != n || cost.size() != n ||
+      cap.size() != n || floor.size() != n)
+    return R_NilValue;
+  const double inf = std::numeric_limits<double>::infinity();
+  Rcpp::List out(n);
+  for (int i = 0; i < n; ++i) {
+    SEXP rt = unit_field(units[i], "rho_t");
+    out[i] = need[i];
+    if (rt == R_NilValue) continue;
+    if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
+    if (!R_FINITE(REAL(rt)[0])) continue;
+    const Rcpp::List tail = emc_alloc_shears_need_cpp(
+        Rcpp::NumericVector::create(REAL(rt)[0]), Rcpp::NumericVector::create(0.0),
+        Rcpp::NumericVector::create(g[i]), Rcpp::NumericVector::create(a[i]),
+        Rcpp::NumericVector::create(cost[i]), Rcpp::NumericVector::create(cap[i]),
+        Rcpp::NumericVector::create(floor[i]), rs);
+    const Rcpp::List own = need[i];
+    const Rcpp::NumericVector x0 = own["x"], xt = Rcpp::as<Rcpp::List>(tail[0])["x"];
+    if (x0.size() != n_t || xt.size() != n_t) return R_NilValue;
+    Rcpp::NumericVector X(n_t), C(n_t);
+    for (int t = 0; t < n_t; ++t) {
+      if (ISNAN(x0[t]) || ISNAN(xt[t])) return R_NilValue;
+      const double x = std::max(x0[t], xt[t]);
+      X[t] = x;
+      C[t] = std::isfinite(x) ? x * cost[i] : inf;
+    }
+    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = own["q"],
+                                Rcpp::Named("cost") = C);
+  }
+  return out;
+}

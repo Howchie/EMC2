@@ -37,6 +37,10 @@ emc_alloc_predict_cpp <- function(units, sol_x, sol_q, idx, fac) {
     .Call(`_EMC2_emc_alloc_predict_cpp`, units, sol_x, sol_q, idx, fac)
 }
 
+emc_alloc_shears_tail_need_cpp <- function(units, need, g, a, cost, cap, floor, rs) {
+    .Call(`_EMC2_emc_alloc_shears_tail_need_cpp`, units, need, g, a, cost, cap, floor, rs)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

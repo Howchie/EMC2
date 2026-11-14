@@ -147,6 +147,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_shears_tail_need_cpp
+SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& need, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& rs);
+RcppExport SEXP _EMC2_emc_alloc_shears_tail_need_cpp(SEXP unitsSEXP, SEXP needSEXP, SEXP gSEXP, SEXP aSEXP, SEXP costSEXP, SEXP capSEXP, SEXP floorSEXP, SEXP rsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type units(unitsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type need(needSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type g(gSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cost(costSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cap(capSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type floor(floorSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_shears_tail_need_cpp(units, need, g, a, cost, cap, floor, rs));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_record_particle_cpp
 SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
 RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
@@ -4633,6 +4650,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_units_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_units_subjects_need_cpp, 3},
     {"_EMC2_emc_alloc_factor_cpp", (DL_FUNC) &_EMC2_emc_alloc_factor_cpp, 3},
     {"_EMC2_emc_alloc_predict_cpp", (DL_FUNC) &_EMC2_emc_alloc_predict_cpp, 5},
+    {"_EMC2_emc_alloc_shears_tail_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_tail_need_cpp, 8},
     {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
     {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
     {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},
