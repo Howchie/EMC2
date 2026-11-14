@@ -186,10 +186,7 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
 
   // The group state's jump from the stored one (.emc_alloc_record_group).
   if (alloc_on) {
-    if (Rf_getAttrib(G, R_DimNamesSymbol) == R_NilValue) {
-      static Function record_group = package_function(".emc_alloc_record_group");
-      sampler = record_group(sampler, pars2);
-    } else {
+    {
       const R_xlen_t at = static_cast<R_xlen_t>(Rf_asReal(idx)) - 1;
       const int q = 2 * p;
       std::vector<double> d(q), now(p), was(p);

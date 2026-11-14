@@ -875,9 +875,9 @@ test_that("the shared subject queue gives the serial likelihoods and survives a 
   skip_if(is.null(pool), "could not start a pool here")
   on.exit(suppressWarnings(try(EMC2:::.emc_wpool_stop(pool), silent = TRUE)), add = TRUE)
   withr::local_options(list(emc2.worker_queue = TRUE))
-  queue <- EMC2:::.emc_wpool_subject_ll_queue
+  queue <- EMC2:::emc_wpool_subject_ll_queue_cpp
   used <- 0L
-  local_mocked_bindings(.emc_wpool_subject_ll_queue = function(...) {
+  local_mocked_bindings(emc_wpool_subject_ll_queue_cpp = function(...) {
     used <<- used + 1L
     queue(...)
   }, .package = "EMC2")

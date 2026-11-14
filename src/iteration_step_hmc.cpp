@@ -11,6 +11,7 @@
 #include <cmath>
 #include <vector>
 #include "iteration_state.h"
+#include "pool_exchange.h"
 
 using namespace Rcpp;
 using namespace emc_iter;
@@ -157,6 +158,12 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
   // Whether the selected transitions run here, on the stored-argument
   // likelihood path; otherwise, and for a transition that path does not
   // serve, through .emc_hmc_dispatch() and so the worker pool.
+  // The group level a subject's transition conditions on, as the standard
+  // hierarchy holds it.
+  const bool shapes =
+      TYPEOF(subj_mu) == REALSXP && Rf_isMatrix(subj_mu) && Rf_nrows(subj_mu) == p &&
+      Rf_ncols(subj_mu) == n && TYPEOF(tvar) == REALSXP && Rf_isMatrix(tvar) &&
+      Rf_nrows(tvar) == p && Rf_ncols(tvar) == p;
   const bool local =
       !(flag(lget(wpool, "alive")) && num(lget(wpool, "n"), 1.0) > 1.0) &&
       !(num(lget(budget, "subject"), 1.0) > 1.0) &&
@@ -164,10 +171,7 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
       option_on("emc2.native_particle_block") &&
       Rf_inherits(VECTOR_ELT(data, 0), "data.frame") &&
       Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values")) == R_NilValue &&
-      TYPEOF(par_names) == STRSXP && XLENGTH(par_names) == p &&
-      TYPEOF(subj_mu) == REALSXP && Rf_isMatrix(subj_mu) && Rf_nrows(subj_mu) == p &&
-      Rf_ncols(subj_mu) == n && TYPEOF(tvar) == REALSXP && Rf_isMatrix(tvar) &&
-      Rf_nrows(tvar) == p && Rf_ncols(tvar) == p;
+      TYPEOF(par_names) == STRSXP && XLENGTH(par_names) == p && shapes;
 
   const Clock started = clock_now();
   Shield<SEXP> seed0(global_seed());
@@ -233,6 +237,74 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
         res_tasks = as<List>(res["tasks"]);
         res_seeds = as<List>(res["seeds"]);
       }
+    }
+    // The transitions on the worker pool: the subjects over the workers by
+    // their data, one request each, and a worker's share in this process
+    // when it gives no valid reply.
+    SEXP data_cost = lget(cx, "subject_cost");
+    if (!ran && flag(lget(wpool, "alive")) && num(lget(wpool, "n"), 1.0) > 1.0 && shapes &&
+        TYPEOF(data_cost) == REALSXP && XLENGTH(data_cost) == n &&
+        Rf_getAttrib(proposals, R_DimNamesSymbol) == R_NilValue &&
+        Rf_getAttrib(streams2, R_NamesSymbol) == R_NilValue) {
+      std::vector<double> cost(m);
+      for (int k = 0; k < m; ++k) cost[k] = REAL(data_cost)[subs[k]];
+      const int n_req = std::min(static_cast<int>(num(lget(wpool, "n"), 1.0)), m);
+      const List part = emc_pool::lpt_partition(cost.data(), m, n_req);
+      SEXP pooled = Rf_getAttrib(VECTOR_ELT(data, 0), Rf_install("pooled_values"));
+      const double* pr = REAL(proposals);
+      List msgs(n_req);
+      for (int w = 0; w < n_req; ++w) {
+        const IntegerVector at = part[w];
+        const int len = at.size();
+        if (len == 0) continue;
+        IntegerVector ss(len);
+        NumericMatrix a(p, len), mu(p, len);
+        NumericVector ll(len), eps(len);
+        List seeds(len);
+        for (int e = 0; e < len; ++e) {
+          const int s = subs[at[e] - 1];
+          ss[e] = s + 1;
+          for (int q = 0; q < p; ++q) {
+            a(q, e) = pr[q + static_cast<R_xlen_t>(s) * (p + 1)];
+            mu(q, e) = REAL(subj_mu)[q + static_cast<R_xlen_t>(s) * p];
+          }
+          ll[e] = pr[p + static_cast<R_xlen_t>(s) * (p + 1)];
+          eps[e] = num(lget(VECTOR_ELT(plan, s), "eps"), NA_REAL);
+          seeds[e] = VECTOR_ELT(streams2, s);
+        }
+        msgs[w] = List::create(_["kind"] = "hmc", _["subs"] = ss, _["notify"] = false,
+                               _["pooled"] = pooled, _["alpha"] = a, _["ll"] = ll, _["mu"] = mu,
+                               _["var"] = tvar, _["seeds"] = seeds, _["eps"] = eps);
+      }
+      RObject pool = wpool;
+      const List replies = emc_pool::requests(pool, msgs);
+      std::vector<int> slot(n, -1);
+      for (int k = 0; k < m; ++k) slot[subs[k]] = k;
+      for (int w = 0; w < n_req; ++w) {
+        if (Rf_isNull(msgs[w])) continue;
+        const List msg = msgs[w];
+        const IntegerVector ss = msg["subs"];
+        RObject res = replies[w];
+        SEXP r_tasks = lget(res, "tasks"), r_seeds = lget(res, "seeds");
+        if (TYPEOF(res) != VECSXP || lget(res, "failed") != R_NilValue ||
+            TYPEOF(r_tasks) != VECSXP || XLENGTH(r_tasks) != ss.size() ||
+            TYPEOF(r_seeds) != VECSXP || XLENGTH(r_seeds) != ss.size()) {
+          emc_pool::lost(pool, "subject HMC worker gave no valid reply");
+          static Function compute = package_function(".emc_hmc_local");
+          res = compute(msg, plan, data, model, lget(budget, "likelihood"), par_names);
+          r_tasks = lget(res, "tasks");
+          r_seeds = lget(res, "seeds");
+          if (TYPEOF(r_tasks) != VECSXP || XLENGTH(r_tasks) != ss.size() ||
+              TYPEOF(r_seeds) != VECSXP || XLENGTH(r_seeds) != ss.size())
+            Rcpp::stop("subject HMC: a reply differs from its request");
+        }
+        for (R_xlen_t e = 0; e < ss.size(); ++e) {
+          res_tasks[slot[ss[e] - 1]] = VECTOR_ELT(r_tasks, e);
+          res_seeds[slot[ss[e] - 1]] = VECTOR_ELT(r_seeds, e);
+        }
+      }
+      if (static_cast<SEXP>(pool) != wpool) new_pool = pool;
+      ran = true;
     }
     if (!ran) {
       static Function dispatch = package_function(".emc_hmc_dispatch");

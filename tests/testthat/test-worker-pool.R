@@ -880,35 +880,15 @@ test_that("the partition records a costliest-first dispatch order", {
   expect_identical(EMC2:::.emc_wpool_queue_order(odd), c(3L, 1L, 2L))
 })
 
-# A pool whose workers are mocks: every send is answered at once on the
-# completion channel.  A worker's reply claims its share of the queue from the
-# shared counter (an even split, in reply order), and `answer(w, subs)`
-# supplies the reply for those subjects.
+# A pool of mock workers (helper-mock-pool.R). A worker's reply claims its
+# share of the queue from the shared counter (an even split, in worker
+# order), and `answer(w, subs)` supplies the reply for those subjects; NULL
+# is a worker whose reply cannot be read.
 queue_harness <- function(n_workers, n_subjects, answer, cost) {
-  dir <- tempfile("emc_queue_")
-  dir.create(dir)
-  done <- EMC2:::.emc_wpool_done_open(dir)
-  if (is.null(done)) return(NULL)
   set.seed(31)
   seed <- get(".Random.seed", envir = globalenv())
-  gen <- 5L
-  pool <- list(n = n_workers, dir = dir, jobs = vector("list", n_workers),
-               wcs = as.list(seq_len(n_workers)), rcs = as.list(seq_len(n_workers)),
-               alive = TRUE, done = done, generation = gen)
-  log <- new.env(parent = emptyenv())
-  log$sent <- list(); log$held <- vector("list", n_workers)
-  log$claimed <- vector("list", n_workers); log$master <- integer(0)
   share <- ceiling(n_subjects / n_workers)
-  send <- function(con, msg, ...) {
-    log$sent[[length(log$sent) + 1L]] <- msg
-    log$held[[con]] <- msg
-    writeBin(EMC2:::.emc_wpool_done_encode(con, gen, msg$request,
-                                           EMC2:::.EMC_WPOOL_ST_OK), done$wc)
-    flush(done$wc)
-    TRUE
-  }
-  recv <- function(con, ...) {
-    msg <- log$held[[con]]
+  serve <- function(w, msg) {
     map <- EMC2:::.emc_wpool_claim_attach(msg$claim_path)
     order <- EMC2:::.emc_wpool_shared_read(msg$shared_file)$inputs$order
     subs <- integer(0)
@@ -917,11 +897,14 @@ queue_harness <- function(n_workers, n_subjects, answer, cost) {
       if (i < 0L) break
       subs <- c(subs, order[[i + 1L]])
     }
-    log$claimed[[con]] <- subs
-    out <- answer(con, subs)
+    out <- answer(w, subs)
     if (is.list(out) && is.null(out$failed)) out$subs <- subs
-    out
+    list(reply = out, garbled = is.null(out), note = subs)
   }
+  mock <- mock_worker_pool(n_workers, serve)
+  if (is.null(mock)) return(NULL)
+  log <- new.env(parent = emptyenv())
+  log$master <- integer(0)
   in_master <- function(msg, ctx, shared = NULL) {
     log$master <- c(log$master, msg$subs)
     list(props = matrix(-msg$subs, ctx$n_pars + 1L, length(msg$subs), byrow = TRUE),
@@ -934,13 +917,13 @@ queue_harness <- function(n_workers, n_subjects, answer, cost) {
   ctx <- list(n_pars = 2L, type = "standard")
   part <- EMC2:::.emc_lpt_partition(cost, n_workers)
   res <- suppressWarnings(testthat::with_mocked_bindings(
-    EMC2:::.emc_wpool_iter(pool, ctx, part, pars, cache,
+    EMC2:::.emc_wpool_iter(mock$pool, ctx, part, pars, cache,
                            vector("list", n_subjects), numeric(n_subjects),
                            rep(list(seed), n_subjects)),
-    .emc_wpool_send = send, .emc_wpool_recv = recv,
     .emc_wpool_compute = in_master, .package = "EMC2"))
-  for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE)
-  unlink(dir, recursive = TRUE)
+  served <- mock$finish()
+  log$sent <- lapply(served, `[[`, "msg")
+  log$claimed <- lapply(served, `[[`, "note")
   list(res = res, log = log, seed = seed)
 }
 

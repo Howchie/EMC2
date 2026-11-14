@@ -306,7 +306,8 @@ bool step_collapsed(SEXP st, SEXP cx, int i) {
 
   if (n_rounds > 0) {
     leave_rng();
-    Shield<SEXP> ctx(collapsed_context(pmwgs));
+    SEXP held = emc_iter::move_context("collapsed", pmwgs);
+  Shield<SEXP> ctx(held != R_NilValue ? held : static_cast<SEXP>(collapsed_context(pmwgs)));
     SEXP args = lget(ctx, "args"), spec = lget(ctx, "spec"), cpp = lget(ctx, "cpp");
     if (TYPEOF(args) != VECSXP || TYPEOF(spec) != VECSXP || TYPEOF(cpp) != VECSXP ||
         TYPEOF(lget(cpp, "has")) != INTSXP)

@@ -3772,6 +3772,44 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_wpool_subject_ll_queue_cpp
+SEXP emc_wpool_subject_ll_queue_cpp(SEXP pool, List rows, SEXP ctx, SEXP part, std::string source, SEXP ns);
+RcppExport SEXP _EMC2_emc_wpool_subject_ll_queue_cpp(SEXP poolSEXP, SEXP rowsSEXP, SEXP ctxSEXP, SEXP partSEXP, SEXP sourceSEXP, SEXP nsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type pool(poolSEXP);
+    Rcpp::traits::input_parameter< List >::type rows(rowsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type ctx(ctxSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type part(partSEXP);
+    Rcpp::traits::input_parameter< std::string >::type source(sourceSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type ns(nsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_wpool_subject_ll_queue_cpp(pool, rows, ctx, part, source, ns));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_wpool_particle_queue_cpp
+SEXP emc_wpool_particle_queue_cpp(SEXP pool, SEXP ctx, SEXP part, SEXP alpha, SEXP population_mu, SEXP group_chol, SEXP pm_settings, SEXP prev_ll, SEXP seeds, SEXP extra, SEXP pooled, SEXP skip, int n_pars, SEXP ns);
+RcppExport SEXP _EMC2_emc_wpool_particle_queue_cpp(SEXP poolSEXP, SEXP ctxSEXP, SEXP partSEXP, SEXP alphaSEXP, SEXP population_muSEXP, SEXP group_cholSEXP, SEXP pm_settingsSEXP, SEXP prev_llSEXP, SEXP seedsSEXP, SEXP extraSEXP, SEXP pooledSEXP, SEXP skipSEXP, SEXP n_parsSEXP, SEXP nsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type pool(poolSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type ctx(ctxSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type part(partSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type population_mu(population_muSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type group_chol(group_cholSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type pm_settings(pm_settingsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type prev_ll(prev_llSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type extra(extraSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type pooled(pooledSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type skip(skipSEXP);
+    Rcpp::traits::input_parameter< int >::type n_pars(n_parsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type ns(nsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_wpool_particle_queue_cpp(pool, ctx, part, alpha, population_mu, group_chol, pm_settings, prev_ll, seeds, extra, pooled, skip, n_pars, ns));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_wpool_recv_cpp
 SEXP emc_wpool_recv_cpp(SEXP con, SEXP deadline, SEXP alive, SEXP busy, double read_chunk, double max_frame);
 RcppExport SEXP _EMC2_emc_wpool_recv_cpp(SEXP conSEXP, SEXP deadlineSEXP, SEXP aliveSEXP, SEXP busySEXP, SEXP read_chunkSEXP, SEXP max_frameSEXP) {
@@ -4598,6 +4636,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_emc2_particle_log_weights", (DL_FUNC) &_EMC2_emc2_particle_log_weights, 10},
+    {"_EMC2_emc_wpool_subject_ll_queue_cpp", (DL_FUNC) &_EMC2_emc_wpool_subject_ll_queue_cpp, 6},
+    {"_EMC2_emc_wpool_particle_queue_cpp", (DL_FUNC) &_EMC2_emc_wpool_particle_queue_cpp, 14},
     {"_EMC2_emc_wpool_recv_cpp", (DL_FUNC) &_EMC2_emc_wpool_recv_cpp, 6},
     {"_EMC2_emc_wpool_send_cpp", (DL_FUNC) &_EMC2_emc_wpool_send_cpp, 5},
     {"_EMC2_emc_arm_parent_death", (DL_FUNC) &_EMC2_emc_arm_parent_death, 0},

@@ -131,11 +131,45 @@ void set_package_namespace(SEXP ns) {
   package_namespace = ns;
 }
 
-Function package_function(const char* name) {
+SEXP package_value(const char* name) {
   if (package_namespace == R_NilValue) Rcpp::stop("the package's namespace is not set");
-  SEXP f = R_getVarEx(Rf_install(name), package_namespace, FALSE, R_NilValue);
-  if (TYPEOF(f) == PROMSXP) f = Rf_eval(f, package_namespace);
-  return Function(f);
+  SEXP v = R_getVarEx(Rf_install(name), package_namespace, FALSE, R_NilValue);
+  if (TYPEOF(v) == PROMSXP) v = Rf_eval(v, package_namespace);
+  return v;
+}
+
+Function package_function(const char* name) { return Function(package_value(name)); }
+
+SEXP move_context(const char* slot, SEXP sampler) {
+  static const char* const fixed[] = {"lik_laplace", "n_pars", "n_subjects", "type", "prior",
+                                      "is_blocked", "nuisance", "par_group"};
+  SEXP hit = var(package_value(".emc_context_store"), slot);
+  SEXP key = lget(hit, "key");
+  if (TYPEOF(key) != VECSXP || TYPEOF(sampler) != VECSXP) return R_NilValue;
+  // identical()'s comparison.
+  const int flags = 16 + 64;
+  R_xlen_t fields = 0;
+  SEXP names = Rf_getAttrib(sampler, R_NamesSymbol);
+  for (const char* name : fixed) {
+    bool present = false;
+    for (R_xlen_t k = 0; k < Rf_xlength(names) && !present; ++k)
+      present = std::strcmp(CHAR(STRING_ELT(names, k)), name) == 0;
+    if (!present || !R_compute_identical(lget(key, name), lget(sampler, name), flags))
+      return R_NilValue;
+    ++fields;
+  }
+  const bool collapsed = std::strcmp(slot, "collapsed") == 0;
+  SEXP walls = lget(lget(sampler, "shear"), "walls");
+  SEXP fits = collapsed ? lget(lget(sampler, "collapsed"), "fits") : R_NilValue;
+  SEXP pooled = collapsed ? lget(lget(sampler, "pooled"), "value") : R_NilValue;
+  const struct { const char* name; SEXP value; } own[] = {
+      {"walls", walls}, {"fits", fits}, {"pooled", pooled}};
+  for (const auto& f : own) {
+    if (!R_compute_identical(lget(key, f.name), f.value, flags)) return R_NilValue;
+    if (f.value != R_NilValue) ++fields;
+  }
+  if (XLENGTH(key) != fields) return R_NilValue;
+  return lget(hit, "value");
 }
 
 double reserved_cost(double elapsed, double cores) {
@@ -277,6 +311,26 @@ NativeStep native_step(const std::string& name) {
 
 }  // namespace
 
+namespace {
+
+// Whether no group move has rejected an update since the state's tallies
+// were read, for an unprofiled run: .emc_steps_rejects() then changes
+// nothing.
+bool rejects_unchanged(SEXP st) {
+  if (emc_iter::var(st, "prof") != R_NilValue) return false;
+  SEXP seen = emc_iter::var(st, "rejects");
+  SEXP now = emc_iter::var(emc_iter::package_value(".emc_profile_state"), "rejects");
+  SEXP zero = emc_iter::package_value(".EMC_REJECT_ZERO");
+  for (const char* kind : {"ensemble", "shear", "collapsed", "gibbs"}) {
+    SEXP cur = emc_iter::lget(now, kind);
+    if (!R_compute_identical(cur == R_NilValue ? zero : cur, emc_iter::lget(seen, kind), 16 + 64))
+      return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 // Iterations `from` to cx$iter. steps: the R step functions in order, named;
 // native: which of them may run here; rejects: the function that takes the
 // iteration's rejected updates into the stage's counts.
@@ -304,7 +358,7 @@ void emc_iteration_loop_cpp(Environment st, List cx, int from, List steps,
   for (int i = from; i <= iter; ++i) {
     for (int k = 0; k < n_steps; ++k) {
       if (fast[k] != NULL && fast[k](st, cx, i)) {
-        if (is_store[k]) rejects(st);
+        if (is_store[k] && !rejects_unchanged(st)) rejects(st);
         ++runs[k];
         continue;
       }

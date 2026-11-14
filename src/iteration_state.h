@@ -46,6 +46,13 @@ bool option_on(const char* name);
 // environment of a package function it is handed.
 void set_package_namespace(SEXP ns);
 Rcpp::Function package_function(const char* name);
+// A variable of the package's namespace.
+SEXP package_value(const char* name);
+
+// A group move's context (.emc_shear_context(), .emc_collapsed_context()):
+// the value last built for the slot while the sampler fields it was built
+// from are unchanged, else NULL (the R function then builds it).
+SEXP move_context(const char* slot, SEXP sampler);
 
 // The native steps: TRUE when the step ran, FALSE when it left the state
 // untouched for the R step.

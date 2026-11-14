@@ -2190,8 +2190,14 @@
                    isTRUE(getOption("emc2.worker_queue", TRUE))) {
     .emc_wpool_claim_attach(file.path(pool$dir, "claim"))
   } else NULL
-  if (!is.null(claim_map))
-    return(.emc_wpool_subject_ll_queue(pool, rows, ctx, part, source, pooled, claim_map))
+  # Over the shared subject queue every subject's rows go out once in a
+  # broadcast file, and each worker claims the next subject (costliest first)
+  # from the pool's counter as it frees up, replying once when the queue is
+  # empty. A subject no valid reply holds is computed here.
+  if (!is.null(claim_map)) {
+    queued <- emc_wpool_subject_ll_queue_cpp(pool, rows, ctx, part, source, topenv())
+    if (!is.null(queued)) return(queued)
+  }
   msgs <- lapply(part, function(subs)
     list(kind = "subject_ll", subs = subs, rows = rows[subs], notify = FALSE,
          pooled = pooled))
@@ -2237,84 +2243,6 @@
         .emc_failure_abort(cls, source, e)
     }
     ll[part[[w]], ] <- do.call(rbind, res$ll)
-  }
-  .emc_pool_state$subject_ll_cpu <-
-    (if (is.null(.emc_pool_state$subject_ll_cpu)) 0 else .emc_pool_state$subject_ll_cpu) +
-    worker_cpu
-  list(ll = if (k == 1L) ll[, 1L] else ll, pool = pool)
-}
-
-# .emc_wpool_subject_ll() over the shared subject queue: every subject's rows
-# go out once in a broadcast file, and each worker claims the next subject
-# (costliest first) from the pool's counter as it frees up, replying once
-# when the queue is empty. A subject no valid reply holds is computed here.
-.emc_wpool_subject_ll_queue <- function(pool, rows, ctx, part, source, pooled,
-                                        claim_map) {
-  n <- length(rows)
-  k <- nrow(rows[[1L]])
-  order <- .emc_wpool_queue_order(part)
-  shared_file <- .emc_wpool_shared_write(
-    pool$dir, serialize(list(rows = rows, order = order, pooled = pooled), NULL))
-  on.exit(if (!is.null(shared_file)) unlink(shared_file), add = TRUE)
-  request <- .emc_wpool_next_request()
-  sent <- logical(pool$n)
-  if (is.null(shared_file)) {
-    .emc_wpool_degraded(.emc_wpool_transport_error(
-      "could not publish the shared broadcast"))
-    pool$alive <- FALSE
-  } else {
-    emc_claim_reset(claim_map$ptr, request)
-    msg <- list(kind = "subject_ll_claim", shared_file = shared_file,
-                claim_path = claim_map$path, key = request, n = length(order),
-                notify = FALSE)
-    deadline <- .emc_wpool_deadline()
-    for (w in seq_len(pool$n)) {
-      sent[w] <- .emc_wpool_request(pool, w, msg, deadline)
-      if (!sent[w]) {
-        .emc_wpool_degraded(.emc_wpool_transport_error("send to a worker failed"))
-        pool$alive <- FALSE
-        break
-      }
-    }
-  }
-  ll <- matrix(0, n, k)
-  stored <- logical(n)
-  worker_cpu <- 0
-  failures <- list()
-  valid <- function(res) {
-    subs <- res$subs
-    is.numeric(subs) && !anyNA(subs) && all(subs >= 1L & subs <= n) &&
-      !anyDuplicated(subs) && !any(stored[subs]) &&
-      is.list(res$ll) && length(res$ll) == length(subs) &&
-      all(vapply(res$ll, function(x) is.numeric(x) && length(x) == k &&
-                   !anyNA(x) && !any(x == Inf), logical(1)))
-  }
-  deadline <- .emc_wpool_deadline()
-  for (w in which(sent)) {
-    res <- .emc_wpool_reply(pool, w, deadline)
-    if (is.null(res) || !is.null(res$failed) || !valid(res)) {
-      emc_claim_reset(claim_map$ptr, 0L)
-      .emc_wpool_degraded("subject likelihood worker gave no valid reply")
-      pool$alive <- FALSE
-      next
-    }
-    subs <- as.integer(res$subs)
-    if (length(subs)) ll[subs, ] <- do.call(rbind, res$ll)
-    stored[subs] <- TRUE
-    failures <- c(failures, res$failures)
-    if (is.numeric(res$cpu)) worker_cpu <- worker_cpu + res$cpu
-  }
-  missing <- which(!stored)
-  if (length(missing)) {
-    res <- .emc_wpool_compute(list(kind = "subject_ll", subs = missing,
-                                   rows = rows[missing], pooled = pooled), ctx)
-    ll[missing, ] <- do.call(rbind, res$ll)
-    failures <- c(failures, res$failures)
-  }
-  for (e in failures) {
-    cls <- .emc_reject_record(e, source)
-    if (identical(.emc_failure_action(cls), "abort"))
-      .emc_failure_abort(cls, source, e)
   }
   .emc_pool_state$subject_ll_cpu <-
     (if (is.null(.emc_pool_state$subject_ll_cpu)) 0 else .emc_pool_state$subject_ll_cpu) +
@@ -2820,6 +2748,13 @@
     .emc_wpool_claim_attach(file.path(pool$dir, "claim"))
   } else NULL
   claim <- !is.null(claim_map)
+  # The unprofiled round over the queue runs natively (src/pool_exchange.cpp).
+  if (claim && !profile && !rows_only) {
+    queued <- emc_wpool_particle_queue_cpp(pool, ctx, part, alpha, population_mu,
+                                           group_chol, pm_settings, prev_ll, seeds, extra,
+                                           pooled, skip, as.integer(ctx$n_pars), topenv())
+    if (!is.null(queued)) return(queued)
+  }
   order <- if (claim) .emc_wpool_queue_order(part) else NULL
   shared_raw <- if (was_alive) {
     serialize(c(shared[c("group_var", "idx_list", "marginal_idx", "include_full")],
@@ -3099,6 +3034,45 @@
            length(shared_raw) + shared_path_bytes + private_bytes
          } else private_bytes
        ) else NULL)
+}
+
+# What the native exchange (src/pool_exchange.cpp) leaves to R when the pool
+# fails part-way: the lost pool's warning with the workers that never
+# answered, which are stopped; one subject's step in this process; and the
+# failures the replies carried.
+.emc_wpool_iter_timeout <- function(pool, stuck, idle, deadline) {
+  .emc_wpool_degraded(sprintf(
+    "worker%s %s produced no reply within %.0f s%s",
+    if (length(stuck) > 1L) "s" else "", paste(stuck, collapse = ", "), deadline,
+    if (length(idle)) {
+      sprintf("; worker%s %s never collected the request",
+              if (length(idle) > 1L) "s" else "", paste(idle, collapse = ", "))
+    } else ""))
+  .emc_wpool_terminate_jobs(pool$jobs[stuck], wait = TRUE, terminate = TRUE)
+  invisible(NULL)
+}
+
+.emc_wpool_iter_missing <- function(s, ctx, alpha, population_mu, pm_settings, prev_ll,
+                                    seeds, extra, pooled, skip, group_chol) {
+  shared <- list(group_var = group_chol$ref, idx_list = group_chol$idx_list,
+                 marginal_idx = group_chol$marginal_idx,
+                 include_full = group_chol$include_full, group_chol = group_chol)
+  .emc_wpool_compute(
+    list(subs = s, alpha = alpha[, s, drop = FALSE],
+         population_mu = population_mu[, s, drop = FALSE], pm = pm_settings[s],
+         prev_ll = prev_ll[s], seeds = seeds[s],
+         extra = if (is.null(extra)) NULL else extra[s], pooled = pooled,
+         rows_only = FALSE, skip = if (is.null(skip)) NULL else skip[s]),
+    ctx, shared = shared)
+}
+
+.emc_wpool_note_failures <- function(failures, source) {
+  for (e in failures) {
+    cls <- .emc_reject_record(e, source)
+    if (identical(.emc_failure_action(cls), "abort"))
+      .emc_failure_abort(cls, source, e)
+  }
+  invisible(NULL)
 }
 
 .emc_range_or_na <- function(x, f) {

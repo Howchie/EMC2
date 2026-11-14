@@ -883,40 +883,24 @@ test_that("exactly one result updates the iteration", {
   # and no later result on those pipes is trustworthy.  What must not happen is
   # a second write over a subject that is already answered.
   skip_on_os("windows")
-  dir <- tempfile("emc_once_")
-  dir.create(dir)
-  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
-  done <- EMC2:::.emc_wpool_done_open(dir)
-  skip_if(is.null(done), "no FIFO available here")
-  on.exit(for (cn in done[c("rc", "wc")]) try(close(cn), silent = TRUE),
-          add = TRUE)
-
   set.seed(23)
   seed <- get(".Random.seed", envir = globalenv())
-  gen <- 11L
-  pool <- list(n = 2L, dir = dir, jobs = list(NULL, NULL), wcs = list(1, 2),
-               rcs = list(1, 2), alive = TRUE, done = done, generation = gen)
+  # Worker 1 answers under the shared queue (it claimed subject 1), and its
+  # completion is announced twice. The second record arrives while worker 2 is
+  # still outstanding, which is exactly when a stale reply could be credited
+  # to a live share. Worker 2 never answers.
+  serve <- function(w, msg) {
+    if (w == 2L) return(list(records = integer(0)))
+    list(records = c(1L, 1L),
+         reply = list(subs = 1L, props = matrix(1, 3L, 1L), pm = list(NULL),
+                      seeds = list(seed), times = 1))
+  }
+  mock <- mock_worker_pool(2L, serve, generation = 11L)
+  skip_if(is.null(mock), "no FIFO available here")
   pars <- list(alpha = matrix(0, 2L, 2L), subj_mu = matrix(0, 2L, 2L),
                tvar = diag(2))
   cache <- EMC2:::build_group_chol_cache(diag(2), list(c(TRUE, TRUE)))
   ctx <- list(n_pars = 2L, type = "standard")
-
-  # Worker 1 answers, and then answers again. The second record arrives while
-  # worker 2 is still outstanding, which is exactly when a stale reply could be
-  # credited to a live share.
-  request <- NULL
-  send <- function(con, msg, ...) {
-    request <<- msg$request
-    writeBin(EMC2:::.emc_wpool_done_encode(1L, gen, msg$request,
-                                           EMC2:::.EMC_WPOOL_ST_OK), done$wc)
-    flush(done$wc)
-    TRUE
-  }
-  # Worker 1's reply under the shared queue: it claimed subject 1.
-  from_worker <- function(...) {
-    list(subs = 1L, props = matrix(1, 3L, 1L), pm = list(NULL),
-         seeds = list(seed), times = 1)
-  }
   # The master's own recomputation is distinguishable from a worker reply, so
   # the test can say which one landed where.
   in_master <- function(...) {
@@ -924,10 +908,10 @@ test_that("exactly one result updates the iteration", {
          times = 1)
   }
   res <- suppressWarnings(with_mocked_bindings(
-    EMC2:::.emc_wpool_iter(pool, ctx, list(1L, 2L), pars, cache,
+    EMC2:::.emc_wpool_iter(mock$pool, ctx, list(1L, 2L), pars, cache,
                            list(NULL, NULL), c(0, 0), list(seed, seed)),
-    .emc_wpool_send = send, .emc_wpool_recv = from_worker,
     .emc_wpool_compute = in_master, .package = "EMC2"))
+  mock$finish()
 
   # Two sends, so two records for worker 1: the second is the duplicate.
   expect_false(res$alive)

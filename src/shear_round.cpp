@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#include "pool_exchange.h"
 #include "subject_ll.h"
 
 using namespace Rcpp;
@@ -163,7 +164,14 @@ bool emc_subject_lls(const List& rows, const List& data, SEXP model, int n_cand,
     if (src == nullptr) return false;
   }
   const R_xlen_t n = ll.nrow();
+  // The shared subject queue's failure paths run R code, as the dispatch does.
   PutRNGstate();
+  if (rows.size() == n &&
+      emc_pool::subject_ll_queue(src->pool, rows, src->sampler, src->part, src->source, n_cand,
+                                 ll.begin())) {
+    GetRNGstate();
+    return true;
+  }
   Function dispatch(src->dispatch);
   const List got = dispatch(src->pool, rows, src->sampler, src->part,
                             Named("source") = std::string(src->source));

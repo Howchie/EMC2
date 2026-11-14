@@ -272,7 +272,8 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   if (total == 0) return finish_idle();
 
   leave_rng();
-  Shield<SEXP> ctx(shear_context(pmwgs));
+  SEXP held = emc_iter::move_context("shear", pmwgs);
+  Shield<SEXP> ctx(held != R_NilValue ? held : static_cast<SEXP>(shear_context(pmwgs)));
   SEXP args = lget(ctx, "args"), spec = lget(ctx, "spec");
   if (TYPEOF(args) != VECSXP || TYPEOF(spec) != VECSXP) return false;
   const arma::cube cube = as<arma::cube>(lget(args, "cube"));

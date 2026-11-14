@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include "iteration_state.h"
+#include "pool_exchange.h"
 
 using namespace Rcpp;
 using namespace emc_iter;
@@ -276,15 +277,224 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   return true;
 }
 
+// x + y of two reject tallies.
+SEXP tally_sum(SEXP x, SEXP y) {
+  if (TYPEOF(x) == INTSXP && TYPEOF(y) == INTSXP && XLENGTH(x) == XLENGTH(y)) {
+    Shield<SEXP> out(Rf_duplicate(x));
+    for (R_xlen_t k = 0; k < XLENGTH(x); ++k) INTEGER(out)[k] += INTEGER(y)[k];
+    return out;
+  }
+  static Function plus("+");
+  return plus(x, y);
+}
+
+// The step with the subjects' particle steps on the worker pool's shared
+// subject queue: the pool's upkeep, the round and its records. FALSE, with
+// the state untouched, for states the R step handles; a pool that does not
+// serve the queue leaves the round to .emc_step_particle_run().
+bool particle_pool(SEXP st, SEXP cx, int i) {
+  SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), wpool = var(st, "wpool");
+  SEXP ctx = lget(cx, "wpool_ctx"), group_chol = var(st, "group_chol_it");
+  SEXP pm_settings = var(st, "pm_settings"), streams = var(st, "streams");
+  SEXP ens_pools = var(st, "ens_pools"), cost0 = var(st, "wpool_cost");
+  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(wpool) != VECSXP || TYPEOF(pm_settings) != VECSXP ||
+      TYPEOF(streams) != VECSXP || var(st, "llpool") != R_NilValue ||
+      var(st, "pars_comb") != R_NilValue || var(st, "wpool_ctx") != R_NilValue ||
+      var(st, "data") != R_NilValue || flag(lget(cx, "sampler_profile")))
+    return false;
+  const int n = static_cast<int>(XLENGTH(pm_settings));
+  SEXP samples = lget(pmwgs, "samples");
+  SEXP s_alpha = lget(samples, "alpha"), s_ll = lget(samples, "subj_ll");
+  SEXP alpha0 = lget(pars, "alpha"), subj_mu = lget(pars, "subj_mu");
+  if (TYPEOF(alpha0) != REALSXP || !Rf_isMatrix(alpha0) || Rf_ncols(alpha0) != n ||
+      XLENGTH(streams) != n || TYPEOF(s_alpha) != REALSXP || TYPEOF(s_ll) != REALSXP ||
+      TYPEOF(cost0) != REALSXP || XLENGTH(cost0) != n ||
+      Rf_asInteger(lget(pmwgs, "n_subjects")) != n)
+    return false;
+  const int p = Rf_nrows(alpha0);
+  if (TYPEOF(subj_mu) != REALSXP || !Rf_isMatrix(subj_mu) || Rf_nrows(subj_mu) != p ||
+      Rf_ncols(subj_mu) != n || Rf_asInteger(lget(ctx, "n_pars")) != p)
+    return false;
+  Shield<SEXP> j(iteration_index(cx, i));
+  const R_xlen_t prev = static_cast<R_xlen_t>(Rf_asReal(j)) - 2;
+  const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
+  if (prev < 0 || XLENGTH(s_alpha) < (prev + 1) * slice || XLENGTH(s_ll) < (prev + 1) * n)
+    return false;
+  const bool alloc_on = flag(lget(cx, "alloc_on"));
+  SEXP extra = lget(ens_pools, "rows");
+  Shield<SEXP> seed0(global_seed());
+
+  Shield<SEXP> streams2(Rf_shallow_duplicate(streams));
+  LogicalVector skip(n);
+  RObject hmc_pick;
+  const bool skipping = draw_skips(pmwgs, var(st, "hmc_plan"), alloc_on, n, streams2, skip,
+                                   hmc_pick);
+  set_global_seed(seed0);
+  const Clock started = clock_now();
+
+  // The pool's upkeep: recycling on its schedule, growth onto freed cores.
+  RObject pool = wpool;
+  const bool persistent = flag(lget(cx, "persistent_workers"));
+  const int at = persistent ? Rf_asInteger(var(st, "pool_iteration")) : i;
+  const int every = Rf_asInteger(lget(cx, "recycle_every"));
+  if (every != NA_INTEGER && every > 0 && at > 1 && Rf_asInteger(lget(pool, "n")) > 1 &&
+      ((at - 1) % every) == 0) {
+    static Function recycle = package_function(".emc_wpool_recycle");
+    pool = recycle(pool, at, every, ctx);
+  }
+  const double chain_cores = emc_pool::cores_now(lget(cx, "core_ctl"),
+                                                 Rf_asReal(lget(cx, "n_cores")));
+  const int per_worker = std::max(1, Rf_asInteger(lget(lget(cx, "pool_budget"), "likelihood")));
+  const int target = std::min(n, std::max(1, static_cast<int>(chain_cores) / per_worker));
+  const int n_before = Rf_asInteger(lget(pool, "n"));
+  if (target > n_before) {
+    static Function grow = package_function(".emc_wpool_grow");
+    pool = grow(pool, target, ctx);
+  }
+  if (persistent) pool = lset(pool, "iterations", var(st, "pool_iteration"));
+  const int n_workers = Rf_asInteger(lget(pool, "n"));
+  RObject part = var(st, "wpool_part");
+  if (n_workers != n_before || skipping) {
+    std::vector<double> cost(REAL(cost0), REAL(cost0) + n);
+    if (skipping) for (int s = 0; s < n; ++s) if (skip[s]) cost[s] = 0.0;
+    part = emc_pool::lpt_partition(cost.data(), n, n_workers);
+  }
+
+  // The subjects' states and prior means as .emc_wpool_iter sends them.
+  SEXP dn = Rf_getAttrib(alpha0, R_DimNamesSymbol);
+  Shield<SEXP> alpha(Rf_allocMatrix(REALSXP, p, n));
+  std::copy(REAL(alpha0), REAL(alpha0) + slice, REAL(alpha));
+  Shield<SEXP> pop_mu(Rf_allocMatrix(REALSXP, p, n));
+  std::copy(REAL(subj_mu), REAL(subj_mu) + slice, REAL(pop_mu));
+  if (dn != R_NilValue) {
+    Rf_setAttrib(alpha, R_DimNamesSymbol, dn);
+    if (VECTOR_ELT(dn, 0) != R_NilValue) {
+      Shield<SEXP> dn2(Rf_allocVector(VECSXP, 2));
+      SET_VECTOR_ELT(dn2, 0, VECTOR_ELT(dn, 0));
+      Rf_setAttrib(pop_mu, R_DimNamesSymbol, dn2);
+    }
+  }
+  NumericVector prev_ll(n);
+  std::copy(REAL(s_ll) + prev * n, REAL(s_ll) + (prev + 1) * n, prev_ll.begin());
+  SEXP ll_dn = Rf_getAttrib(s_ll, R_DimNamesSymbol);
+  if (ll_dn != R_NilValue && VECTOR_ELT(ll_dn, 0) != R_NilValue)
+    prev_ll.attr("names") = VECTOR_ELT(ll_dn, 0);
+
+  emc_pool::ParticleRequest request;
+  request.ctx = ctx;
+  request.part = part;
+  request.alpha = alpha;
+  request.population_mu = pop_mu;
+  request.group_chol = group_chol;
+  request.pm_settings = pm_settings;
+  request.prev_ll = prev_ll;
+  request.seeds = streams2;
+  request.extra = extra;
+  request.pooled = lget(lget(pmwgs, "pooled"), "value");
+  request.skip = skipping ? static_cast<SEXP>(skip) : R_NilValue;
+  request.n_pars = p;
+  emc_pool::ParticleReply reply;
+  if (!emc_pool::particle_queue(pool, request, reply)) {
+    set_var(st, "wpool", pool);
+    set_var(st, "wpool_part", part);
+    static Function run = package_function(".emc_step_particle_run");
+    run(st, cx, Rf_ScalarInteger(i), request.skip, hmc_pick, streams2, true);
+    return true;
+  }
+
+  const NumericVector times(static_cast<SEXP>(reply.times));
+  if (ens_pools != R_NilValue) set_var(st, "ens_pools", lset(ens_pools, "ll", reply.extra_ll));
+  {
+    SEXP tallies = var(st, "stage_rejects");
+    Shield<SEXP> sum(tally_sum(lget(tallies, "particle"), reply.rejects));
+    set_var(st, "stage_rejects", lset(tallies, "particle", sum));
+    SEXP counts = lget(reply.ensemble_rejects, "counts");
+    bool any = false;
+    for (R_xlen_t k = 0; TYPEOF(counts) == INTSXP && k < XLENGTH(counts); ++k)
+      if (INTEGER(counts)[k] >= 1) any = true;
+    if (any || TYPEOF(counts) != INTSXP) {
+      static Function add = package_function(".emc_reject_add");
+      add(reply.ensemble_rejects, "ensemble");
+    }
+  }
+
+  // The subjects' relative costs and the next round's partition.
+  Shield<SEXP> cost(Rf_duplicate(cost0));
+  {
+    double low = R_PosInf;
+    for (int s = 0; s < n; ++s) if (!skip[s] && times[s] > 0 && times[s] < low) low = times[s];
+    if (R_FINITE(low))
+      for (int s = 0; s < n; ++s)
+        if (!skip[s]) REAL(cost)[s] = std::max(static_cast<double>(times[s]), low);
+  }
+  Shield<SEXP> next_part(emc_pool::lpt_partition(REAL(cost), n, Rf_asInteger(lget(pool, "n"))));
+
+  // The steps' jumps and costs into the allocation window. The pass also
+  // computes the ensemble candidates: the particle steps' share of it is
+  // their share of the workers' CPU.
+  RObject sampler = pmwgs;
+  if (alloc_on) {
+    double share = 1.0;
+    if (reply.worker_cpu > 0) {
+      long double total = 0.0L;
+      for (int s = 0; s < n; ++s) total += times[s];
+      share = std::min(1.0, static_cast<double>(total) / reply.worker_cpu);
+    }
+    LogicalVector ran(n);
+    bool any_ran = false;
+    for (int s = 0; s < n; ++s) {
+      ran[s] = !skip[s];
+      any_ran = any_ran || ran[s];
+    }
+    if (any_ran) {
+      NumericMatrix before(p, n);
+      std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice,
+                before.begin());
+      Shield<SEXP> after(proposal_rows(reply.props, p));
+      const double cost_now = share * reserved_cost(clock_now().elapsed - started.elapsed,
+                                                    num(var(st, "cores_it"), 1.0));
+      SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window");
+      RObject r;
+      if (TYPEOF(lget(w, "P")) == VECSXP && TYPEOF(lget(w, "nP")) == INTSXP &&
+          TYPEOF(lget(w, "cpu_part")) == REALSXP)
+        r = emc_alloc_record_particle_cpp(
+            List(lget(w, "P")), IntegerVector(lget(w, "nP")),
+            NumericVector(lget(w, "cpu_part")), before, NumericMatrix(static_cast<SEXP>(after)),
+            ran, cost_now, times);
+      if (!r.isNULL()) {
+        RObject w2 = lset(w, "P", lget(r, "P"));
+        w2 = lset(w2, "nP", lget(r, "nP"));
+        w2 = lset(w2, "cpu_part", lget(r, "cpu_part"));
+        Shield<SEXP> alloc2(lset(alloc, "window", w2));
+        sampler = lset(pmwgs, "alloc", alloc2);
+      } else {
+        static Function record = package_function(".emc_alloc_record_particle");
+        sampler = record(pmwgs, before, after, ran, cost_now, times);
+      }
+    }
+  }
+
+  set_var(st, "pmwgs", sampler);
+  set_var(st, "proposals", reply.props);
+  set_var(st, "pm_settings", reply.pm_settings);
+  set_var(st, "streams", reply.seeds);
+  set_var(st, "wpool", pool);
+  set_var(st, "wpool_part", next_part);
+  set_var(st, "wpool_cost", cost);
+  set_var(st, "hmc_pick", hmc_pick);
+  return true;
+}
+
 }  // namespace
 
 namespace emc_iter {
 
-// In this process where the subjects' steps run here; else the draws here
-// and the steps through .emc_step_particle_run(), which holds the worker
-// pool's transport.
+// In this process where the subjects' steps run here, or on the worker
+// pool's shared subject queue; else the draws here and the steps through
+// .emc_step_particle_run().
 bool step_particle(SEXP st, SEXP cx, int i) {
   if (particle_local(st, cx, i)) return true;
+  if (particle_pool(st, cx, i)) return true;
   SEXP pmwgs = var(st, "pmwgs"), streams = var(st, "streams");
   if (TYPEOF(pmwgs) != VECSXP || TYPEOF(streams) != VECSXP ||
       Rf_length(lget(pmwgs, "n_subjects")) != 1)

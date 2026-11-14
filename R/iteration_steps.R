@@ -74,6 +74,7 @@
       !nzchar(Sys.getenv("EMC2_LL_TRACE")) && isTRUE(ctx$ll_cache_validated) &&
       !persistent_workers && all(lengths(tune_in) == 1L))
     out$particle <- list(tune_in = tune_in)
+  out$subject_cost <- .emc_subject_cost(ctx$data)
   out$hmc_warmup <- c(accept = .EMC_HMC_WARMUP_ACCEPT, moves = .EMC_HMC_WARMUP_MOVES,
                       eps_low = .EMC_HMC_EPS_RANGE[1], eps_high = .EMC_HMC_EPS_RANGE[2])
   out$shear_active <- .emc_shear_active(pmwgs)
@@ -202,8 +203,10 @@
 # The particle step given the allocation's skips (NULL when no subject may
 # skip), the joint selection with subject HMC and the subjects' streams after
 # those draws: the steps on the worker pool, or in this process without one,
-# and their records.
-.emc_step_particle_run <- function(st, cx, i, part_skip, hmc_pick, wpool_streams) {
+# and their records. `maintained`: the pool has had this iteration's recycling
+# and growth.
+.emc_step_particle_run <- function(st, cx, i, part_skip, hmc_pick, wpool_streams,
+                                   maintained = FALSE) {
   j <- cx$start_iter + i
   prof <- cx$sampler_profile
   pmwgs <- st$pmwgs
@@ -230,21 +233,24 @@
     st$llpool <- llpool
   }
   if (!is.null(wpool)) {
-    recycle_started <- if (prof) proc.time()[["elapsed"]]
-    wpool <- .emc_wpool_recycle(
-      wpool, if (cx$persistent_workers) st$pool_iteration else i,
-      cx$recycle_every, wpool_ctx)
-    if (prof) recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
-    chain_cores <- .emc_cores_now(cx$core_ctl, cx$n_cores)
-    target_workers <- min(
-      pmwgs$n_subjects,
-      max(1L, chain_cores %/% max(1L, cx$pool_budget$likelihood))
-    )
     n_before <- wpool$n
-    grow_started <- if (prof) proc.time()[["elapsed"]]
-    wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
-    if (cx$persistent_workers) wpool$iterations <- st$pool_iteration
-    if (prof) grow_elapsed <- proc.time()[["elapsed"]] - grow_started
+    if (!maintained) {
+      recycle_started <- if (prof) proc.time()[["elapsed"]]
+      wpool <- .emc_wpool_recycle(
+        wpool, if (cx$persistent_workers) st$pool_iteration else i,
+        cx$recycle_every, wpool_ctx)
+      if (prof) recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
+      chain_cores <- .emc_cores_now(cx$core_ctl, cx$n_cores)
+      target_workers <- min(
+        pmwgs$n_subjects,
+        max(1L, chain_cores %/% max(1L, cx$pool_budget$likelihood))
+      )
+      n_before <- wpool$n
+      grow_started <- if (prof) proc.time()[["elapsed"]]
+      wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
+      if (cx$persistent_workers) wpool$iterations <- st$pool_iteration
+      if (prof) grow_elapsed <- proc.time()[["elapsed"]] - grow_started
+    }
     if (wpool$n != n_before || !is.null(part_skip)) {
       wpool_part <- .emc_lpt_partition(
         if (is.null(part_skip)) wpool_cost else wpool_cost * !part_skip, wpool$n)

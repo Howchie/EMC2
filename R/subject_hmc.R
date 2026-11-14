@@ -371,6 +371,13 @@
   list(results = results, pool = wpool)
 }
 
+# One request's transitions in this process, for a worker that gave no valid
+# reply to the native round (src/iteration_step_hmc.cpp).
+.emc_hmc_local <- function(msg, plan, data, model, r_cores, par_names) {
+  .emc_hmc_compute(msg, list(data = data, model = model, hmc = plan, r_cores = r_cores,
+                             par_names = par_names, ll_cache_validated = TRUE))
+}
+
 # The round, from the final state of the other updates. Draws each
 # subject's selection uniform from its own stream on the master, runs the
 # selected transitions on the workers (or in-process), and returns the
