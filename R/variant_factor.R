@@ -201,6 +201,14 @@ fill_samples_factor <- function(samples, group_level, proposals, j = 1, n_pars){
   if (is.null(mean)) rmvnorm(n, sigma = sigma) else rmvnorm(n, mean, sigma)
 }
 
+# solve(a) for the group draws: the same inverse without the R function's
+# overhead for a real square matrix without dimnames, else that function.
+.emc_solve <- function(a) {
+  out <- if (is.matrix(a) && is.double(a) && is.null(dimnames(a)) && nrow(a) == ncol(a))
+    emc_solve_cpp(a)
+  if (is.null(out)) solve(a) else out
+}
+
 # The group draw: the native form (src/gibbs_factor.cpp), which gives the R
 # form's draw on the same random stream, else the R form from the stream's
 # state before the call.

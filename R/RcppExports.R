@@ -183,6 +183,10 @@ emc_rmvnorm_cpp <- function(n, mean, sigma) {
     .Call(`_EMC2_emc_rmvnorm_cpp`, n, mean, sigma)
 }
 
+emc_solve_cpp <- function(a) {
+    .Call(`_EMC2_emc_solve_cpp`, a)
+}
+
 emc_gibbs_factor_cpp <- function(alpha, state, free_entry, prior) {
     .Call(`_EMC2_emc_gibbs_factor_cpp`, alpha, state, free_entry, prior)
 }

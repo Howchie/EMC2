@@ -694,6 +694,16 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_solve_cpp
+SEXP emc_solve_cpp(const Rcpp::NumericMatrix& a);
+RcppExport SEXP _EMC2_emc_solve_cpp(SEXP aSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type a(aSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_solve_cpp(a));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_gibbs_factor_cpp
 SEXP emc_gibbs_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::List& state, const Rcpp::LogicalMatrix& free_entry, const Rcpp::List& prior);
 RcppExport SEXP _EMC2_emc_gibbs_factor_cpp(SEXP alphaSEXP, SEXP stateSEXP, SEXP free_entrySEXP, SEXP priorSEXP) {
@@ -4514,6 +4524,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
     {"_EMC2_emc_rmvnorm_cpp", (DL_FUNC) &_EMC2_emc_rmvnorm_cpp, 3},
+    {"_EMC2_emc_solve_cpp", (DL_FUNC) &_EMC2_emc_solve_cpp, 1},
     {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 4},
     {"_EMC2_emc_gibbs_infnt_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_infnt_factor_cpp, 3},
     {"_EMC2_emc_ensemble_rounds_latent_cpp", (DL_FUNC) &_EMC2_emc_ensemble_rounds_latent_cpp, 8},

@@ -354,7 +354,7 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
 .sem_total_effects <- function(lambda, B, K, G, n_pars, n_cov) {
   lambda <- matrix(lambda, n_pars)
   n_factors <- ncol(lambda)
-  A <- lambda %*% solve(diag(n_factors) - matrix(B, n_factors, n_factors))
+  A <- lambda %*% .emc_solve(diag(n_factors) - matrix(B, n_factors, n_factors))
   K <- matrix(if (n_cov) K else numeric(0), n_pars, n_cov)
   G <- matrix(if (n_cov) G else numeric(0), n_factors, n_cov)
   list(A = A, C = K + A %*% G)
@@ -376,7 +376,7 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
   A <- AC$A
   C <- AC$C
   n_factors <- ncol(A)
-  V_cond <- A %*% solve(matrix(delta_inv, n_factors, n_factors)) %*% t(A) +
+  V_cond <- A %*% .emc_solve(matrix(delta_inv, n_factors, n_factors)) %*% t(A) +
     diag(1 / as.numeric(epsilon_inv), n_pars)
   V_cond <- (V_cond + t(V_cond)) / 2
   out <- list(A = A, C = C, subj_var = V_cond)
@@ -405,9 +405,9 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
 # Full conditional draw of the factor scores given mean-centred alphas.
 .sem_draw_eta <- function(ytilde, covariates, K, G, B, delta_inv, lambda,
                           epsilon_inv, n_factors, n_subjects) {
-  B0_inv   <- solve(diag(n_factors) - B)
-  Psi0_inv <- solve(B0_inv %*% solve(delta_inv) %*% t(B0_inv))
-  eta_sig  <- solve(Psi0_inv + t(lambda) %*% epsilon_inv %*% lambda)
+  B0_inv   <- .emc_solve(diag(n_factors) - B)
+  Psi0_inv <- .emc_solve(B0_inv %*% .emc_solve(delta_inv) %*% t(B0_inv))
+  eta_sig  <- .emc_solve(Psi0_inv + t(lambda) %*% epsilon_inv %*% lambda)
   eta_mean_mat <- eta_sig %*% (
     t(lambda) %*% epsilon_inv %*% t(ytilde - covariates %*% t(K)) +
       Psi0_inv %*% B0_inv %*% G %*% t(covariates)
@@ -456,7 +456,7 @@ gibbs_step_SEM <- function(sampler, alpha){
                        lambda, epsilon_inv, n_factors, n_subjects)
 
   ## ---- update mu ----------------------------------------------------------
-  mu_sig <- solve(n_subjects * epsilon_inv +
+  mu_sig <- .emc_solve(n_subjects * epsilon_inv +
                   diag(1 / prior$theta_mu_var, n_pars))
   mu_mu  <- mu_sig %*%
             (epsilon_inv %*%
@@ -492,7 +492,7 @@ gibbs_step_SEM <- function(sampler, alpha){
       y_j <- ytilde[, j]
       if (any(!isFree))
         y_j <- y_j - X_y[, !isFree, drop = FALSE] %*% lambda_y[j, !isFree]
-      lam_sig <- solve(epsilon_inv[j,j] * crossprod(etaS) +
+      lam_sig <- .emc_solve(epsilon_inv[j,j] * crossprod(etaS) +
                        diag(1/lambda_y_prior[j,isFree], sum(isFree)))
       lam_mu  <- lam_sig %*% (epsilon_inv[j,j] * crossprod(etaS, y_j))
       lambda_y[j, isFree] <- .emc_rmvnorm(1, lam_mu, lam_sig)
@@ -544,7 +544,7 @@ gibbs_step_SEM <- function(sampler, alpha){
     prior_vec <- c(prior$G_var, prior$B_var)[free_idx]   # length = ncol(Z_p)
 
     ## 4.  Posterior draw
-    B_sig <- solve(delta_pp * crossprod(Z_p) +
+    B_sig <- .emc_solve(delta_pp * crossprod(Z_p) +
                      diag(1 / prior_vec, length(prior_vec)))
     B_mu  <- B_sig %*% crossprod(Z_p, y_star)
     coef_sample <- .emc_rmvnorm(1, B_mu, B_sig)      # 1 x ncol(Z_p)

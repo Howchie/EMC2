@@ -734,6 +734,18 @@ SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma) {
   }
 }
 
+// solve(a) of a square matrix without dimnames; NULL where solve() would
+// raise a condition.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_solve_cpp(const Rcpp::NumericMatrix& a) {
+  if (a.nrow() != a.ncol() || a.nrow() < 1) return R_NilValue;
+  try {
+    return as_r(inverse(as_mat(a)));
+  } catch (Decline&) {
+    return R_NilValue;
+  }
+}
+
 // gibbs_step_factor()'s draw: `alpha` subjects x parameters, the state as
 // the store holds it (eta, lambda, mu, sig_err_inv, psi_inv), the free
 // loadings and the prior's vectors at full length. NULL when the draw is
