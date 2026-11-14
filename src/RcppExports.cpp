@@ -731,6 +731,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_iteration_loop_cpp
+void emc_iteration_loop_cpp(Environment st, List cx, int from, List steps, LogicalVector native, Function rejects);
+RcppExport SEXP _EMC2_emc_iteration_loop_cpp(SEXP stSEXP, SEXP cxSEXP, SEXP fromSEXP, SEXP stepsSEXP, SEXP nativeSEXP, SEXP rejectsSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Environment >::type st(stSEXP);
+    Rcpp::traits::input_parameter< List >::type cx(cxSEXP);
+    Rcpp::traits::input_parameter< int >::type from(fromSEXP);
+    Rcpp::traits::input_parameter< List >::type steps(stepsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type native(nativeSEXP);
+    Rcpp::traits::input_parameter< Function >::type rejects(rejectsSEXP);
+    emc_iteration_loop_cpp(st, cx, from, steps, native, rejects);
+    return R_NilValue;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4376,6 +4391,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
+    {"_EMC2_emc_iteration_loop_cpp", (DL_FUNC) &_EMC2_emc_iteration_loop_cpp, 6},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc_candidate_rows_cpp", (DL_FUNC) &_EMC2_emc_candidate_rows_cpp, 2},

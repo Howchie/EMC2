@@ -779,9 +779,23 @@
   key$walls <- sampler$shear$walls
   .emc_context_memo("shear", key, function() {
     fits <- .emc_shear_fits(sampler)
-    list(fits = fits, packed = .emc_shear_pack(fits, sampler$n_pars),
-         spec = .emc_shear_v_spec(sampler), walls = .emc_shear_walls_of(sampler))
+    packed <- .emc_shear_pack(fits, sampler$n_pars)
+    walls <- .emc_shear_walls_of(sampler)
+    list(fits = fits, packed = packed, spec = .emc_shear_v_spec(sampler), walls = walls,
+         args = .emc_shear_round_args(packed, walls, sampler$n_pars))
   })
+}
+
+# The fits and walls as the native rounds take them.
+.emc_shear_round_args <- function(packed, walls, p) {
+  if (is.null(walls)) {
+    has <- logical(0); U <- matrix(0, p, 0); b <- numeric(0)
+    Uc <- array(0, c(p, max(p - 1L, 0L), 0))
+  } else {
+    has <- walls$has; U <- walls$U; b <- ifelse(has, walls$b, 0)
+    Uc <- .emc_shear_uperp_cube(walls, p)
+  }
+  list(cube = packed$cube, lin = packed$lin, has = has, U = U, b = b, Uc = Uc)
 }
 
 # The last value built for a slot, reused while its inputs are unchanged: a

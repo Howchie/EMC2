@@ -1083,7 +1083,8 @@ test_that("unresolved orbit widths do not replace the existing tuning", {
 
 test_that("the native shear rounds are the R rounds on the same random stream", {
   skip_on_cran()
-  old <- options(emc2.fit_host = FALSE)
+  # The R step is the one that runs the move through the mocked binding.
+  old <- options(emc2.fit_host = FALSE, emc2.native_steps = FALSE)
   on.exit(options(old), add = TRUE)
   des <- design(factors = list(subjects = 1:5, S = 1), Rlevels = 1, model = REXG,
                 formula = list(mu ~ 1, sigma ~ 1, tau ~ 1))

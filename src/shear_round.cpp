@@ -63,6 +63,77 @@ int sample_one(const std::vector<double>& w) {
   return perm[j] - 1;
 }
 
+// Every subject's likelihood of its candidate rows on the stored-argument
+// path, a column per candidate. False when a subject's likelihood is not
+// served there.
+bool candidate_lls(const List& rows, const List& data, SEXP model, int n_ok,
+                   NumericMatrix& ll_new) {
+  const int n = ll_new.nrow();
+  for (int s = 0; s < n; ++s) {
+    RObject ll;
+    try {
+      ll = emc2_ll_cached(rows[s], data[s], model, R_NilValue);
+    } catch (...) {
+      return false;
+    }
+    if (TYPEOF(ll) != REALSXP || XLENGTH(ll) != n_ok || ANY_ATTRIB(ll)) return false;
+    const double* x = REAL(ll);
+    for (int c = 0; c < n_ok; ++c) {
+      if (ISNAN(x[c]) || x[c] == R_PosInf) return false;
+      ll_new(s, c) = x[c];
+    }
+  }
+  return true;
+}
+
+// The round's selection among staying (0) and its K candidates with steps t:
+// the valid candidates `ok` (0-based) weigh by their likelihood columns
+// against the current likelihoods plus their prior change. E is the
+// selection-weighted squared step.
+int select_candidate(const double* t, int K, const std::vector<int>& ok,
+                     const std::vector<double>& prior_delta, const NumericMatrix& ll_new,
+                     const NumericVector& ll_cur, double& E) {
+  const int n = ll_new.nrow(), n_ok = static_cast<int>(ok.size());
+  std::vector<double> lw(K, R_NegInf);
+  if (n_ok > 0) {
+    long double cur_acc = 0.0L;
+    for (int s = 0; s < n; ++s) cur_acc += ll_cur[s];
+    const double cur_sum = static_cast<double>(cur_acc);
+    for (int c = 0; c < n_ok; ++c) {
+      long double col = 0.0L;
+      for (int s = 0; s < n; ++s) col += ll_new(s, c);
+      const double v_ok = static_cast<double>(col) - cur_sum + prior_delta[ok[c]];
+      lw[ok[c]] = R_FINITE(v_ok) ? v_ok : R_NegInf;
+    }
+  }
+  std::vector<double> w(K + 1);
+  w[0] = 0.0;
+  for (int k = 0; k < K; ++k) w[k + 1] = lw[k];
+  double top = w[0];
+  for (int k = 1; k <= K; ++k) if (w[k] > top) top = w[k];
+  // One scalar exp per weight, as R's exp(): a vectorised exp may differ in
+  // the last bit.
+  for (int k = 0; k <= K; ++k) {
+    volatile double arg = w[k] - top;
+    w[k] = std::exp(arg);
+  }
+  long double total = 0.0L;
+  for (int k = 0; k <= K; ++k) total += w[k];
+  const double total_d = static_cast<double>(total);
+  for (int k = 0; k <= K; ++k) w[k] /= total_d;
+  const int j = sample_one(w);
+  long double e_acc = 0.0L;
+  // Each term is rounded to double before it is added, as R's sum() of a
+  // product vector.
+  for (int k = 0; k < K; ++k) {
+    volatile double term = t[k] * t[k];
+    term = w[k + 1] * term;
+    e_acc += term;
+  }
+  E = static_cast<double>(e_acc);
+  return j;
+}
+
 }  // namespace
 
 // `v` has no mean part, so every candidate keeps mu and its mean-prior
@@ -108,7 +179,6 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
     ok.push_back(k);
   }
   const int n_ok = static_cast<int>(ok.size());
-  std::vector<double> lw(K, R_NegInf);
   NumericMatrix ll_new(n, n_ok > 0 ? n_ok : 1);
   double ll_seconds = 0.0;
   if (n_ok > 0) {
@@ -116,58 +186,14 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
     for (int c = 0; c < n_ok; ++c) moved[c] = as<List>(cands[ok[c]])["alpha"];
     const List rows = emc_candidate_rows_cpp(moved, par_names);
     const auto ll_t0 = std::chrono::steady_clock::now();
-    for (int s = 0; s < n; ++s) {
-      RObject ll;
-      try {
-        ll = emc2_ll_cached(rows[s], data[s], model, R_NilValue);
-      } catch (...) {
-        return List::create(Named("fallback") = true);
-      }
-      if (TYPEOF(ll) != REALSXP || XLENGTH(ll) != n_ok || ANY_ATTRIB(ll))
-        return List::create(Named("fallback") = true);
-      const double* x = REAL(ll);
-      for (int c = 0; c < n_ok; ++c) {
-        if (ISNAN(x[c]) || x[c] == R_PosInf) return List::create(Named("fallback") = true);
-        ll_new(s, c) = x[c];
-      }
-    }
+    if (!candidate_lls(rows, data, model, n_ok, ll_new))
+      return List::create(Named("fallback") = true);
     ll_seconds = seconds_since(ll_t0);
-    long double cur_acc = 0.0L;
-    for (int s = 0; s < n; ++s) cur_acc += ll_cur[s];
-    const double cur_sum = static_cast<double>(cur_acc);
-    for (int c = 0; c < n_ok; ++c) {
-      long double col = 0.0L;
-      for (int s = 0; s < n; ++s) col += ll_new(s, c);
-      const double v_ok = static_cast<double>(col) - cur_sum + prior_delta[ok[c]];
-      lw[ok[c]] = R_FINITE(v_ok) ? v_ok : R_NegInf;
-    }
   }
-  std::vector<double> w(K + 1);
-  w[0] = 0.0;
-  for (int k = 0; k < K; ++k) w[k + 1] = lw[k];
-  double top = w[0];
-  for (int k = 1; k <= K; ++k) if (w[k] > top) top = w[k];
-  // One scalar exp per weight, as R's exp(): a vectorised exp may differ in
-  // the last bit.
-  for (int k = 0; k <= K; ++k) {
-    volatile double arg = w[k] - top;
-    w[k] = std::exp(arg);
-  }
-  long double total = 0.0L;
-  for (int k = 0; k <= K; ++k) total += w[k];
-  const double total_d = static_cast<double>(total);
-  for (int k = 0; k <= K; ++k) w[k] /= total_d;
-  const int j = sample_one(w);
-  long double e_acc = 0.0L;
-  // Each term is rounded to double before it is added, as R's sum() of a
-  // product vector.
-  for (int k = 0; k < K; ++k) {
-    volatile double term = t[k] * t[k];
-    term = w[k + 1] * term;
-    e_acc += term;
-  }
+  double E = 0.0;
+  const int j = select_candidate(t.memptr(), K, ok, prior_delta, ll_new, ll_cur, E);
   List out = List::create(Named("fallback") = false,
-                          Named("E") = static_cast<double>(e_acc),
+                          Named("E") = E,
                           Named("j") = j, Named("evaluated") = n_ok > 0,
                           Named("ll_seconds") = ll_seconds);
   if (j > 0) {
@@ -194,8 +220,6 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
   return out;
 }
 
-namespace {
-
 // .emc_shear_log_hier: the subjects' joint log density under the group
 // state, by the same triangular solve and the same sums.
 double shear_log_hier(const NumericMatrix& alpha, const NumericVector& mu,
@@ -219,7 +243,141 @@ double shear_log_hier(const NumericMatrix& alpha, const NumericVector& mu,
   return a - b;
 }
 
-}  // namespace
+// One shear round along a mean direction d with no transport walls
+// (R/shear_move.R .emc_shear_round with .emc_shear_line): V and every frame
+// factor stay, each frame centre moves along Delta_s = Q_s^-1 V^-1 d, and the
+// candidates' prior change is a quadratic in the step. Returns fallback =
+// TRUE when a subject's likelihood is not served by the stored-argument path
+// or a product would leave R's BLAS path. Otherwise E, the selected candidate
+// (0 = stay), whether any candidate was valid and, for a move, the moved
+// mean, frame centres, subjects and likelihoods.
+List shear_mean_round(const NumericVector& t, const NumericVector& d,
+                      const NumericMatrix& alpha, const NumericVector& mu,
+                      const NumericMatrix& chol_V, const NumericMatrix& Vi,
+                      const NumericMatrix& m0, const NumericVector& R0,
+                      const NumericVector& prior_mean, const NumericMatrix& prior_invar,
+                      const NumericVector& ll_cur, const List& data, SEXP model,
+                      const CharacterVector& par_names) {
+  const int K = t.size();
+  int p = alpha.nrow(), n = alpha.ncol();
+  const double one = 1.0, zero = 0.0;
+  int ione = 1;
+  auto finite = [](const double* x, R_xlen_t len) {
+    for (R_xlen_t i = 0; i < len; ++i) if (!R_FINITE(x[i])) return false;
+    return true;
+  };
+  const List fallback = List::create(Named("fallback") = true);
+  if (d.size() != p || mu.size() != p || prior_mean.size() != p || prior_invar.nrow() != p ||
+      prior_invar.ncol() != p || XLENGTH(R0) != static_cast<R_xlen_t>(p) * p * n ||
+      !finite(Vi.begin(), XLENGTH(Vi)) || !finite(prior_invar.begin(), XLENGTH(prior_invar)) ||
+      !finite(d.begin(), p))
+    return fallback;
+  // Each centre's move for a mean step u: Q_s^-1 V^-1 u through the frame's
+  // factor, lower then upper.
+  std::vector<double> Rt(static_cast<size_t>(p) * p);
+  auto centre_shift = [&](const double* u, std::vector<double>& out) {
+    std::vector<double> Vi_u(p);
+    F77_CALL(dgemv)("N", &p, &p, &one, Vi.begin(), &p, u, &ione, &zero, Vi_u.data(),
+                    &ione FCONE);
+    out.resize(static_cast<size_t>(p) * n);
+    for (int s = 0; s < n; ++s) {
+      const double* R = R0.begin() + static_cast<R_xlen_t>(s) * p * p;
+      for (int c = 0; c < p; ++c)
+        for (int r = 0; r < p; ++r) Rt[c + static_cast<size_t>(r) * p] = R[r + static_cast<size_t>(c) * p];
+      double* x = out.data() + static_cast<size_t>(s) * p;
+      std::copy(Vi_u.begin(), Vi_u.end(), x);
+      F77_CALL(dtrsm)("L", "L", "N", "N", &p, &ione, &one, Rt.data(), &p, x, &p
+                      FCONE FCONE FCONE FCONE);
+      F77_CALL(dtrsm)("L", "U", "N", "N", &p, &ione, &one, R, &p, x, &p
+                      FCONE FCONE FCONE FCONE);
+    }
+  };
+  std::vector<double> Delta;
+  centre_shift(d.begin(), Delta);
+  std::vector<double> Z0(static_cast<size_t>(p) * n), Zd(static_cast<size_t>(p) * n);
+  for (int s = 0; s < n; ++s)
+    for (int i = 0; i < p; ++i) {
+      const size_t at = i + static_cast<size_t>(s) * p;
+      Z0[at] = alpha(i, s) - mu[i];
+      Zd[at] = Delta[at] - d[i];
+    }
+  F77_CALL(dtrsm)("L", "U", "T", "N", &p, &n, &one, chol_V.begin(), &p, Z0.data(), &p
+                  FCONE FCONE FCONE FCONE);
+  F77_CALL(dtrsm)("L", "U", "T", "N", &p, &n, &one, chol_V.begin(), &p, Zd.data(), &p
+                  FCONE FCONE FCONE FCONE);
+  std::vector<double> P0d(p);
+  F77_CALL(dgemv)("N", &p, &p, &one, prior_invar.begin(), &p, d.begin(), &ione, &zero,
+                  P0d.data(), &ione FCONE);
+  long double zz = 0.0L, dd = 0.0L, mp = 0.0L, dp = 0.0L;
+  for (size_t i = 0; i < Z0.size(); ++i) {
+    volatile double cross = Z0[i] * Zd[i];
+    volatile double sq = Zd[i] * Zd[i];
+    zz += cross;
+    dd += sq;
+  }
+  for (int i = 0; i < p; ++i) {
+    volatile double centred = mu[i] - prior_mean[i];
+    volatile double a = centred * P0d[i];
+    volatile double b = d[i] * P0d[i];
+    mp += a;
+    dp += b;
+  }
+  volatile double a1 = static_cast<double>(zz) + static_cast<double>(mp);
+  volatile double a2 = static_cast<double>(dd) + static_cast<double>(dp);
+  volatile double half_a2 = 0.5 * a2;
+  std::vector<int> ok;
+  std::vector<double> prior_delta(K);
+  for (int k = 0; k < K; ++k) {
+    volatile double lin_term = a1 * t[k];
+    volatile double tsq = t[k] * t[k];
+    volatile double quad = half_a2 * tsq;
+    volatile double total = lin_term + quad;
+    prior_delta[k] = -total;
+    if (R_FINITE(prior_delta[k])) ok.push_back(k);
+  }
+  auto moved_alpha = [&](double step) {
+    NumericMatrix a(p, n);
+    for (R_xlen_t i = 0; i < XLENGTH(a); ++i) {
+      volatile double shift = step * Delta[i];
+      a[i] = alpha[i] + shift;
+    }
+    return a;
+  };
+  const int n_ok = static_cast<int>(ok.size());
+  NumericMatrix ll_new(n, n_ok > 0 ? n_ok : 1);
+  if (n_ok > 0) {
+    List moved(n_ok);
+    for (int c = 0; c < n_ok; ++c) moved[c] = moved_alpha(t[ok[c]]);
+    const List rows = emc_candidate_rows_cpp(moved, par_names);
+    if (!candidate_lls(rows, data, model, n_ok, ll_new)) return fallback;
+  }
+  double E = 0.0;
+  const int j = select_candidate(t.begin(), K, ok, prior_delta, ll_new, ll_cur, E);
+  List out = List::create(Named("fallback") = false, Named("E") = E, Named("j") = j,
+                          Named("evaluated") = n_ok > 0);
+  if (j > 0) {
+    int col = 0;
+    while (col < n_ok && ok[col] != j - 1) ++col;
+    if (col == n_ok) Rcpp::stop("shear round: an invalid candidate was selected");
+    const double step = t[j - 1];
+    NumericVector u(p), mu1(p), ll_sel(n);
+    for (int i = 0; i < p; ++i) {
+      volatile double ui = step * d[i];
+      u[i] = ui;
+      mu1[i] = mu[i] + ui;
+    }
+    std::vector<double> shift;
+    centre_shift(u.begin(), shift);
+    NumericMatrix m1(p, n);
+    for (R_xlen_t i = 0; i < XLENGTH(m1); ++i) m1[i] = m0[i] + shift[i];
+    for (int s = 0; s < n; ++s) ll_sel[s] = ll_new(s, col);
+    out["mu"] = mu1;
+    out["m"] = m1;
+    out["alpha"] = moved_alpha(step);
+    out["ll"] = ll_sel;
+  }
+  return out;
+}
 
 // Consecutive shear rounds along log-sd coordinates `ks` (1-based, each
 // above the number of parameters), each as emc_shear_round_cpp from the

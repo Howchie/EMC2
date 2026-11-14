@@ -959,12 +959,18 @@ run_stage <- function(pmwgs,
                chains_mu = chains_mu, chains_var = chains_var, wpool_ctx = wpool_ctx,
                persistent_workers = persistent_workers, recycle_every = recycle_every,
                pool_budget = pool_budget, par_names = par_names, data = data)
+    cx <- c(cx, .emc_steps_constants(pmwgs, stage, chains_mu, chains_var, idx_list_blk,
+                                     marginal_idx_blk, cx$include_full, wpool_ctx,
+                                     persistent_workers))
     # The exit handlers stop the pool the steps leave, whatever ends them.
     tryCatch(.emc_steps_run(st, cx), finally = wpool <- st$wpool)
     pmwgs <- st$pmwgs
     pm_settings <- st$pm_settings
     wpool_streams <- st$streams
     stage_rejects <- st$stage_rejects
+    if (isTRUE(getOption("emc2.native_steps_trace", FALSE)))
+      .emc_pool_state$native_runs <- rbind(.emc_pool_state$native_runs,
+                                           c(st$native_runs, iter = iter))
     steps_done <- TRUE
   }
   for (i in if (steps_done) integer(0) else 1:iter) {

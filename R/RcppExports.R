@@ -191,6 +191,10 @@ draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
 }
 
+emc_iteration_loop_cpp <- function(st, cx, from, steps, native, rejects) {
+    invisible(.Call(`_EMC2_emc_iteration_loop_cpp`, st, cx, from, steps, native, rejects))
+}
+
 emc2_ll_cached <- function(proposals, dadm, model, varying) {
     .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
 }

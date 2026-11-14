@@ -16,6 +16,62 @@
     pmwgs$n_subjects > 1L
 }
 
+# What the native steps take ready-made for the block: the group draw's
+# blocks (NULL with group designs, which the R update handles), the ensemble
+# pools' inputs ("off" when no pools are drawn), the native particle kernel's
+# tuning constants (NULL when the kernel does not cover the block), and
+# whether the group covariance has one factor over all the parameters.
+.emc_steps_constants <- function(pmwgs, stage, chains_mu, chains_var, idx_list_blk,
+                                 marginal_idx_blk, include_full, ctx,
+                                 persistent_workers) {
+  p <- pmwgs$n_pars
+  n <- pmwgs$n_subjects
+  out <- list()
+  if (is.null(pmwgs$gd) && !length(pmwgs$group_designs)) {
+    is_blocked <- pmwgs$is_blocked[!pmwgs$nuisance]
+    par_group <- pmwgs$par_group[!pmwgs$nuisance]
+    if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
+    if (is.null(par_group)) par_group <- rep(1L, p)
+    out$gibbs <- list(blocked = as.logical(is_blocked),
+                      group = as.integer(factor(par_group, levels = unique(par_group))))
+  }
+  ens_q <- pmwgs$ensemble_q
+  mu <- if (is.null(ens_q)) chains_mu else ens_q$mu
+  var <- if (is.null(ens_q)) chains_var else ens_q$var
+  cfg <- .emc_ensemble_options()
+  out$pools <- if (stage == "preburn" || !.emc_ensemble_supported(pmwgs) ||
+                   length(mu) != n || length(var) != n ||
+                   any(vapply(mu, is.null, logical(1))) ||
+                   any(vapply(var, is.null, logical(1)))) "off" else
+    list(mu = lapply(mu, as.numeric), var = lapply(var, as.matrix), size = cfg$pool - 1L,
+         rounds = cfg$rounds,
+         tail_weight = cfg$tail_weight, tail_df = cfg$tail_df,
+         tail_excess = cfg$tail_excess, par_names = pmwgs$par_names)
+  # The particle steps run on the native kernel (.emc_native_particle_batch)
+  # with one block of parameters, in this process.
+  tune <- ctx$tune
+  tune_in <- list(n0 = as.numeric(tune$n0),
+                  step_target = if (is.null(tune$step_target)) step_target(1) else
+                    tune$step_target,
+                  mix_adapt = as.numeric(tune$mix_adapt),
+                  target_ESS = as.numeric(tune$target_ESS),
+                  ESS_scale = as.numeric(tune$ESS_scale),
+                  max_particles = as.numeric(tune$max_particles))
+  if (isTRUE(getOption("emc2.native_particle_block", TRUE)) &&
+      is.null(ctx$marginalise) && length(unique(tune$components)) == 1L &&
+      length(unique(tune$shared_ll_idx)) == 1L && !isTRUE(ctx$r_cores > 1L) &&
+      !(!is.null(.emc_pool_state$ll_pool) && isTRUE(.emc_pool_state$ll_pool$alive)) &&
+      !nzchar(Sys.getenv("EMC2_LL_TRACE")) && isTRUE(ctx$ll_cache_validated) &&
+      !persistent_workers && all(lengths(tune_in) == 1L))
+    out$particle <- list(tune_in = tune_in)
+  out$shear_active <- .emc_shear_active(pmwgs)
+  out$shear_step_range <- .EMC_SHEAR_LOG_STEP_RANGE
+  out$chol_simple <- !isTRUE(include_full) && length(idx_list_blk) == 1L &&
+    is.logical(idx_list_blk[[1L]]) && length(idx_list_blk[[1L]]) == p &&
+    all(idx_list_blk[[1L]]) && !any(marginal_idx_blk)
+  out
+}
+
 # The group draw given the subjects' last states, the ensemble pool members
 # drawn from the same stream, and the factors of the group covariance.
 .emc_step_group <- function(st, cx, i) {
@@ -207,11 +263,6 @@
 
 # Subject HMC, the last update of the iteration, from the final group state.
 .emc_step_hmc <- function(st, cx, i) {
-  for (kind in c("ensemble", "shear", "collapsed")) {
-    delta <- .emc_reject_delta(st$rejects[[kind]], kind)
-    st$rejects[[kind]] <- .emc_reject_counts(kind)
-    st$stage_rejects[[kind]] <- st$stage_rejects[[kind]] + delta
-  }
   pmwgs <- st$pmwgs
   proposals <- st$proposals
   hmc_tasks <- NULL
@@ -277,26 +328,37 @@
       collapsed = c(cpu = st$coll_cpu, own = st$coll_round_cpu, n = st$coll_moves),
       hmc = .emc_reserved_cost(st$hmc_el, st$cores_it)))
   }
-  delta <- .emc_reject_delta(st$rejects$gibbs, "gibbs")
-  st$rejects$gibbs <- .emc_reject_counts("gibbs")
-  st$stage_rejects$gibbs <- st$stage_rejects$gibbs + delta
   st$pmwgs <- pmwgs
+  .emc_steps_rejects(st)
+  invisible(NULL)
+}
+
+# The iteration's rejected updates of each group move, into the stage's
+# counts.
+.emc_steps_rejects <- function(st) {
+  for (kind in c("ensemble", "shear", "collapsed", "gibbs")) {
+    now <- .emc_reject_counts(kind)
+    if (identical(now, st$rejects[[kind]])) next
+    st$stage_rejects[[kind]] <- st$stage_rejects[[kind]] + (now - st$rejects[[kind]])
+    st$rejects[[kind]] <- now
+  }
   invisible(NULL)
 }
 
 .EMC_ITERATION_STEPS <- c("group", "particle", "ensemble", "shear", "collapsed", "hmc",
                           "store")
 
-# Iterations `from` to cx$iter of the block as the step sequence.
+# Iterations `from` to cx$iter of the block: the native loop
+# (src/iteration_loop.cpp), which runs each step itself where it can and
+# calls the step above where it cannot.
 .emc_steps_run <- function(st, cx, from = 1L) {
-  for (i in seq.int(from, cx$iter, length.out = max(0L, cx$iter - from + 1L))) {
-    .emc_step_group(st, cx, i)
-    .emc_step_particle(st, cx, i)
-    .emc_step_ensemble(st, cx, i)
-    .emc_step_shear(st, cx, i)
-    .emc_step_collapsed(st, cx, i)
-    .emc_step_hmc(st, cx, i)
-    .emc_step_store(st, cx, i)
-  }
+  steps <- list(group = .emc_step_group, particle = .emc_step_particle,
+                ensemble = .emc_step_ensemble, shear = .emc_step_shear,
+                collapsed = .emc_step_collapsed, hmc = .emc_step_hmc,
+                store = .emc_step_store)
+  native <- getOption("emc2.native_steps", TRUE)
+  native <- if (is.character(native)) .EMC_ITERATION_STEPS %in% native else
+    rep(isTRUE(native), length(steps))
+  emc_iteration_loop_cpp(st, cx, as.integer(from), steps, native, .emc_steps_rejects)
   invisible(NULL)
 }

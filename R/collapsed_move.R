@@ -206,10 +206,12 @@
   fits <- .emc_collapsed_condition(fits, sampler$pooled$value)
   fits <- lapply(fits, .emc_collapsed_safe_fit)
   chart <- .emc_collapsed_chart(spec, sampler$n_pars)
-  list(fits = fits, packed = .emc_shear_pack(fits, sampler$n_pars),
+  packed <- .emc_shear_pack(fits, sampler$n_pars)
+  walls <- .emc_shear_walls_of(sampler)
+  list(fits = fits, packed = packed,
        base_fits = base_fits, cacheable = cacheable,
        spec = spec, prior = sampler$prior, chart = chart,
-       walls = .emc_shear_walls_of(sampler),
+       walls = walls, args = .emc_shear_round_args(packed, walls, sampler$n_pars),
        cpp = .emc_collapsed_cpp_model(chart, fits, sampler$prior, spec))
 }
 
