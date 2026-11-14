@@ -212,9 +212,13 @@ test_that("an SEM without covariates takes a group draw", {
 
 test_that("the native latent ensemble rounds are the R rounds", {
   skip_on_os("windows")
-  for (type in c("factor", "infnt_factor")) {
-    fac <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = type,
-                    n_factors = 2)
+  for (type in c("factor", "infnt_factor", "SEM")) {
+    fac <- if (type == "SEM")
+      make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = type,
+               sem_settings = list(Lambda_mat = cbind(c(1, Inf, 0, 0), c(0, 0, 1, Inf)),
+                                   factor_groups = c(1, 1))) else
+      make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = type,
+               n_factors = 2)
     fac <- init_chains(fac, cores_for_chains = 1, particles = 5)
     sampler <- fac[[1]]
     n <- sampler$n_subjects
@@ -246,7 +250,8 @@ test_that("the native SEM group draw is the R form's draw", {
     list(Lambda_mat = matrix(c(1, Inf, Inf, Inf), 4, 1)),
     list(Lambda_mat = cbind(c(1, Inf, 0, 0), c(0, 0, 1, Inf)),
          B_mat = matrix(c(0, Inf, 0, 0), 2, 2), K_mat = matrix(c(Inf, 0, 0, 0.2), 4, 1),
-         G_mat = matrix(c(Inf, 0), 2, 1), covariates = x))
+         G_mat = matrix(c(Inf, 0), 2, 1), covariates = x),
+    list(Lambda_mat = cbind(c(1, Inf, 0, 0), c(0, 0, 1, Inf)), factor_groups = c(1, 1)))
   for (ss in settings) {
     sem <- make_emc(dat, design_LNR, rt_resolution = 0.05, n_chains = 1, type = "SEM",
                     sem_settings = ss)
@@ -255,10 +260,10 @@ test_that("the native SEM group draw is the R form's draw", {
     alpha <- sampler$samples$alpha[, , sampler$samples$idx]
     set.seed(11)
     seed <- .Random.seed
-    r_form <- EMC2:::.sem_gibbs_front_r(sampler, alpha)
+    r_form <- EMC2:::gibbs_step_SEM_r(sampler, alpha)
     after <- .Random.seed
     assign(".Random.seed", seed, envir = globalenv())
-    native <- EMC2:::.sem_gibbs_front_native(sampler, alpha)
+    native <- EMC2:::.sem_gibbs_native(sampler, alpha)
     expect_false(is.null(native))
     expect_identical(native, r_form)
     expect_identical(.Random.seed, after)

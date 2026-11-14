@@ -82,6 +82,28 @@ struct SemPrior {
 // states and covariates (subjects x covariates); FALSE as for gibbs().
 bool gibbs_sem(SemState& state, const Mat& y, const Mat& cov, const SemPrior& prior);
 
+// What the disturbance precision's draw needs: each factor's block (numbered
+// from zero in order of first appearance), the prior's shape and rate, and
+// the covariates' means and covariance.
+struct SemBlocks {
+  std::vector<int> block;
+  double a_d, b_d;
+  std::vector<double> x_mean;
+  Mat x_var;
+};
+
+// The subjects' moments with the scores integrated out: each subject's mean
+// (parameters x subjects) and their common covariance, and both averaged
+// over the covariates.
+struct SemMoments {
+  Mat subj_mu, subj_var, pop_var;
+  std::vector<double> pop_mean;
+};
+
+// The disturbance precision given the rest of the draw, block by block, and
+// the moments the completed draw implies; FALSE as for gibbs().
+bool finish_sem(SemState& state, const Mat& cov, const SemBlocks& blocks, SemMoments& moments);
+
 }  // namespace emc_factor
 
 #endif

@@ -179,8 +179,8 @@ pbvn_hybrid <- function(h, k, rho) {
     .Call(`_EMC2_pbvn_hybrid`, h, k, rho)
 }
 
-emc_gibbs_sem_cpp <- function(y, covariates, state, free, prior) {
-    .Call(`_EMC2_emc_gibbs_sem_cpp`, y, covariates, state, free, prior)
+emc_gibbs_sem_cpp <- function(y, covariates, state, free, prior, blocks) {
+    .Call(`_EMC2_emc_gibbs_sem_cpp`, y, covariates, state, free, prior, blocks)
 }
 
 emc_rmvnorm_cpp <- function(n, mean, sigma) {
@@ -199,8 +199,8 @@ emc_gibbs_infnt_factor_cpp <- function(alpha, state, prior) {
     .Call(`_EMC2_emc_gibbs_infnt_factor_cpp`, alpha, state, prior)
 }
 
-emc_ensemble_rounds_latent_cpp <- function(pool_stack, base_w, k0, M, rounds, state, free_entry, prior) {
-    .Call(`_EMC2_emc_ensemble_rounds_latent_cpp`, pool_stack, base_w, k0, M, rounds, state, free_entry, prior)
+emc_ensemble_rounds_latent_cpp <- function(pool_stack, base_w, k0, M, rounds, state, free_entry, prior, sem) {
+    .Call(`_EMC2_emc_ensemble_rounds_latent_cpp`, pool_stack, base_w, k0, M, rounds, state, free_entry, prior, sem)
 }
 
 gomp_pdf_cdf_vec <- function(rt, alpha, beta, K, B, A, t0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 512L, dt_target = 4e-3, grade = 8.0, tgrade = 32.0) {

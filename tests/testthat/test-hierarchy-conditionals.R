@@ -117,7 +117,7 @@ test_that("SEM loading, K, G and B rows subtract fixed contributions", {
   B0 <- s$samples$B[, , 1]; G0 <- matrix(s$samples$G[, , 1], 2)
   local_mocked_bindings(.emc_rmvnorm = hc_mean_rmvnorm, .package = "EMC2")
   set.seed(1)
-  out <- EMC2:::.sem_gibbs_back(s, alpha, EMC2:::.sem_gibbs_front_r(s, alpha))
+  out <- EMC2:::gibbs_step_SEM_r(s, alpha)
   eta <- out$eta
   # Loading / K rows.
   X <- cbind(x, eta)

@@ -682,8 +682,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_gibbs_sem_cpp
-SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates, const Rcpp::List& state, const Rcpp::List& free, const Rcpp::List& prior);
-RcppExport SEXP _EMC2_emc_gibbs_sem_cpp(SEXP ySEXP, SEXP covariatesSEXP, SEXP stateSEXP, SEXP freeSEXP, SEXP priorSEXP) {
+SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates, const Rcpp::List& state, const Rcpp::List& free, const Rcpp::List& prior, const Rcpp::List& blocks);
+RcppExport SEXP _EMC2_emc_gibbs_sem_cpp(SEXP ySEXP, SEXP covariatesSEXP, SEXP stateSEXP, SEXP freeSEXP, SEXP priorSEXP, SEXP blocksSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -692,7 +692,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::List& >::type state(stateSEXP);
     Rcpp::traits::input_parameter< const Rcpp::List& >::type free(freeSEXP);
     Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_gibbs_sem_cpp(y, covariates, state, free, prior));
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type blocks(blocksSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_gibbs_sem_cpp(y, covariates, state, free, prior, blocks));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -747,8 +748,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_ensemble_rounds_latent_cpp
-SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack, const Rcpp::NumericVector& base_w, const Rcpp::IntegerVector& k0, int M, int rounds, const Rcpp::List& state, SEXP free_entry, const Rcpp::List& prior);
-RcppExport SEXP _EMC2_emc_ensemble_rounds_latent_cpp(SEXP pool_stackSEXP, SEXP base_wSEXP, SEXP k0SEXP, SEXP MSEXP, SEXP roundsSEXP, SEXP stateSEXP, SEXP free_entrySEXP, SEXP priorSEXP) {
+SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack, const Rcpp::NumericVector& base_w, const Rcpp::IntegerVector& k0, int M, int rounds, const Rcpp::List& state, SEXP free_entry, const Rcpp::List& prior, SEXP sem);
+RcppExport SEXP _EMC2_emc_ensemble_rounds_latent_cpp(SEXP pool_stackSEXP, SEXP base_wSEXP, SEXP k0SEXP, SEXP MSEXP, SEXP roundsSEXP, SEXP stateSEXP, SEXP free_entrySEXP, SEXP priorSEXP, SEXP semSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -760,7 +761,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::List& >::type state(stateSEXP);
     Rcpp::traits::input_parameter< SEXP >::type free_entry(free_entrySEXP);
     Rcpp::traits::input_parameter< const Rcpp::List& >::type prior(priorSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_ensemble_rounds_latent_cpp(pool_stack, base_w, k0, M, rounds, state, free_entry, prior));
+    Rcpp::traits::input_parameter< SEXP >::type sem(semSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_ensemble_rounds_latent_cpp(pool_stack, base_w, k0, M, rounds, state, free_entry, prior, sem));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4539,12 +4541,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
-    {"_EMC2_emc_gibbs_sem_cpp", (DL_FUNC) &_EMC2_emc_gibbs_sem_cpp, 5},
+    {"_EMC2_emc_gibbs_sem_cpp", (DL_FUNC) &_EMC2_emc_gibbs_sem_cpp, 6},
     {"_EMC2_emc_rmvnorm_cpp", (DL_FUNC) &_EMC2_emc_rmvnorm_cpp, 3},
     {"_EMC2_emc_solve_cpp", (DL_FUNC) &_EMC2_emc_solve_cpp, 1},
     {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 4},
     {"_EMC2_emc_gibbs_infnt_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_infnt_factor_cpp, 3},
-    {"_EMC2_emc_ensemble_rounds_latent_cpp", (DL_FUNC) &_EMC2_emc_ensemble_rounds_latent_cpp, 8},
+    {"_EMC2_emc_ensemble_rounds_latent_cpp", (DL_FUNC) &_EMC2_emc_ensemble_rounds_latent_cpp, 9},
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},

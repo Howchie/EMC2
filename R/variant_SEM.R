@@ -416,25 +416,31 @@ fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
          n_subjects, n_factors)
 }
 
-# The group draw: everything but the disturbance precision from the native
-# form (src/gibbs_factor.cpp), which gives the R form's draw on the same
-# random stream, else from the R form started at the stream's state before
-# the call; then the disturbance precision and the implied moments.
+# The group draw: from the native form (src/gibbs_factor.cpp), which gives
+# the R form's draw on the same random stream, else from the R form started
+# at the stream's state before the call.
 gibbs_step_SEM <- function(sampler, alpha){
   seed <- get0(".Random.seed", envir = globalenv(), inherits = FALSE)
-  front <- if (!is.null(seed) && isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
-    .sem_gibbs_front_native(sampler, alpha)
-  if (is.null(front)) {
+  out <- if (!is.null(seed) && isTRUE(getOption("emc2.native_gibbs_factor", TRUE)))
+    .sem_gibbs_native(sampler, alpha)
+  if (is.null(out)) {
     if (!is.null(seed)) assign(".Random.seed", seed, envir = globalenv())
-    front <- .sem_gibbs_front_r(sampler, alpha)
+    out <- gibbs_step_SEM_r(sampler, alpha)
   }
-  .sem_gibbs_back(sampler, alpha, front)
+  out
 }
 
-# The native draw of everything but the disturbance precision, or NULL where
-# the native form does not cover the model or declines the draw.
-.sem_gibbs_front_native <- function(sampler, alpha) {
-  last <- last_sample_SEM(sampler$samples)
+# The group draw in R.
+gibbs_step_SEM_r <- function(sampler, alpha) {
+  .sem_gibbs_back(sampler, alpha, .sem_gibbs_front_r(sampler, alpha))
+}
+
+# What the native draw takes besides the subjects' states: the covariates
+# (no columns without any), the state (as last_sample_SEM() gives it), which
+# coefficients are free, the prior's precisions at full length, and the
+# factors' blocks with the disturbance prior and the covariates' summaries.
+# NULL where the native form does not cover the model.
+.sem_gibbs_inputs <- function(sampler, last) {
   ss <- sampler$sem_settings
   prior <- sampler$prior
   n <- sampler$n_subjects
@@ -445,28 +451,56 @@ gibbs_step_SEM <- function(sampler, alpha){
   full <- function(v, len) is.numeric(v) && length(v) %in% c(1L, len)
   exact <- function(v, len) is.numeric(v) && length(v) == len
   shaped <- function(m, nr, nc) is.matrix(m) && all(dim(m) == c(nr, nc)) && !anyNA(m)
-  if (p < 2L || length(k) != 1L || k < 1L || !is.matrix(alpha) ||
-      !all(dim(alpha) == c(p, n)) || !is.double(x) || nrow(x) != n ||
+  if (p < 2L || length(k) != 1L || k < 1L || !is.double(x) || nrow(x) != n ||
       !shaped(ss$Lambda_mat, p, k) || !shaped(ss$B_mat, k, k) ||
       !shaped(ss$K_mat, p, n_cov) || !shaped(ss$G_mat, k, n_cov) ||
       !full(prior$theta_mu_var, p) || !exact(prior$theta_mu_mean, p) ||
       !full(prior$a_e, p) || !full(prior$b_e, p) || !exact(prior$K_var, n_cov) ||
-      !exact(prior$lambda_var, k) || !exact(prior$G_var, n_cov) || !exact(prior$B_var, k))
+      !exact(prior$lambda_var, k) || !exact(prior$G_var, n_cov) || !exact(prior$B_var, k) ||
+      !exact(prior$a_d, 1L) || !exact(prior$b_d, 1L) || length(ss$factor_groups) != k ||
+      anyNA(ss$factor_groups))
     return(NULL)
-  emc_gibbs_sem_cpp(
-    t(alpha), unname(x),
-    list(lambda = matrix(as.numeric(last$lambda), p, k), B = matrix(as.numeric(last$B), k, k),
-         K = matrix(as.numeric(last$K), p, n_cov), G = matrix(as.numeric(last$G), k, n_cov),
-         delta_inv = matrix(as.numeric(last$delta_inv), k, k), mu = as.numeric(last$mu),
-         epsilon_inv = as.numeric(last$epsilon_inv)),
-    list(lambda = ss$Lambda_mat == Inf, K = ss$K_mat == Inf, B = ss$B_mat == Inf,
-         G = ss$G_mat == Inf),
-    list(mu_prec = rep_len(1 / as.numeric(prior$theta_mu_var), p),
-         mu_mean = as.numeric(prior$theta_mu_mean),
-         shape_err = rep_len(as.numeric(prior$a_e + n / 2), p),
-         rate_err = rep_len(as.numeric(prior$b_e), p),
-         load_prec = 1 / c(as.numeric(prior$K_var), as.numeric(prior$lambda_var)),
-         struct_prec = 1 / c(as.numeric(prior$G_var), as.numeric(prior$B_var))))
+  list(
+    covariates = unname(x),
+    state = list(lambda = matrix(as.numeric(last$lambda), p, k),
+                 B = matrix(as.numeric(last$B), k, k),
+                 K = matrix(as.numeric(last$K), p, n_cov),
+                 G = matrix(as.numeric(last$G), k, n_cov),
+                 delta_inv = matrix(as.numeric(last$delta_inv), k, k),
+                 mu = as.numeric(last$mu), epsilon_inv = as.numeric(last$epsilon_inv)),
+    free = list(lambda = ss$Lambda_mat == Inf, K = ss$K_mat == Inf, B = ss$B_mat == Inf,
+                G = ss$G_mat == Inf),
+    prior = list(mu_prec = rep_len(1 / as.numeric(prior$theta_mu_var), p),
+                 mu_mean = as.numeric(prior$theta_mu_mean),
+                 shape_err = rep_len(as.numeric(prior$a_e + n / 2), p),
+                 rate_err = rep_len(as.numeric(prior$b_e), p),
+                 load_prec = 1 / c(as.numeric(prior$K_var), as.numeric(prior$lambda_var)),
+                 struct_prec = 1 / c(as.numeric(prior$G_var), as.numeric(prior$B_var))),
+    blocks = list(block = match(ss$factor_groups, unique(ss$factor_groups)),
+                  a_d = as.numeric(prior$a_d), b_d = as.numeric(prior$b_d),
+                  x_mean = if (n_cov) as.numeric(colMeans(x)) else numeric(0),
+                  x_var = if (n_cov && n > 1) unname(stats::cov(x)) else
+                    matrix(0, n_cov, n_cov)))
+}
+
+# The native draw's state in the form gibbs_step_SEM_r() returns, given the
+# subjects' states (parameters x subjects).
+.sem_gibbs_pars <- function(res, alpha) {
+  res$alpha <- alpha
+  res[c("tmu", "lambda", "eta", "B", "K", "G", "epsilon_inv", "delta_inv", "alpha",
+        "subj_mu", "subj_var", "pop_mean", "tvar")]
+}
+
+# The native draw, or NULL where the native form does not cover the model or
+# declines the draw.
+.sem_gibbs_native <- function(sampler, alpha) {
+  p <- sum(!sampler$nuisance)
+  if (!is.matrix(alpha) || !all(dim(alpha) == c(p, sampler$n_subjects))) return(NULL)
+  inp <- .sem_gibbs_inputs(sampler, last_sample_SEM(sampler$samples))
+  if (is.null(inp)) return(NULL)
+  res <- emc_gibbs_sem_cpp(t(alpha), inp$covariates, inp$state, inp$free, inp$prior,
+                           inp$blocks)
+  if (is.null(res)) NULL else .sem_gibbs_pars(res, alpha)
 }
 
 # The draw of everything but the disturbance precision, in R.

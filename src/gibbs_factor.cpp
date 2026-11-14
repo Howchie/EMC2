@@ -787,6 +787,122 @@ void draw_sem(emc_factor::SemState& s, const Mat& y, const Mat& cov,
   }
 }
 
+// The reciprocal 1-norm condition number of a square matrix, zero where it
+// is singular.
+double reciprocal_condition(const Mat& a) {
+  int n = a.r, info = 0;
+  Mat lu = a;
+  std::vector<int> ipiv(n);
+  F77_CALL(dgetrf)(&n, &n, lu.v.data(), &n, ipiv.data(), &info);
+  if (info != 0) return 0.0;
+  double anorm = F77_CALL(dlange)("1", &n, &n, a.v.data(), &n, NULL FCONE);
+  std::vector<double> work(4 * static_cast<size_t>(n));
+  double rcond = 0.0;
+  F77_CALL(dgecon)("1", &n, lu.v.data(), &n, &anorm, &rcond, work.data(), ipiv.data(),
+                   &info FCONE);
+  return info == 0 ? rcond : 0.0;
+}
+
+// riwish(v, scale): the inverse of a Wishart draw on the scale's inverse,
+// from the Bartlett factor with its chi-square diagonal drawn before its
+// normal upper triangle. A scale near the conditioning riwish() refuses is
+// left to the R form.
+Mat inverse_wishart(double v, const Mat& scale) {
+  const int p = scale.r;
+  if (scale.c != p || p < 2) throw Decline();
+  require_finite(scale);
+  Mat s(p, p);
+  for (int j = 0; j < p; ++j)
+    for (int i = 0; i < p; ++i) s(i, j) = (scale(i, j) + scale(j, i)) / 2;
+  chol_upper(s);
+  if (!(reciprocal_condition(s) > 1e-8)) throw Decline();
+  const Mat s_inv = inverse(s);
+  if (!R_FINITE(v) || v <= p - 1) throw Decline();
+  const Mat cc = chol_upper(s_inv);
+  Mat z(p, p);
+  for (int i = 0; i < p; ++i) {
+    const double chi = Rf_rchisq(v - static_cast<double>(i));
+    if (!R_FINITE(chi)) throw Decline();
+    z(i, i) = std::sqrt(chi);
+  }
+  for (int j = 1; j < p; ++j)
+    for (int i = 0; i < j; ++i) z(i, j) = norm_rand();
+  return inverse(sym_product(mult(z, cc), false));
+}
+
+Mat symmetrised(const Mat& x) {
+  Mat z(x.r, x.c);
+  for (int j = 0; j < x.c; ++j)
+    for (int i = 0; i < x.r; ++i) z(i, j) = (x(i, j) + x(j, i)) / 2;
+  return z;
+}
+
+void finish(emc_factor::SemState& s, const Mat& cov, const emc_factor::SemBlocks& b,
+            emc_factor::SemMoments& m) {
+  const int n = s.eta.r, k = s.eta.c, p = s.lambda.r, c = cov.c;
+  const Mat own = mult(s.eta, transpose(s.B));
+  const Mat driven = mult(cov, transpose(s.G));
+  Mat resid(n, k);
+  for (int f = 0; f < k; ++f)
+    for (int i = 0; i < n; ++i) resid(i, f) = s.eta(i, f) - own(i, f) - driven(i, f);
+  int n_blocks = 0;
+  for (int f = 0; f < k; ++f) n_blocks = std::max(n_blocks, b.block[f] + 1);
+  for (int g = 0; g < n_blocks; ++g) {
+    std::vector<int> idx;
+    for (int f = 0; f < k; ++f)
+      if (b.block[f] == g) idx.push_back(f);
+    const int d = static_cast<int>(idx.size());
+    if (d == 0) throw Decline();
+    const Mat cross = sym_product(columns(resid, idx), false);
+    const double df = b.a_d + n;
+    if (!(df > d - 1)) throw Decline();
+    if (d > 1) {
+      Mat scale(d, d);
+      for (int j = 0; j < d; ++j)
+        for (int i = 0; i < d; ++i) scale(i, j) = (i == j ? b.b_d : 0.0) + cross(i, j);
+      const Mat precision = inverse(inverse_wishart(df, scale));
+      for (int j = 0; j < d; ++j)
+        for (int i = 0; i < d; ++i) s.delta_inv(idx[i], idx[j]) = precision(i, j);
+    } else {
+      volatile double half = 0.5 * cross(0, 0);
+      s.delta_inv(idx[0], idx[0]) = gamma_draw(b.a_d + n / 2.0, b.b_d + half);
+    }
+  }
+  // Loadings on the disturbances and the covariates' total effects.
+  Mat structure(k, k);
+  for (int j = 0; j < k; ++j)
+    for (int i = 0; i < k; ++i) structure(i, j) = (i == j ? 1.0 : 0.0) - s.B(i, j);
+  const Mat a = mult(s.lambda, inverse(structure));
+  Mat total = mult(a, s.G);
+  for (int j = 0; j < c; ++j)
+    for (int i = 0; i < p; ++i) total(i, j) = s.K(i, j) + total(i, j);
+  Mat v = mult(mult(a, inverse(s.delta_inv)), transpose(a));
+  for (int j = 0; j < p; ++j)
+    for (int i = 0; i < p; ++i) v(i, j) = v(i, j) + (i == j ? 1 / s.epsilon_inv[i] : 0.0);
+  m.subj_var = symmetrised(v);
+  m.subj_mu = Mat(p, n);
+  if (c > 0) {
+    const Mat shift = mult(total, transpose(cov));
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < p; ++j) m.subj_mu(j, i) = s.mu[j] + shift(j, i);
+    Mat x_mean(c, 1);
+    x_mean.v = b.x_mean;
+    const Mat mean_shift = mult(total, x_mean);
+    m.pop_mean.resize(p);
+    for (int j = 0; j < p; ++j) m.pop_mean[j] = s.mu[j] + mean_shift(j, 0);
+    const Mat spread = mult(mult(total, b.x_var), transpose(total));
+    Mat pv(p, p);
+    for (int j = 0; j < p; ++j)
+      for (int i = 0; i < p; ++i) pv(i, j) = m.subj_var(i, j) + spread(i, j);
+    m.pop_var = symmetrised(pv);
+  } else {
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < p; ++j) m.subj_mu(j, i) = s.mu[j];
+    m.pop_mean = s.mu;
+    m.pop_var = m.subj_var;
+  }
+}
+
 Mat as_mat(const Rcpp::NumericMatrix& x) {
   Mat z(x.nrow(), x.ncol());
   std::copy(x.begin(), x.end(), z.v.begin());
@@ -946,17 +1062,29 @@ bool gibbs_sem(SemState& state, const Mat& y, const Mat& cov, const SemPrior& pr
   return true;
 }
 
+bool finish_sem(SemState& state, const Mat& cov, const SemBlocks& blocks,
+                SemMoments& moments) {
+  const int n = state.eta.r, k = state.eta.c, c = cov.c;
+  if (n < 1 || k < 1 || cov.r != n || static_cast<int>(blocks.block.size()) != k ||
+      static_cast<int>(blocks.x_mean.size()) != c || blocks.x_var.r != c ||
+      blocks.x_var.c != c || !R_FINITE(blocks.a_d) || !R_FINITE(blocks.b_d))
+    return false;
+  for (int g : blocks.block)
+    if (g < 0 || g >= k) return false;
+  try {
+    finish(state, cov, blocks, moments);
+  } catch (Decline&) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace emc_factor
 
-// The structural equation model's group draw up to its structural
-// coefficients: `y` subjects x parameters, the covariates (no columns
-// without any), the state as the store holds it, which coefficients are
-// free, and the prior's precisions at full length. NULL when the draw is
-// left to the R form.
-// [[Rcpp::export]]
-SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates,
-                       const Rcpp::List& state, const Rcpp::List& free,
-                       const Rcpp::List& prior) {
+// The structural equation model's state, prior and blocks from the lists
+// emc_gibbs_sem_cpp() takes; FALSE where which coefficients are free is
+// missing.
+emc_factor::SemState sem_state(const Rcpp::List& state) {
   emc_factor::SemState s;
   s.lambda = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["lambda"]));
   s.B = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["B"]));
@@ -965,25 +1093,64 @@ SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& 
   s.delta_inv = as_mat(Rcpp::as<Rcpp::NumericMatrix>(state["delta_inv"]));
   s.mu = as_std(state["mu"]);
   s.epsilon_inv = as_std(state["epsilon_inv"]);
-  emc_factor::SemPrior pr;
+  return s;
+}
+
+bool sem_prior(const Rcpp::List& prior, const Rcpp::List& free, emc_factor::SemPrior& pr) {
   pr.mu_prec = as_std(prior["mu_prec"]);
   pr.mu_mean = as_std(prior["mu_mean"]);
   pr.shape_err = as_std(prior["shape_err"]);
   pr.rate_err = as_std(prior["rate_err"]);
   pr.load_prec = as_std(prior["load_prec"]);
   pr.struct_prec = as_std(prior["struct_prec"]);
-  if (!free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["lambda"]), pr.free_lambda) ||
-      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["K"]), pr.free_K) ||
-      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["B"]), pr.free_B) ||
-      !free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["G"]), pr.free_G))
-    return R_NilValue;
-  if (!emc_factor::gibbs_sem(s, as_mat(y), as_mat(covariates), pr)) return R_NilValue;
+  return free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["lambda"]), pr.free_lambda) &&
+         free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["K"]), pr.free_K) &&
+         free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["B"]), pr.free_B) &&
+         free_entries(Rcpp::as<Rcpp::LogicalMatrix>(free["G"]), pr.free_G);
+}
+
+emc_factor::SemBlocks sem_blocks(const Rcpp::List& blocks) {
+  emc_factor::SemBlocks bl;
+  for (int g : Rcpp::as<Rcpp::IntegerVector>(blocks["block"])) bl.block.push_back(g - 1);
+  bl.a_d = Rcpp::as<double>(blocks["a_d"]);
+  bl.b_d = Rcpp::as<double>(blocks["b_d"]);
+  bl.x_mean = as_std(blocks["x_mean"]);
+  bl.x_var = as_mat(Rcpp::as<Rcpp::NumericMatrix>(blocks["x_var"]));
+  return bl;
+}
+
+Rcpp::List sem_result(const emc_factor::SemState& s, const emc_factor::SemMoments& mom) {
   return Rcpp::List::create(
-      Rcpp::_["mu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
-      Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["tmu"] = Rcpp::NumericVector(s.mu.begin(), s.mu.end()),
+      Rcpp::_["lambda"] = as_r(s.lambda), Rcpp::_["eta"] = as_r(s.eta),
+      Rcpp::_["B"] = as_r(s.B), Rcpp::_["K"] = as_r(s.K), Rcpp::_["G"] = as_r(s.G),
       Rcpp::_["epsilon_inv"] = Rcpp::NumericVector(s.epsilon_inv.begin(), s.epsilon_inv.end()),
-      Rcpp::_["lambda"] = as_r(s.lambda), Rcpp::_["K"] = as_r(s.K), Rcpp::_["G"] = as_r(s.G),
-      Rcpp::_["B"] = as_r(s.B));
+      Rcpp::_["delta_inv"] = as_r(s.delta_inv), Rcpp::_["subj_mu"] = as_r(mom.subj_mu),
+      Rcpp::_["subj_var"] = as_r(mom.subj_var),
+      Rcpp::_["pop_mean"] = Rcpp::NumericVector(mom.pop_mean.begin(), mom.pop_mean.end()),
+      Rcpp::_["tvar"] = as_r(mom.pop_var));
+}
+
+// The structural equation model's group draw: `y` subjects x parameters, the
+// covariates (no columns without any), the state as the store holds it,
+// which coefficients are free, the prior's precisions at full length, and
+// the factors' blocks (numbered from one) with the disturbance prior and the
+// covariates' means and covariance. NULL when the draw is left to the R
+// form.
+// [[Rcpp::export]]
+SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& covariates,
+                       const Rcpp::List& state, const Rcpp::List& free,
+                       const Rcpp::List& prior, const Rcpp::List& blocks) {
+  emc_factor::SemState s = sem_state(state);
+  emc_factor::SemPrior pr;
+  if (!sem_prior(prior, free, pr)) return R_NilValue;
+  const emc_factor::SemBlocks bl = sem_blocks(blocks);
+  emc_factor::SemMoments mom;
+  const Mat cov = as_mat(covariates);
+  if (!emc_factor::gibbs_sem(s, as_mat(y), cov, pr) ||
+      !emc_factor::finish_sem(s, cov, bl, mom))
+    return R_NilValue;
+  return sem_result(s, mom);
 }
 
 // mvtnorm::rmvnorm(n, mean, sigma) by its default method, on the same random
@@ -1042,22 +1209,24 @@ SEXP emc_gibbs_infnt_factor_cpp(const Rcpp::NumericMatrix& alpha, const Rcpp::Li
 }
 
 // The ensemble move's Gibbs rounds for a factor hierarchy (`free_entry` a
-// matrix) or the shrinkage-prior one (`free_entry` NULL), as
-// .emc_ensemble_rounds_r() runs them: the group draw given the selected pool
-// members, every member's density under the subject prior given the scores,
-// and each subject's selection by the Gumbel-max trick, one uniform per pool
-// row in stack order. Returns the final and the last conditioning
-// selections, the group state and the pools' weight ESS under it; NULL when
-// a round is left to the R form.
+// matrix), the shrinkage-prior one (`free_entry` NULL) or a structural
+// equation model (`sem` its covariates, free coefficients and blocks as
+// emc_gibbs_sem_cpp() takes them), as .emc_ensemble_rounds_r() runs them:
+// the group draw given the selected pool members, every member's density
+// under the subject prior given the scores, and each subject's selection by
+// the Gumbel-max trick, one uniform per pool row in stack order. Returns the
+// final and the last conditioning selections, the group state and the pools'
+// weight ESS under it; NULL when a round is left to the R form.
 // [[Rcpp::export]]
 SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
                                     const Rcpp::NumericVector& base_w,
                                     const Rcpp::IntegerVector& k0, int M, int rounds,
                                     const Rcpp::List& state, SEXP free_entry,
-                                    const Rcpp::List& prior) {
+                                    const Rcpp::List& prior, SEXP sem) {
   const int n = k0.size(), p = pool_stack.ncol();
   const R_xlen_t nM = pool_stack.nrow();
-  const bool infinite = free_entry == R_NilValue;
+  const bool structural = sem != R_NilValue;
+  const bool infinite = !structural && free_entry == R_NilValue;
   if (n < 1 || M < 1 || rounds < 1 || nM != static_cast<R_xlen_t>(n) * M ||
       base_w.size() != nM)
     return R_NilValue;
@@ -1065,8 +1234,21 @@ SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
   emc_factor::Prior fp;
   emc_factor::InfiniteState is;
   emc_factor::InfinitePrior ip;
+  emc_factor::SemState ss;
+  emc_factor::SemPrior sp;
+  emc_factor::SemBlocks sb;
+  emc_factor::SemMoments mom;
+  Mat cov, cov_t;
   std::vector<int> fr;
-  if (infinite) {
+  if (structural) {
+    const Rcpp::List parts(sem);
+    ss = sem_state(state);
+    if (!sem_prior(prior, Rcpp::as<Rcpp::List>(parts["free"]), sp)) return R_NilValue;
+    sb = sem_blocks(Rcpp::as<Rcpp::List>(parts["blocks"]));
+    cov = as_mat(Rcpp::as<Rcpp::NumericMatrix>(parts["covariates"]));
+    if (cov.r != n) return R_NilValue;
+    cov_t = transpose(cov);
+  } else if (infinite) {
     is = infinite_state(state);
     ip = infinite_prior(prior);
   } else {
@@ -1087,17 +1269,28 @@ SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
         for (int i = 0; i < p; ++i)
           alpha(s, i) = pool_stack(static_cast<R_xlen_t>(s) * M + selected[s], i);
       conditioned = selected;
-      const bool drawn = infinite ? emc_factor::gibbs_infinite(is, alpha, ip)
-                                  : emc_factor::gibbs(fs, alpha, fp, fr);
+      const bool drawn =
+          structural ? emc_factor::gibbs_sem(ss, alpha, cov, sp) &&
+                           emc_factor::finish_sem(ss, cov, sb, mom)
+                     : infinite ? emc_factor::gibbs_infinite(is, alpha, ip)
+                                : emc_factor::gibbs(fs, alpha, fp, fr);
       if (!drawn) return R_NilValue;
-      const Mat& lambda = infinite ? is.lambda : fs.lambda;
-      const Mat& eta = infinite ? is.eta : fs.eta;
-      const std::vector<double>& mu = infinite ? is.mu : fs.mu;
-      const std::vector<double>& precision = infinite ? is.epsilon_inv : fs.sig_err_inv;
-      // Each subject's prior mean given its scores; independent errors.
+      const Mat& lambda = structural ? ss.lambda : infinite ? is.lambda : fs.lambda;
+      const Mat& eta = structural ? ss.eta : infinite ? is.eta : fs.eta;
+      const std::vector<double>& mu = structural ? ss.mu : infinite ? is.mu : fs.mu;
+      const std::vector<double>& precision =
+          structural ? ss.epsilon_inv : infinite ? is.epsilon_inv : fs.sig_err_inv;
+      // Each subject's prior mean given its scores (and its covariates);
+      // independent errors.
       Mat mean = mult(lambda, transpose(eta));
-      for (int s = 0; s < n; ++s)
-        for (int i = 0; i < p; ++i) mean(i, s) = mu[i] + mean(i, s);
+      if (structural) {
+        const Mat direct = mult(ss.K, cov_t);
+        for (int s = 0; s < n; ++s)
+          for (int i = 0; i < p; ++i) mean(i, s) = mu[i] + direct(i, s) + mean(i, s);
+      } else {
+        for (int s = 0; s < n; ++s)
+          for (int i = 0; i < p; ++i) mean(i, s) = mu[i] + mean(i, s);
+      }
       long double log_var = 0.0;
       for (int i = 0; i < p; ++i) {
         dvar[i] = 1 / precision[i];
@@ -1167,7 +1360,8 @@ SEXP emc_ensemble_rounds_latent_cpp(const Rcpp::NumericMatrix& pool_stack,
     cond[s] = conditioned[s] + 1;
   }
   return Rcpp::List::create(Rcpp::_["selected"] = sel, Rcpp::_["conditioned"] = cond,
-                            Rcpp::_["state"] = infinite ? infinite_result(is)
-                                                        : factor_result(fs),
+                            Rcpp::_["state"] = structural ? sem_result(ss, mom)
+                                               : infinite ? infinite_result(is)
+                                                          : factor_result(fs),
                             Rcpp::_["wess"] = Rcpp::NumericVector(wess.begin(), wess.end()));
 }
