@@ -17,15 +17,10 @@
   !sampler_profile
 }
 
-# The steps with a native form for a sampler: all of them for standard
-# hierarchies and fits without a group level; the particle step alone for
-# the other types, whose group updates and moves are their own, and with
-# nuisance or pooled parameters.
-.emc_steps_native_set <- function(pmwgs) {
-  plain <- !any(pmwgs$nuisance) && is.null(pmwgs$pooled)
-  if (plain && (identical(pmwgs$type, "standard") || identical(pmwgs$type, "single")))
-    names(.EMC_NATIVE_STEPS) else "particle"
-}
+# The steps with a native form: each native step takes the states it covers
+# and leaves the others to its R form (the other hierarchy types' group
+# updates, moves and stores; the moves with nuisance or pooled parameters).
+.emc_steps_native_set <- function(pmwgs) names(.EMC_NATIVE_STEPS)
 
 # Each subject's prior mean under the group state, parameters x subjects.
 .emc_steps_prior_means <- function(pars, type, n_subjects) {
@@ -57,8 +52,15 @@
   if (identical(pmwgs$type, "single") && !any(pmwgs$nuisance))
     out$single <- list(tmu = pmwgs$prior$theta_mu_mean, tvar = pmwgs$prior$theta_mu_var,
                        rows = pmwgs$par_names[!pmwgs$nuisance])
-  else if (identical(pmwgs$type, "standard") && is.null(pmwgs$gd) &&
-           !length(pmwgs$group_designs)) {
+  plain <- !any(pmwgs$nuisance) && is.null(pmwgs$pooled)
+  # The moves' native forms are those of a standard hierarchy over all its
+  # parameters; its store's also with nuisance or pooled parameters.
+  out$moves_native <- plain && identical(pmwgs$type, "standard")
+  out$store_native <- identical(pmwgs$type, "standard") ||
+    (identical(pmwgs$type, "single") && plain)
+  if (!is.null(out$single)) {
+  } else if (plain && identical(pmwgs$type, "standard") && is.null(pmwgs$gd) &&
+             !length(pmwgs$group_designs)) {
     is_blocked <- pmwgs$is_blocked[!pmwgs$nuisance]
     par_group <- pmwgs$par_group[!pmwgs$nuisance]
     if (is.null(is_blocked) || length(is_blocked) == 0L) is_blocked <- rep(TRUE, p)
@@ -99,6 +101,7 @@
   out$hmc_warmup <- c(accept = .EMC_HMC_WARMUP_ACCEPT, moves = .EMC_HMC_WARMUP_MOVES,
                       eps_low = .EMC_HMC_EPS_RANGE[1], eps_high = .EMC_HMC_EPS_RANGE[2])
   out$shear_active <- .emc_shear_active(pmwgs)
+  out$collapsed_active <- .emc_collapsed_active(pmwgs)
   out$shear_step_range <- .EMC_SHEAR_LOG_STEP_RANGE
   out$chol_simple <- !isTRUE(include_full) && length(idx_list_blk) == 1L &&
     is.logical(idx_list_blk[[1L]]) && length(idx_list_blk[[1L]]) == p &&

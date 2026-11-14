@@ -233,9 +233,14 @@ bool log_prior_mu(SEXP mu, SEXP prior, double& out) {
 }
 
 bool step_collapsed(SEXP st, SEXP cx, int i) {
-  SEXP active = lget(cx, "shear_active");
-  if (TYPEOF(active) != LGLSXP) return false;
+  SEXP active = lget(cx, "shear_active"), own = lget(cx, "collapsed_active");
+  if (TYPEOF(active) != LGLSXP || TYPEOF(own) != LGLSXP) return false;
   const std::string stage = as<std::string>(lget(cx, "stage"));
+  if (!flag(own)) {
+    zero_costs(st);
+    return true;
+  }
+  if (!flag(lget(cx, "moves_native"))) return false;
   if (!flag(active) || stage == "preburn") {
     zero_costs(st);
     return true;

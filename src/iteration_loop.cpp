@@ -226,6 +226,13 @@ bool step_store(SEXP st, SEXP cx, int i) {
     set_var(st, "pmwgs", lset(pmwgs, "samples", s2));
     return true;
   }
+  if (!flag(lget(cx, "store_native"))) return false;
+  SEXP pooled = lget(pmwgs, "pooled"), s_pooled = lget(samples, "pooled");
+  SEXP pooled_value = lget(pooled, "value");
+  if (pooled != R_NilValue &&
+      (TYPEOF(s_pooled) != REALSXP || !Rf_isMatrix(s_pooled) ||
+       TYPEOF(pooled_value) != REALSXP || XLENGTH(pooled_value) != Rf_nrows(s_pooled)))
+    return false;
   SEXP a_half = lget(samples, "a_half"), theta_mu = lget(samples, "theta_mu"),
        theta_var = lget(samples, "theta_var"), alpha = lget(samples, "alpha"),
        subj_ll = lget(samples, "subj_ll");
@@ -267,6 +274,7 @@ bool step_store(SEXP st, SEXP cx, int i) {
   emc_set_last_slice(theta_mu, jj, tmu);
   emc_set_last_slice(theta_var, jj, tvar);
   emc_set_particle_slice(alpha, subj_ll, proposals, jj, n_pars);
+  if (pooled != R_NilValue) emc_set_last_slice(s_pooled, jj, pooled_value);
   Shield<SEXP> s1(lset(samples, "last_theta_var_inv", tvinv));
   Shield<SEXP> s2(lset(s1, "idx", j));
   RObject result = lset(pmwgs, "samples", s2);

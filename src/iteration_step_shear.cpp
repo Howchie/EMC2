@@ -172,6 +172,7 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     zero_costs(st);
     return true;
   }
+  if (!flag(lget(cx, "moves_native"))) return false;
   SEXP sst = lget(pmwgs, "shear"), plan = lget(sst, "plan");
   SEXP dirs = lget(plan, "dirs"), rounds = lget(plan, "rounds"), log_step = lget(plan, "log_step");
   const int p = Rf_asInteger(lget(pmwgs, "n_pars")), n = Rf_asInteger(lget(pmwgs, "n_subjects"));

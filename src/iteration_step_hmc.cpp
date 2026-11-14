@@ -108,6 +108,7 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
     return false;
   const int p = Rf_nrows(proposals) - 1, n = Rf_ncols(proposals);
   const bool alloc_on = flag(lget(cx, "alloc_on"));
+  if (plan != R_NilValue && !flag(lget(cx, "moves_native"))) return false;
   SEXP samples = lget(pmwgs, "samples");
   RObject sampler = pmwgs;
 
