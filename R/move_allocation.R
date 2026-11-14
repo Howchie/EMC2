@@ -364,6 +364,8 @@
 
 # rho from a mean squared jump and the coordinate's variance.
 .emc_alloc_rho <- function(esjd, var) {
+  out <- if (getOption("emc2.native_alloc_rho", TRUE)) emc_alloc_rho_cpp(esjd, var)
+  if (!is.null(out)) return(out)
   pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
 }
 
@@ -1490,8 +1492,7 @@
 # HMC factors h for subject s from its evidence; NULL without enough.
 .emc_alloc_hmc_factor <- function(ev, W, var, min_n) {
   if (is.null(ev) || ev$n < min_n) return(NULL)
-  esjd <- .emc_alloc_quad_diag(W, ev$M) / ev$n
-  pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
+  .emc_alloc_rho(.emc_alloc_quad_diag(W, ev$M) / ev$n, var)
 }
 
 # The units and costs the solver sees for one chain. optimistic: an eligible

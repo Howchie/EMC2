@@ -1051,4 +1051,39 @@ SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::
                             Rcpp::Named("objective") = best_obj);
 }
 
+// .emc_alloc_rho(): the lag-one correlation 1 - esjd / (2 var) held within
+// [0, 1], the variance floored at the least positive number. NULL for
+// anything but two plain vectors of doubles of one length without missing
+// values, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_rho_cpp(SEXP esjd, SEXP var) {
+  auto plain = [](SEXP v) {
+    return TYPEOF(v) == REALSXP && !Rf_isObject(v) &&
+           Rf_getAttrib(v, R_DimSymbol) == R_NilValue;
+  };
+  if (!plain(esjd) || !plain(var) || XLENGTH(esjd) != XLENGTH(var) || XLENGTH(esjd) < 1)
+    return R_NilValue;
+  const R_xlen_t n = XLENGTH(esjd);
+  const double tiny = std::numeric_limits<double>::min();
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const double e = REAL(esjd)[i], v = REAL(var)[i];
+    if (ISNAN(e) || ISNAN(v)) {
+      UNPROTECT(1);
+      return R_NilValue;
+    }
+    volatile double den = 2 * (v > tiny ? v : tiny);
+    volatile double ratio = e / den;
+    volatile double rho = 1 - ratio;
+    const double r = rho;
+    if (ISNAN(r)) {
+      UNPROTECT(1);
+      return R_NilValue;
+    }
+    REAL(out)[i] = r < 0 ? 0.0 : (r > 1 ? 1.0 : r);
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 #pragma GCC pop_options
