@@ -167,6 +167,9 @@
 # .emc_alloc_lsd of draws k of a p x p x T variance array, as a p x length(k)
 # matrix.
 .emc_alloc_lsd_draws <- function(V, k) {
+  out <- if (getOption("emc2.native_alloc_lsd", TRUE)) emc_alloc_lsd_draws_cpp(V, k)
+  if (!is.null(out))
+    return(matrix(out, nrow(out), dimnames = list(dimnames(V)[[1L]], NULL)))
   p <- dim(V)[1L]
   # A plain vector index: an index matrix with as many columns as V has
   # dimensions would be read as array subscripts.
@@ -376,6 +379,9 @@
 .emc_alloc_tail_rho <- function(n_in, n_stay, rho) {
   q <- .EMC_ALLOC_TAIL_P
   n0 <- .EMC_ALLOC_ROUND_EVIDENCE
+  out <- if (getOption("emc2.native_alloc_tail", TRUE))
+    emc_alloc_tail_rho_cpp(n_in, n_stay, rho, q, n0)
+  if (!is.null(out)) return(out)
   ref <- q + (1 - q) * pmin(1, pmax(0, rho))
   stay <- (n_stay + n0 * ref) / (n_in + n0)
   pmin(1, pmax(0, (stay - q) / (1 - q)))

@@ -1086,4 +1086,98 @@ SEXP emc_alloc_rho_cpp(SEXP esjd, SEXP var) {
   return out;
 }
 
+// .emc_alloc_tail_rho(): the lag-one correlation of each coordinate's tail
+// indicator from its counts in the tail (n_in) and staying there (n_stay),
+// the tail holding q of the draws, against a reference worth n0 visits at the
+// coordinate's own rho. NULL for anything but plain vectors of one length
+// without missing values, which the R form handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_tail_rho_cpp(SEXP n_in, SEXP n_stay, SEXP rho, double q, double n0) {
+  auto plain = [](SEXP v, bool counts) {
+    return (TYPEOF(v) == REALSXP || (counts && TYPEOF(v) == INTSXP)) && !Rf_isObject(v) &&
+           Rf_getAttrib(v, R_DimSymbol) == R_NilValue;
+  };
+  if (!plain(n_in, true) || !plain(n_stay, true) || !plain(rho, false) || ISNAN(q) ||
+      ISNAN(n0))
+    return R_NilValue;
+  const R_xlen_t n = XLENGTH(rho);
+  if (n < 1 || XLENGTH(n_in) != n || XLENGTH(n_stay) != n) return R_NilValue;
+  auto count = [](SEXP v, R_xlen_t i, double& out) {
+    if (TYPEOF(v) == INTSXP) {
+      if (INTEGER(v)[i] == NA_INTEGER) return false;
+      out = INTEGER(v)[i];
+    } else {
+      out = REAL(v)[i];
+    }
+    return !ISNAN(out);
+  };
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
+  volatile double rest = 1 - q;
+  for (R_xlen_t i = 0; i < n; ++i) {
+    double in, stay;
+    const double r = REAL(rho)[i];
+    if (!count(n_in, i, in) || !count(n_stay, i, stay) || ISNAN(r)) {
+      UNPROTECT(1);
+      return R_NilValue;
+    }
+    const double held = r < 0 ? 0.0 : (r > 1 ? 1.0 : r);
+    volatile double scaled = rest * held;
+    volatile double ref = q + scaled;
+    volatile double prior = n0 * ref;
+    volatile double num = stay + prior;
+    volatile double den = in + n0;
+    volatile double kept = num / den;
+    volatile double above = kept - q;
+    volatile double value = above / rest;
+    const double v = value;
+    if (ISNAN(v)) {
+      UNPROTECT(1);
+      return R_NilValue;
+    }
+    REAL(out)[i] = v < 0 ? 0.0 : (v > 1 ? 1.0 : v);
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+// .emc_alloc_lsd_draws(): half the log of the diagonals of draws k of a
+// covariance array, floored at the least positive number (parameters x
+// draws, without names). NULL for anything but a cube of doubles with square
+// slices, positions within it and no missing values, which the R form
+// handles.
+// [[Rcpp::export(rng = false)]]
+SEXP emc_alloc_lsd_draws_cpp(SEXP V, SEXP k) {
+  SEXP dim = Rf_getAttrib(V, R_DimSymbol);
+  if (TYPEOF(V) != REALSXP || TYPEOF(dim) != INTSXP || XLENGTH(dim) != 3 ||
+      (TYPEOF(k) != INTSXP && TYPEOF(k) != REALSXP))
+    return R_NilValue;
+  const int p = INTEGER(dim)[0], n_draws = INTEGER(dim)[2];
+  const R_xlen_t n = XLENGTH(k);
+  if (p < 1 || INTEGER(dim)[1] != p || n < 1) return R_NilValue;
+  const double tiny = std::numeric_limits<double>::min();
+  const R_xlen_t slice = static_cast<R_xlen_t>(p) * p;
+  SEXP out = PROTECT(Rf_allocMatrix(REALSXP, p, static_cast<int>(n)));
+  for (R_xlen_t j = 0; j < n; ++j) {
+    double at = TYPEOF(k) == INTSXP
+      ? (INTEGER(k)[j] == NA_INTEGER ? NA_REAL : static_cast<double>(INTEGER(k)[j]))
+      : REAL(k)[j];
+    if (!(at >= 1) || !(at <= n_draws) || at != std::floor(at)) {
+      UNPROTECT(1);
+      return R_NilValue;
+    }
+    const R_xlen_t d = static_cast<R_xlen_t>(at) - 1;
+    for (int i = 0; i < p; ++i) {
+      const double v = REAL(V)[d * slice + i + static_cast<R_xlen_t>(i) * p];
+      if (ISNAN(v)) {
+        UNPROTECT(1);
+        return R_NilValue;
+      }
+      volatile double l = std::log(v > tiny ? v : tiny);
+      REAL(out)[j * p + i] = 0.5 * l;
+    }
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 #pragma GCC pop_options

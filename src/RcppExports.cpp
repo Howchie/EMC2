@@ -234,6 +234,31 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_tail_rho_cpp
+SEXP emc_alloc_tail_rho_cpp(SEXP n_in, SEXP n_stay, SEXP rho, double q, double n0);
+RcppExport SEXP _EMC2_emc_alloc_tail_rho_cpp(SEXP n_inSEXP, SEXP n_staySEXP, SEXP rhoSEXP, SEXP qSEXP, SEXP n0SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type n_in(n_inSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type n_stay(n_staySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type q(qSEXP);
+    Rcpp::traits::input_parameter< double >::type n0(n0SEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_tail_rho_cpp(n_in, n_stay, rho, q, n0));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_alloc_lsd_draws_cpp
+SEXP emc_alloc_lsd_draws_cpp(SEXP V, SEXP k);
+RcppExport SEXP _EMC2_emc_alloc_lsd_draws_cpp(SEXP VSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type V(VSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_lsd_draws_cpp(V, k));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_record_particle_cpp
 SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
 RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
@@ -4831,6 +4856,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_unit_summary_cpp", (DL_FUNC) &_EMC2_emc_alloc_unit_summary_cpp, 1},
     {"_EMC2_emc_alloc_candidate_cpp", (DL_FUNC) &_EMC2_emc_alloc_candidate_cpp, 7},
     {"_EMC2_emc_alloc_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_rho_cpp, 2},
+    {"_EMC2_emc_alloc_tail_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_tail_rho_cpp, 5},
+    {"_EMC2_emc_alloc_lsd_draws_cpp", (DL_FUNC) &_EMC2_emc_alloc_lsd_draws_cpp, 2},
     {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
     {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
     {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},
