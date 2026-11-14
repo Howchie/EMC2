@@ -3371,6 +3371,34 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc2_native_particle_claim
+List emc2_native_particle_claim(Function get_static, NumericMatrix alpha, NumericVector prev_ll, NumericMatrix population_mu, NumericMatrix group_var, List group, List pm_list, List seeds, LogicalVector skip, std::string stage, List tune_in, SEXP claim, int key, IntegerVector order, SEXP extra, bool extra_cached, List data, SEXP model);
+RcppExport SEXP _EMC2_emc2_native_particle_claim(SEXP get_staticSEXP, SEXP alphaSEXP, SEXP prev_llSEXP, SEXP population_muSEXP, SEXP group_varSEXP, SEXP groupSEXP, SEXP pm_listSEXP, SEXP seedsSEXP, SEXP skipSEXP, SEXP stageSEXP, SEXP tune_inSEXP, SEXP claimSEXP, SEXP keySEXP, SEXP orderSEXP, SEXP extraSEXP, SEXP extra_cachedSEXP, SEXP dataSEXP, SEXP modelSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Function >::type get_static(get_staticSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type prev_ll(prev_llSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type population_mu(population_muSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type group_var(group_varSEXP);
+    Rcpp::traits::input_parameter< List >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< List >::type pm_list(pm_listSEXP);
+    Rcpp::traits::input_parameter< List >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type skip(skipSEXP);
+    Rcpp::traits::input_parameter< std::string >::type stage(stageSEXP);
+    Rcpp::traits::input_parameter< List >::type tune_in(tune_inSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type claim(claimSEXP);
+    Rcpp::traits::input_parameter< int >::type key(keySEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type order(orderSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type extra(extraSEXP);
+    Rcpp::traits::input_parameter< bool >::type extra_cached(extra_cachedSEXP);
+    Rcpp::traits::input_parameter< List >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type model(modelSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc2_native_particle_claim(get_static, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in, claim, key, order, extra, extra_cached, data, model));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_same_objects
 bool emc_same_objects(SEXP a, SEXP b);
 RcppExport SEXP _EMC2_emc_same_objects(SEXP aSEXP, SEXP bSEXP) {
@@ -4694,6 +4722,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc2_native_hmc_subjects", (DL_FUNC) &_EMC2_emc2_native_hmc_subjects, 10},
     {"_EMC2_emc2_native_particle_block", (DL_FUNC) &_EMC2_emc2_native_particle_block, 11},
     {"_EMC2_emc2_native_particle_subjects", (DL_FUNC) &_EMC2_emc2_native_particle_subjects, 11},
+    {"_EMC2_emc2_native_particle_claim", (DL_FUNC) &_EMC2_emc2_native_particle_claim, 18},
     {"_EMC2_emc_same_objects", (DL_FUNC) &_EMC2_emc_same_objects, 2},
     {"_EMC2_ParamTable_create_from_p_types", (DL_FUNC) &_EMC2_ParamTable_create_from_p_types, 2},
     {"_EMC2_ParamTable_create_from_matrix", (DL_FUNC) &_EMC2_ParamTable_create_from_matrix, 2},

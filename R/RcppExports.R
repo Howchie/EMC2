@@ -799,6 +799,10 @@ emc2_native_particle_subjects <- function(statics, alpha, prev_ll, population_mu
     .Call(`_EMC2_emc2_native_particle_subjects`, statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in)
 }
 
+emc2_native_particle_claim <- function(get_static, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in, claim, key, order, extra, extra_cached, data, model) {
+    .Call(`_EMC2_emc2_native_particle_claim`, get_static, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage, tune_in, claim, key, order, extra, extra_cached, data, model)
+}
+
 emc_same_objects <- function(a, b) {
     .Call(`_EMC2_emc_same_objects`, a, b)
 }

@@ -1401,11 +1401,10 @@ reject_sample_iteration <- function(samples, j) {
   value
 }
 
-# The particle steps of one message's subjects in a single native call.
-# Returns NULL when the message cannot run natively, else per subject: done
-# (FALSE where the R step must run from the subject's untouched stream), the
-# new state, log-likelihood, settings and stream.
-.emc_native_particle_batch <- function(msg, ctx, shared, group_chol) {
+# What the native particle kernel takes for a message's subjects besides
+# their states and streams (their block-fixed parts only with `statics`), or
+# NULL when the message cannot run natively.
+.emc_native_particle_inputs <- function(msg, ctx, shared, group_chol, statics = TRUE) {
   tune <- ctx$tune
   if (!isTRUE(getOption("emc2.native_particle_block", TRUE)) ||
       isTRUE(msg$rows_only) || !is.null(msg$pooled) ||
@@ -1424,8 +1423,6 @@ reject_sample_iteration <- function(samples, j) {
       !is.double(msg$population_mu) || !is.double(msg$alpha)) return(NULL)
   subs <- msg$subs
   n <- length(subs)
-  stage <- ctx$stage
-  adapt <- !identical(stage, "sample")
   tune_in <- list(n0 = as.numeric(tune$n0),
                   step_target = if (is.null(tune$step_target)) step_target(1) else
                     tune$step_target,
@@ -1434,19 +1431,20 @@ reject_sample_iteration <- function(samples, j) {
                   ESS_scale = as.numeric(tune$ESS_scale),
                   max_particles = as.numeric(tune$max_particles))
   if (!all(lengths(tune_in) == 1L)) return(NULL)
-  statics <- .emc_native_statics(subs, ctx, par_names)
   skip <- if (is.null(msg$skip)) logical(n) else as.logical(msg$skip)
   skip[is.na(skip)] <- FALSE
-  res <- tryCatch(emc2_native_particle_subjects(
-    statics, msg$alpha, as.numeric(msg$prev_ll), msg$population_mu, gv,
-    list(R = gf$R, rooti = gf$rooti, sld = gf$sum_log_diag), msg$pm,
-    msg$seeds, skip, stage, tune_in), error = function(e) NULL)
-  if (is.null(res)) return(NULL)
-  # Each subject's settings, in the order update_pm_settings first creates
-  # them.
-  res$pm_settings <- vector("list", n)
+  list(statics = if (statics) .emc_native_statics(subs, ctx, par_names), group_var = gv,
+       group = list(R = gf$R, rooti = gf$rooti, sld = gf$sum_log_diag),
+       skip = skip, stage = ctx$stage, tune_in = tune_in)
+}
+
+# Each stepped subject's settings from the kernel's result, in the order
+# update_pm_settings first creates them.
+.emc_native_particle_settings <- function(res, pm_in, stage) {
+  adapt <- !identical(stage, "sample")
+  res$pm_settings <- vector("list", length(pm_in))
   for (k in which(res$done)) {
-    pm_k <- msg$pm[[k]]
+    pm_k <- pm_in[[k]]
     pm <- pm_k[[1L]]
     sl <- res$sel[[k]]
     if (isTRUE(sl$moved))
@@ -1471,6 +1469,21 @@ reject_sample_iteration <- function(samples, j) {
     res$pm_settings[[k]] <- pm_k
   }
   res
+}
+
+# The particle steps of one message's subjects in a single native call.
+# Returns NULL when the message cannot run natively, else per subject: done
+# (FALSE where the R step must run from the subject's untouched stream), the
+# new state, log-likelihood, settings and stream.
+.emc_native_particle_batch <- function(msg, ctx, shared, group_chol) {
+  inp <- .emc_native_particle_inputs(msg, ctx, shared, group_chol)
+  if (is.null(inp)) return(NULL)
+  res <- tryCatch(emc2_native_particle_subjects(
+    inp$statics, msg$alpha, as.numeric(msg$prev_ll), msg$population_mu, inp$group_var,
+    inp$group, msg$pm, msg$seeds, inp$skip, inp$stage, inp$tune_in),
+    error = function(e) NULL)
+  if (is.null(res)) return(NULL)
+  .emc_native_particle_settings(res, msg$pm, inp$stage)
 }
 
 safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,

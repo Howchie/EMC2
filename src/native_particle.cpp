@@ -920,13 +920,16 @@ List emc2_native_particle_block(List plan_in, int n_iter, NumericVector start,
 //
 // statics[[k]]: ll_args, chains_mu, chains (R, rooti, sld), eff_mu, eff_B,
 // eff_given, eff (R, rooti, sld), lik_prec, lik_lin. group: R, rooti, sld.
-// [[Rcpp::export]]
-List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
-                                   NumericVector prev_ll,
-                                   NumericMatrix population_mu,
-                                   NumericMatrix group_var, List group,
-                                   List pm_list, List seeds, LogicalVector skip,
-                                   std::string stage, List tune_in) {
+//
+// `next` names the subjects to step, one per call until it returns a
+// negative value; `after` runs once a named subject has been handled. With
+// `guard`, a subject whose step raises an exception is left to R like any
+// other the kernel does not finish.
+template <typename Next, typename After>
+List particle_subjects(List statics, NumericMatrix alpha, NumericVector prev_ll,
+                       NumericMatrix population_mu, NumericMatrix group_var, List group,
+                       List pm_list, List seeds, LogicalVector skip, std::string stage,
+                       List tune_in, Next next, After after, const bool guard) {
   const int n = alpha.ncol(), p = alpha.nrow();
   const bool adapt = stage != "sample";
   const TuneArgs tune = read_tune(tune_in);
@@ -944,9 +947,9 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
   List pm_out(n), seeds_out(n), sel_out(n);
   Environment global = Environment::global_env();
 
-  for (int k = 0; k < n; ++k) {
+  auto step = [&](const int k) {
     done[k] = false;
-    if (skip[k] || Rf_isNull(statics[k])) continue;
+    if (skip[k] || Rf_isNull(statics[k])) return;
     const std::clock_t c0 = std::clock();
     const List st = statics[k];
     const List pm_all = pm_list[k];
@@ -971,13 +974,13 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
         arma::mat cv;
         have_Vi = all_finite(V) && r_chol(V, cv) && r_chol2inv(cv, Vi);
       }
-      if (!have_Vi) continue;
+      if (!have_Vi) return;
       const arma::mat prec = as<arma::mat>(st["lik_prec"]);
       const arma::vec lin = as<arma::vec>(st["lik_lin"]);
       arma::mat Q = prec + Vi, Qs(p, p), Rq, Sig;
       for (int j = 0; j < p; ++j)
         for (int i = 0; i < p; ++i) Qs(i, j) = (Q(i, j) + Q(j, i)) / 2;
-      if (!all_finite(Qs) || !r_chol(Qs, Rq) || !r_chol2inv(Rq, Sig)) continue;
+      if (!all_finite(Qs) || !r_chol(Qs, Rq) || !r_chol2inv(Rq, Sig)) return;
       std::vector<double> gm(p), t1(p), rhs(p), m(p);
       for (int j = 0; j < p; ++j) gm[j] = population_mu(j, k);
       r_matprod(Vi.memptr(), p, p, gm.data(), p, 1, t1.data());
@@ -987,10 +990,10 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
       for (int j = 0; j < p; ++j)
         for (int i = 0; i < p; ++i) var(i, j) = (Sig(i, j) + Sig(j, i)) / 2;
       for (int j = 0; j < p; ++j) if (!R_FINITE(m[j])) ok = false;
-      if (!ok || !all_finite(Sig)) continue;
+      if (!ok || !all_finite(Sig)) return;
       // .chol_factor() of the conditional covariance; a repaired factor is
       // left to R.
-      if (!r_chol(var, effR) || !r_backsolve_identity(effR, effrooti)) continue;
+      if (!r_chol(var, effR) || !r_backsolve_identity(effR, effrooti)) return;
       long double sl = 0.0L;
       for (int j = 0; j < p; ++j) sl += std::log(effrooti(j, j));
       effsld = static_cast<double>(sl);
@@ -1018,7 +1021,7 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
         }
         if (fin) for (int j = 0; j < p; ++j) eff_mu[j] = out[j];
       }
-      if (Rf_isNull(st["eff"])) continue;
+      if (Rf_isNull(st["eff"])) return;
       const List ef = st["eff"];
       effR = as<arma::mat>(ef["R"]);
       effrooti = as<arma::mat>(ef["rooti"]);
@@ -1076,7 +1079,7 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
       if (!all_finite(plan.bR[j]) || !all_finite(plan.brooti[j]) ||
           !R_FINITE(plan.bsld[j])) ok = false;
     }
-    if (!ok) continue;
+    if (!ok) return;
     plan.have_jump = true;
     plan.jump_rooti = uses_chains ? crooti : grooti;
     static const char* tag_names[] = {"group", "chains", "eff"};
@@ -1095,7 +1098,7 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
     SelState sel;
     try {
       if (mix_len != K || Rf_length(pm_r["epsilon"]) < 1 ||
-          Rf_length(pm_r["n_particles"]) != 1) continue;
+          Rf_length(pm_r["n_particles"]) != 1) return;
       pm.mix = as<std::vector<double>>(pm_r["mix"]);
       pm.epsilon = as<std::vector<double>>(pm_r["epsilon"]);
       pm.n_particles = as<double>(pm_r["n_particles"]);
@@ -1106,7 +1109,7 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
             !has(pm_r, "iter") || !has(pm_r, "gd_good") ||
             Rf_length(pm_r["proposal_counts"]) != K ||
             Rf_length(pm_r["acc_counts"]) != K || Rf_length(pm_r["iter"]) != 1 ||
-            Rf_length(pm_r["gd_good"]) != 1) continue;
+            Rf_length(pm_r["gd_good"]) != 1) return;
         pm.iter = as<double>(pm_r["iter"]);
         pm.proposal_counts = as<std::vector<double>>(pm_r["proposal_counts"]);
         pm.acc_counts = as<std::vector<double>>(pm_r["acc_counts"]);
@@ -1128,14 +1131,14 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
           const NumericVector sn = sl["n"], sd = sl["disp"];
           for (int j = 0; j < K && j < sn.size(); ++j) sel.n[j] = sn[j];
           for (int j = 0; j < K && j < sd.size(); ++j) sel.disp[j] = sd[j];
-          if (sn.size() > K || sd.size() > K) continue;
+          if (sn.size() > K || sd.size() > K) return;
           sel.steps = as<double>(sl["steps"]);
         }
       }
     } catch (...) {
-      continue;
+      return;
     }
-    if (!R_FINITE(prev_ll[k])) continue;
+    if (!R_FINITE(prev_ll[k])) return;
 
     const LlArgs ll(as<List>(st["ll_args"]));
     std::vector<double> state(p);
@@ -1149,7 +1152,7 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
                                       gd_good, adapt, sel,
                                       &alpha_out(0, k), &ll_out[k], seed_at_abort);
     PutRNGstate();
-    if (n_done != 1) continue;
+    if (n_done != 1) return;
     done[k] = true;
     seeds_out[k] = global.get(".Random.seed");
     pm_out[k] = write_pm(pm);
@@ -1157,10 +1160,93 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
                               _["steps"] = sel.steps,
                               _["moved"] = sel.steps > steps_before);
     cpu[k] = static_cast<double>(std::clock() - c0) / CLOCKS_PER_SEC;
+  };
+  for (int k = next(); k >= 0; k = next()) {
+    if (k >= n) Rcpp::stop("subject outside the iteration");
+    try {
+      step(k);
+    } catch (Rcpp::LongjumpException&) {
+      throw;
+    } catch (Rcpp::internal::InterruptedException&) {
+      throw;
+    } catch (std::exception&) {
+      if (!guard) throw;
+      done[k] = false;
+    }
+    after(k);
   }
   return List::create(_["alpha"] = alpha_out, _["ll"] = ll_out, _["done"] = done,
                       _["pm"] = pm_out, _["sel"] = sel_out,
                       _["seeds"] = seeds_out, _["cpu"] = cpu);
+}
+
+// [[Rcpp::export]]
+List emc2_native_particle_subjects(List statics, NumericMatrix alpha,
+                                   NumericVector prev_ll,
+                                   NumericMatrix population_mu,
+                                   NumericMatrix group_var, List group,
+                                   List pm_list, List seeds, LogicalVector skip,
+                                   std::string stage, List tune_in) {
+  const int n = alpha.ncol();
+  int k = 0;
+  return particle_subjects(statics, alpha, prev_ll, population_mu, group_var, group, pm_list,
+                           seeds, skip, stage, tune_in,
+                           [&]() { return k < n ? k++ : -1; }, [](int) {}, false);
+}
+
+int emc_claim_next(SEXP map, int key, int n);
+List emc2_ll_cached_subjects(List rows, List data, SEXP model);
+
+// The particle steps of the subjects this process claims from the shared
+// queue (src/claim_counter.cpp): queue position i is subject order[i], and
+// every argument of emc2_native_particle_subjects() covers all subjects,
+// except that a subject's block-fixed parts come from `get_static(s)` when
+// it is claimed.
+// Each claimed subject's candidate rows (`extra`, NULL without any) are
+// evaluated as it is stepped, from the stored likelihood arguments where
+// `extra_cached`. Adds the claimed subjects, in claim order, and their
+// candidates' likelihoods (NULL where the full path must evaluate them).
+// [[Rcpp::export]]
+List emc2_native_particle_claim(Function get_static, NumericMatrix alpha,
+                                NumericVector prev_ll,
+                                NumericMatrix population_mu, NumericMatrix group_var,
+                                List group, List pm_list, List seeds, LogicalVector skip,
+                                std::string stage, List tune_in, SEXP claim, int key,
+                                IntegerVector order, SEXP extra, bool extra_cached,
+                                List data, SEXP model) {
+  const int n = alpha.ncol(), n_queue = order.size();
+  const bool has_extra = !Rf_isNull(extra);
+  List statics(n);
+  if (pm_list.size() != n || seeds.size() != n || skip.size() != n ||
+      prev_ll.size() != n || population_mu.ncol() != n || data.size() != n ||
+      (has_extra && (TYPEOF(extra) != VECSXP || XLENGTH(extra) != n)))
+    Rcpp::stop("claim inputs do not cover the subjects");
+  std::vector<int> claimed;
+  List extra_ll(n);
+  List out = particle_subjects(
+      statics, alpha, prev_ll, population_mu, group_var, group, pm_list, seeds, skip, stage,
+      tune_in,
+      [&]() {
+        const int i = emc_claim_next(claim, key, n_queue);
+        if (i < 0) return -1;
+        const int s = order[i];
+        if (s < 1 || s > n) Rcpp::stop("queued subject outside the iteration");
+        claimed.push_back(s);
+        statics[s - 1] = get_static(s);
+        return s - 1;
+      },
+      [&](const int k) {
+        if (!has_extra || !extra_cached) return;
+        const SEXP rows = VECTOR_ELT(extra, k);
+        if (Rf_isNull(rows)) return;
+        const List one = emc2_ll_cached_subjects(List::create(rows), List::create(data[k]),
+                                                 model);
+        extra_ll[k] = one[0];
+      },
+      true);
+  out["claimed"] = wrap(claimed);
+  out["extra_ll"] = extra_ll;
+  return out;
 }
 
 // Whether every element of `a` is the very object at the same position of
