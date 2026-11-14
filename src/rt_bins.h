@@ -164,9 +164,17 @@ struct RtBinCache {
   double h = 0.0;
   std::vector<RtBin> bins;
   std::vector<double> log_fraction;
+  // Over the bins of finite positive rts: whether any is empty, whether any
+  // is near an onset at zero, and the smallest onset that could reach one.
+  bool any_empty = false;
+  bool any_near_zero = false;
+  double min_far_below = R_PosInf;
   void init(const Rcpp::DataFrame& data, int n_lR) {
     bins.clear();
     log_fraction.clear();
+    any_empty = false;
+    any_near_zero = false;
+    min_far_below = R_PosInf;
     h = rt_bin_width(data);
     if (h == 0.0) return;
     Rcpp::NumericVector rt = data["rt"];
@@ -183,6 +191,11 @@ struct RtBinCache {
         RtBin{0.0, 0.0, h, 0.0});
       const RtBin& bin = bins.back();
       log_fraction.push_back(bin.hi > bin.lo ? std::log((bin.hi - bin.lo) / h) : R_NegInf);
+      if (R_FINITE(rt[row]) && rt[row] > 0.0) {
+        if (!(bin.hi > bin.lo)) any_empty = true;
+        if (rt_bin_near_support(bin, 0.0)) any_near_zero = true;
+        min_far_below = std::min(min_far_below, bin.edge - 2.0 * bin.h);
+      }
     }
   }
   bool active() const { return h > 0.0; }

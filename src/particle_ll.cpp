@@ -1911,9 +1911,14 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     std::vector<int> time_kernel_mask_fp(static_cast<size_t>(n_trials), 0);
     std::vector<double> res_buf;
     std::vector<double> ll_uniq_buf;
-    std::vector<int> winner_int_buf;
-    std::vector<int> loser_int_buf;
+    // Winner, loser and timer masks are fixed by the data.
+    static const std::vector<int> no_ints_fp;
+    const std::vector<int>& winner_int_buf = use_raw_fast_path ? race_data->winner_int : no_ints_fp;
+    const std::vector<int>& loser_int_buf = use_raw_fast_path ? race_data->loser_int : no_ints_fp;
+    const std::vector<int>& time_win_int_buf = use_raw_fast_path ? race_data->time_win_int : no_ints_fp;
+    const std::vector<int>& n_resp_fp = use_raw_fast_path ? race_data->n_resp : no_ints_fp;
     std::vector<int> isok_int_fp;
+    bool boundary_marks_set_fp = false;
     const double* rt_ptr = nullptr;
     const int* R_idxs_dadm = nullptr;
     const int* expand_ptr = expand.begin();
@@ -1929,30 +1934,18 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
     GuessKernel fast_guess;                   // uniform guess kernel (data-fixed)
     GuessKernel binned_guess_fp;              // fast_guess with one bin's densities
 
-    std::vector<int> time_win_int_buf;
     std::vector<double> alt_res_buf_fp;
-    std::vector<int> n_resp_fp;
 
     if (use_raw_fast_path) {
       res_buf.resize(n_trials);
       ll_uniq_buf.resize(n_unique_fp);
-      winner_int_buf.resize(n_trials);
-      loser_int_buf.resize(n_trials);
       isok_int_fp.resize(n_trials);
-      // Allocate auxiliary buffers only where actually needed.
       // alt_res_buf_fp: needed for time-race (f_T, S_W) and global_kill (log S_K at winner).
-      // n_resp_fp:      needed for time-race only.
-      // time_win_int_buf: needed for time-race only.
       if (time_code != -1) {
         alt_res_buf_fp.resize(n_trials);
       } else if (adapter.ctx.is_global_kill) {
         alt_res_buf_fp.resize(n_trials);
       }
-      // winner/loser masks are data-fixed (race_data_state_fill()).
-      winner_int_buf = race_data->winner_int;
-      loser_int_buf = race_data->loser_int;
-      time_win_int_buf = race_data->time_win_int;
-      n_resp_fp = race_data->n_resp;
       if (!race_data->has_rt_R) Rcpp::stop("calc_ll_oo: race data lack rt or R");
       rt_ptr = race_data->rt.begin();
       R_idxs_dadm = race_data->R.begin();
@@ -2040,7 +2033,12 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
       btawl_cache_new_particle(&adapter.ctx);
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
-        for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
+        {
+          const int* ok_raw = LOGICAL(is_ok);
+          int* ok_out = isok_int_fp.data();
+#pragma omp simd
+          for (int j = 0; j < n_trials; ++j) ok_out[j] = ok_raw[j] != 0 ? 1 : 0;
+        }
 
         const double* const* pars_cols = race_cols.data();
         adapter.ctx.mode_hint = 0;
@@ -2093,7 +2091,28 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
         bool any_loss_kernel = n_lR > 1;
         bool any_time_kernel = !time_win_int_buf.empty();
         boundary_trials_fp.clear();
-        if (rt_bins.active()) {
+        // No bin can be a boundary bin when none is empty and every onset
+        // lies below the reach of every bin.
+        bool no_boundary_bins = false;
+        if (rt_bins.active() && !rt_bins.any_empty &&
+            !(adapter.ctx.has_pre_t0_mass() && rt_bins.any_near_zero)) {
+          if (adapter.ctx.t0_index < 0) {
+            no_boundary_bins = true;
+          } else {
+            const double* onset = pars_cols[adapter.ctx.t0_index];
+            const double reach = rt_bins.min_far_below;
+            int reached = 0;
+#pragma omp simd reduction(+:reached)
+            for (int j = 0; j < n_trials; ++j) reached += !(onset[j] < reach);
+            no_boundary_bins = reached == 0;
+          }
+        }
+        if (no_boundary_bins) {
+          if (boundary_marks_set_fp) {
+            std::fill(boundary_bin_fp.begin(), boundary_bin_fp.end(), 0);
+            boundary_marks_set_fp = false;
+          }
+        } else if (rt_bins.active()) {
           for (int j = 0; j < n_unique_fp; ++j) {
             const int base = j * n_lR;
             const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
@@ -2105,6 +2124,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
             if (is_bnd) boundary_trials_fp.push_back(j);
           }
           have_boundary_bin_fp = !boundary_trials_fp.empty();
+          boundary_marks_set_fp = have_boundary_bin_fp;
           if (have_boundary_bin_fp) {
             any_win_kernel = false;
             any_loss_kernel = false;
@@ -2172,7 +2192,43 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
           }
         }
         if (time_code == -1) adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
+        // Whether any trial mixes in a contaminant or guess this particle.
+        bool any_mix_fp = false;
+        if (fast_pc_col >= 0) {
+          const double* pc = pars_cols[fast_pc_col];
+          int n_mix = 0;
+#pragma omp simd reduction(+:n_mix)
+          for (int j = 0; j < n_trials; ++j) n_mix += pc[j] != 0.0;
+          any_mix_fp = n_mix != 0;
+        }
+        if (!any_mix_fp && fast_pg_col >= 0 && fast_guess.active()) {
+          const double* pg = pars_cols[fast_pg_col];
+          int n_mix = 0;
+#pragma omp simd reduction(+:n_mix)
+          for (int j = 0; j < n_trials; ++j) n_mix += pg[j] != 0.0;
+          any_mix_fp = n_mix != 0;
+        }
+        const bool plain_sum_fp = n_lR == 1 && !has_RACE_col_fp && !any_mix_fp &&
+          time_code == -1 && !(adapter.ctx.is_global_kill && adapter.ctx.kill_active);
         // 1. Vectorized bulk pass for all unique trials:
+        if (plain_sum_fp) {
+          const double* res = res_buf.data();
+          double* out = ll_uniq_buf.data();
+          if (rt_bins.active()) {
+            const double* frac = rt_bins.log_fraction.data();
+#pragma omp simd
+            for (int j = 0; j < n_unique_fp; ++j) {
+              const double v = (0.0 + res[j]) + frac[j];
+              out[j] = v < min_ll ? min_ll : v;
+            }
+          } else {
+#pragma omp simd
+            for (int j = 0; j < n_unique_fp; ++j) {
+              const double v = 0.0 + res[j];
+              out[j] = v < min_ll ? min_ll : v;
+            }
+          }
+        } else
         for (int j = 0; j < n_unique_fp; ++j) {
           const int base = j * n_lR;
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
@@ -2205,7 +2261,7 @@ NumericVector calc_ll_oo_core(const NumericMatrix& particle_matrix, const DataFr
             s += rt_bins.log_fraction[j];
           }
           s = s < min_ll ? min_ll : s;
-          if (fast_pc_col >= 0 || (fast_pg_col >= 0 && fast_guess.active())) {
+          if (any_mix_fp) {
             const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
             const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
                                 ? pars_cols[fast_pg_col][base] : 0.0;

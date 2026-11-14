@@ -467,6 +467,7 @@ inline void lr_all_inplace(LogicalVector& ok, int n_side)
   const R_xlen_t n = ok.size();
   if (n % n_side)
     stop("Vector length is not a multiple of n_side");
+  if (n_side == 1) return;
   int* x = LOGICAL(ok);
   for (R_xlen_t i = 0; i < n; i += n_side) {
     int state = TRUE;

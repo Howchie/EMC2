@@ -239,14 +239,14 @@ inline ExgTruncationCache make_exg_truncation_cache(
   cache.log_tau = std::log(cache.tau_prepared);
   cache.lower = lower;
   cache.upper = upper;
-  cache.lower_cdf = lower == R_NegInf ? 0.0
-      : pexg(lower, mu, sigma, tau, true, false);
-  cache.upper_cdf = upper == R_PosInf ? 1.0
-      : pexg(upper, mu, sigma, tau, true, false);
+  // pexg's natural lower tail is the exponential of its log lower tail, so
+  // one evaluation per bound serves both.
   cache.lower_lcdf = lower == R_NegInf ? R_NegInf
                                         : pexg(lower, mu, sigma, tau, true, true);
   cache.upper_lcdf = upper == R_PosInf ? 0.0
                                         : pexg(upper, mu, sigma, tau, true, true);
+  cache.lower_cdf = lower == R_NegInf ? 0.0 : std::exp(cache.lower_lcdf);
+  cache.upper_cdf = upper == R_PosInf ? 1.0 : std::exp(cache.upper_lcdf);
   cache.lower_lsurv = lower == R_NegInf ? 0.0
       : (lower == R_PosInf ? R_NegInf : pexg_log_upper(lower, mu, sigma, tau));
   cache.upper_lsurv = upper == R_PosInf ? R_NegInf
