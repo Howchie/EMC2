@@ -108,6 +108,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_alloc_units_subjects_need_cpp
+SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs);
+RcppExport SEXP _EMC2_emc_alloc_units_subjects_need_cpp(SEXP unitsSEXP, SEXP q_gridSEXP, SEXP rsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type units(unitsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_grid(q_gridSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_units_subjects_need_cpp(units, q_grid, rs));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_record_particle_cpp
 SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
 RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
@@ -4580,6 +4593,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_act_term_list_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_list_cpp, 2},
     {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 8},
     {"_EMC2_emc_alloc_fixed_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_fixed_need_cpp, 2},
+    {"_EMC2_emc_alloc_units_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_units_subjects_need_cpp, 3},
     {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
     {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
     {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},

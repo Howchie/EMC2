@@ -25,6 +25,10 @@ emc_alloc_fixed_need_cpp <- function(rho_max, rs) {
     .Call(`_EMC2_emc_alloc_fixed_need_cpp`, rho_max, rs)
 }
 
+emc_alloc_units_subjects_need_cpp <- function(units, q_grid, rs) {
+    .Call(`_EMC2_emc_alloc_units_subjects_need_cpp`, units, q_grid, rs)
+}
+
 emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
     .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
 }

@@ -1040,6 +1040,12 @@
   }
   idx <- which(subj)
   if (!length(idx)) return(out)
+  packed <- emc_alloc_units_subjects_need_cpp(us[idx], .EMC_ALLOC_PARTICLE_RATES,
+                                              as.numeric(rs))
+  if (!is.null(packed)) {
+    out[idx] <- packed
+    return(out)
+  }
   num <- function(x, d) if (is.null(x)) d else as.numeric(x)
   rho <- lapply(us[idx], function(u) as.numeric(u$rho))
   k <- lengths(rho)

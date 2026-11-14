@@ -1,5 +1,6 @@
 #include <Rcpp.h>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -290,3 +291,110 @@ Rcpp::List emc_alloc_fixed_need_cpp(const Rcpp::NumericVector& rho_max,
 }
 
 #pragma GCC pop_options
+
+namespace {
+
+// u$name of a unit; NULL when absent.
+SEXP unit_field(SEXP u, const char* name) {
+  SEXP names = Rf_getAttrib(u, R_NamesSymbol);
+  if (TYPEOF(u) != VECSXP || TYPEOF(names) != STRSXP) return R_NilValue;
+  for (R_xlen_t i = 0; i < XLENGTH(u); ++i)
+    if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) return VECTOR_ELT(u, i);
+  return R_NilValue;
+}
+
+// A unit's scalar field as a number, `if_null` when absent; false for a
+// field that is not one number.
+bool unit_scalar(SEXP u, const char* name, double if_null, double& out) {
+  SEXP v = unit_field(u, name);
+  if (v == R_NilValue) {
+    out = if_null;
+    return true;
+  }
+  if ((TYPEOF(v) != REALSXP && TYPEOF(v) != INTSXP && TYPEOF(v) != LGLSXP) || XLENGTH(v) != 1)
+    return false;
+  out = Rf_asReal(v);
+  return true;
+}
+
+}  // namespace
+
+// The subject units' cheapest allocations at each target, from the units
+// themselves: emc_alloc_subjects_need_cpp() on their packed fields, each
+// unit's row returned as its own list (x, q, cost). NULL for units whose
+// fields are not in the expected form, which R then packs itself.
+// [[Rcpp::export]]
+SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::NumericVector& q_grid,
+                                       const Rcpp::NumericVector& rs) {
+  const int n = units.size();
+  std::vector<double> rho, b_share, p, h, level;
+  Rcpp::IntegerVector off(n + 1);
+  Rcpp::LogicalVector has_p(n), has_h(n);
+  Rcpp::NumericVector q_fixed(n), r_fixed(n), r_min(n), c_p(n), c_h(n);
+  auto numeric = [](SEXP v) { return TYPEOF(v) == REALSXP || TYPEOF(v) == INTSXP; };
+  for (int j = 0; j < n; ++j) {
+    SEXP u = units[j];
+    SEXP r = unit_field(u, "rho"), b = unit_field(u, "b_share"), pp = unit_field(u, "p"),
+         hh = unit_field(u, "h");
+    if (!numeric(r)) return R_NilValue;
+    const R_xlen_t k = XLENGTH(r);
+    if ((b != R_NilValue && (!numeric(b) || XLENGTH(b) != k)) ||
+        (pp != R_NilValue && (!numeric(pp) || XLENGTH(pp) != k)) ||
+        (hh != R_NilValue && (!numeric(hh) || XLENGTH(hh) != k)))
+      return R_NilValue;
+    double qf, rf, rm, cp, ch;
+    if (!unit_scalar(u, "q_fixed", NA_REAL, qf) || !unit_scalar(u, "r_fixed", NA_REAL, rf) ||
+        !unit_scalar(u, "r_min", 0.0, rm) || !unit_scalar(u, "c_p", 0.0, cp) ||
+        !unit_scalar(u, "c_h", 0.0, ch))
+      return R_NilValue;
+    Rcpp::NumericVector rv = Rcpp::as<Rcpp::NumericVector>(r);
+    Rcpp::NumericVector bv, pv, hv;
+    if (b != R_NilValue) bv = Rcpp::as<Rcpp::NumericVector>(b);
+    if (pp != R_NilValue) pv = Rcpp::as<Rcpp::NumericVector>(pp);
+    if (hh != R_NilValue) hv = Rcpp::as<Rcpp::NumericVector>(hh);
+    for (R_xlen_t i = 0; i < k; ++i) {
+      const double f = pp == R_NilValue ? 1.0 : pv[i];
+      // The unit's rho under its particle step alone.
+      volatile double stepped = rv[i] * f;
+      double base = stepped;
+      if (b != R_NilValue) {
+        volatile double rest = 1 - bv[i];
+        volatile double scaled = rest * stepped;
+        volatile double sum = bv[i] + scaled;
+        base = sum;
+      }
+      rho.push_back(rv[i]);
+      b_share.push_back(b == R_NilValue ? 0.0 : bv[i]);
+      p.push_back(f);
+      h.push_back(hh == R_NilValue ? 1.0 : hv[i]);
+      level.push_back(base);
+    }
+    off[j + 1] = off[j] + static_cast<int>(k);
+    has_p[j] = pp != R_NilValue;
+    has_h[j] = hh != R_NilValue;
+    q_fixed[j] = qf;
+    r_fixed[j] = rf;
+    r_min[j] = rm;
+    c_p[j] = cp;
+    c_h[j] = ch;
+  }
+  const Rcpp::List got = emc_alloc_subjects_need_cpp(
+      Rcpp::NumericVector(rho.begin(), rho.end()),
+      Rcpp::NumericVector(b_share.begin(), b_share.end()),
+      Rcpp::NumericVector(p.begin(), p.end()), Rcpp::NumericVector(h.begin(), h.end()),
+      Rcpp::NumericVector(level.begin(), level.end()), off, has_p, has_h, q_fixed, r_fixed, r_min,
+      c_p, c_h, q_grid, rs);
+  const Rcpp::NumericMatrix x = got["x"], q = got["q"], cost = got["cost"];
+  const int n_t = x.ncol();
+  Rcpp::List out(n);
+  for (int j = 0; j < n; ++j) {
+    Rcpp::NumericVector xj(n_t), qj(n_t), cj(n_t);
+    for (int t = 0; t < n_t; ++t) {
+      xj[t] = x(j, t);
+      qj[t] = q(j, t);
+      cj[t] = cost(j, t);
+    }
+    out[j] = Rcpp::List::create(Rcpp::_["x"] = xj, Rcpp::_["q"] = qj, Rcpp::_["cost"] = cj);
+  }
+  return out;
+}
