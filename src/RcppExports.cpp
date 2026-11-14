@@ -697,6 +697,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_refresh_scores_cpp
+SEXP emc_refresh_scores_cpp(const Rcpp::NumericMatrix& alpha, int kind, const Rcpp::List& pars, SEXP covariates);
+RcppExport SEXP _EMC2_emc_refresh_scores_cpp(SEXP alphaSEXP, SEXP kindSEXP, SEXP parsSEXP, SEXP covariatesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< int >::type kind(kindSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type covariates(covariatesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_refresh_scores_cpp(alpha, kind, pars, covariates));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_rmvnorm_cpp
 SEXP emc_rmvnorm_cpp(int n, SEXP mean, const Rcpp::NumericMatrix& sigma);
 RcppExport SEXP _EMC2_emc_rmvnorm_cpp(SEXP nSEXP, SEXP meanSEXP, SEXP sigmaSEXP) {
@@ -4585,6 +4599,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
     {"_EMC2_emc_gibbs_sem_cpp", (DL_FUNC) &_EMC2_emc_gibbs_sem_cpp, 6},
+    {"_EMC2_emc_refresh_scores_cpp", (DL_FUNC) &_EMC2_emc_refresh_scores_cpp, 4},
     {"_EMC2_emc_rmvnorm_cpp", (DL_FUNC) &_EMC2_emc_rmvnorm_cpp, 3},
     {"_EMC2_emc_solve_cpp", (DL_FUNC) &_EMC2_emc_solve_cpp, 1},
     {"_EMC2_emc_gibbs_factor_cpp", (DL_FUNC) &_EMC2_emc_gibbs_factor_cpp, 4},

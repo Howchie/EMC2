@@ -183,6 +183,10 @@ emc_gibbs_sem_cpp <- function(y, covariates, state, free, prior, blocks) {
     .Call(`_EMC2_emc_gibbs_sem_cpp`, y, covariates, state, free, prior, blocks)
 }
 
+emc_refresh_scores_cpp <- function(alpha, kind, pars, covariates) {
+    .Call(`_EMC2_emc_refresh_scores_cpp`, alpha, kind, pars, covariates)
+}
+
 emc_rmvnorm_cpp <- function(n, mean, sigma) {
     .Call(`_EMC2_emc_rmvnorm_cpp`, n, mean, sigma)
 }

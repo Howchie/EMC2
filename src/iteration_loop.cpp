@@ -21,6 +21,8 @@ using namespace Rcpp;
 void emc_set_last_slice(NumericVector target, int j, NumericVector values);
 void emc_set_particle_slice(NumericVector alpha, NumericVector subj_ll,
                             NumericMatrix proposals, int j, int n_pars);
+SEXP emc_refresh_scores_cpp(const NumericMatrix& alpha, int kind, const List& pars,
+                            SEXP covariates);
 SEXP emc_alloc_record_tasks_cpp(NumericVector cpu_hmc, IntegerVector hmc_att,
                                 NumericVector rows_hmc, List tasks);
 
@@ -228,7 +230,7 @@ bool step_store(SEXP st, SEXP cx, int i) {
   }
   // A latent-factor hierarchy's draw goes into its own arrays
   // (fill_samples_factor, _infnt_factor, _SEM); without pools its scores
-  // are redrawn first, which the R step does.
+  // are redrawn first (.emc_ensemble_refresh_scores).
   SEXP latent = lget(cx, "latent");
   const bool lat = TYPEOF(latent) == VECSXP;
   static const char* const lat_store[3][7] = {
@@ -240,10 +242,40 @@ bool step_store(SEXP st, SEXP cx, int i) {
       {"lambda", "epsilon_inv", "psi", "eta", "delta", nullptr, nullptr},
       {"lambda", "B", "K", "G", "epsilon_inv", "delta_inv", "eta"}};
   const int kind = lat ? Rf_asInteger(lget(latent, "kind")) : -1;
+  RObject refreshed, sampler;
   if (lat) {
-    if (kind < 0 || kind > 2 || var(st, "ens_pools") == R_NilValue ||
-        lget(pmwgs, "pooled") != R_NilValue || TYPEOF(pars) != VECSXP)
+    if (kind < 0 || kind > 2 || lget(pmwgs, "pooled") != R_NilValue || TYPEOF(pars) != VECSXP)
       return false;
+    if (var(st, "ens_pools") == R_NilValue) {
+      SEXP marg = lget(pmwgs, "marginalised_idx"), seed = lget(lget(pmwgs, "rng"), "gibbs");
+      SEXP eta = lget(pars, "eta");
+      const int n_pars = Rf_asInteger(lget(pmwgs, "n_pars"));
+      if (marg != R_NilValue) {
+        if (TYPEOF(marg) != LGLSXP) return false;
+        for (R_xlen_t q = 0; q < XLENGTH(marg); ++q)
+          if (LOGICAL(marg)[q] == TRUE) return false;
+      }
+      if (TYPEOF(seed) != INTSXP || TYPEOF(eta) != REALSXP ||
+          TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) ||
+          Rf_nrows(proposals) != n_pars + 1)
+        return false;
+      Shield<SEXP> states(emc_iter::proposal_rows(proposals, n_pars));
+      emc_iter::set_global_seed(seed);
+      GetRNGstate();
+      Shield<SEXP> scores(emc_refresh_scores_cpp(NumericMatrix(static_cast<SEXP>(states)), kind,
+                                                 List(pars),
+                                                 lget(lget(latent, "sem"), "covariates")));
+      PutRNGstate();
+      if (scores == R_NilValue || XLENGTH(scores) != XLENGTH(eta)) return false;
+      Shield<SEXP> seed_after(emc_iter::global_seed());
+      Shield<SEXP> eta2(Rf_duplicate(eta));
+      std::copy(REAL(scores), REAL(scores) + XLENGTH(scores), REAL(eta2));
+      refreshed = lset(pars, "eta", eta2);
+      pars = refreshed;
+      Shield<SEXP> rng2(lset(lget(pmwgs, "rng"), "gibbs", seed_after));
+      sampler = lset(pmwgs, "rng", rng2);
+      pmwgs = sampler;
+    }
     for (int q = 0; q < 7 && lat_store[kind][q] != nullptr; ++q)
       if (TYPEOF(lget(samples, lat_store[kind][q])) != REALSXP ||
           TYPEOF(lget(pars, lat_pars[kind][q])) != REALSXP)
@@ -349,6 +381,7 @@ bool step_store(SEXP st, SEXP cx, int i) {
     result = lset(result, "alloc", alloc2);
   }
   set_var(st, "pmwgs", result);
+  if (static_cast<SEXP>(refreshed) != R_NilValue) set_var(st, "pars", refreshed);
   return true;
 }
 

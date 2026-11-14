@@ -25,6 +25,8 @@
 #include <cfloat>
 #include <cmath>
 #include <vector>
+#include <cstring>
+
 #include "gibbs_factor.h"
 
 namespace {
@@ -632,6 +634,34 @@ void regression_row(const Mat& design, Mat response, double tau, const std::vect
   for (int f = 0; f < kf; ++f) coef[fr[f]] = row(0, f);
 }
 
+// The structural model's factor scores drawn given the subjects' states
+// less their means (subjects x parameters), the covariates and the error
+// precisions as a diagonal matrix (.sem_draw_eta).
+void sem_scores(emc_factor::SemState& s, const Mat& tilde, const Mat& cov, const Mat& eps) {
+  const int n = tilde.r, k = s.lambda.c;
+  Mat ib(k, k);
+  for (int j = 0; j < k; ++j)
+    for (int i = 0; i < k; ++i) ib(i, j) = (i == j ? 1.0 : 0.0) - s.B(i, j);
+  const Mat b0 = inverse(ib);
+  const Mat psi0 = inverse(mult(mult(b0, inverse(s.delta_inv)), transpose(b0)));
+  const Mat lt = transpose(s.lambda);
+  Mat prec = mult(mult(lt, eps), s.lambda);
+  for (size_t e = 0; e < prec.v.size(); ++e) prec.v[e] = psi0.v[e] + prec.v[e];
+  const Mat eta_sig = inverse(prec);
+  Mat centred = tilde;
+  const Mat effects = mult(cov, transpose(s.K));
+  for (size_t e = 0; e < centred.v.size(); ++e) centred.v[e] = centred.v[e] - effects.v[e];
+  const Mat data = mult(mult(lt, eps), transpose(centred));
+  const Mat structural = mult(mult(mult(psi0, b0), s.G), transpose(cov));
+  Mat total(k, n);
+  for (size_t e = 0; e < total.v.size(); ++e) total.v[e] = data.v[e] + structural.v[e];
+  const Mat mean = mult(eta_sig, total);
+  const Mat noise = normal_rows(n, NULL, normal_factor(eta_sig));
+  if (s.eta.r != n || s.eta.c != k) s.eta = Mat(n, k);
+  for (int f = 0; f < k; ++f)
+    for (int i = 0; i < n; ++i) s.eta(i, f) = mean(f, i) + noise(i, f);
+}
+
 void draw_sem(emc_factor::SemState& s, const Mat& y, const Mat& cov,
               const emc_factor::SemPrior& prior) {
   const int n = y.r, p = y.c, k = s.lambda.c, c = cov.c;
@@ -646,26 +676,7 @@ void draw_sem(emc_factor::SemState& s, const Mat& y, const Mat& cov,
     for (size_t e = 0; e < a.v.size(); ++e) a.v[e] = a.v[e] - b.v[e];
     return a;
   };
-  // The factor scores' conditional draw given centred subject states.
-  auto scores = [&](const Mat& tilde) {
-    Mat ib(k, k);
-    for (int j = 0; j < k; ++j)
-      for (int i = 0; i < k; ++i) ib(i, j) = (i == j ? 1.0 : 0.0) - s.B(i, j);
-    const Mat b0 = inverse(ib);
-    const Mat psi0 = inverse(mult(mult(b0, inverse(s.delta_inv)), transpose(b0)));
-    const Mat lt = transpose(s.lambda);
-    Mat prec = mult(mult(lt, eps), s.lambda);
-    for (size_t e = 0; e < prec.v.size(); ++e) prec.v[e] = psi0.v[e] + prec.v[e];
-    const Mat eta_sig = inverse(prec);
-    const Mat data = mult(mult(lt, eps), transpose(minus(tilde, mult(cov, transpose(s.K)))));
-    const Mat structural = mult(mult(mult(psi0, b0), s.G), transpose(cov));
-    Mat total(k, n);
-    for (size_t e = 0; e < total.v.size(); ++e) total.v[e] = data.v[e] + structural.v[e];
-    const Mat mean = mult(eta_sig, total);
-    const Mat noise = normal_rows(n, NULL, normal_factor(eta_sig));
-    for (int f = 0; f < k; ++f)
-      for (int i = 0; i < n; ++i) s.eta(i, f) = mean(f, i) + noise(i, f);
-  };
+  auto scores = [&](const Mat& tilde) { sem_scores(s, tilde, cov, eps); };
   auto residual = [&](const Mat& base) {
     return minus(minus(base, mult(cov, transpose(s.K))), mult(s.eta, transpose(s.lambda)));
   };
@@ -1151,6 +1162,92 @@ SEXP emc_gibbs_sem_cpp(const Rcpp::NumericMatrix& y, const Rcpp::NumericMatrix& 
       !emc_factor::finish_sem(s, cov, bl, mom))
     return R_NilValue;
   return sem_result(s, mom);
+}
+
+// .emc_ensemble_refresh_scores()'s draw of a latent hierarchy's factor
+// scores given the subjects' states (parameters x subjects) and the group
+// state as the iteration holds it: `kind` 0 factor, 1 shrinkage prior, 2
+// structural (with its covariates). The scores (subjects x factors), or NULL
+// when the draw is left to the R form.
+// [[Rcpp::export]]
+SEXP emc_refresh_scores_cpp(const Rcpp::NumericMatrix& alpha, int kind, const Rcpp::List& pars,
+                            SEXP covariates) {
+  const int p = alpha.nrow(), n = alpha.ncol();
+  auto real = [&](const char* name) -> SEXP {
+    SEXP names = pars.names();
+    for (R_xlen_t i = 0; i < pars.size(); ++i)
+      if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) {
+        SEXP v = VECTOR_ELT(pars, i);
+        return TYPEOF(v) == REALSXP ? v : R_NilValue;
+      }
+    return R_NilValue;
+  };
+  auto shaped = [&](SEXP v, int nr, int nc) {
+    Mat m(nr, nc);
+    if (v == R_NilValue || XLENGTH(v) != static_cast<R_xlen_t>(nr) * nc) throw Decline();
+    std::copy(REAL(v), REAL(v) + XLENGTH(v), m.v.begin());
+    return m;
+  };
+  auto vec = [&](SEXP v, int len) {
+    if (v == R_NilValue || XLENGTH(v) != len) throw Decline();
+    return std::vector<double>(REAL(v), REAL(v) + len);
+  };
+  if (p < 1 || n < 1 || kind < 0 || kind > 2 || TYPEOF(pars.names()) != STRSXP)
+    return R_NilValue;
+  try {
+    SEXP load = real(kind == 0 ? "lambda_untransf" : "lambda");
+    if (load == R_NilValue || XLENGTH(load) % p != 0) throw Decline();
+    const int k = static_cast<int>(XLENGTH(load) / p);
+    if (k < 1) throw Decline();
+    const Mat loadings = shaped(load, p, k);
+    const std::vector<double> mu = vec(real("tmu"), p);
+    Mat residual(n, p);
+    for (int j = 0; j < p; ++j)
+      for (int i = 0; i < n; ++i) residual(i, j) = alpha(j, i) - mu[j];
+    if (kind == 2) {
+      if (TYPEOF(covariates) != REALSXP || !Rf_isMatrix(covariates) ||
+          Rf_nrows(covariates) != n)
+        throw Decline();
+      const int c = Rf_ncols(covariates);
+      emc_factor::SemState s;
+      s.lambda = loadings;
+      s.K = shaped(real("K"), p, c);
+      s.G = shaped(real("G"), k, c);
+      s.B = shaped(real("B"), k, k);
+      s.delta_inv = shaped(real("delta_inv"), k, k);
+      sem_scores(s, residual, shaped(covariates, n, c), diagonal(vec(real("epsilon_inv"), p)));
+      return as_r(s.eta);
+    }
+    const std::vector<double> error = vec(real(kind == 0 ? "sig_err_inv" : "epsilon_inv"), p);
+    const std::vector<double> score =
+        kind == 0 ? vec(real("psi_inv"), k) : std::vector<double>(k, 1.0);
+    Mat weighted(p, k);
+    for (int f = 0; f < k; ++f)
+      for (int j = 0; j < p; ++j) weighted(j, f) = loadings(j, f) * error[j];
+    // The two-matrix cross product: one general product, or the level-2
+    // routine for a single factor.
+    Mat prec(k, k);
+    if (k == 1) {
+      prec = cross_column(loadings, weighted);
+    } else {
+      require_finite(loadings);
+      require_finite(weighted);
+      int pp = p, kk = k;
+      double one = 1.0, zero = 0.0;
+      F77_CALL(dgemm)("T", "N", &kk, &kk, &pp, &one, loadings.v.data(), &pp, weighted.v.data(),
+                      &pp, &zero, prec.v.data(), &kk FCONE FCONE);
+    }
+    for (int f = 0; f < k; ++f)
+      for (int g = 0; g < k; ++g) prec(g, f) = (g == f ? score[f] : 0.0) + prec(g, f);
+    const Mat covariance = inverse(prec);
+    const Mat mean = mult(mult(residual, weighted), covariance);
+    const Mat noise = normal_rows(n, NULL, normal_factor(covariance));
+    Mat out(n, k);
+    for (size_t e = 0; e < out.v.size(); ++e) out.v[e] = mean.v[e] + noise.v[e];
+    return as_r(out);
+  } catch (Decline&) {
+    return R_NilValue;
+  }
 }
 
 // mvtnorm::rmvnorm(n, mean, sigma) by its default method, on the same random
