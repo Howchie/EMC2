@@ -56,7 +56,7 @@
   # The moves' native forms are those of a standard hierarchy over all its
   # parameters, with or without pooled coefficients; its store's also with
   # nuisance parameters.
-  out$moves_native <- !any(pmwgs$nuisance) && identical(pmwgs$type, "standard")
+  out$moves_native <- !any(pmwgs$nuisance) && pmwgs$type %in% c("standard", "diagonal-gamma")
   out$store_native <- identical(pmwgs$type, "standard") ||
     (pmwgs$type %in% c("single", "diagonal-gamma") && plain)
   if (plain && identical(pmwgs$type, "diagonal-gamma")) {

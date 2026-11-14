@@ -60,12 +60,16 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   SEXP pools = var(st, "ens_pools"), gibbs = lget(cx, "gibbs"), cfg = lget(cx, "pools");
   const bool alloc_on = flag(lget(cx, "alloc_on"));
   if (pools == R_NilValue) return !alloc_on;
-  if (TYPEOF(pmwgs) != VECSXP || TYPEOF(gibbs) != VECSXP || TYPEOF(cfg) != VECSXP ||
+  // A diagonal-gamma hierarchy's rounds draw independent precisions.
+  SEXP dgamma = lget(cx, "dgamma");
+  const bool dg = TYPEOF(dgamma) == VECSXP;
+  if (TYPEOF(pmwgs) != VECSXP || (!dg && TYPEOF(gibbs) != VECSXP) || TYPEOF(cfg) != VECSXP ||
       TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals))
     return false;
   const int p = Rf_nrows(proposals) - 1, n = Rf_ncols(proposals);
   SEXP rows = lget(pools, "rows"), ll = lget(pools, "ll");
-  SEXP rng = lget(pmwgs, "rng"), seed = lget(rng, "gibbs"), prior = lget(pmwgs, "prior");
+  SEXP rng = lget(pmwgs, "rng"), seed = lget(rng, "gibbs");
+  SEXP prior = dg ? lget(dgamma, "prior") : lget(pmwgs, "prior");
   SEXP samples = lget(pmwgs, "samples");
   if (TYPEOF(rows) != VECSXP || XLENGTH(rows) != n || TYPEOF(ll) != VECSXP ||
       XLENGTH(ll) != n || TYPEOF(seed) != INTSXP || !Rf_isMatrix(VECTOR_ELT(rows, 0)) ||
@@ -84,7 +88,11 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
     }
   }
   SEXP tvinv = lget(pars, "tvinv"), a_half = lget(pars, "a_half");
-  if (TYPEOF(tvinv) != REALSXP || TYPEOF(a_half) != REALSXP) return false;
+  if (TYPEOF(tvinv) != REALSXP || (!dg && TYPEOF(a_half) != REALSXP)) return false;
+  if (dg && (!Rf_isMatrix(tvinv) || Rf_nrows(tvinv) != p || Rf_ncols(tvinv) != p ||
+             TYPEOF(prior) != VECSXP || TYPEOF(lget(dgamma, "rows")) != STRSXP ||
+             XLENGTH(lget(dgamma, "rows")) != p))
+    return false;
   SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window");
   SEXP G = lget(w, "G"), nG = lget(w, "nG"), idx = lget(samples, "idx");
   SEXP theta_mu = lget(samples, "theta_mu"), theta_var = lget(samples, "theta_var");
@@ -115,14 +123,24 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
                                      Rf_asReal(lget(pools, "c")),
                                      Rf_asReal(lget(cfg, "tail_weight")),
                                      Rf_asReal(lget(cfg, "tail_df")));
-    NumericVector ah(XLENGTH(a_half));
-    std::copy(REAL(a_half), REAL(a_half) + XLENGTH(a_half), ah.begin());
-    const List state = List::create(_["tvinv"] = tvinv, _["a_half"] = ah);
-    res = emc_ensemble_rounds_cpp(as<arma::mat>(stacked["pool_stack"]),
-                                  as<arma::vec>(stacked["base_w"]), k0, M,
-                                  Rf_asInteger(lget(cfg, "rounds")), 0, state, List(prior),
-                                  LogicalVector(lget(gibbs, "blocked")),
-                                  IntegerVector(lget(gibbs, "group")));
+    if (dg) {
+      NumericVector prec(p);
+      for (int k = 0; k < p; ++k) prec[k] = REAL(tvinv)[k + static_cast<R_xlen_t>(k) * p];
+      res = emc_ensemble_rounds_cpp(as<arma::mat>(stacked["pool_stack"]),
+                                    as<arma::vec>(stacked["base_w"]), k0, M,
+                                    Rf_asInteger(lget(cfg, "rounds")), 1,
+                                    List::create(_["tvinv"] = prec), List(prior),
+                                    LogicalVector(0), IntegerVector(0));
+    } else {
+      NumericVector ah(XLENGTH(a_half));
+      std::copy(REAL(a_half), REAL(a_half) + XLENGTH(a_half), ah.begin());
+      const List state = List::create(_["tvinv"] = tvinv, _["a_half"] = ah);
+      res = emc_ensemble_rounds_cpp(as<arma::mat>(stacked["pool_stack"]),
+                                    as<arma::vec>(stacked["base_w"]), k0, M,
+                                    Rf_asInteger(lget(cfg, "rounds")), 0, state, List(prior),
+                                    LogicalVector(lget(gibbs, "blocked")),
+                                    IntegerVector(lget(gibbs, "group")));
+    }
   } catch (std::exception&) {
     ok = false;
   }
@@ -134,7 +152,30 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   const NumericVector wess = res["wess"];
   const NumericMatrix pool_stack = stacked["pool_stack"];
   const NumericVector ll_stack = stacked["ll_stack"];
-  SEXP tmu = res["tmu"], tvar = res["tvar"];
+  RObject tmu_keep = res["tmu"], tvar_keep, tvinv_keep;
+  if (dg) {
+    // The named means and the diagonal matrices of the variances and
+    // precisions, as the hierarchy's own draw gives them.
+    SEXP prec = res["tvinv"];
+    if (TYPEOF(tmu_keep) != REALSXP || XLENGTH(tmu_keep) != p || TYPEOF(prec) != REALSXP ||
+        XLENGTH(prec) != p)
+      return false;
+    tmu_keep = Rf_duplicate(tmu_keep);
+    Rf_setAttrib(tmu_keep, R_NamesSymbol, lget(dgamma, "rows"));
+    Shield<SEXP> var_m(Rf_allocMatrix(REALSXP, p, p)), prec_m(Rf_allocMatrix(REALSXP, p, p));
+    std::fill(REAL(var_m), REAL(var_m) + static_cast<R_xlen_t>(p) * p, 0.0);
+    std::fill(REAL(prec_m), REAL(prec_m) + static_cast<R_xlen_t>(p) * p, 0.0);
+    for (int k = 0; k < p; ++k) {
+      volatile double v = 1.0 / REAL(prec)[k];
+      REAL(var_m)[k + static_cast<R_xlen_t>(k) * p] = v;
+      REAL(prec_m)[k + static_cast<R_xlen_t>(k) * p] = REAL(prec)[k];
+    }
+    tvar_keep = var_m;
+    tvinv_keep = prec_m;
+  } else {
+    tvar_keep = res["tvar"];
+  }
+  SEXP tmu = tmu_keep, tvar = tvar_keep;
   if (TYPEOF(tmu) != REALSXP || XLENGTH(tmu) != p || TYPEOF(tvar) != REALSXP) return false;
   Shield<SEXP> props2(Rf_duplicate(proposals));
   double* pr = REAL(props2);
@@ -151,9 +192,11 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
   for (int s = 0; s < n; ++s)
     std::copy(REAL(tmu), REAL(tmu) + p, REAL(subj_mu) + static_cast<R_xlen_t>(s) * p);
   Shield<SEXP> alpha(proposal_rows(props2, p));
-  List pars2 = List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
-                            _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
-                            _["alpha"] = alpha);
+  List pars2 = dg ? List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = tvinv_keep,
+                                 _["alpha"] = alpha)
+                  : List::create(_["tmu"] = tmu, _["tvar"] = tvar, _["tvinv"] = res["tvinv"],
+                                 _["a_half"] = res["a_half"], _["subj_mu"] = subj_mu,
+                                 _["alpha"] = alpha);
 
   // The move's running statistics.
   RObject stats = lget(pmwgs, "ensemble_stats");
