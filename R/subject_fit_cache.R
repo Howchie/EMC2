@@ -186,6 +186,13 @@
   if (is.null(key) || is.null(check) || identical(check$status, "error") ||
       length(chain$laplace_check_cache) < subject) return(chain)
   entries <- chain$laplace_check_cache[[subject]]
+  stored <- if (getOption("emc2.native_laplace_store", TRUE) && length(max_entries) == 1L &&
+                !is.na(max_entries))
+    emc_laplace_check_store_cpp(entries, key, check, draws, as.integer(max_entries))
+  if (!is.null(stored)) {
+    chain$laplace_check_cache[[subject]] <- stored
+    return(chain)
+  }
   if (!is.list(entries)) entries <- list()
   same <- Filter(function(entry) identical(entry$key, key), entries)
   entries <- Filter(function(entry) !identical(entry$key, key), entries)

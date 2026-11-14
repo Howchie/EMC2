@@ -993,6 +993,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_laplace_check_store_cpp
+SEXP emc_laplace_check_store_cpp(SEXP entries, SEXP key, SEXP check, SEXP draws, int max_entries);
+RcppExport SEXP _EMC2_emc_laplace_check_store_cpp(SEXP entriesSEXP, SEXP keySEXP, SEXP checkSEXP, SEXP drawsSEXP, SEXP max_entriesSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type entries(entriesSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type key(keySEXP);
+    Rcpp::traits::input_parameter< SEXP >::type check(checkSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type draws(drawsSEXP);
+    Rcpp::traits::input_parameter< int >::type max_entries(max_entriesSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_laplace_check_store_cpp(entries, key, check, draws, max_entries));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc2_ll_cached
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 RcppExport SEXP _EMC2_emc2_ll_cached(SEXP proposalsSEXP, SEXP dadmSEXP, SEXP modelSEXP, SEXP varyingSEXP) {
@@ -4768,6 +4782,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_iteration_loop_cpp", (DL_FUNC) &_EMC2_emc_iteration_loop_cpp, 6},
     {"_EMC2_emc_collapsed_tune_eps_cpp", (DL_FUNC) &_EMC2_emc_collapsed_tune_eps_cpp, 9},
     {"_EMC2_emc_native_claim_reply_cpp", (DL_FUNC) &_EMC2_emc_native_claim_reply_cpp, 8},
+    {"_EMC2_emc_laplace_check_store_cpp", (DL_FUNC) &_EMC2_emc_laplace_check_store_cpp, 5},
     {"_EMC2_emc2_ll_cached", (DL_FUNC) &_EMC2_emc2_ll_cached, 4},
     {"_EMC2_emc2_ll_cached_subjects", (DL_FUNC) &_EMC2_emc2_ll_cached_subjects, 3},
     {"_EMC2_emc2_ll_cached_claim", (DL_FUNC) &_EMC2_emc2_ll_cached_claim, 6},

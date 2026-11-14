@@ -267,6 +267,10 @@ emc_native_claim_reply_cpp <- function(res, alpha, prev_ll, pm, seeds, skip, ext
     .Call(`_EMC2_emc_native_claim_reply_cpp`, res, alpha, prev_ll, pm, seeds, skip, extra, stage)
 }
 
+emc_laplace_check_store_cpp <- function(entries, key, check, draws, max_entries) {
+    .Call(`_EMC2_emc_laplace_check_store_cpp`, entries, key, check, draws, max_entries)
+}
+
 emc2_ll_cached <- function(proposals, dadm, model, varying) {
     .Call(`_EMC2_emc2_ll_cached`, proposals, dadm, model, varying)
 }
