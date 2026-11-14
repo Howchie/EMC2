@@ -278,12 +278,18 @@
   nm <- names(st$value)
   p <- length(nm)
   d <- nrow(alpha)
-  D <- d + p
   x0 <- lapply(seq_len(ncol(alpha)), function(s)
     stats::setNames(c(alpha[, s], st$value), c(pmwgs$par_names, nm)))
   steps <- lapply(x0, function(x) h * pmax(1, abs(x)))
   rows <- Map(.emc_pooled_fd_rows, x0, steps, MoreArgs = list(d = d, p = p))
-  f <- score(rows)
+  .emc_pooled_curvature_from(pmwgs, st, score(rows), steps, d)
+}
+
+# The shear slope and step covariance from the grid's scores (rows x
+# subjects) and each subject's steps.
+.emc_pooled_curvature_from <- function(pmwgs, st, f, steps, d) {
+  p <- length(st$value)
+  D <- d + p
   if (any(!is.finite(f))) return(st)
   A <- matrix(0, D, D)
   for (s in seq_len(ncol(f))) A <- A + .emc_pooled_fd_hessian(f[, s], steps[[s]], d, p)
