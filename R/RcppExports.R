@@ -37,10 +37,6 @@ emc_alloc_predict_cpp <- function(units, sol_x, sol_q, idx, fac) {
     .Call(`_EMC2_emc_alloc_predict_cpp`, units, sol_x, sol_q, idx, fac)
 }
 
-emc_alloc_shears_tail_need_cpp <- function(units, need, g, a, cost, cap, floor, rs) {
-    .Call(`_EMC2_emc_alloc_shears_tail_need_cpp`, units, need, g, a, cost, cap, floor, rs)
-}
-
 emc_alloc_saturation_cpp <- function(g, D, K) {
     .Call(`_EMC2_emc_alloc_saturation_cpp`, g, D, K)
 }
@@ -63,10 +59,6 @@ emc_alloc_candidate_cpp <- function(base, joint, fixed, need, act_shear, act_hmc
 
 emc_alloc_rho_cpp <- function(esjd, var) {
     .Call(`_EMC2_emc_alloc_rho_cpp`, esjd, var)
-}
-
-emc_alloc_tail_rho_cpp <- function(n_in, n_stay, rho, q, n0) {
-    .Call(`_EMC2_emc_alloc_tail_rho_cpp`, n_in, n_stay, rho, q, n0)
 }
 
 emc_alloc_lsd_draws_cpp <- function(V, k) {

@@ -109,27 +109,6 @@
 # latency): the same accounting for each.
 .EMC_ALLOC_FAMILIES <- c("shear", "collapsed", "hmc")
 .EMC_ALLOC_MIN_GAIN <- 0.9
-# A log group sd is also priced on its lower tail, the neck of its funnel: a
-# coordinate that is slow only there has an unremarkable lag-one correlation
-# over the whole chain. Two measurements give the tail's own rho, the larger
-# of them where it exceeds the coordinate's rho:
-#   the lag-one correlation of the indicator of the tail below the
-#   .EMC_ALLOC_TAIL_P quantile of the pooled draws, from how often the rest
-#   of the iteration left the coordinate there;
-#   the coordinate's tau scaled by the squared depth of its
-#   .EMC_ALLOC_TAIL_DEPTH_P quantile below the median against a Gaussian's of
-#   the same variance, where that ratio is at least .EMC_ALLOC_TAIL_DEPTH (the
-#   rest of the iteration crosses a deeper tail by the same jumps).
-# The collapsed move's factor is measured on the whole chain's jumps and does
-# not carry into the neck, so only the coordinate's own shear rounds lower
-# its tail rho (the unit's rho_t). A tail at least .EMC_ALLOC_TAIL_STICKY
-# keeps a floor of rounds, so that no block leaves it without the move that
-# takes it out of the neck.
-.EMC_ALLOC_TAIL_P <- 0.05
-.EMC_ALLOC_TAIL_DEPTH_P <- 0.01
-.EMC_ALLOC_TAIL_DEPTH <- 1.5
-.EMC_ALLOC_TAIL_STICKY <- 0.9
-.EMC_ALLOC_TAIL_FLOOR <- 0.125
 # Particle rates the solver considers, highest first so that ties keep the
 # particle step.
 .EMC_ALLOC_PARTICLE_RATES <- seq(1, 0, by = -0.125)
@@ -191,7 +170,7 @@
        cpu_rest = 0, fam = .emc_alloc_fam_empty(),
        cpu_hmc = numeric(n), hmc_att = integer(n), rows_hmc = numeric(n),
        P = replicate(n, matrix(0, p, p), simplify = FALSE), nP = integer(n),
-       cpu_part = numeric(n), Tin = integer(p), Tstay = integer(p))
+       cpu_part = numeric(n))
 }
 
 # The particle step's own jumps and cost. A subject's cost is its marginal
@@ -248,19 +227,11 @@
 .emc_alloc_record_group <- function(sampler, pars) {
   idx <- sampler$samples$idx
   w <- .emc_alloc_window(sampler)
-  now <- .emc_alloc_lsd(pars$tvar)
-  was <- .emc_alloc_lsd(sampler$samples$theta_var[, , idx])
-  d <- c(as.numeric(pars$tmu), now) - c(sampler$samples$theta_mu[, idx], was)
+  d <- c(as.numeric(pars$tmu), .emc_alloc_lsd(pars$tvar)) -
+    c(sampler$samples$theta_mu[, idx], .emc_alloc_lsd(sampler$samples$theta_var[, , idx]))
   if (all(is.finite(d))) {
     w$G <- w$G + tcrossprod(d)
     w$nG <- w$nG + 1L
-    # Each log sd found in its lower tail, and whether it was left there.
-    thr <- sampler$alloc$tail_thr
-    if (length(thr) == length(was) && !is.null(w$Tin)) {
-      inside <- !is.na(thr) & was < thr
-      w$Tin <- w$Tin + as.integer(inside)
-      w$Tstay <- w$Tstay + as.integer(inside & now < thr)
-    }
   }
   sampler$alloc$window <- w
   sampler
@@ -370,51 +341,6 @@
   out <- if (getOption("emc2.native_alloc_rho", TRUE)) emc_alloc_rho_cpp(esjd, var)
   if (!is.null(out)) return(out)
   pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
-}
-
-# The lag-one correlation of a coordinate's lower-tail indicator from the
-# times it was found in the tail (n_in) and left there (n_stay), the tail
-# holding .EMC_ALLOC_TAIL_P of the draws. Counts weigh against a reference
-# worth .EMC_ALLOC_ROUND_EVIDENCE visits at the coordinate's own rho.
-.emc_alloc_tail_rho <- function(n_in, n_stay, rho) {
-  q <- .EMC_ALLOC_TAIL_P
-  n0 <- .EMC_ALLOC_ROUND_EVIDENCE
-  out <- if (getOption("emc2.native_alloc_tail", TRUE))
-    emc_alloc_tail_rho_cpp(n_in, n_stay, rho, q, n0)
-  if (!is.null(out)) return(out)
-  ref <- q + (1 - q) * pmin(1, pmax(0, rho))
-  stay <- (n_stay + n0 * ref) / (n_in + n0)
-  pmin(1, pmax(0, (stay - q) / (1 - q)))
-}
-
-# A coordinate's rho in its lower tail from the tail's depth: `draws`
-# (coordinates x draws) give each coordinate's median and
-# .EMC_ALLOC_TAIL_DEPTH_P quantile; tau scales with the squared depth against
-# a Gaussian's of the draws' variance.
-.emc_alloc_tail_depth <- function(draws, rho) {
-  if (ncol(draws) < 100L) return(rep(0, nrow(draws)))
-  q <- apply(draws, 1L, stats::quantile, probs = c(.EMC_ALLOC_TAIL_DEPTH_P, 0.5), names = FALSE)
-  sd <- sqrt(.emc_alloc_row_var(draws))
-  depth <- ((q[2L, ] - q[1L, ]) / (-stats::qnorm(.EMC_ALLOC_TAIL_DEPTH_P) * sd))^2
-  deep <- is.finite(depth) & depth >= .EMC_ALLOC_TAIL_DEPTH
-  tau <- .emc_alloc_tau(pmin(1, pmax(0, rho))) * ifelse(deep, depth, 1)
-  ifelse(deep, (tau - 1) / (tau + 1), 0)
-}
-
-# A shear coordinate's tail as a unit of its own: the tail rho under the
-# coordinate's rounds alone. NULL without one.
-.emc_alloc_tail_unit <- function(u) {
-  if (!identical(u$kind, "shear") || is.null(u$rho_t) || !is.finite(u$rho_t)) return(NULL)
-  list(kind = "shear", rho = u$rho_t, g = u$g, a = u$a, cost = u$cost, cap = u$cap,
-       floor = u$floor)
-}
-
-# The rounds x both a coordinate and its tail need, and their cost.
-.emc_alloc_need_with_tail <- function(need, u, rs, max_rounds) {
-  tu <- .emc_alloc_tail_unit(u)
-  if (is.null(tu)) return(need)
-  x <- pmax(need$x, .emc_alloc_unit_need(tu, rs, max_rounds)$x)
-  list(x = x, q = need$q, cost = ifelse(is.finite(x), x * u$cost, Inf))
 }
 
 .emc_alloc_tau <- function(rho) {
@@ -799,11 +725,8 @@
     x <- if (length(sol$x) >= i && is.finite(sol$x[i])) sol$x[i] else 0
     switch(u$kind,
       fixed = b + (1 - b) * rho,
-      shear = {
-        f <- .emc_alloc_factor(u$g, x, if (is.null(u$a)) u$g else u$a)
-        own <- b + (1 - b) * rho * f
-        if (is.null(.emc_alloc_tail_unit(u))) own else pmax(own, u$rho_t * f)
-      },
+      shear = b + (1 - b) * rho *
+        .emc_alloc_factor(u$g, x, if (is.null(u$a)) u$g else u$a),
       subject = {
         q <- if (is.null(u$p) || length(sol$q) < i) 1 else sol$q[i]
         r <- if (is.null(u$h)) 0 else
@@ -867,12 +790,9 @@
   levels = vapply(units, function(u) max(.emc_alloc_level(u)), numeric(1)),
   best = vapply(units, function(u) switch(u$kind,
     fixed = max(.emc_alloc_unit_rho(u)),
-    shear = {
-      f_cap <- .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap,
-                                 if (is.null(u$a)) u$g else u$a)
-      max(.emc_alloc_rho_floor(u$rho * f_cap, u$b_share),
-          if (is.null(.emc_alloc_tail_unit(u))) 0 else u$rho_t * f_cap)
-    },
+    shear = max(.emc_alloc_rho_floor(
+      u$rho * .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap,
+                                if (is.null(u$a)) u$g else u$a), u$b_share)),
     subject = max(if (is.null(u$h)) .emc_alloc_level(u) else
                     .emc_alloc_rho_floor(
                       u$rho * (if (is.null(u$p)) 1 else u$p) * u$h, u$b_share))),
@@ -905,11 +825,6 @@
     .emc_alloc_factor(u$g, if (is.null(u$cap)) max_rounds else u$cap, a_of(u)) else NA_real_,
     numeric(1))
   floored <- !is.na(f_floor)
-  # The tails' levels and least reachable rhos do not change with rho.
-  tail <- vapply(units, function(u) if (is.null(.emc_alloc_tail_unit(u))) 0 else u$rho_t,
-                 numeric(1))
-  t_level <- tail * ifelse(floored, f_floor, 1)
-  t_best <- tail * ifelse(sh, f_cap, 1)
   function(us) {
     rho <- as.numeric(unlist(lapply(us, `[[`, "rho")))
     b <- as.numeric(unlist(lapply(us, function(u)
@@ -918,7 +833,7 @@
     levels[floored] <- .emc_alloc_rho_floor(rho[floored] * f_floor[floored], b[floored])
     best <- .emc_alloc_rho_floor(rho, b)
     best[sh] <- .emc_alloc_rho_floor(rho[sh] * f_cap[sh], b[sh])
-    list(levels = pmax(levels, t_level), best = pmax(best, t_best))
+    list(levels = levels, best = best)
   }
 }
 
@@ -968,11 +883,6 @@
 # A unit's rho with nothing allocated: subjects run their particle step and
 # any HMC rate they are held to.
 .emc_alloc_level <- function(u) {
-  tu <- .emc_alloc_tail_unit(u)
-  if (!is.null(tu)) {
-    u$rho_t <- NULL
-    return(pmax(.emc_alloc_level(u), .emc_alloc_level(tu)))
-  }
   if (identical(u$kind, "shear") && !is.null(u$floor) && u$floor > 0)
     return(.emc_alloc_rho_floor(
       u$rho * .emc_alloc_factor(u$g, u$floor, if (is.null(u$a)) u$g else u$a),
@@ -1008,9 +918,7 @@
       xo[!is.finite(xo) | xo > cap + 1e-9] <- Inf
       x[over] <- xo
     }
-    return(.emc_alloc_need_with_tail(
-      list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)),
-      u, rs, max_rounds))
+    return(list(x = x, q = rep(1, n_t), cost = ifelse(is.finite(x), x * u$cost, Inf)))
   }
   # Subject: for each particle rate q, the least HMC rate r with
   # rho_i F(q, r) <= min(rho*, level_i) on every coordinate, F the kernels'
@@ -1088,12 +996,6 @@
                                          layout$b_share[k],
                                          layout$g[k], layout$a[k], layout$cost[k],
                                          layout$cap[k], layout$floor[k], as.numeric(rs))
-    tailed <- emc_alloc_shears_tail_need_cpp(us[sh], out[sh], layout$g[k], layout$a[k],
-                                             layout$cost[k], layout$cap[k], layout$floor[k],
-                                             as.numeric(rs))
-    if (!is.null(tailed)) out[sh] <- tailed else
-      for (i in sh) if (!is.null(us[[i]]$rho_t))
-        out[[i]] <- .emc_alloc_need_with_tail(out[[i]], us[[i]], rs, max_rounds)
   }
   idx <- which(subj)
   if (!length(idx)) return(out)
@@ -1229,12 +1131,8 @@
       if (is.list(pool)) {
         w$G <- w$G + pool$G
         w$nG <- w$nG + pool$nG
-        if (length(pool$Tin) == length(w$Tin)) {
-          w$Tin <- w$Tin + pool$Tin
-          w$Tstay <- w$Tstay + pool$Tstay
-        }
       }
-      pool <- list(G = w$G, nG = w$nG, Tin = w$Tin, Tstay = w$Tstay)
+      pool <- list(G = w$G, nG = w$nG)
     }
   }
   vdraws <- draws
@@ -1285,27 +1183,6 @@
   g_rho <- if (w$nG > 0) .emc_alloc_rho(g_esjd, g_var) else rep(NA_real_, 2L * p)
   g_valid <- is.finite(g_rho) & is.finite(g_var) & g_var > 0 & is.finite(g_b_share)
   g_rho[!g_valid] <- 1
-  # The log sds' lower tails: every chain's counts (the same kernel), each
-  # shrunk towards what the coordinate's own rho implies.
-  tail_in <- tail_stay <- numeric(p)
-  if (!stored) for (i in seq_along(emc)) {
-    wi <- if (i == j) w else emc[[i]]$alloc$window
-    if (length(wi$Tin) != p) next
-    tail_in <- tail_in + wi$Tin
-    tail_stay <- tail_stay + wi$Tstay
-    pi_ <- if (i != j && production && identical(emc[[i]]$alloc$stage, "sample"))
-      emc[[i]]$alloc$pool
-    if (length(pi_$Tin) == p) {
-      tail_in <- tail_in + pi_$Tin
-      tail_stay <- tail_stay + pi_$Tstay
-    }
-  }
-  lsd_rho <- g_rho[p + seq_len(p)]
-  g_tail <- pmax(.emc_alloc_tail_rho(tail_in, tail_stay, lsd_rho),
-                 .emc_alloc_tail_depth(ds$lsd, lsd_rho))
-  g_tail[!g_valid[p + seq_len(p)] | !is.finite(g_tail) | g_tail <= lsd_rho + 1e-9] <- NA_real_
-  tail_thr <- apply(ds$lsd, 1L, stats::quantile, probs = .EMC_ALLOC_TAIL_P, names = FALSE)
-  tail_thr[!is.finite(tail_thr)] <- NA_real_
   g_var[!is.finite(g_var) | g_var <= 0] <- 1
   g_b_share[!is.finite(g_b_share)] <- 0
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
@@ -1470,8 +1347,7 @@
     .emc_alloc_marginal(if (stored) NULL else w, f, ch$alloc$last)), .EMC_ALLOC_FAMILIES)
   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), pool = pool,
        shear = shear,
-       g_rho = g_rho, g_tail = g_tail, tail_thr = tail_thr,
-       g_var = g_var, g_b_share = g_b_share, g_valid = g_valid,
+       g_rho = g_rho, g_var = g_var, g_b_share = g_b_share, g_valid = g_valid,
        g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
        g_n = if (shear) last_n else numeric(2L * p),
        g_iters = if (shear) last_iters else numeric(2L * p),
@@ -1554,23 +1430,11 @@
     if (shear_on && is.finite(ms$g_fac[k])) {
       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
                   if (is.null(ms$g_iters)) 0 else ms$g_iters[k])
-      # A log sd with a sticky lower tail keeps its floor of rounds.
-      p_g <- length(ms$g_rho) %/% 2L
-      sticky <- p_g > 0L && k > p_g && length(ms$g_tail) == p_g &&
-        is.finite(ms$g_tail[k - p_g]) && ms$g_tail[k - p_g] >= .EMC_ALLOC_TAIL_STICKY
-      if (isTRUE(sticky)) {
-        b$floor <- max(b$floor, .EMC_ALLOC_TAIL_FLOOR)
-        b$cap <- max(b$cap, b$floor)
-      }
-      u <- list(kind = "shear", rho = ms$g_rho[k],
-                b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k],
-                g = ms$g_fac[k],
-                a = if (is.null(ms$g_sat)) ms$g_fac[k] else ms$g_sat[k], cost = c_round,
-                floor = min(b$floor, .EMC_ALLOC_MAX_ROUNDS),
-                cap = min(b$cap, .EMC_ALLOC_MAX_ROUNDS))
-      if (p_g > 0L && k > p_g && length(ms$g_tail) == p_g && is.finite(ms$g_tail[k - p_g]))
-        u$rho_t <- ms$g_tail[k - p_g]
-      u
+      list(kind = "shear", rho = ms$g_rho[k],
+           b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k],
+           g = ms$g_fac[k],
+           a = if (is.null(ms$g_sat)) ms$g_fac[k] else ms$g_sat[k], cost = c_round,
+           floor = min(b$floor, .EMC_ALLOC_MAX_ROUNDS), cap = min(b$cap, .EMC_ALLOC_MAX_ROUNDS))
     } else list(kind = "fixed", rho = ms$g_rho[k],
                 b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k], cost = 0))
   for (s in seq_len(n)) {
@@ -1947,7 +1811,6 @@
       pred0_subject = do.call(rbind, lapply(u$units[n_g + seq_len(ch$n_subjects)], function(x)
         .emc_alloc_subject_base(x)[seq_len(ch$n_pars)])),
       group_rho = .emc_alloc_rho_floor(m$g_rho, m$g_b_share),
-      group_tail = m$g_tail,
       group_g = m$g_fac, group_a = m$g_sat,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,
@@ -1966,8 +1829,7 @@
       calib_cpu = if (is.null(st$subjects)) 0 else
         sum(vapply(st$subjects, function(x) x$calib_cpu, numeric(1))))
     ch$alloc <- list(window = .emc_alloc_empty_window(ch$n_subjects, ch$n_pars),
-                     stage = stage, pool = m$pool, tail_thr = m$tail_thr, last = rec,
-                     history = c(ch$alloc$history, list(rec)),
+                     stage = stage, pool = m$pool, last = rec, history = c(ch$alloc$history, list(rec)),
                      particle = list(rate = q, fac = m$p_fac, fac_dev = m$p_dev, cost = m$c_part))
     if (!is.null(st)) {
       st$alloc <- rec

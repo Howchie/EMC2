@@ -390,20 +390,6 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
           }
         w2 = lset(w2, "G", G2);
         w2 = lset(w2, "nG", Rf_ScalarInteger(INTEGER(nG)[0] + 1));
-        // Each log sd found in its lower tail, and whether it was left there.
-        SEXP thr = lget(alloc, "tail_thr"), t_in = lget(w, "Tin"), t_stay = lget(w, "Tstay");
-        if (TYPEOF(thr) == REALSXP && XLENGTH(thr) == p && TYPEOF(t_in) == INTSXP &&
-            XLENGTH(t_in) == p && TYPEOF(t_stay) == INTSXP && XLENGTH(t_stay) == p) {
-          Shield<SEXP> in2(Rf_duplicate(t_in)), stay2(Rf_duplicate(t_stay));
-          for (int k = 0; k < p; ++k) {
-            const double t = REAL(thr)[k];
-            if (ISNAN(t) || !(was[k] < t)) continue;
-            INTEGER(in2)[k] += 1;
-            if (now[k] < t) INTEGER(stay2)[k] += 1;
-          }
-          w2 = lset(w2, "Tin", in2);
-          w2 = lset(w2, "Tstay", stay2);
-        }
       }
       Shield<SEXP> alloc2(lset(alloc, "window", w2));
       sampler = lset(sampler, "alloc", alloc2);

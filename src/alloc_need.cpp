@@ -506,10 +506,9 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
     // The unit's own moves' factor on each coordinate.
     std::vector<double> own(k, 1.0);
     bool scaled = false;
-    double tail = NA_REAL;
     Rcpp::RObject f_keep;
     if (shear) {
-      SEXP g = unit_field(u, "g"), a = unit_field(u, "a"), rt = unit_field(u, "rho_t");
+      SEXP g = unit_field(u, "g"), a = unit_field(u, "a");
       if (!plain_field(g, k) || (a != R_NilValue && !plain_field(a, k))) return R_NilValue;
       Rcpp::NumericVector xv = Rcpp::NumericVector::create(x);
       f_keep = emc_alloc_factor_cpp(g, xv, a == R_NilValue ? g : a);
@@ -517,13 +516,6 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
       if (f == R_NilValue || (XLENGTH(f) != 1 && XLENGTH(f) != k)) return R_NilValue;
       for (R_xlen_t c = 0; c < k; ++c) own[c] = REAL(f)[XLENGTH(f) == 1 ? 0 : c];
       scaled = true;
-      if (rt != R_NilValue) {
-        if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
-        if (R_FINITE(REAL(rt)[0])) {
-          if (XLENGTH(f) != 1 && k != XLENGTH(f)) return R_NilValue;
-          tail = REAL(rt)[0];
-        }
-      }
     } else if (subject) {
       SEXP p = hmc ? R_NilValue : unit_field(u, "p"), h = unit_field(u, "h");
       SEXP rm = unit_field(u, "r_min");
@@ -581,61 +573,9 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
         v = w;
       }
       volatile double sum = bc + v;
-      double val = sum;
-      if (!ISNAN(tail)) {
-        volatile double t = tail * own[c];
-        if (ISNAN(val) || ISNAN(static_cast<double>(t))) return R_NilValue;
-        val = std::max(val, static_cast<double>(t));
-      }
-      res[c] = val;
+      res[c] = sum;
     }
     out[i] = res;
-  }
-  return out;
-}
-
-// The shear units' needs with their tails (.emc_alloc_need_with_tail): where
-// a unit carries a finite tail rho, the rounds both it and its tail need, the
-// tail priced as a coordinate of its own without a between-chain share, and
-// their cost. `need` holds the units' own needs (emc_alloc_shears_need_cpp)
-// and the other vectors their fixed fields. NULL for a tail that is not one
-// number or a need with missing values, which the R form handles.
-// [[Rcpp::export(rng = false)]]
-SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& need,
-                                    const Rcpp::NumericVector& g, const Rcpp::NumericVector& a,
-                                    const Rcpp::NumericVector& cost,
-                                    const Rcpp::NumericVector& cap,
-                                    const Rcpp::NumericVector& floor,
-                                    const Rcpp::NumericVector& rs) {
-  const int n = units.size(), n_t = rs.size();
-  if (need.size() != n || g.size() != n || a.size() != n || cost.size() != n ||
-      cap.size() != n || floor.size() != n)
-    return R_NilValue;
-  const double inf = std::numeric_limits<double>::infinity();
-  Rcpp::List out(n);
-  for (int i = 0; i < n; ++i) {
-    SEXP rt = unit_field(units[i], "rho_t");
-    out[i] = need[i];
-    if (rt == R_NilValue) continue;
-    if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
-    if (!R_FINITE(REAL(rt)[0])) continue;
-    const Rcpp::List tail = emc_alloc_shears_need_cpp(
-        Rcpp::NumericVector::create(REAL(rt)[0]), Rcpp::NumericVector::create(0.0),
-        Rcpp::NumericVector::create(g[i]), Rcpp::NumericVector::create(a[i]),
-        Rcpp::NumericVector::create(cost[i]), Rcpp::NumericVector::create(cap[i]),
-        Rcpp::NumericVector::create(floor[i]), rs);
-    const Rcpp::List own = need[i];
-    const Rcpp::NumericVector x0 = own["x"], xt = Rcpp::as<Rcpp::List>(tail[0])["x"];
-    if (x0.size() != n_t || xt.size() != n_t) return R_NilValue;
-    Rcpp::NumericVector X(n_t), C(n_t);
-    for (int t = 0; t < n_t; ++t) {
-      if (ISNAN(x0[t]) || ISNAN(xt[t])) return R_NilValue;
-      const double x = std::max(x0[t], xt[t]);
-      X[t] = x;
-      C[t] = std::isfinite(x) ? x * cost[i] : inf;
-    }
-    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = own["q"],
-                                Rcpp::Named("cost") = C);
   }
   return out;
 }
@@ -780,31 +720,19 @@ SEXP emc_alloc_range_parts_cpp(const Rcpp::List& units, SEXP max_rounds) {
     bool bad = false;
     auto seen = [&bad](double v) { if (ISNAN(v)) bad = true; return v; };
     if (shear) {
-      SEXP fl = unit_field(u, "floor"), cap = unit_field(u, "cap"), rt = unit_field(u, "rho_t");
+      SEXP fl = unit_field(u, "floor"), cap = unit_field(u, "cap");
       if ((fl != R_NilValue && !one_double(fl)) || (cap != R_NilValue && !one_double(cap)))
         return R_NilValue;
       const bool floored = fl != R_NilValue && REAL(fl)[0] > 0;
       if (floored && !shear_factor(u, k, REAL(fl)[0], f_floor)) return R_NilValue;
       if (!shear_factor(u, k, REAL(cap == R_NilValue ? max_rounds : cap)[0], f_cap))
         return R_NilValue;
-      double tail = NA_REAL;
-      if (rt != R_NilValue) {
-        if (TYPEOF(rt) != REALSXP || XLENGTH(rt) != 1) return R_NilValue;
-        if (R_FINITE(REAL(rt)[0])) tail = REAL(rt)[0];
-      }
-      least = 0.0;
       for (R_xlen_t c = 0; c < k; ++c) {
         const double rho = REAL(r)[c];
         volatile double at_floor = floored ? rho * f_floor[c] : rho;
         raise(level, seen(with_share(b, c, at_floor)));
         volatile double at_cap = rho * f_cap[c];
         raise(least, seen(with_share(b, c, at_cap)));
-        if (!ISNAN(tail)) {
-          volatile double t_floor = floored ? tail * f_floor[c] : tail;
-          raise(level, seen(t_floor));
-          volatile double t_cap = tail * f_cap[c];
-          raise(least, seen(t_cap));
-        }
       }
     } else if (subject) {
       SEXP p = unit_field(u, "p"), h = unit_field(u, "h"), rm = unit_field(u, "r_min");
@@ -1081,60 +1009,6 @@ SEXP emc_alloc_rho_cpp(SEXP esjd, SEXP var) {
       return R_NilValue;
     }
     REAL(out)[i] = r < 0 ? 0.0 : (r > 1 ? 1.0 : r);
-  }
-  UNPROTECT(1);
-  return out;
-}
-
-// .emc_alloc_tail_rho(): the lag-one correlation of each coordinate's tail
-// indicator from its counts in the tail (n_in) and staying there (n_stay),
-// the tail holding q of the draws, against a reference worth n0 visits at the
-// coordinate's own rho. NULL for anything but plain vectors of one length
-// without missing values, which the R form handles.
-// [[Rcpp::export(rng = false)]]
-SEXP emc_alloc_tail_rho_cpp(SEXP n_in, SEXP n_stay, SEXP rho, double q, double n0) {
-  auto plain = [](SEXP v, bool counts) {
-    return (TYPEOF(v) == REALSXP || (counts && TYPEOF(v) == INTSXP)) && !Rf_isObject(v) &&
-           Rf_getAttrib(v, R_DimSymbol) == R_NilValue;
-  };
-  if (!plain(n_in, true) || !plain(n_stay, true) || !plain(rho, false) || ISNAN(q) ||
-      ISNAN(n0))
-    return R_NilValue;
-  const R_xlen_t n = XLENGTH(rho);
-  if (n < 1 || XLENGTH(n_in) != n || XLENGTH(n_stay) != n) return R_NilValue;
-  auto count = [](SEXP v, R_xlen_t i, double& out) {
-    if (TYPEOF(v) == INTSXP) {
-      if (INTEGER(v)[i] == NA_INTEGER) return false;
-      out = INTEGER(v)[i];
-    } else {
-      out = REAL(v)[i];
-    }
-    return !ISNAN(out);
-  };
-  SEXP out = PROTECT(Rf_allocVector(REALSXP, n));
-  volatile double rest = 1 - q;
-  for (R_xlen_t i = 0; i < n; ++i) {
-    double in, stay;
-    const double r = REAL(rho)[i];
-    if (!count(n_in, i, in) || !count(n_stay, i, stay) || ISNAN(r)) {
-      UNPROTECT(1);
-      return R_NilValue;
-    }
-    const double held = r < 0 ? 0.0 : (r > 1 ? 1.0 : r);
-    volatile double scaled = rest * held;
-    volatile double ref = q + scaled;
-    volatile double prior = n0 * ref;
-    volatile double num = stay + prior;
-    volatile double den = in + n0;
-    volatile double kept = num / den;
-    volatile double above = kept - q;
-    volatile double value = above / rest;
-    const double v = value;
-    if (ISNAN(v)) {
-      UNPROTECT(1);
-      return R_NilValue;
-    }
-    REAL(out)[i] = v < 0 ? 0.0 : (v > 1 ? 1.0 : v);
   }
   UNPROTECT(1);
   return out;

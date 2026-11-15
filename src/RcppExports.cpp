@@ -147,23 +147,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// emc_alloc_shears_tail_need_cpp
-SEXP emc_alloc_shears_tail_need_cpp(const Rcpp::List& units, const Rcpp::List& need, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& rs);
-RcppExport SEXP _EMC2_emc_alloc_shears_tail_need_cpp(SEXP unitsSEXP, SEXP needSEXP, SEXP gSEXP, SEXP aSEXP, SEXP costSEXP, SEXP capSEXP, SEXP floorSEXP, SEXP rsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type units(unitsSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type need(needSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type g(gSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cost(costSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cap(capSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type floor(floorSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_shears_tail_need_cpp(units, need, g, a, cost, cap, floor, rs));
-    return rcpp_result_gen;
-END_RCPP
-}
 // emc_alloc_saturation_cpp
 SEXP emc_alloc_saturation_cpp(SEXP g, SEXP D, SEXP K);
 RcppExport SEXP _EMC2_emc_alloc_saturation_cpp(SEXP gSEXP, SEXP DSEXP, SEXP KSEXP) {
@@ -231,20 +214,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type esjd(esjdSEXP);
     Rcpp::traits::input_parameter< SEXP >::type var(varSEXP);
     rcpp_result_gen = Rcpp::wrap(emc_alloc_rho_cpp(esjd, var));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_tail_rho_cpp
-SEXP emc_alloc_tail_rho_cpp(SEXP n_in, SEXP n_stay, SEXP rho, double q, double n0);
-RcppExport SEXP _EMC2_emc_alloc_tail_rho_cpp(SEXP n_inSEXP, SEXP n_staySEXP, SEXP rhoSEXP, SEXP qSEXP, SEXP n0SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< SEXP >::type n_in(n_inSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type n_stay(n_staySEXP);
-    Rcpp::traits::input_parameter< SEXP >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< double >::type q(qSEXP);
-    Rcpp::traits::input_parameter< double >::type n0(n0SEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_tail_rho_cpp(n_in, n_stay, rho, q, n0));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4862,14 +4831,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_units_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_units_subjects_need_cpp, 3},
     {"_EMC2_emc_alloc_factor_cpp", (DL_FUNC) &_EMC2_emc_alloc_factor_cpp, 3},
     {"_EMC2_emc_alloc_predict_cpp", (DL_FUNC) &_EMC2_emc_alloc_predict_cpp, 5},
-    {"_EMC2_emc_alloc_shears_tail_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_tail_need_cpp, 8},
     {"_EMC2_emc_alloc_saturation_cpp", (DL_FUNC) &_EMC2_emc_alloc_saturation_cpp, 3},
     {"_EMC2_emc_alloc_range_parts_cpp", (DL_FUNC) &_EMC2_emc_alloc_range_parts_cpp, 2},
     {"_EMC2_emc_alloc_within_share_cpp", (DL_FUNC) &_EMC2_emc_alloc_within_share_cpp, 1},
     {"_EMC2_emc_alloc_unit_summary_cpp", (DL_FUNC) &_EMC2_emc_alloc_unit_summary_cpp, 1},
     {"_EMC2_emc_alloc_candidate_cpp", (DL_FUNC) &_EMC2_emc_alloc_candidate_cpp, 7},
     {"_EMC2_emc_alloc_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_rho_cpp, 2},
-    {"_EMC2_emc_alloc_tail_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_tail_rho_cpp, 5},
     {"_EMC2_emc_alloc_lsd_draws_cpp", (DL_FUNC) &_EMC2_emc_alloc_lsd_draws_cpp, 2},
     {"_EMC2_emc_alloc_pool_factors_cpp", (DL_FUNC) &_EMC2_emc_alloc_pool_factors_cpp, 4},
     {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},

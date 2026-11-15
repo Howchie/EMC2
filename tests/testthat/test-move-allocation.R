@@ -1064,28 +1064,3 @@ test_that("a cheaper HMC option within the minimum gain of the best is chosen", 
   expect_identical(EMC2:::.emc_alloc_choose(o), "1")
   expect_identical(EMC2:::.emc_alloc_choose(c(none = Inf, "0" = 9, "1" = 9.5), c(Inf, 4, 6)), "0")
 })
-
-test_that("a log sd's lower tail is priced on its own shear rounds", {
-  # Visits the rest of the iteration always leaves in the tail read as a
-  # sticky tail; none observed reads as the coordinate's own rho.
-  expect_gt(EMC2:::.emc_alloc_tail_rho(200, 198, 0.5), 0.9)
-  expect_equal(EMC2:::.emc_alloc_tail_rho(0, 0, 0.5), 0.5)
-  # A Gaussian coordinate has no deeper tail; a long lower tail does.
-  set.seed(1)
-  z <- stats::rnorm(4000)
-  deep <- ifelse(stats::runif(4000) < 0.03, -abs(stats::rnorm(4000, 6, 3)), z)
-  d <- EMC2:::.emc_alloc_tail_depth(rbind(z, deep), c(0.6, 0.6))
-  expect_equal(unname(d[1]), 0)
-  expect_gt(d[2], 0.6)
-  # The tail needs the coordinate's own rounds whatever lowers its rho.
-  u <- list(kind = "shear", rho = 0.2, g = 0.5, a = 0.5, cost = 1, cap = 4, floor = 0)
-  ut <- c(u, list(rho_t = 0.9))
-  rs <- c(0.5, 0.3)
-  plain <- EMC2:::.emc_alloc_unit_need(u, rs, 4)
-  tail <- EMC2:::.emc_alloc_unit_need(ut, rs, 4)
-  expect_equal(plain$x, c(0, 0))
-  expect_equal(tail$x, c(8 / 9, 5 / 3))
-  expect_equal(EMC2:::.emc_alloc_units_need(list(ut), TRUE, rs, 4)[[1]]$x, tail$x)
-  expect_equal(max(EMC2:::.emc_alloc_level(ut)), 0.9)
-  expect_equal(EMC2:::.emc_alloc_predict(list(ut), list(x = 1, q = 1, joint = NULL))[[1]], 0.45)
-})
