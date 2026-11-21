@@ -8,41 +8,42 @@ make_info <- function(samples, type){
     type = type,
     model = samples$model
   )
-  info <- bridge_add_info(info, samples, type)
-
+  bridge_add_info(info, samples, type)
 }
 
+bridge_eval_proposal <- function(kind, draws, iter_idx, gen_samples, data, m, R, info,
+                                 cores_per_prop, hyper_only, block_size) {
+  n <- length(iter_idx)
+  out <- numeric(n)
+  for (first in seq.int(1L, n, by = block_size)) {
+    rows <- seq.int(first, min(n, first + block_size - 1L))
+    proposals <- switch(kind,
+      posterior = draws[iter_idx[rows], , drop = FALSE],
+      reflected = sweep(-draws[iter_idx[rows], , drop = FALSE], 2L, 2 * m, "+"),
+      negative = sweep(-(gen_samples[rows, , drop = FALSE] %*% R), 2L, m, "+"),
+      positive = sweep(gen_samples[rows, , drop = FALSE] %*% R, 2L, m, "+")
+    )
+    out[rows] <- h.unnormalized.posterior(proposals, data, info, cores_per_prop, hyper_only)
+  }
+  out
+}
 
-
-eval.unnormalized.posterior <- function(samples_iter, gen_samples, data, m, L, info, cores_for_props = 1, cores_per_prop = 1,
-                                        hyper_only = FALSE) {
-
-  ### evaluate unnormalized posterior for posterior and generated samples
-  n_post <- nrow(samples_iter)
-  e <- Brobdingnag::as.brob( exp(1) )
-  twom_min_s <- matrix(2*m, nrow = n_post, ncol = length(m), byrow = TRUE) - samples_iter
-  m_min_gen <- matrix(m, nrow = n_post, ncol = length(m), byrow = TRUE) - gen_samples %*% t(L)
-  m_plus_gen <- matrix(m, nrow = n_post, ncol = length(m), byrow = TRUE) + gen_samples %*% t(L)
-  samples_list <- list(
-    q11.a = samples_iter,
-    q11.b = twom_min_s,
-    q21.a = m_min_gen,
-    q21.b = m_plus_gen
-  )
-  mls <- auto_mclapply(samples_list, h.unnormalized.posterior, data = data, info = info, n_cores = cores_per_prop, hyper_only = hyper_only,
-                  mc.cores = cores_for_props)
-  q11 <- log(e^(mls$q11.a) + e^(mls$q11.b))
-  q21 <- log(e^(mls$q21.a) + e^(mls$q21.b))
-  return(list(q11 = q11, q21 = q21))
-
+eval.unnormalized.posterior <- function(draws, iter_idx, gen_samples, data, m, R, info,
+                                        cores_for_props, cores_per_prop, hyper_only, block_size) {
+  mls <- auto_mclapply(c("posterior", "reflected", "negative", "positive"), bridge_eval_proposal,
+                       draws = draws, iter_idx = iter_idx, gen_samples = gen_samples, data = data,
+                       m = m, R = R, info = info, cores_per_prop = cores_per_prop,
+                       hyper_only = hyper_only, block_size = block_size, mc.cores = cores_for_props)
+  list(q11 = bridge_log_add(mls[[1L]], mls[[2L]]),
+       q21 = bridge_log_add(mls[[3L]], mls[[4L]]))
 }
 
 h.unnormalized.posterior <- function(proposals, data, info, n_cores, hyper_only) {
   n_pars <- info$n_pars
   n_subjects <- info$n_subjects
   proposals_list <- vector("list", length = n_subjects)
-  for(i in 1:n_subjects){
-    tmp <- proposals[,((i-1)*n_pars + 1):(i*n_pars)]
+  for(i in seq_len(n_subjects)){
+    tmp <- proposals[, ((i-1)*n_pars + 1):(i*n_pars), drop = FALSE]
     colnames(tmp) <- info$par_names
     proposals_list[[i]] <- tmp
   }
@@ -51,145 +52,125 @@ h.unnormalized.posterior <- function(proposals, data, info, n_cores, hyper_only)
   } else{
     if(n_cores <= 1) {
       lws <- mapply(calc_ll_manager, proposals_list, data,
-                    MoreArgs = list(model = info$model))
+                    MoreArgs = list(model = info$model), SIMPLIFY = FALSE)
     } else {
       lws <- parallel::mcmapply(.emc_armed(calc_ll_manager), proposals_list, data,
                                 MoreArgs = list(model = info$model),
-                                mc.cores = n_cores)
+                                mc.cores = n_cores, SIMPLIFY = FALSE)
     }
-    lw <- rowSums(lws)
+    lw <- rowSums(do.call(cbind, lws))
   }
-  proposals_group <- proposals[,info$group_idx]
+  proposals_group <- proposals[, info$group_idx, drop = FALSE]
   gr_pr_jac <- bridge_group_and_prior_and_jac(proposals_group, proposals_list, info, info$type)
   return(lw + gr_pr_jac)
 }
 
-run.iterative.scheme <- function(q11, q12, q21, q22, r0, tol,
-                                 criterion, L, silent, maxiter,
-                                 neff) {
-
-  ### run iterative updating scheme (using "optimal" bridge function,
-  ### see Meng & Wong, 1996)
-
-  l1 <- -log(2) + determinant(L)$modulus + q11 - q12 # log(l)
-  l2 <- -log(2) + determinant(L)$modulus + q21 - q22 # log(ltilde)
-
+run.iterative.scheme <- function(l1, l2, log_r0, tol, criterion, silent, maxiter, neff) {
   lstar <- median(l1)
   n.1 <- length(l1)
   n.2 <- length(l2)
+  if (is.null(neff)) neff <- n.1
 
-  if (is.null(neff)) {
-    neff <- n.1
-  }
-
-  s1 <- neff/(neff + n.2)
-  s2 <- n.2/(neff + n.2)
-  r <- r0
-  logml <- log(r) + lstar
-  i <- 1
-
-  r_vals <- r
-  logml_vals <-  logml
-  e <- Brobdingnag::as.brob( exp(1) )
-
+  l1 <- l1 - lstar
+  l2 <- l2 - lstar
+  log_s1 <- log(neff / (neff + n.2))
+  log_s2 <- log(n.2 / (neff + n.2))
+  log_r <- log_r0
+  previous_log_r <- log_r
+  logml <- log_r + lstar
+  i <- 1L
   criterion_val <- 1 + tol
 
   while (criterion_val > tol && i <= maxiter) {
+    if (!silent) cat("Iteration: ", i, "\n", sep = "")
+    previous_log_r <- log_r
+    previous_logml <- logml
+    log_r <- bridge_update(l1, l2, log_s1, log_s2 + log_r)
+    logml <- log_r + lstar
+    i <- i + 1L
 
-    if (! silent) {
-      cat(paste0("Iteration: ", i, "\n"))
-    }
-
-    rold <- r
-    logmlold <- logml
-    numi <- as.numeric( e^(l2 - lstar)/(s1 * e^(l2 - lstar) + s2 *  r) )
-    deni <- as.numeric( 1/(s1 * e^(l1 - lstar) + s2 * r) )
-    r <- (n.1/n.2) * sum(numi)/sum(deni)
-    logml <- log(r) + lstar
-    r_vals <- c(r_vals, r)
-    logml_vals <- c(logml_vals, logml)
-    i <- i + 1
-
-    criterion_val <- switch(criterion, "r" = abs((r - rold)/r),
-                            "logml" = abs((logml - logmlold)/logml))
-    if(is.na(criterion_val)) break
-
+    criterion_val <- switch(criterion,
+      r = abs(expm1(previous_log_r - log_r)),
+      logml = abs((logml - previous_logml) / logml)
+    )
+    if (is.na(criterion_val)) break
   }
 
-  if (i > maxiter || is.na(criterion_val)) {
-    logml <- NA
-  }
-
-  return(list(logml = logml, niter = i - 1, r_vals = r_vals,
-              logml_vals = logml_vals, tol = tol, neff = neff,
-              criterion = criterion, maxiter = maxiter))
-
+  if (i > maxiter || is.na(criterion_val)) logml <- NA_real_
+  list(logml = logml, restart = (previous_log_r + log_r) / 2)
 }
 
-bridge_sampling <- function(samples, n_eff, split_idx, cores_for_props = 1, cores_per_prop = 1, maxiter = 5000,
-                            stage = "sample", r0 = 1e-5, tol1 = 1e-10, tol2 = 1e-6, hyper_only = FALSE){
-  if(Sys.info()[1] == "Windows" & cores_per_prop > 1) stop("only cores_for_props can be set on Windows")
-  type <- samples$type
-  data <- samples$data
-  info <- make_info(samples, type)
-  n_pars <- samples$n_pars
-  n_subjects <- samples$n_subjects
-  idx <- samples$samples$stage == stage
-  all_samples <- matrix(NA_real_, nrow = sum(idx), ncol = n_pars * n_subjects)
-  for(i in 1:n_subjects){
-    all_samples[,((i-1)*n_pars + 1):(i*n_pars)] <- t(samples$samples$alpha[,i,idx])
+bridge_draws <- function(emc, stage, info) {
+  samples <- emc[[1L]]
+  stage_idx <- lapply(emc, function(chain) which(chain$samples$stage %in% stage))
+  n <- sum(lengths(stage_idx))
+  p <- info$n_pars
+  draws <- matrix(NA_real_, n, p * info$n_subjects + length(info$group_idx))
+  offset <- 0L
+  for (chain in seq_along(emc)) {
+    idx <- stage_idx[[chain]]
+    if (!length(idx)) next
+    samples$samples <- emc[[chain]]$samples
+    rows <- offset + seq_along(idx)
+    for (subject in seq_len(info$n_subjects)) {
+      cols <- (subject - 1L) * p + seq_len(p)
+      alpha <- samples$samples$alpha[, subject, idx, drop = FALSE]
+      draws[rows, cols] <- t(matrix(alpha, nrow = p))
+    }
+    if (length(info$group_idx)) {
+      group <- bridge_add_group(matrix(numeric(), length(idx), 0L), samples, idx, samples$type)
+      draws[rows, info$group_idx] <- group
+    }
+    offset <- offset + length(idx)
   }
-  all_samples <- bridge_add_group(all_samples, samples, idx, type)
-  samples_fit <- all_samples[split_idx,]
-  samples_iter <- all_samples[-split_idx,]
-  if(nrow(samples_fit) != nrow(samples_iter)){
-    samples_fit <- samples_fit[1:nrow(samples_iter),]
-  }
+  draws
+}
 
-  m <- colMeans(samples_fit)
-  V <- as.matrix(Matrix::nearPD(var(samples_fit))$mat)
-  L <- t(chol(V))
-  gen_samples <- mvtnorm::rmvnorm(nrow(samples_fit), mean = rep(0, ncol(samples_fit)), sigma = diag(ncol(samples_fit)))
-  q12_input <- (samples_iter - matrix(m, nrow = nrow(samples_iter),
-                                      ncol = length(m),
-                                      byrow = TRUE)) %*%t(solve(L))
-  if(hyper_only){
-    q12 <- dmvnorm(q12_input[,info$group_idx],  mean = rep(0, length(info$group_idx)), sigma = diag(length(info$group_idx)), log = TRUE)
-    q22 <- dmvnorm(gen_samples[,info$group_idx], mean = rep(0, length(info$group_idx)), sigma = diag(length(info$group_idx)), log = TRUE)
-  } else{
-    q12 <- dmvnorm(q12_input,  mean = rep(0, ncol(samples_iter)), sigma = diag(ncol(samples_iter)), log = TRUE)
-    q22 <- dmvnorm(gen_samples, mean = rep(0, ncol(samples_fit)), sigma = diag(ncol(samples_fit)), log = TRUE)
-  }
+bridge_fit <- function(draws, fit_idx) {
+  fit <- draws[fit_idx, , drop = FALSE]
+  list(mean = colMeans(fit), chol = chol(Matrix::nearPD(var(fit), base.matrix = TRUE)$mat))
+}
 
-  qList <- eval.unnormalized.posterior(samples_iter = samples_iter, gen_samples = gen_samples,
-                                       data = data, m = m, L =L, info = info, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
-                                       hyper_only = hyper_only)
+bridge_sampling <- function(draws, data, info, n_eff, split_idx, fit,
+                            cores_for_props, cores_per_prop, maxiter, r0, tol1, tol2, hyper_only) {
+  m <- fit$mean
+  R <- fit$chol
+  iter_idx <- seq_len(nrow(draws))[-split_idx]
+  n_iter <- length(iter_idx)
+  p <- ncol(draws)
+  gen_samples <- matrix(NA_real_, n_iter, p)
 
-  q11 <- qList$q11
-  q21 <- qList$q21
-  # save(q11, q12, q22, q21, L, m, file = "Qs.RData")
-  tmp <- run.iterative.scheme(q11 = q11, q12 = q12, q21 = q21,
-                              q22 = q22, r0 = r0, tol = tol1,
-                              L = L, silent = T,
-                              maxiter = maxiter, neff = n_eff,
-                              criterion = "r")
-  if (is.na(tmp$logml)) {
-    lr <- length(tmp$r_vals)
-    # use geometric mean as starting value
-    r0_2 <- sqrt(tmp$r_vals[lr - 1]*tmp$r_vals[lr])
-    tmp <- run.iterative.scheme(q11 = q11, q12 = q12, q21 = q21,
-                                q22 = q22, r0 = r0_2, tol = tol2,
-                                L = L, silent = T,
-                                maxiter = maxiter, neff = n_eff,
-                                criterion = "logml")
+  # Cap the size of temporary proposal and whitening matrices per worker.
+  block_size <- max(1L, floor(2^21 / p))
+  q12 <- q22 <- numeric(n_iter)
+  density_cols <- if (hyper_only) info$group_idx else seq_len(p)
+  log_const <- -0.5 * length(density_cols) * log(2 * pi)
+  for (first in seq.int(1L, n_iter, by = block_size)) {
+    rows <- seq.int(first, min(n_iter, first + block_size - 1L))
+    generated <- matrix(rnorm(as.double(length(rows)) * p), length(rows), byrow = TRUE)
+    gen_samples[rows, ] <- generated
+    centered <- sweep(draws[iter_idx[rows], , drop = FALSE], 2L, m, "-")
+    standard <- backsolve(R, t(centered), transpose = TRUE)
+    q12[rows] <- log_const - 0.5 * colSums(standard[density_cols, , drop = FALSE]^2)
+    q22[rows] <- log_const - 0.5 * rowSums(generated[, density_cols, drop = FALSE]^2)
   }
 
-  if(is.na(tmp$logml)){
+  rm(centered, standard, generated)
+  q <- eval.unnormalized.posterior(draws, iter_idx, gen_samples, data, m, R, info,
+                                   cores_for_props, cores_per_prop, hyper_only, block_size)
+  log_scale <- sum(log(diag(R))) - log(2)
+  l1 <- log_scale + q$q11 - q12
+  l2 <- log_scale + q$q21 - q22
+  result <- run.iterative.scheme(l1, l2, log(r0), tol1, "r", TRUE, maxiter, n_eff)
+  if (is.na(result$logml)) {
+    result <- run.iterative.scheme(l1, l2, result$restart, tol2, "logml", TRUE, maxiter, n_eff)
+  }
+
+  if (is.na(result$logml)) {
     stop("Bridge sampling did not converge, usually this means you need to fit longer to get more samples")
   }
-  return(tmp$logml)
+  result$logml
 }
-
 
 #' Estimating Marginal Likelihoods Using WARP-III Bridge Sampling
 #'
@@ -260,27 +241,32 @@ run_bridge_sampling <- function(emc, stage = "sample", filter = NULL, repetition
   }
   emc <-subset(emc, filter = filter, stage = stage)
   n_eff <- round(ess_summary(emc, selection = "alpha", stat = "median", stat_only = TRUE, stage = stage, filter = filter)/2)
-  samples <- merge_chains(emc)
-  idx <- samples$samples$stage == stage
+  if (.Platform$OS.type == "windows" && cores_per_prop > 1)
+    stop("only cores_for_props can be set on Windows")
+  info <- make_info(emc[[1L]], emc[[1L]]$type)
+  data <- emc[[1L]]$data
+  draws <- bridge_draws(emc, stage, info)
+  rm(emc)
+  n <- nrow(draws)
+  if (!repetitions) return(numeric())
+  if (n < 4L) stop("Bridge sampling requires at least four draws from the chosen stage")
+  split1 <- if (both_splits) seq_len(round(n / 2)) else seq.int(1L, n, by = 2L)
+  split2 <- if (both_splits) seq.int(length(split1) + 1L, n)
+  fit_idx <- if (both_splits) split1 else head(split1, n - length(split1))
+  fit1 <- bridge_fit(draws, fit_idx)
   mls <- numeric(repetitions)
-  for(i in 1:repetitions){
-    if(both_splits){
-      split1 <- seq(1, round(sum(idx)/2))
-      s1 <- bridge_sampling(samples, n_eff, split1, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
-                            maxiter = maxiter, stage = stage,
-                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
-      split2 <- seq(round(sum(idx)/2 + 1) : sum(idx))
-      s2 <- bridge_sampling(samples, n_eff, split2, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
-                            maxiter = maxiter, stage = stage,
-                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
-      if(abs(s1 - s2) > 1) warning("First split and second split marginal likelihood estimates are off by 1 log point. \n This usually means that your MCMC chains aren't completely stable yet. \n Consider running the MCMC chain longer if you need more precise estimates (e.g. when comparing different priors)")
-      mls[i] <- mean(c(s1, s2))
-    } else{
-      split_idx <- seq(1, sum(idx), by = 2)
-      mls[i] <- bridge_sampling(samples, n_eff, split_idx, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
-                                maxiter = maxiter, stage = stage,
-                                r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
+  for (i in seq_len(repetitions)) {
+    s1 <- bridge_sampling(draws, data, info, n_eff, split1, fit1, cores_for_props, cores_per_prop,
+                          maxiter, r0, tol1, tol2, hyper_only)
+    if (both_splits) {
+      fit2 <- bridge_fit(draws, split2)
+      s2 <- bridge_sampling(draws, data, info, n_eff, split2, fit2, cores_for_props, cores_per_prop,
+                            maxiter, r0, tol1, tol2, hyper_only)
+      rm(fit2)
+      if (abs(s1 - s2) > 1) warning("First split and second split marginal likelihood estimates are off by 1 log point. \n This usually means that your MCMC chains aren't completely stable yet. \n Consider running the MCMC chain longer if you need more precise estimates (e.g. when comparing different priors)")
+      s1 <- mean(c(s1, s2))
     }
+    mls[i] <- s1
   }
-  return(mls)
+  mls
 }

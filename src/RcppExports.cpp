@@ -359,6 +359,42 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// bridge_diwish
+double bridge_diwish(const arma::mat& W, double v, const arma::mat& S);
+RcppExport SEXP _EMC2_bridge_diwish(SEXP WSEXP, SEXP vSEXP, SEXP SSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type W(WSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type S(SSEXP);
+    rcpp_result_gen = Rcpp::wrap(bridge_diwish(W, v, S));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bridge_log_add
+Rcpp::NumericVector bridge_log_add(const Rcpp::NumericVector& a, const Rcpp::NumericVector& b);
+RcppExport SEXP _EMC2_bridge_log_add(SEXP aSEXP, SEXP bSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type b(bSEXP);
+    rcpp_result_gen = Rcpp::wrap(bridge_log_add(a, b));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bridge_update
+double bridge_update(const Rcpp::NumericVector& l1, const Rcpp::NumericVector& l2, double log_s1, double log_s2_r);
+RcppExport SEXP _EMC2_bridge_update(SEXP l1SEXP, SEXP l2SEXP, SEXP log_s1SEXP, SEXP log_s2_rSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type l1(l1SEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type l2(l2SEXP);
+    Rcpp::traits::input_parameter< double >::type log_s1(log_s1SEXP);
+    Rcpp::traits::input_parameter< double >::type log_s2_r(log_s2_rSEXP);
+    rcpp_result_gen = Rcpp::wrap(bridge_update(l1, l2, log_s1, log_s2_r));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_claim_open
 SEXP emc_claim_open(std::string path);
 RcppExport SEXP _EMC2_emc_claim_open(SEXP pathSEXP) {
@@ -4858,6 +4894,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_hmc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_hmc_record_tasks_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
+    {"_EMC2_bridge_diwish", (DL_FUNC) &_EMC2_bridge_diwish, 3},
+    {"_EMC2_bridge_log_add", (DL_FUNC) &_EMC2_bridge_log_add, 2},
+    {"_EMC2_bridge_update", (DL_FUNC) &_EMC2_bridge_update, 4},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},
     {"_EMC2_emc_claim_reset", (DL_FUNC) &_EMC2_emc_claim_reset, 2},
     {"_EMC2_emc_claim_next", (DL_FUNC) &_EMC2_emc_claim_next, 3},

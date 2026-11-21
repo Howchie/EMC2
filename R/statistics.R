@@ -504,6 +504,10 @@ add_pw_ll_chain <- function(chain) {
 robust_diwish <- function (W, v, S) { # Stabilize non-positive-definite proposals.
   if (!is.matrix(S)) S <- matrix(S)
   if (!is.matrix(W)) W <- matrix(W)
+  if (length(v) == 1L) {
+    density <- bridge_diwish(W, v, S)
+    if (!is.na(density)) return(density)
+  }
   p <- nrow(S)
   gammapart <- sum(lgamma((v + 1 - 1:p)/2))
   ldenom <- gammapart + 0.5 * v * p * log(2) + 0.25 * p * (p - 1) * log(pi)

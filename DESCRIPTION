@@ -80,7 +80,6 @@ Imports:
     stats,
     Matrix,
     Rcpp,
-    Brobdingnag,
     corrplot,
     colorspace,
     psych,

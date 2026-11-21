@@ -422,9 +422,9 @@ bridge_add_info_factor <- function(info, samples){
 
 bridge_add_group_factor <- function(all_samples, samples, idx){
   Lambda_mat <- attr(samples, "Lambda_mat")
-  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[,idx]))
+  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[, idx, drop = FALSE]))
   all_samples <- cbind(all_samples, t(matrix(apply(samples$samples$lambda_untransf[,,idx,drop = F], 3, unwind_lambda, Lambda_mat), ncol = nrow(all_samples))))
-  all_samples <- cbind(all_samples, t(log(samples$samples$epsilon_inv[,idx])))
+  all_samples <- cbind(all_samples, t(log(samples$samples$epsilon_inv[, idx, drop = FALSE])))
   all_samples <- cbind(all_samples, t(log(samples$samples$psi_inv[,idx, drop = F])))
   return(all_samples)
 }
@@ -432,9 +432,9 @@ bridge_add_group_factor <- function(all_samples, samples, idx){
 bridge_group_and_prior_and_jac_factor <- function(proposals_group, proposals_list, info){
   prior <- info$prior
   proposals <- do.call(cbind, proposals_list)
-  theta_mu <- proposals_group[,1:info$n_pars]
-  lambda <- proposals_group[,(info$n_pars +1):(info$n_pars + sum(info$Lambda_mat == Inf))]
-  theta_epsilon_inv <- proposals_group[,(1 + info$n_pars + sum(info$Lambda_mat == Inf)): (info$n_pars + sum(info$Lambda_mat == Inf) + info$n_pars)]
+  theta_mu <- proposals_group[, seq_len(info$n_pars), drop = FALSE]
+  lambda <- proposals_group[, (info$n_pars + 1):(info$n_pars + sum(info$Lambda_mat == Inf)), drop = FALSE]
+  theta_epsilon_inv <- proposals_group[,(1 + info$n_pars + sum(info$Lambda_mat == Inf)): (info$n_pars + sum(info$Lambda_mat == Inf) + info$n_pars), drop = FALSE]
   psi_inv <- proposals_group[,(1 + info$n_pars + sum(info$Lambda_mat == Inf) + info$n_pars):
                                      (info$n_pars + sum(info$Lambda_mat == Inf) + info$n_pars + info$n_factors), drop = F]
 

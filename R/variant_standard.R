@@ -707,7 +707,7 @@ bridge_add_info_standard <- function(info, samples){
   # blocked parameters here therefore overstates the number of columns when
   # there is more than one blocked group (e.g. groups 1, 2, and 3).  The
   # resulting indices point past the proposal matrix and bridge sampling then
-  # fails downstream with opaque subscript/Brobdingnag errors.
+  # fails downstream with subscript errors.
   info$group_idx <- (samples$n_pars*samples$n_subjects + 1):
     (samples$n_pars*samples$n_subjects + n_total_pars + samples$n_pars +
        sum(!has_cov) +
@@ -721,8 +721,8 @@ bridge_add_info_standard <- function(info, samples){
 
 bridge_add_group_standard <- function(all_samples, samples, idx){
   # Add theta_mu (now includes all parameters)
-  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[,idx]))
-  all_samples <- cbind(all_samples, t(log(samples$samples$a_half[,idx])))
+  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[, idx, drop = FALSE]))
+  all_samples <- cbind(all_samples, t(log(samples$samples$a_half[, idx, drop = FALSE])))
 
   # Handle variance matrices
   par_group <- samples$par_group

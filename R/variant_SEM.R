@@ -939,13 +939,13 @@ bridge_add_group_SEM <- function(all_samples, samples, idx){
   G_mat <- sem_settings$G_mat
   factor_groups_bs_add <- sem_settings$factor_groups
 
-  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[,idx]))
+  all_samples <- cbind(all_samples, t(samples$samples$theta_mu[, idx, drop = FALSE]))
   all_samples <- cbind(all_samples, t(matrix(apply(samples$samples$lambda[,,idx,drop = F], 3, unwind_lambda, Lambda_mat), ncol = nrow(all_samples))))
   all_samples <- cbind(all_samples, t(matrix(apply(samples$samples$B[,,idx,drop = F], 3, unwind_lambda, B_mat), ncol = nrow(all_samples))))
   all_samples <- cbind(all_samples, t(matrix(apply(samples$samples$K[,,idx,drop = F], 3, unwind_lambda, K_mat), ncol = nrow(all_samples))))
   all_samples <- cbind(all_samples, t(matrix(apply(samples$samples$G[,,idx,drop = F], 3, unwind_lambda, G_mat), ncol = nrow(all_samples))))
 
-  all_samples <- cbind(all_samples, t(log(samples$samples$epsilon_inv[,idx])))
+  all_samples <- cbind(all_samples, t(log(samples$samples$epsilon_inv[, idx, drop = FALSE])))
 
   if (is.null(factor_groups_bs_add)) {
       factor_groups_bs_add <- 1:samples$n_factors
