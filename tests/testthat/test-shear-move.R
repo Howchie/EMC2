@@ -1154,3 +1154,272 @@ test_that("rebuilt mean directions inherit the old directions' records by their 
   expect_equal(rowSums(cw$w)[1:p], rep(0, p))
   expect_equal(cw$w[sd_k, sd_k], diag(p))
 })
+
+# An arbitrary curve for n subjects of p parameters: K knots of row' mu around
+# `centre`, with unrelated positive-definite precisions and linear terms at
+# each, so that nothing but the map's own construction makes a move valid.
+arbitrary_curve <- function(p, n, row, centre, width, K = 3L, seed = 13) {
+  set.seed(seed)
+  cube <- array(0, c(p, p, n, K))
+  lin <- array(rnorm(p * n * K), c(p, n, K))
+  for (s in seq_len(n)) for (q in seq_len(K)) {
+    A <- matrix(rnorm(p * p), p)
+    cube[, , s, q] <- crossprod(A) * q / 2 + diag(0.2 * q, p)
+  }
+  list(row = row, knots = centre + width * seq(-1, 1, length.out = K), cube = cube, lin = lin)
+}
+
+test_that("a curve's fits are the knots' at the knots, between them in between, and held beyond", {
+  p <- 3L; n <- 2L
+  cv <- arbitrary_curve(p, n, row = c(1, -0.5, 0.25), centre = 0.3, width = 1)
+  at <- function(c) EMC2:::emc_shear_curve_fits_cpp(c(c, 0, 0), cv, n)
+  for (q in 1:3) {
+    f <- at(cv$knots[q])
+    expect_equal(f$cube, cv$cube[, , , q], tolerance = 1e-14)
+    expect_equal(f$lin, cv$lin[, , q], tolerance = 1e-14)
+  }
+  mid <- at(cv$knots[2] + 0.25 * diff(cv$knots[2:3]))
+  expect_equal(mid$cube, 0.75 * cv$cube[, , , 2] + 0.25 * cv$cube[, , , 3], tolerance = 1e-13)
+  expect_equal(mid$lin, 0.75 * cv$lin[, , 2] + 0.25 * cv$lin[, , 3], tolerance = 1e-13)
+  expect_equal(at(cv$knots[1] - 5)$cube, cv$cube[, , , 1])
+  expect_equal(at(cv$knots[3] + 5)$lin, cv$lin[, , 3])
+  # The coordinate is row' mu, whatever the rest of mu.
+  expect_equal(EMC2:::emc_shear_curve_fits_cpp(c(0.3, 2, 4), cv, n), at(0.3), tolerance = 1e-13)
+  expect_error(EMC2:::emc_shear_curve_fits_cpp(c(0, 0, 0), replace(cv, "knots", list(c(1, 1, 2))), n))
+})
+
+test_that("the shear map with curved frames inverts, composes and has the stated Jacobian", {
+  for (type in c("standard", "diagonal-gamma")) {
+    f <- shear_fixture(type)
+    p <- length(f$mu); n <- ncol(f$alpha)
+    prior <- f$sampler$prior; spec <- f$ctx$spec
+    fits <- EMC2:::.emc_shear_pack(f$ctx$fits, p)
+    row <- c(0.7, -0.4, 0.2)
+    fits$curve <- arbitrary_curve(p, n, row, centre = sum(row * f$mu) + 0.05, width = 0.6)
+    state <- function(mu, V) EMC2:::.emc_shear_state(mu, V, fits, prior, spec)
+    cur <- state(f$mu, f$V)
+    # The step moves the curve's coordinate, so the frames differ at its ends.
+    expect_true(EMC2:::.emc_shear_curve_moves(fits, f$u[seq_len(p)]))
+    fwd <- EMC2:::.emc_shear_propose(cur, f$u, f$alpha, fits, prior, spec)
+    back <- EMC2:::.emc_shear_propose(fwd$state, -f$u, fwd$alpha, fits, prior, spec)
+    expect_equal(back$alpha, f$alpha, tolerance = 1e-9)
+    expect_equal(back$state$mu, f$mu, tolerance = 1e-12)
+    expect_equal(back$log_jac, -fwd$log_jac, tolerance = 1e-9)
+    free <- which(upper.tri(f$V, diag = TRUE) & f$V != 0, arr.ind = TRUE)
+    pack <- function(mu, V, alpha) c(mu, V[free], alpha)
+    unpack <- function(x) {
+      V <- matrix(0, p, p); V[free] <- x[p + seq_len(nrow(free))]
+      V[free[, 2:1, drop = FALSE]] <- x[p + seq_len(nrow(free))]
+      list(mu = x[seq_len(p)], V = V, alpha = matrix(x[-seq_len(p + nrow(free))], p))
+    }
+    map <- function(x, u) {
+      s <- unpack(x)
+      out <- EMC2:::.emc_shear_propose(state(s$mu, s$V), u, s$alpha, fits, prior, spec)
+      pack(out$state$mu, out$state$V, out$alpha)
+    }
+    x0 <- pack(f$mu, f$V, f$alpha)
+    h <- 1e-6
+    jacobian <- function(u) vapply(seq_along(x0), function(i) {
+      e <- replace(numeric(length(x0)), i, h)
+      (map(x0 + e, u) - map(x0 - e, u)) / (2 * h)
+    }, numeric(length(x0)))
+    expect_equal(as.numeric(determinant(jacobian(f$u))$modulus), fwd$log_jac, tolerance = 1e-5)
+    # A mean step along the curve changes the frames: its Jacobian is not 1,
+    # and it is the frames' determinant ratio.
+    u_mu <- replace(f$u, p + seq_len(p), 0)
+    mean_step <- EMC2:::.emc_shear_propose(cur, u_mu, f$alpha, fits, prior, spec)
+    expect_gt(abs(mean_step$log_jac), 1e-3)
+    expect_equal(mean_step$log_jac, cur$logdet - mean_step$state$logdet, tolerance = 1e-10)
+    expect_equal(as.numeric(determinant(jacobian(u_mu))$modulus), mean_step$log_jac,
+                 tolerance = 1e-5)
+    full <- state(f$mu + u_mu[seq_len(p)], f$V)
+    expect_equal(mean_step$state$fm$m, full$fm$m, tolerance = 1e-10)
+    # A mean step that keeps the coordinate is the plain shift at the
+    # current fits.
+    flat <- c(0.4, 0.7, 0)
+    expect_false(EMC2:::.emc_shear_curve_moves(fits, flat))
+    flat_step <- EMC2:::.emc_shear_propose(cur, c(flat, 0, 0, 0), f$alpha, fits, prior, spec)
+    expect_identical(flat_step$log_jac, 0)
+    expect_equal(flat_step$state$fm$m, state(f$mu + flat, f$V)$fm$m, tolerance = 1e-10)
+    # Maps compose across the knots.
+    v <- c(-0.3, 0.25, 0.5, -0.2, 0.1, 0.3)
+    two <- EMC2:::.emc_shear_propose(fwd$state, v, fwd$alpha, fits, prior, spec)
+    one <- EMC2:::.emc_shear_propose(cur, f$u + v, f$alpha, fits, prior, spec)
+    expect_equal(two$alpha, one$alpha, tolerance = 1e-9)
+    expect_equal(fwd$log_jac + two$log_jac, one$log_jac, tolerance = 1e-9)
+  }
+})
+
+test_that("the shear move with curved frames leaves the joint posterior invariant", {
+  local_test_rng(kind = "Mersenne-Twister")
+  N <- 4000
+  h <- diag_hierarchy_draws(N)
+  p <- h$p; n <- h$n; y <- h$y; Si <- h$Si
+  local_mocked_bindings(calc_ll_manager = function(proposals, dadm, ...) h$ll(proposals, dadm),
+                        .package = "EMC2")
+  pn <- c("x1", "x2")
+  lik <- lapply(seq_len(n), function(s)
+    list(prec = Si, lin = drop(Si %*% y[, s]), check = ok_check))
+  plan <- EMC2:::.emc_shear_plan(lik, h$prior, diag(exp(2 * colMeans(h$lsd))))
+  plan <- shear_ready(plan, n, 2)
+  row <- solve(plan$dirs)[1, ]
+  centre <- mean(h$mu %*% row); width <- 2 * sd(h$mu %*% row)
+  # The exact fits bent along the first mean direction, an unrelated curve,
+  # and a broken control that drops the frames' Jacobian, which must fail.
+  bent <- arbitrary_curve(p, n, row, centre, width)
+  for (s in seq_len(n)) for (q in 1:3) {
+    bent$cube[, , s, q] <- Si * c(0.4, 1, 2.5)[q]
+    bent$lin[, s, q] <- drop(bent$cube[, , s, q] %*% (y[, s] + c(-0.6, 0, 0.8)[q]))
+  }
+  runs <- list(list(curve = bent), list(curve = arbitrary_curve(p, n, row, centre, width)),
+               list(curve = bent, broken = TRUE))
+  moved <- numeric(length(runs))
+  for (r in seq_along(runs)) {
+    run <- runs[[r]]
+    if (isTRUE(run$broken)) {
+      candidates <- EMC2:::.emc_shear_candidates
+      local_mocked_bindings(.emc_shear_candidates = function(...) {
+        lapply(candidates(...), function(out) {
+          if (!is.null(out)) out$log_jac <- 0
+          out
+        })
+      }, .package = "EMC2")
+    }
+    sampler <- list(type = "diagonal-gamma", nuisance = rep(FALSE, p), n_subjects = n,
+                    n_pars = p, par_names = pn, data = lapply(seq_len(n), function(s) y[, s]),
+                    model = NULL, prior = h$prior, lik_laplace = lik, rng = list(),
+                    shear = list(plan = plan, curve = run$curve))
+    expect_false(is.null(EMC2:::.emc_shear_context(sampler)$packed$curve))
+    set.seed(5)
+    after <- t(vapply(seq_len(N), function(i) {
+      V <- diag(exp(2 * h$lsd[i, ]))
+      al <- matrix(h$a[i, , ], p, dimnames = list(pn, NULL))
+      ll <- vapply(seq_len(n), function(s) -0.5 * sum((al[, s] - y[, s])^2 / h$S), 0)
+      out <- EMC2:::.emc_shear_move(sampler, list(tmu = setNames(h$mu[i, ], pn), tvar = V,
+                                                  tvinv = solve(V)),
+                                    rbind(al, ll), "sample")
+      c(out$pars$tmu, 0.5 * log(diag(out$pars$tvar)), out$proposals[1:p, ])
+    }, numeric(2 * p + p * n)))
+    moved[r] <- mean(after[, 1] != h$before[, 1])
+    se <- apply(h$before, 2, sd) / sqrt(N)
+    z_mean <- abs(colMeans(after) - colMeans(h$before)) / se
+    z_var <- abs(apply(after, 2, var) / apply(h$before, 2, var) - 1) / sqrt(2 / N)
+    if (isTRUE(run$broken)) {
+      expect_gt(max(z_mean, z_var), 6)
+    } else {
+      expect_true(all(z_mean < 4.5))
+      expect_true(all(z_var < 4.5))
+    }
+  }
+  expect_true(all(moved[1:2] > 0.1))
+})
+
+test_that("a curve is asked for only where measured rounds do not move a slow coordinate", {
+  set.seed(3)
+  p <- 3L
+  plan <- list(dirs = diag(p), last = list(E = c(0.02, 1.5, 0.02, 0, 0, 0),
+                                           n = c(40, 40, 5, 0, 0, 0)))
+  ar1 <- function(rho, n = 400) as.numeric(stats::filter(rnorm(n), rho, "recursive"))
+  cs <- rbind(ar1(0.97), ar1(0.97), ar1(0.97))
+  wvar <- apply(cs, 1, var)
+  plan$last$E[1:3] <- plan$last$E[1:3] * wvar * plan$last$n[1:3]
+  out <- EMC2:::.emc_shear_curve_slow(plan, cs, wvar)
+  # 1: slow and its rounds small; 2: slow but its rounds move it; 3: too few
+  # rounds to say.
+  expect_identical(out$slow, c(TRUE, FALSE, FALSE))
+  # Rounds that do not move a coordinate that mixes anyway ask for nothing.
+  fast <- EMC2:::.emc_shear_curve_slow(plan, rbind(ar1(0.2), cs[2:3, ]), wvar)
+  expect_false(fast$slow[1])
+  # No record, or a window too short to measure, asks for nothing.
+  expect_false(any(EMC2:::.emc_shear_curve_slow(plan, cs[, 1:20], wvar)$slow))
+  expect_false(any(EMC2:::.emc_shear_curve_slow(replace(plan, "last", list(NULL)), cs, wvar)$slow))
+})
+
+test_that("a curve is reused while it covers the window", {
+  cv <- list(knots = 2 + 0.5 * EMC2:::.EMC_SHEAR_CURVE_KNOTS)
+  set.seed(4)
+  z <- rnorm(300)
+  expect_true(EMC2:::.emc_shear_curve_covers(cv, 2 + 0.5 * z))
+  expect_true(EMC2:::.emc_shear_curve_covers(cv, 2.5 + 0.4 * z))
+  expect_false(EMC2:::.emc_shear_curve_covers(cv, 3.2 + 0.5 * z))
+  expect_false(EMC2:::.emc_shear_curve_covers(cv, 2 + 1.5 * z))
+  expect_false(EMC2:::.emc_shear_curve_covers(cv, 2 + 0.1 * z))
+})
+
+test_that("a coordinate that changes kernel starts its record afresh", {
+  p <- 2L
+  rec <- list(E = 1:4 + 0, n = 5:8 + 0, moved = 1:4 + 0, N = 1:4 + 0, iters = rep(50, 4),
+              K = matrix(1, 4, 3))
+  plan <- list(pool = rec, last = rec, log_step = rep(0.3, 4))
+  out <- EMC2:::.emc_shear_restart_coord(plan, 2L, 0.4)
+  for (nm in c("pool", "last")) {
+    expect_identical(out[[nm]]$n, c(5, 0, 7, 8))
+    expect_identical(out[[nm]]$E, c(1, 0, 3, 4))
+    expect_identical(out[[nm]]$K[2, ], numeric(3))
+    expect_identical(out[[nm]]$K[-2, ], rec$K[-2, ])
+  }
+  expect_equal(out$log_step, c(0.3, log(EMC2:::.EMC_SHEAR_STEP0 * 0.4), 0.3, 0.3))
+  expect_identical(EMC2:::.emc_shear_restart_coord(plan, 2L)$log_step, plan$log_step)
+})
+
+test_that("a pinned direction keeps its coordinate and leaves a basis", {
+  set.seed(8)
+  p <- 4L
+  D <- matrix(rnorm(p * p), p) + diag(2, p)
+  row <- rnorm(p); dir <- rnorm(p)
+  out <- EMC2:::.emc_shear_pin_dir(D, 2L, dir, row)
+  # Row 2 of the inverse is the coordinate, and direction 2 moves it by one.
+  expect_equal(solve(out)[2, ], row, tolerance = 1e-10)
+  expect_equal(out[, 2], dir / sum(row * dir), tolerance = 1e-12)
+  # The other directions lose only their part along the coordinate.
+  expect_equal(drop(row %*% out[, -2]), numeric(p - 1), tolerance = 1e-12)
+  expect_equal(out[, -2] + outer(out[, 2], drop(row %*% D[, -2])), D[, -2], tolerance = 1e-12)
+  # Pinning a plan's own direction and coordinate changes nothing.
+  expect_equal(EMC2:::.emc_shear_pin_dir(D, 3L, D[, 3], solve(D)[3, ]), D, tolerance = 1e-10)
+  # A direction that does not move the coordinate cannot be pinned.
+  flat <- dir - row * sum(row * dir) / sum(row^2)
+  expect_null(EMC2:::.emc_shear_pin_dir(D, 2L, flat, row))
+  expect_null(EMC2:::.emc_shear_pin_dir(D, 2L, dir[-1], row))
+})
+
+test_that("a curve's direction is the one the group mean covaries along", {
+  set.seed(9)
+  p <- 3L
+  S <- crossprod(matrix(rnorm(p * p), p)) + diag(0.5, p)
+  chains <- lapply(1:3, function(i) list(samples = list(
+    theta_mu = t(MASS::mvrnorm(4000, rnorm(p, 0, 5), S)))))
+  row <- c(1, -0.5, 0.2)
+  u <- EMC2:::.emc_shear_curve_dir(chains, 1:4000, row, fallback = c(9, 9, 9))
+  # Within chains, whatever their offsets: S row' scaled to move the
+  # coordinate by one, along which the coordinate's line has its full width.
+  expect_equal(u, drop(S %*% row) / drop(row %*% S %*% row), tolerance = 0.08)
+  expect_equal(sum(row * u), 1, tolerance = 1e-12)
+  expect_equal(1 / drop(u %*% solve(S) %*% u), drop(row %*% S %*% row), tolerance = 0.1)
+  # No usable window: the fallback.
+  one <- lapply(chains, function(ch) { ch$samples$theta_mu[] <- 1; ch })
+  expect_identical(EMC2:::.emc_shear_curve_dir(one, 1:10, row, fallback = c(9, 9, 9)), c(9, 9, 9))
+})
+
+test_that("a chain without a curve tries another chain's coordinate first", {
+  set.seed(10)
+  p <- 4L
+  D <- matrix(rnorm(p * p), p) + diag(3, p)
+  chain <- function(dirs, row = NULL) list(shear = list(
+    plan = list(dirs = dirs), curve = if (!is.null(row)) list(row = row)))
+  # Chain 2 holds a curve on what is nearly chain 1's coordinate 3.
+  near <- solve(D)[3, ] + rnorm(p, 0, 0.02)
+  emc <- list(chain(D), chain(D[, c(3, 1, 2, 4)], near), chain(D))
+  expect_identical(EMC2:::.emc_shear_curve_match(D, near)$k, 3L)
+  expect_identical(EMC2:::.emc_shear_curve_candidates(emc, 1L, own = c(1L, 3L, 2L)),
+                   c(3L, 1L, 2L))
+  expect_identical(EMC2:::.emc_shear_curve_candidates(emc, 1L, own = integer(0)), 3L)
+  # A coordinate that failed here and is still waited on stays out.
+  expect_identical(EMC2:::.emc_shear_curve_candidates(emc, 1L, own = integer(0),
+                                                      failed = list(solve(D)[3, ])), integer(0))
+  # No curve anywhere: the chain's own candidates.
+  none <- list(chain(D), chain(D), chain(D))
+  expect_identical(EMC2:::.emc_shear_curve_candidates(none, 1L, own = c(2L, 4L)), c(2L, 4L))
+  # A curve along no coordinate of this chain adds nothing.
+  off <- list(chain(D), chain(D, colSums(solve(D))), chain(D))
+  expect_identical(EMC2:::.emc_shear_curve_candidates(off, 1L, own = 2L), 2L)
+})

@@ -261,6 +261,74 @@ static double shear_log_prior_v(const arma::mat& V, const Rcpp::List& spec) {
   return lp;
 }
 
+// Likelihood approximations that follow the group mean along one coordinate
+// (R/shear_move.R, "Curved frames"): each subject's precision and linear term
+// at K knots of c = row' mu, interpolated linearly between the knots and held
+// at the end knots beyond them. A convex combination of the knots' precisions
+// is positive semi-definite wherever they are.
+struct ShearCurve {
+  bool on = false;
+  arma::uword p = 0, n = 0, K = 0;
+  const double* row = nullptr;
+  const double* knots = nullptr;
+  const double* cube = nullptr;  // p x p x n x K
+  const double* lin = nullptr;   // p x n x K
+};
+
+static ShearCurve shear_curve(Rcpp::Nullable<Rcpp::List> curve, arma::uword p, arma::uword n) {
+  ShearCurve cv;
+  if (curve.isNull()) return cv;
+  const Rcpp::List cl(curve.get());
+  const Rcpp::NumericVector row = cl["row"], knots = cl["knots"], cube = cl["cube"],
+    lin = cl["lin"];
+  const arma::uword K = knots.size();
+  if (K < 2 || (arma::uword) row.size() != p ||
+      (arma::uword) cube.size() != p * p * n * K || (arma::uword) lin.size() != p * n * K)
+    Rcpp::stop("shear curve: dimensions");
+  for (arma::uword k = 1; k < K; ++k)
+    if (!(knots[k] > knots[k - 1])) Rcpp::stop("shear curve: knots must increase");
+  cv.on = true; cv.p = p; cv.n = n; cv.K = K;
+  cv.row = REAL(row); cv.knots = REAL(knots); cv.cube = REAL(cube); cv.lin = REAL(lin);
+  return cv;
+}
+
+// The approximations at group mean mu, written over prec and lin.
+static void shear_curve_blend(const ShearCurve& cv, const arma::vec& mu, arma::cube& prec,
+                              arma::mat& lin) {
+  double c = 0.0;
+  for (arma::uword i = 0; i < cv.p; ++i) c += cv.row[i] * mu(i);
+  arma::uword i0 = 0;
+  double w = 0.0;
+  if (c >= cv.knots[cv.K - 1]) { i0 = cv.K - 2; w = 1.0; }
+  else if (c > cv.knots[0]) {
+    while (i0 + 2 < cv.K && c >= cv.knots[i0 + 1]) ++i0;
+    w = (c - cv.knots[i0]) / (cv.knots[i0 + 1] - cv.knots[i0]);
+  }
+  const arma::uword nc = cv.p * cv.p * cv.n, nl = cv.p * cv.n;
+  const double* c0 = cv.cube + i0 * nc;
+  const double* c1 = c0 + nc;
+  const double* l0 = cv.lin + i0 * nl;
+  const double* l1 = l0 + nl;
+  prec.set_size(cv.p, cv.p, cv.n);
+  lin.set_size(cv.p, cv.n);
+  double* po = prec.memptr();
+  double* lo = lin.memptr();
+  const double u = 1.0 - w;
+  for (arma::uword q = 0; q < nc; ++q) po[q] = u * c0[q] + w * c1[q];
+  for (arma::uword q = 0; q < nl; ++q) lo[q] = u * l0[q] + w * l1[q];
+}
+
+// [[Rcpp::export(rng = false)]]
+Rcpp::List emc_shear_curve_fits_cpp(const arma::vec& mu, Rcpp::List curve,
+                                    int n_subjects) {
+  const ShearCurve cv = shear_curve(Rcpp::Nullable<Rcpp::List>(curve), mu.n_elem,
+                                    (arma::uword) n_subjects);
+  arma::cube prec;
+  arma::mat lin;
+  shear_curve_blend(cv, mu, prec, lin);
+  return Rcpp::List::create(Rcpp::Named("cube") = prec, Rcpp::Named("lin") = lin);
+}
+
 // The candidates of one shear round (R/shear_move.R .emc_shear_candidates):
 // for each offset t[k] the group state moves by u = t[k] v (mean part, then
 // log-sd part), the frames are rebuilt there from every subject's
@@ -281,8 +349,12 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
                                     const Rcpp::LogicalVector& has,
                                     const arma::mat& U, const arma::vec& b,
                                     const arma::cube& Uperp,
-                                    Rcpp::Nullable<Rcpp::List> spec = R_NilValue) {
+                                    Rcpp::Nullable<Rcpp::List> spec = R_NilValue,
+                                    Rcpp::Nullable<Rcpp::List> curve = R_NilValue) {
   const arma::uword p = alpha.n_rows, n = alpha.n_cols, K = t.n_elem;
+  const ShearCurve cv = shear_curve(curve, p, n);
+  arma::cube prec_c;
+  arma::mat lin_c;
   const double logdet0_sum = arma::accu(logdet0);
   const bool with_prior = spec.isNotNull();
   Rcpp::List spec_list;
@@ -303,11 +375,14 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
       Ri = upper_solve(cholV, arma::eye(p, p));
       Vi = Ri * Ri.t();
       const arma::vec Vi_mu = Vi * mu1;
+      if (cv.on) shear_curve_blend(cv, mu1, prec_c, lin_c);
+      const arma::cube& prec_k = cv.on ? prec_c : prec;
+      const arma::mat& lin_k = cv.on ? lin_c : lin;
       for (arma::uword s = 0; s < n && ok; ++s) {
-        Q = prec.slice(s) + Vi;
+        Q = prec_k.slice(s) + Vi;
         if (!arma::chol(Rs, Q)) { ok = false; break; }
         R1.slice(s) = Rs;
-        rhs = lin.col(s) + Vi_mu;
+        rhs = lin_k.col(s) + Vi_mu;
         m1.col(s) = upper_solve(Rs, upper_t_solve(Rs, rhs));
         logdet1(s) = arma::sum(arma::log(Rs.diag()));
       }

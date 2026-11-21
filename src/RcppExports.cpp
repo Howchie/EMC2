@@ -4640,9 +4640,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_shear_curve_fits_cpp
+Rcpp::List emc_shear_curve_fits_cpp(const arma::vec& mu, Rcpp::List curve, int n_subjects);
+RcppExport SEXP _EMC2_emc_shear_curve_fits_cpp(SEXP muSEXP, SEXP curveSEXP, SEXP n_subjectsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type curve(curveSEXP);
+    Rcpp::traits::input_parameter< int >::type n_subjects(n_subjectsSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_curve_fits_cpp(mu, curve, n_subjects));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_shear_candidates_cpp
-Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v, const arma::mat& alpha, const arma::vec& mu, const arma::mat& V, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::cube& prec, const arma::mat& lin, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp, Rcpp::Nullable<Rcpp::List> spec);
-RcppExport SEXP _EMC2_emc_shear_candidates_cpp(SEXP tSEXP, SEXP vSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP precSEXP, SEXP linSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP, SEXP specSEXP) {
+Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v, const arma::mat& alpha, const arma::vec& mu, const arma::mat& V, const arma::mat& m0, const arma::cube& R0, const arma::vec& logdet0, const arma::cube& prec, const arma::mat& lin, const Rcpp::LogicalVector& has, const arma::mat& U, const arma::vec& b, const arma::cube& Uperp, Rcpp::Nullable<Rcpp::List> spec, Rcpp::Nullable<Rcpp::List> curve);
+RcppExport SEXP _EMC2_emc_shear_candidates_cpp(SEXP tSEXP, SEXP vSEXP, SEXP alphaSEXP, SEXP muSEXP, SEXP VSEXP, SEXP m0SEXP, SEXP R0SEXP, SEXP logdet0SEXP, SEXP precSEXP, SEXP linSEXP, SEXP hasSEXP, SEXP USEXP, SEXP bSEXP, SEXP UperpSEXP, SEXP specSEXP, SEXP curveSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -4661,7 +4673,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const arma::vec& >::type b(bSEXP);
     Rcpp::traits::input_parameter< const arma::cube& >::type Uperp(UperpSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type spec(specSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type curve(curveSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec, curve));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -5100,7 +5113,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
     {"_EMC2_emc_shear_frames_cpp", (DL_FUNC) &_EMC2_emc_shear_frames_cpp, 4},
     {"_EMC2_emc_shear_transport_cpp", (DL_FUNC) &_EMC2_emc_shear_transport_cpp, 11},
-    {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 15},
+    {"_EMC2_emc_shear_curve_fits_cpp", (DL_FUNC) &_EMC2_emc_shear_curve_fits_cpp, 3},
+    {"_EMC2_emc_shear_candidates_cpp", (DL_FUNC) &_EMC2_emc_shear_candidates_cpp, 16},
     {"_EMC2_emc_shear_state_cpp", (DL_FUNC) &_EMC2_emc_shear_state_cpp, 5},
     {"_EMC2_emc_collapsed_log_lhat_cpp", (DL_FUNC) &_EMC2_emc_collapsed_log_lhat_cpp, 4},
     {"_EMC2_emc_shear_surrogate_cpp", (DL_FUNC) &_EMC2_emc_shear_surrogate_cpp, 3},

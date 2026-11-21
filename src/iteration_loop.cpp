@@ -164,8 +164,11 @@ SEXP move_context(const char* slot, SEXP sampler) {
   SEXP walls = lget(lget(sampler, "shear"), "walls");
   SEXP fits = collapsed ? lget(lget(sampler, "collapsed"), "fits") : R_NilValue;
   SEXP pooled = collapsed ? lget(lget(sampler, "pooled"), "value") : R_NilValue;
+  // The shear's curve (R/shear_move.R .emc_shear_curve_of); one the R side
+  // would not use differs from the key and sends the caller there.
+  SEXP curve = collapsed ? R_NilValue : lget(lget(sampler, "shear"), "curve");
   const struct { const char* name; SEXP value; } own[] = {
-      {"walls", walls}, {"fits", fits}, {"pooled", pooled}};
+      {"walls", walls}, {"fits", fits}, {"pooled", pooled}, {"curve", curve}};
   for (const auto& f : own) {
     if (!R_compute_identical(lget(key, f.name), f.value, flags)) return R_NilValue;
     if (f.value != R_NilValue) ++fields;

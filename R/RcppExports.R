@@ -1151,8 +1151,12 @@ emc_shear_transport_cpp <- function(alpha, m0, R0, logdet0, m1, R1, logdet1, has
     .Call(`_EMC2_emc_shear_transport_cpp`, alpha, m0, R0, logdet0, m1, R1, logdet1, has, U, b, Uperp)
 }
 
-emc_shear_candidates_cpp <- function(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec = NULL) {
-    .Call(`_EMC2_emc_shear_candidates_cpp`, t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec)
+emc_shear_curve_fits_cpp <- function(mu, curve, n_subjects) {
+    .Call(`_EMC2_emc_shear_curve_fits_cpp`, mu, curve, n_subjects)
+}
+
+emc_shear_candidates_cpp <- function(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec = NULL, curve = NULL) {
+    .Call(`_EMC2_emc_shear_candidates_cpp`, t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp, spec, curve)
 }
 
 emc_shear_state_cpp <- function(mu, V, prec, lin, spec) {

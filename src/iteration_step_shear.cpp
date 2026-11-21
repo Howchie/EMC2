@@ -50,7 +50,8 @@ List shear_round_from(const arma::vec& t, const arma::vec& v,
                       List spec, double lp_mu, double cur_hier, double cur_lp,
                       NumericVector ll_cur, List data, SEXP model,
                       CharacterVector par_names, SubjectLl* src,
-                      const double* lp_mu_each);
+                      const double* lp_mu_each, Rcpp::Nullable<Rcpp::List> curve);
+Rcpp::List emc_shear_curve_fits_cpp(const arma::vec& mu, Rcpp::List curve, int n_subjects);
 List shear_mean_round(const NumericVector& t, const NumericVector& d,
                       const NumericMatrix& alpha, const NumericVector& mu,
                       const NumericMatrix& chol_V, const NumericMatrix& Vi,
@@ -277,8 +278,37 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   Shield<SEXP> ctx(held != R_NilValue ? held : static_cast<SEXP>(shear_context(pmwgs)));
   SEXP args = lget(ctx, "args"), spec = lget(ctx, "spec");
   if (TYPEOF(args) != VECSXP || TYPEOF(spec) != VECSXP) return false;
-  const arma::cube cube = as<arma::cube>(lget(args, "cube"));
-  const arma::mat lin = as<arma::mat>(lget(args, "lin"));
+  arma::cube cube = as<arma::cube>(lget(args, "cube"));
+  arma::mat lin = as<arma::mat>(lget(args, "lin"));
+  // Curved frames: the fits follow the mean along the curve's coordinate, so
+  // a run of log-sd rounds takes the curve's fits at the mean it starts
+  // from (stale: a mean round moved since they were last taken).
+  SEXP packed = lget(ctx, "packed");
+  SEXP curve = TYPEOF(packed) == VECSXP ? lget(packed, "curve") : R_NilValue;
+  const bool curved = TYPEOF(curve) == VECSXP;
+  auto fits_at = [&](SEXP mu) {
+    const List f = emc_shear_curve_fits_cpp(as<arma::vec>(mu), List(curve), n);
+    cube = as<arma::cube>(f["cube"]);
+    lin = as<arma::mat>(f["lin"]);
+  };
+  std::vector<char> on_curve(p, 0);
+  if (curved) {
+    SEXP row = lget(curve, "row");
+    if (TYPEOF(row) != REALSXP || XLENGTH(row) != p) return false;
+    double rr = 0.0;
+    for (int r = 0; r < p; ++r) rr += REAL(row)[r] * REAL(row)[r];
+    for (int k = 0; k < p; ++k) {
+      double rd = 0.0, dd = 0.0;
+      for (int r = 0; r < p; ++r) {
+        const double d = REAL(dirs)[r + static_cast<R_xlen_t>(k) * p];
+        rd += REAL(row)[r] * d;
+        dd += d * d;
+      }
+      on_curve[k] = std::fabs(rd) > 1e-9 * std::sqrt(rr * dd);
+    }
+    fits_at(tmu);
+  }
+  bool stale = false;
   const arma::mat U = as<arma::mat>(lget(args, "U"));
   const arma::vec wall_b = as<arma::vec>(lget(args, "b"));
   const arma::cube Uc = as<arma::cube>(lget(args, "Uc"));
@@ -351,6 +381,7 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     lls.pool = lget(out, "wpool");
     evaluated += Rf_asInteger(lget(out, "rounds"));
     const bool moved = flag(lget(out, "moved"));
+    if (moved && k <= p) stale = true;
     net[k - 1] += Rf_asReal(lget(out, "t"));
     E[k - 1] = E[k - 1] + Rf_asReal(lget(out, "E"));
     cnt[k - 1] = cnt[k - 1] + 1;
@@ -393,6 +424,7 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     const int j = as<int>(o["j"]);
     const bool moved = j > 0;
     if (moved) {
+      stale = true;
       x.mu = o["mu"]; x.m = o["m"]; x.alpha = o["alpha"]; x.ll = o["ll"];
       leave_rng();
       x.lp = prior_mu(x.mu) + Rf_asReal(x.lp_v);
@@ -412,8 +444,9 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     }
     any_moved = any_moved || moved;
   };
-  // A mean-direction round with transport walls: the general candidates,
-  // each with the prior density of its own mean.
+  // A mean-direction round with transport walls, or along a curve's
+  // coordinate: the general candidates, each with the prior density of its
+  // own mean.
   auto walled_round = [&](int k) {
     const double step = std::exp(steps[k - 1]);
     NumericVector t(kCandidates), lp_each(kCandidates);
@@ -441,10 +474,12 @@ bool step_shear(SEXP st, SEXP cx, int i) {
         as<arma::vec>(t), v, as<arma::mat>(x.alpha), as<arma::vec>(x.mu), as<arma::mat>(x.V),
         as<arma::mat>(x.m), as<arma::cube>(x.R), as<arma::vec>(x.logdet), cube, lin, has, U,
         wall_b, Uc, List(spec), 0.0, x.cur_hier, x.lp, NumericVector(static_cast<SEXP>(x.ll)),
-        List(data), model, CharacterVector(par_names), &lls, lp_each.begin());
+        List(data), model, CharacterVector(par_names), &lls, lp_each.begin(),
+        curved ? Rcpp::Nullable<List>(curve) : Rcpp::Nullable<List>(R_NilValue));
     if (as<bool>(o["evaluated"])) ++evaluated;
     const int j = as<int>(o["j"]);
     const bool moved = j > 0;
+    if (moved) stale = true;
     if (moved) {
       SEXP V2 = o["V"];
       Shield<SEXP> Vn(Rf_duplicate(V2));
@@ -472,7 +507,8 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   while (at < total) {
     const int k = order[at];
     if (k <= p) {
-      if (mean_line) mean_round(k);
+      if (curved && on_curve[k - 1]) walled_round(k);
+      else if (mean_line) mean_round(k);
       else if (lget(ctx, "walls") != R_NilValue) walled_round(k);
       else r_round(k, R_NilValue);
       ++at;
@@ -485,6 +521,10 @@ bool step_shear(SEXP st, SEXP cx, int i) {
     leave_rng();
     const double lp_mu = prior_mu(x.mu);
     enter_rng();
+    if (curved && stale) {
+      fits_at(x.mu);
+      stale = false;
+    }
     const List o = shear_rounds_from(
         ks, steps, cnt, adapt, NumericVector(range), kMoveTarget, kCandidates,
         NumericMatrix(static_cast<SEXP>(x.alpha)), NumericVector(static_cast<SEXP>(x.mu)),

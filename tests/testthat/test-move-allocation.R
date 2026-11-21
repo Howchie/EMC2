@@ -1068,3 +1068,20 @@ test_that("a cheaper HMC option within the minimum gain of the best is chosen", 
   expect_identical(EMC2:::.emc_alloc_choose(o), "1")
   expect_identical(EMC2:::.emc_alloc_choose(c(none = Inf, "0" = 9, "1" = 9.5), c(Inf, 4, 6)), "0")
 })
+
+test_that("a curved shear coordinate runs a round in every iteration", {
+  ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = c(0.3, 0.98), g_fac = c(0.5, 0.95),
+             g_n = c(200, 200), g_iters = c(100, 100), g_measured = c(TRUE, TRUE),
+             C_rest = 1, c_round = 0.2, coll = FALSE, W = list(diag(1)),
+             s_var = matrix(1, 1, 1), c_hmc = NA_real_)
+  plain <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = 100)
+  expect_identical(plain$units[[1]]$floor, 0)
+  curved <- EMC2:::.emc_alloc_units(c(ms, list(g_curved = 1L)), NULL, TRUE, FALSE, B = 100)
+  expect_identical(curved$units[[1]]$floor, 1)
+  expect_gte(curved$units[[1]]$cap, 1)
+  expect_identical(curved$units[[2]]$floor, 0)
+  # The plan holds it there although the other coordinate sets the target.
+  sol <- EMC2:::.emc_alloc_solve_units(curved)
+  expect_gte(sol$x[1], 1)
+  expect_lt(EMC2:::.emc_alloc_solve_units(plain)$x[1], 1)
+})

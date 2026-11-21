@@ -35,7 +35,8 @@ Rcpp::List emc_shear_candidates_cpp(const arma::vec& t, const arma::vec& v,
                                     const Rcpp::LogicalVector& has,
                                     const arma::mat& U, const arma::vec& b,
                                     const arma::cube& Uperp,
-                                    Rcpp::Nullable<Rcpp::List> spec);
+                                    Rcpp::Nullable<Rcpp::List> spec,
+                                    Rcpp::Nullable<Rcpp::List> curve);
 List emc_candidate_rows_cpp(List cand, CharacterVector par_names);
 SEXP emc2_ll_cached(SEXP proposals, SEXP dadm, SEXP model, SEXP varying);
 
@@ -192,7 +193,8 @@ bool emc_subject_lls(const List& rows, const List& data, SEXP model, int n_cand,
 // likelihoods and, for a move, the selected state, subjects and likelihoods.
 // With a likelihood source the round never falls back: the source serves
 // whatever the stored-argument path does not. A `v` with a mean part takes
-// each candidate's mean-prior density from `lp_mu_each`.
+// each candidate's mean-prior density from `lp_mu_each`; with a `curve` the
+// candidates' frames follow it (prec and lin are then its fits at mu).
 List shear_round_from(const arma::vec& t, const arma::vec& v,
                       const arma::mat& alpha, const arma::vec& mu,
                       const arma::mat& V, const arma::mat& m0,
@@ -203,13 +205,13 @@ List shear_round_from(const arma::vec& t, const arma::vec& v,
                       List spec, double lp_mu, double cur_hier, double cur_lp,
                       NumericVector ll_cur, List data, SEXP model,
                       CharacterVector par_names, SubjectLl* src,
-                      const double* lp_mu_each) {
+                      const double* lp_mu_each, Rcpp::Nullable<Rcpp::List> curve) {
   const int K = static_cast<int>(t.n_elem);
   const int p = static_cast<int>(alpha.n_rows), n = static_cast<int>(alpha.n_cols);
   if (static_cast<int>(v.n_elem) != 2 * p || data.size() != n || ll_cur.size() != n)
     Rcpp::stop("shear round: inputs differ in shape");
   List cands = emc_shear_candidates_cpp(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin,
-                                        has, U, b, Uperp, spec);
+                                        has, U, b, Uperp, spec, curve);
   const IntegerVector size = spec["size"];
   std::vector<int> ok;
   std::vector<double> prior_delta(K, R_NegInf), lp(K, NA_REAL);
@@ -287,7 +289,7 @@ List emc_shear_round_cpp(const arma::vec& t, const arma::vec& v,
                          CharacterVector par_names) {
   return shear_round_from(t, v, alpha, mu, V, m0, R0, logdet0, prec, lin, has, U, b, Uperp,
                           spec, lp_mu, cur_hier, cur_lp, ll_cur, data, model, par_names,
-                          nullptr, nullptr);
+                          nullptr, nullptr, R_NilValue);
 }
 
 // .emc_shear_log_hier: the subjects' joint log density under the group
@@ -500,7 +502,7 @@ List shear_rounds_from(IntegerVector ks, NumericVector log_step, IntegerVector b
         as<arma::vec>(t), v, as<arma::mat>(alpha), as<arma::vec>(mu), as<arma::mat>(V),
         as<arma::mat>(m0), arma::cube(R0.begin(), p, p, alpha.ncol(), false, true),
         as<arma::vec>(logdet_cur), prec, lin, has, U, b, Uperp, spec, lp_mu, cur_hier,
-        cur_lp, ll, data, model, par_names, src, nullptr);
+        cur_lp, ll, data, model, par_names, src, nullptr, R_NilValue);
     if (as<bool>(o["fallback"])) {
       t_next = t;
       break;

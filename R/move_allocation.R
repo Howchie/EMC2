@@ -1349,6 +1349,7 @@
        shear = shear,
        g_rho = g_rho, g_var = g_var, g_b_share = g_b_share, g_valid = g_valid,
        g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
+       g_curved = if (shear && is.list(ch$shear[["curve"]])) ch$shear$curve_rec$k,
        g_n = if (shear) last_n else numeric(2L * p),
        g_iters = if (shear) last_iters else numeric(2L * p),
        c_n = if (coll && c_measured) last$n else 0,
@@ -1433,6 +1434,14 @@
     if (shear_on && is.finite(ms$g_fac[k])) {
       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
                   if (is.null(ms$g_iters)) 0 else ms$g_iters[k], unmeasured_cap = 1)
+      # A curved coordinate is one the rest of the iteration and fractional
+      # rounds were measured not to move, so its factor's credit for a
+      # fraction of a round is not to be relied on: its curve runs a round
+      # in every iteration.
+      if (identical(ms$g_curved, k)) {
+        b$floor <- max(b$floor, 1)
+        b$cap <- max(b$cap, 1)
+      }
       list(kind = "shear", rho = ms$g_rho[k],
            b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k],
            g = ms$g_fac[k],
