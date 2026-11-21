@@ -280,7 +280,9 @@
 }
 
 .emc_chain_process_pool_run <- function(pool, samplers, args = list(),
-                                        max_active = length(samplers)) {
+                                        max_active = length(samplers),
+                                        restart_blocks = getOption(
+                                          "emc2.persistent_chain_restart_blocks", 2L)) {
   if (is.null(pool) || length(pool$workers) != length(samplers))
     stop("persistent chain process pool is unavailable", call. = FALSE)
   max_active <- max(1L, min(length(samplers), as.integer(max_active)))
@@ -352,7 +354,6 @@
   # A chain process's heap only grows: it starts with a copy of the session's
   # and ratchets up with every block's largest temporaries. A fresh fork costs
   # about as much as the block boundary it replaces.
-  restart_blocks <- getOption("emc2.persistent_chain_restart_blocks", 2L)
   if (identical(restart_blocks, FALSE) || is.null(restart_blocks)) {
     restart_blocks <- Inf
   } else {

@@ -153,7 +153,20 @@ run_emc <- function(emc, stage, stop_criteria,
                 else if (cores_for_chains <= 1L) 1L else 0L
   pool_session <- NULL
   chain_process_pool <- NULL
-  persistent_chain_requested <- isTRUE(getOption("emc2.persistent_chains", FALSE))
+  persistent_chain_option <- getOption("emc2.persistent_chains")
+  # Reuse the workers across progress reports in verbose production fits.
+  # An explicit setting still controls the runner for every stage.
+  reuse_progress_workers <- is.null(persistent_chain_option) &&
+    stage == "sample" && verbose && .Platform$OS.type == "unix" &&
+    length(emc) > 1L && cores_for_chains >= length(emc) &&
+    nzchar(Sys.which("mkfifo")) &&
+    isTRUE(iter - total_iters_stage > step_size) &&
+    is.null(fileName) && isFALSE(thin) &&
+    is.null(stop_criteria$max_sample_iter)
+  persistent_chain_requested <- isTRUE(persistent_chain_option) ||
+    reuse_progress_workers
+  # Amortize worker startup while still periodically releasing their heaps.
+  progress_worker_restart <- if (reuse_progress_workers) 10L else 2L
   persistent_chain_supported <- persistent_chain_requested &&
     .Platform$OS.type == "unix"
   if (persistent_chain_requested && .Platform$OS.type != "unix") {
@@ -217,11 +230,12 @@ run_emc <- function(emc, stage, stop_criteria,
     sample_started <- proc.time()[["elapsed"]]
     # Every stop rule waits for the iteration target, and production proposals
     # change only at their rebuild points, so a sample-stage block runs
-    # straight to whichever comes first. Each block is a fork whose children
-    # copy the session heap; checkpoints and thinning keep the per-step
-    # blocks. block_units counts the steps the block stands for.
+    # straight to whichever comes first. Batching reduces chain dispatches
+    # and forks. Verbose runs need the chain draws back at each
+    # step to report fresh diagnostics. Checkpoints and thinning also keep
+    # per-step blocks. block_units counts the steps the block stands for.
     block_units <- 1L
-    if (stage == "sample" && is.null(fileName) && isFALSE(thin) &&
+    if (stage == "sample" && !verbose && is.null(fileName) && isFALSE(thin) &&
         is.null(stop_criteria$max_sample_iter)) {
       remaining <- iter - progress$total_iters_stage
       to_rebuild <- emc[[1L]]$sample_proposals_next - emc[[1L]]$sample_transitions
@@ -269,7 +283,9 @@ run_emc <- function(emc, stage, stop_criteria,
                     particle_factor = particle_factor,
                     search_width = search_width, n_cores = cores_per_chain,
                     r_cores = r_cores, core_ctl = core_ctl),
-        max_active = cores_for_chains)
+        max_active = cores_for_chains,
+        restart_blocks = getOption("emc2.persistent_chain_restart_blocks",
+                                   progress_worker_restart))
     } else {
       sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
                                outer_slot <- .emc_pool_state$session_slot
