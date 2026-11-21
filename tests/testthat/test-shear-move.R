@@ -974,13 +974,9 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   ch$shear$plan <- old
   again <- EMC2:::.emc_shear_set_plan(ch, seq_len(ch$samples$idx), "burn")$shear$plan
   p <- ncol(old$dirs)
-  cosine <- abs(crossprod(old$dirs, again$dirs)) /
-    outer(sqrt(colSums(old$dirs^2)), sqrt(colSums(again$dirs^2)))
+  cw <- EMC2:::.emc_shear_carry_weights(old$dirs, again$dirs)
   for (k in seq_len(p)) {
-    m <- which.max(cosine[, k])
-    expected <- if (cosine[m, k] >= 0.9) {
-      log(1.7) + 0.5 * log(sum(old$dirs[, m]^2) / sum(again$dirs[, k]^2))
-    } else log(EMC2:::.EMC_SHEAR_STEP0)
+    expected <- sum(cw$w[k, seq_len(p)] * (log(1.7) + log(cw$scale[k, seq_len(p)])))
     expect_equal(again$log_step[k], expected, tolerance = 1e-10)
   }
   # A log group sd always matches itself.
@@ -1123,4 +1119,38 @@ test_that("the native shear rounds are the R rounds on the same random stream", 
   expect_gt(native, 20L)
   expect_gt(moved, 10L)
   expect_identical(differing, 0L)
+})
+
+test_that("rebuilt mean directions inherit the old directions' records by their share", {
+  set.seed(3)
+  p <- 3L
+  D <- matrix(rnorm(p * p), p)
+  sd_k <- p + seq_len(p)
+  # Same directions: every record is its own.
+  cw <- EMC2:::.emc_shear_carry_weights(D, D)
+  expect_equal(cw$w, diag(2L * p))
+  expect_equal(cw$scale[cbind(1:p, 1:p)], rep(1, p))
+  # A direction rescaled by a: its own record, moves in units of the new length.
+  a <- 2
+  cw <- EMC2:::.emc_shear_carry_weights(D, D %*% diag(c(a, 1, 1)))
+  expect_equal(cw$w, diag(2L * p))
+  expect_equal(cw$scale[1, 1], 1 / a)
+  # Two directions of equal length rotated into each other: each new one
+  # is half of each old one, the third keeps its own and the log sds theirs.
+  D[, 2] <- D[, 2] * sqrt(sum(D[, 1]^2) / sum(D[, 2]^2))
+  th <- pi / 4
+  Q <- diag(p)
+  Q[1:2, 1:2] <- matrix(c(cos(th), sin(th), -sin(th), cos(th)), 2)
+  cw <- EMC2:::.emc_shear_carry_weights(D, D %*% Q)
+  expect_equal(cw$w[1:2, 1:2], matrix(0.5, 2, 2))
+  expect_equal(cw$w[3, ], replace(numeric(2L * p), 3, 1))
+  expect_equal(cw$w[sd_k, sd_k], diag(p))
+  # The rotated pair keeps the pair's evidence through a rebuild's carry.
+  n <- c(300, 100, 50, rep(10, p))
+  expect_equal(drop(cw$w %*% n)[1:2], c(200, 200))
+  expect_equal(sum(drop(cw$w %*% n)[1:2]), sum(n[1:2]))
+  # An old basis that cannot be inverted passes nothing to the mean directions.
+  cw <- EMC2:::.emc_shear_carry_weights(matrix(0, p, p), D)
+  expect_equal(rowSums(cw$w)[1:p], rep(0, p))
+  expect_equal(cw$w[sd_k, sd_k], diag(p))
 })

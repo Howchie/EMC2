@@ -1397,15 +1397,18 @@
 # beyond one per iteration the moves share iterations, whose saturation the
 # evidence gathered at a lower rate cannot identify. A cap tied to the rate
 # alone would ratchet a move down for good after one plan that ran little of
-# it.
+# it. A shear coordinate with no rounds behind it counts at its kind's pooled
+# factor and may also run up to once per iteration: held at its exploration
+# rate, an unmeasured slow coordinate would set the minimax target, and every
+# other coordinate would be bought only down to it.
 .emc_alloc_units <- function(ms, hmc_state, shear_on, optimistic, B = NULL) {
   n <- nrow(ms$s_rho)
-  bounds <- function(n_ev, iters) {
+  bounds <- function(n_ev, iters, unmeasured_cap = 0) {
     if (is.null(B) || !is.finite(B) || B <= 0) return(list(floor = 0, cap = Inf))
     n0 <- .EMC_ALLOC_ROUND_EVIDENCE
     floor <- max(0, n0 - n_ev) / B
     span <- if (length(iters) && is.finite(iters) && iters > 0) iters else B
-    list(floor = floor, cap = max(floor, 2 * n_ev / span, if (n_ev > 0) 1 else 0))
+    list(floor = floor, cap = max(floor, 2 * n_ev / span, if (n_ev > 0) 1 else unmeasured_cap))
   }
   has_C_rest <- length(ms$C_rest) == 1L && is.finite(ms$C_rest)
   C_rest <- if (has_C_rest) ms$C_rest else 1
@@ -1429,7 +1432,7 @@
   units <- lapply(seq_along(ms$g_rho), function(k)
     if (shear_on && is.finite(ms$g_fac[k])) {
       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
-                  if (is.null(ms$g_iters)) 0 else ms$g_iters[k])
+                  if (is.null(ms$g_iters)) 0 else ms$g_iters[k], unmeasured_cap = 1)
       list(kind = "shear", rho = ms$g_rho[k],
            b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k],
            g = ms$g_fac[k],

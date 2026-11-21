@@ -573,13 +573,17 @@ test_that("a move earns its evidence at an exploration rate and runs no faster t
              coll = TRUE, c_fac = rep(0.5, 2), c_measured = FALSE, c_n = 0, c_coll = 0.1,
              c_rate = 0, W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
   u <- EMC2:::.emc_alloc_units(ms, NULL, TRUE, FALSE, B = B)
-  # No rounds yet: the floor collects n0 rounds by the next rebuild and is
-  # also the cap; 400 rounds: no floor, the usual cap.
-  expect_equal(c(u$units[[1]]$floor, u$units[[1]]$cap), c(n0 / B, n0 / B))
+  # No rounds yet: the floor collects n0 rounds by the next rebuild; a shear
+  # coordinate may still run once per iteration at its pooled factor, while
+  # the collapsed move is capped at its floor. 400 rounds: no floor, the
+  # usual cap.
+  expect_equal(c(u$units[[1]]$floor, u$units[[1]]$cap), c(n0 / B, 1))
   expect_equal(c(u$units[[2]]$floor, u$units[[2]]$cap), c(0, EMC2:::.EMC_ALLOC_MAX_ROUNDS))
   expect_equal(c(u$joint$floor, u$joint$cap), c(n0 / B, n0 / B))
   sol <- EMC2:::.emc_alloc_solve_units(u)
-  expect_equal(sol$x[1], n0 / B)
+  # The unmeasured coordinate is the slowest, so it is bought past its floor.
+  expect_gt(sol$x[1], n0 / B)
+  expect_lte(sol$x[1], 1 + 1e-9)
   expect_equal(sol$joint, n0 / B)
   # Half the evidence in: the floor collects the rest, and a measured move
   # may run at one move per iteration.

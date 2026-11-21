@@ -261,7 +261,7 @@
 
 # Every chain's plan from the proposal window create_chain_proposals() uses.
 # Step scales and the last block's round records carry over to the new
-# directions they match (|cosine| >= 0.9; a log group sd always matches
+# directions (.emc_shear_carry_weights; a log group sd always matches
 # itself); the round counts are set by the move allocation afterwards.
 .emc_shear_set_plans <- function(emc, samples_idx, stage, n_cores = 1L) {
   if (!.emc_shear_active(emc[[1L]])) return(emc)
@@ -417,6 +417,36 @@
   emc
 }
 
+# How a rebuilt plan's coordinates inherit the old plan's step scales and
+# round records. A new mean direction is a combination sum_m c_m d_m of the
+# old ones, each of which moves mu by one posterior sd of its direction; it
+# takes old direction m's per-round statistics with weight c_m^2 / sum c^2,
+# rescaled by the length ratio |d_m| / |d| (round moves are in units of
+# the direction). A direction the old plan already had inherits its own
+# record alone. Directions with nearly equal lambda are fixed only up to a
+# rotation among themselves, so a rebuild can turn them into new
+# combinations of the old ones; matching one old direction each would leave
+# them unmeasured. w and scale are 2p x 2p (new by old coordinate); a log
+# group sd inherits its own record unscaled, and an old basis that cannot
+# be inverted passes nothing to the mean directions.
+.emc_shear_carry_weights <- function(old_dirs, new_dirs) {
+  p <- ncol(new_dirs)
+  w <- scale <- matrix(0, 2L * p, 2L * p)
+  sd_k <- p + seq_len(p)
+  w[cbind(sd_k, sd_k)] <- 1
+  scale[] <- 1
+  cf <- tryCatch(solve(old_dirs, new_dirs), error = function(e) NULL)
+  if (!is.null(cf) && all(is.finite(cf))) {
+    wm <- t(cf^2)
+    tot <- rowSums(wm)
+    wm[tot > 0, ] <- wm[tot > 0, , drop = FALSE] / tot[tot > 0]
+    w[seq_len(p), seq_len(p)] <- wm
+    scale[seq_len(p), seq_len(p)] <- outer(1 / sqrt(colSums(new_dirs^2)),
+                                           sqrt(colSums(old_dirs^2)))
+  }
+  list(w = w, scale = scale)
+}
+
 .emc_shear_set_plan <- function(chain, idx, stage) {
   if (!.emc_shear_active(chain)) return(chain)
   n <- chain$n_subjects
@@ -436,32 +466,22 @@
   recent <- plan$pool <- zero
   same_stage <- identical(stage, old$stage)
   if (is.list(old) && is.matrix(old$dirs) && all(dim(old$dirs) == p)) {
-    scale <- c(rep(NA_real_, p), rep(1, p))
-    match <- c(rep(NA_integer_, p), p + seq_len(p))
-    for (k in seq_len(p)) {
-      d <- plan$dirs[, k]
-      cs <- abs(drop(crossprod(old$dirs, d))) /
-        (sqrt(colSums(old$dirs^2)) * sqrt(sum(d^2)))
-      m <- which.max(cs)
-      if (cs[m] >= 0.9) {
-        match[k] <- m
-        scale[k] <- sqrt(sum(old$dirs[, m]^2) / sum(d^2))
-      }
-    }
-    got <- which(!is.na(match))
+    cw <- .emc_shear_carry_weights(old$dirs, plan$dirs)
+    got <- which(rowSums(cw$w) > 0)
     blk <- old$block
-    plan$log_step[got] <- old$log_step[match[got]] + log(scale[got])
+    plan$log_step[got] <- rowSums(cw$w * (rep(old$log_step, each = 2L * p) +
+                                            log(cw$scale)))[got]
     carry <- function(rec) {
       out <- zero
       if (is.null(rec)) return(out)
       rec <- .emc_shear_record(rec, p)
-      out$E[got] <- rec$E[match[got]] * scale[got]^2
-      out$n[got] <- rec$n[match[got]]
-      out$moved[got] <- rec$moved[match[got]]
-      out$N[got] <- rec$N[match[got]] * scale[got]^2
-      out$iters[got] <- rec$iters[match[got]]
-      out$K <- matrix(0L, 2L * p, ncol(rec$K))
-      out$K[got, ] <- rec$K[match[got], ]
+      sq <- cw$w * cw$scale^2
+      out$E <- drop(sq %*% rec$E)
+      out$n <- drop(cw$w %*% rec$n)
+      out$moved <- drop(cw$w %*% rec$moved)
+      out$N <- drop(sq %*% rec$N)
+      out$iters <- drop(cw$w %*% rec$iters)
+      out$K <- cw$w %*% rec$K
       out
     }
     recent <- carry(blk)
