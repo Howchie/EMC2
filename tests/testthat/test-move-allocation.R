@@ -156,12 +156,6 @@ test_that("the rest of the iteration is recorded against the previous final stat
   s <- EMC2:::.emc_alloc_record_group(s, list(tmu = c(3, 4), tvar = diag(c(1, 16))))
   d <- c(2, 2, -log(2), log(4 / 3))
   expect_equal(s$alloc$window$G, tcrossprod(d))
-  # The shear and collapsed moves' own jump is not the rest's.
-  from <- c(1.5, 2, 0.1, log(3))
-  before <- c(2, 1, 0.2, log(3))
-  s2 <- EMC2:::.emc_alloc_record_group(within(s, alloc <- NULL),
-                                       list(tmu = c(3, 4), tvar = diag(c(1, 16))), from, before)
-  expect_equal(s2$alloc$window$G, tcrossprod(d - (before - from)))
   s <- EMC2:::.emc_alloc_record_subjects(s, matrix(1:6, p) + 1)
   expect_equal(s$alloc$window$A[[2]], matrix(1, p, p))
   s <- EMC2:::.emc_alloc_record_cost(s, 0.5, list(NULL, list(cpu = 0.2), NULL),

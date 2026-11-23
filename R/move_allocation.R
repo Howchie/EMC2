@@ -223,16 +223,12 @@
 }
 
 # The group state the rest of the iteration produced, against the previous
-# iteration's final (stored) one. from, before: the group state (mu, log
-# sds) the shear and collapsed moves started from and left; the rest runs
-# around them, stored -> from and before -> pars, and their jump is not the
-# rest's.
-.emc_alloc_record_group <- function(sampler, pars, from = NULL, before = NULL) {
+# iteration's final (stored) one.
+.emc_alloc_record_group <- function(sampler, pars) {
   idx <- sampler$samples$idx
   w <- .emc_alloc_window(sampler)
   d <- c(as.numeric(pars$tmu), .emc_alloc_lsd(pars$tvar)) -
     c(sampler$samples$theta_mu[, idx], .emc_alloc_lsd(sampler$samples$theta_var[, , idx]))
-  if (length(from) == length(d) && length(before) == length(d)) d <- d - (before - from)
   if (all(is.finite(d))) {
     w$G <- w$G + tcrossprod(d)
     w$nG <- w$nG + 1L

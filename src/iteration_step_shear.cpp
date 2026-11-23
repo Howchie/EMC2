@@ -17,7 +17,6 @@
 #ifndef FCONE
 #define FCONE
 #endif
-#include <cfloat>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -170,30 +169,6 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   if (TYPEOF(active) != LGLSXP) return false;
   const std::string stage = as<std::string>(lget(cx, "stage"));
   SEXP pmwgs = var(st, "pmwgs"), pars = var(st, "pars"), proposals = var(st, "proposals");
-  // The group state the shear and collapsed moves start from, for the
-  // allocation's record of the rest of the iteration (step_ensemble).
-  {
-    SEXP from = R_NilValue;
-    SEXP fmu = lget(pars, "tmu"), fvar = lget(pars, "tvar");
-    if (flag(active) && flag(lget(cx, "alloc_on")) && TYPEOF(fmu) == REALSXP &&
-        TYPEOF(fvar) == REALSXP && Rf_isMatrix(fvar) && Rf_nrows(fvar) == XLENGTH(fmu) &&
-        Rf_ncols(fvar) == XLENGTH(fmu)) {
-      const int pf = static_cast<int>(XLENGTH(fmu));
-      from = Rf_allocVector(REALSXP, 2 * pf);
-      PROTECT(from);
-      for (int k = 0; k < pf; ++k) {
-        REAL(from)[k] = REAL(fmu)[k];
-        double d = REAL(fvar)[k + static_cast<R_xlen_t>(k) * pf];
-        if (d < DBL_MIN) d = DBL_MIN;
-        volatile double l = std::log(d);
-        REAL(from)[pf + k] = 0.5 * l;
-      }
-      set_var(st, "shear_from", from);
-      UNPROTECT(1);
-    } else {
-      set_var(st, "shear_from", R_NilValue);
-    }
-  }
   if (!flag(active) || stage == "preburn") {
     zero_costs(st);
     return true;

@@ -434,24 +434,16 @@
   invisible(NULL)
 }
 
-# The ensemble group update, after the subject step and the shear and
-# collapsed moves. Its group Gibbs rounds and final reselection redraw the
-# subjects against the group those moves left: a non-centred move followed
-# directly by the next centred group draw would hand that draw subjects
-# still placed for the old group, and the two augmentations would undo each
-# other along the directions the subjects' data barely inform. Its pools'
-# likelihoods do not depend on the group state, so it is valid after any
-# group move.
+# The ensemble group update, after the subject step, so the group Gibbs
+# rounds and the final reselection close the sweep.
 .emc_step_ensemble <- function(st, cx, i) {
   started <- if (cx$sampler_profile) proc.time()[["elapsed"]]
-  before <- if (cx$alloc_on && length(st$shear_from))
-    c(as.numeric(st$pars$tmu), .emc_alloc_lsd(st$pars$tvar))
   ens <- .emc_ensemble_move(st$pmwgs, st$pars, st$proposals, cx$stage, st$wpool,
                             .emc_steps_now(st, cx, "wpool_ctx"), st$wpool_part,
                             st$ens_pools, ll_cache_validated = TRUE)
   if (cx$sampler_profile) st$prof$ensemble <- proc.time()[["elapsed"]] - started
   pmwgs <- ens$sampler
-  if (cx$alloc_on) pmwgs <- .emc_alloc_record_group(pmwgs, ens$pars, st$shear_from, before)
+  if (cx$alloc_on) pmwgs <- .emc_alloc_record_group(pmwgs, ens$pars)
   st$pmwgs <- pmwgs
   st$pars <- ens$pars
   st$proposals <- ens$proposals
@@ -465,10 +457,6 @@
   st$shear_rounds <- 0L
   prof <- cx$sampler_profile
   if (prof) st$prof$shear_raw <- st$prof$shear_build <- st$prof$shear_ll <- 0
-  # The group state the shear and collapsed moves start from, for the
-  # allocation's record of the rest of the iteration (.emc_step_ensemble).
-  st$shear_from <- if (cx$alloc_on && .emc_shear_active(st$pmwgs))
-    c(as.numeric(st$pars$tmu), .emc_alloc_lsd(st$pars$tvar))
   if (!.emc_shear_active(st$pmwgs)) return(invisible(NULL))
   shear_started <- if (prof) .emc_cpu_self()
   sll_shear <- if (prof) .emc_subject_ll_cpu()
@@ -741,8 +729,8 @@
 .emc_steps_run <- function(st, cx, from = 1L) {
   steps <- c(if (cx$verbose_progress) list(progress = .emc_step_progress),
              list(group = .emc_step_group, particle = .emc_step_particle,
-                  shear = .emc_step_shear, collapsed = .emc_step_collapsed,
-                  ensemble = .emc_step_ensemble),
+                  ensemble = .emc_step_ensemble, shear = .emc_step_shear,
+                  collapsed = .emc_step_collapsed),
              if (cx$pooled) list(pooled = .emc_step_pooled),
              list(hmc = .emc_step_hmc, store = .emc_step_store),
              if (cx$sampler_profile) list(profile = .emc_step_profile))
