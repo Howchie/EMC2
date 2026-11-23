@@ -528,6 +528,20 @@
   pad(A) + pad(B)
 }
 
+# Round factors held to what the rounds can refresh: with `share` of the
+# coordinate's variance inside the conditional its rounds sample
+# (.emc_shear_orbit_shares), no number of rounds takes the factor below
+# 1 - share. One round's factor is raised to that, and the saturation set so
+# the composition 1 - (1 - g) (1 - a^k) / (1 - a) levels off there. Factors
+# without a measured share are left as they are.
+.emc_alloc_cap_rounds <- function(g, a, share) {
+  ok <- is.finite(share) & is.finite(g)
+  s <- pmin(1, pmax(share, 1e-3))
+  g2 <- ifelse(ok, pmax(g, 1 - s), g)
+  a0 <- ifelse(is.finite(a), a, g2)
+  list(g = g2, a = ifelse(ok, pmin(a0, pmax(0, 1 - (1 - g2) / s)), a))
+}
+
 # The moves' correlation a in [0, g] within their conditional, per
 # coordinate, from D, the mean over iterations of the net squared jump of
 # their moves over twice the coordinate's variance, and K, those iterations'
@@ -1354,6 +1368,7 @@
   g_var_slow <- (1 - g_white) * g_var
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
   g_measured <- logical(2L * p)
+  g_share <- rep(NA_real_, 2L * p)
   coupling <- NULL
   if (shear) {
     last <- .emc_shear_record(ch$shear$plan$last, p)
@@ -1387,6 +1402,22 @@
     g_fac <- .emc_alloc_shrink_g(g_obs, nk, rep(1:2, each = p))
     g_sat <- .emc_alloc_saturation(
       g_fac, last$N / pmax(1, rowSums(last$K)) / (2 * g_var_slow), last$K)
+    # The variance each coordinate's rounds can refresh (plan$cond_var); the
+    # log sds' pooled over chains as their rounds are.
+    cond <- ch$shear$plan$cond_var
+    if (length(cond) != 2L * p) cond <- rep(NA_real_, 2L * p)
+    if (production && identical(ch$shear$plan$stage, "sample")) {
+      all_cond <- vapply(emc, function(e) {
+        cv <- e$shear$plan$cond_var
+        if (length(cv) == 2L * p) cv[p + seq_len(p)] else rep(NA_real_, p)
+      }, numeric(p))
+      pooled <- rowMeans(matrix(all_cond, p), na.rm = TRUE)
+      cond[p + seq_len(p)] <- ifelse(is.finite(pooled), pooled, NA_real_)
+    }
+    g_share <- pmin(1, cond / g_var_slow)
+    capped <- .emc_alloc_cap_rounds(g_fac, g_sat, g_share)
+    g_fac <- capped$g
+    g_sat <- capped$a
     # The group block priced jointly: its coordinates' covariance and the
     # rest of the iteration's operator on them, and each coordinate's rounds
     # as moves within its conditional given the others.
@@ -1404,6 +1435,9 @@
         coupling$g <- .emc_alloc_shrink_g(c_obs, nk, rep(1:2, each = p))
         coupling$a <- .emc_alloc_saturation(
           coupling$g, last$N / pmax(1, rowSums(last$K)) / (2 * cv), last$K)
+        capped <- .emc_alloc_cap_rounds(coupling$g, coupling$a, pmin(1, cond / cv))
+        coupling$g <- capped$g
+        coupling$a <- capped$a
       }
     }
   }
@@ -1535,7 +1569,8 @@
   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), pool = pool,
        shear = shear,
        g_rho = g_rho, g_var = g_var, g_white = g_white, g_b_share = g_b_share, g_valid = g_valid,
-       g_fac = g_fac, g_sat = g_sat, g_measured = g_measured, coupling = coupling,
+       g_fac = g_fac, g_sat = g_sat, g_measured = g_measured, g_share = g_share,
+       coupling = coupling,
        g_curved = if (shear && is.list(ch$shear[["curve"]])) ch$shear$curve_rec$k,
        g_n = if (shear) last_n else numeric(2L * p),
        g_iters = if (shear) last_iters else numeric(2L * p),
@@ -2022,6 +2057,7 @@
       group_g = m$g_fac, group_a = m$g_sat,
       # Whether the group coordinates were priced jointly, with the
       # conditional round factors and the off-diagonal shrinkage used.
+      group_share = m$g_share,
       coupled = !is.null(u$coupling),
       coupled_g = if (!is.null(u$coupling)) m$coupling$g,
       coupled_shrink = if (!is.null(u$coupling)) m$coupling$shrink,

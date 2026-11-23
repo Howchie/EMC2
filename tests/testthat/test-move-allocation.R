@@ -1259,3 +1259,23 @@ test_that("the solver prices a coupled group block on the joint system", {
   alone <- EMC2:::.emc_alloc_solve(units, 1)
   expect_false(isTRUE(all.equal(alone$x[seq_len(q)], xg)))
 })
+
+test_that("round factors level off at what the rounds can refresh", {
+  cap <- EMC2:::.emc_alloc_cap_rounds
+  fac <- EMC2:::.emc_alloc_factor
+  # A fifth of the variance is refreshable: no number of rounds does more.
+  out <- cap(0.95, 0.95, 0.2)
+  expect_identical(out$g, 0.95)
+  expect_equal(fac(out$g, 1, out$a), 0.95)
+  expect_equal(fac(out$g, 200, out$a), 0.8, tolerance = 1e-6)
+  expect_gt(fac(out$g, 2, out$a), 0.95^2)
+  # One round cannot refresh more than the share either.
+  out <- cap(0.5, 0.5, 0.2)
+  expect_equal(c(out$g, out$a), c(0.8, 0))
+  expect_equal(fac(out$g, 3, out$a), 0.8)
+  # A measured saturation below the cap stands; an unmeasured share changes nothing.
+  expect_equal(cap(0.9, 0.1, 0.5)$a, 0.1)
+  expect_identical(cap(c(0.9, NA, 0.7), c(0.6, NA, NA), c(NA, 0.3, NA)),
+                   list(g = c(0.9, NA, 0.7), a = c(0.6, NA, NA)))
+  expect_equal(cap(0.9, 0.9, 1)$a, 0.9)
+})

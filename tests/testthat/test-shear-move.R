@@ -1736,3 +1736,56 @@ test_that("a chain without a curve tries another chain's coordinate first", {
   off <- list(chain(D), chain(D, colSums(solve(D))), chain(D))
   expect_identical(EMC2:::.emc_shear_curve_candidates(off, 1L, own = 2L), 2L)
 })
+
+test_that("what a coordinate's rounds can refresh is its orbits' mean variance over the window", {
+  p <- 2L
+  n <- 200L
+  set.seed(4)
+  chain <- function() {
+    tv <- array(0, c(p, p, n))
+    tv[1, 1, ] <- exp(2 * rnorm(n, 0, 0.5))
+    tv[2, 2, ] <- exp(2 * rnorm(n, -1, 0.2))
+    list(n_pars = p, data = list(), samples = list(idx = n, theta_mu = matrix(rnorm(p * n), p),
+                                                   theta_var = tv),
+         shear = list(plan = list(dirs = diag(p), log_step = rep(0, 2L * p),
+                                  last = list(n = c(500, 0, 300, 10)))))
+  }
+  emc <- list(chain(), chain())
+  seen <- new.env()
+  seen$draws <- list()
+  local_mocked_bindings(
+    # A mean direction's orbit has sd 0.5; a log sd's is wider where it is low.
+    .emc_shear_orbit_width = function(ch, idx, k, fits_of, s0, n_cores = 1L) {
+      seen$draws[[length(seen$draws) + 1L]] <- c(k, ch$samples$idx)
+      if (k <= p) 0.5 else exp(-0.5 * log(ch$samples$theta_var[k - p, k - p, ch$samples$idx]))
+    },
+    .emc_shear_context = function(ch) list(packed = NULL),
+    .emc_ll_data_prepared = function(data) NULL,
+    .emc_rebuild_lapply = function(X, FUN, n_cores, ...) lapply(X, FUN),
+    .package = "EMC2")
+  out <- EMC2:::.emc_shear_orbit_shares(emc, seq_len(n), 1L)
+  m <- EMC2:::.EMC_SHEAR_SHARE_STATES
+  for (j in 1:2) {
+    cv <- out[[j]]$shear$plan$cond_var
+    expect_identical(is.finite(cv), c(TRUE, FALSE, TRUE, FALSE))
+    expect_equal(cv[1], 0.25)
+    # The states are the coordinate's quantile mid-points; widths are in
+    # window sds of the log sd.
+    lsd <- 0.5 * log(emc[[j]]$samples$theta_var[1, 1, ])
+    at <- order(lsd)[round((seq_len(m) - 0.5) / m * n)]
+    expect_equal(cv[3], mean((exp(-lsd[at]) * sd(lsd))^2))
+  }
+  d <- do.call(rbind, seen$draws)
+  expect_identical(nrow(d), 4L * m)
+  expect_identical(sort(unique(d[, 1])), c(1L, 3L))
+  # A state whose orbit is not resolved leaves the coordinate unmeasured.
+  local_mocked_bindings(
+    .emc_shear_orbit_width = function(ch, idx, k, fits_of, s0, n_cores = 1L)
+      if (k == 3L && ch$samples$idx %% 2L == 0L) NA_real_ else 0.5,
+    .package = "EMC2")
+  out <- EMC2:::.emc_shear_orbit_shares(emc, seq_len(n), 1L)
+  expect_identical(is.finite(out[[1]]$shear$plan$cond_var), c(TRUE, FALSE, FALSE, FALSE))
+  # Too short a window measures nothing.
+  short <- EMC2:::.emc_shear_orbit_shares(emc, seq_len(2L * m), 1L)
+  expect_true(all(is.na(short[[1]]$shear$plan$cond_var)))
+})

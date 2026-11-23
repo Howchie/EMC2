@@ -306,6 +306,74 @@
   if (k <= p) c(plan$dirs[, k], numeric(p)) else replace(numeric(2L * p), k, 1)
 }
 
+# What a coordinate's rounds can refresh. A round moves the coordinate along
+# its orbit with every subject's frame position held, so it samples the
+# coordinate's conditional given those positions; the conditional's centre
+# moves only as the subjects' updates change the positions. The mean variance
+# of that conditional over the window's states is therefore the most of the
+# coordinate's variance any number of rounds can refresh, and the move
+# allocation caps the rounds' credit there (.emc_alloc_cap_rounds). It is
+# measured for the coordinates whose rounds the last block ran often enough
+# to pay for the scans, at .EMC_SHEAR_SHARE_STATES window states spread over
+# the coordinate's quantiles (the conditional is wider where the coordinate
+# is low), under the block's frames; plan$cond_var holds it in the
+# coordinate's own units, NA where it is not measured.
+.EMC_SHEAR_SHARE_STATES <- 12L
+.EMC_SHEAR_SHARE_MIN_ROUNDS <- 120
+.emc_shear_orbit_shares <- function(emc, idx, n_cores = 1L) {
+  m <- .EMC_SHEAR_SHARE_STATES
+  jobs <- list()
+  for (j in seq_along(emc)) {
+    plan <- emc[[j]]$shear$plan
+    if (!is.list(plan) || !is.matrix(plan$dirs)) next
+    p <- emc[[j]]$n_pars
+    plan$cond_var <- rep(NA_real_, 2L * p)
+    emc[[j]]$shear$plan <- plan
+    if (length(idx) < 4L * m || !is.list(plan$last) || length(plan$last$n) != 2L * p) next
+    lsd <- .emc_shear_window_lsd(emc[[j]], idx)
+    sd_l <- apply(lsd, 1L, stats::sd)
+    y_mu <- NULL
+    for (k in which(plan$last$n >= .EMC_SHEAR_SHARE_MIN_ROUNDS)) {
+      unit <- if (k <= p) 1 else sd_l[k - p]
+      if (!is.finite(unit) || unit <= 0) next
+      if (k <= p && is.null(y_mu)) y_mu <- tryCatch(
+        solve(plan$dirs, emc[[j]]$samples$theta_mu[, idx, drop = FALSE]), error = function(e) NULL)
+      y <- if (k <= p) y_mu[k, ] else lsd[k - p, ]
+      if (is.null(y) || !all(is.finite(y))) next
+      at <- idx[order(y)[pmax(1L, round((seq_len(m) - 0.5) / m * length(y)))]]
+      for (d in at) jobs[[length(jobs) + 1L]] <- list(
+        chain = j, k = k, unit = unit, draw = d,
+        s0 = exp(plan$log_step[k]) / .EMC_SHEAR_STEP0 / unit)
+    }
+  }
+  if (!length(jobs)) return(emc)
+  packed <- vector("list", length(emc))
+  for (j in unique(vapply(jobs, `[[`, integer(1), "chain"))) {
+    packed[j] <- list(.emc_shear_context(emc[[j]])$packed)
+    emc[[j]]$ll_cache_validated <- .emc_ll_data_prepared(emc[[j]]$data)
+  }
+  widths <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_along(jobs), function(i) {
+    jb <- jobs[[i]]
+    ch <- emc[[jb$chain]]
+    ch$samples$idx <- jb$draw
+    fits <- packed[[jb$chain]]
+    tryCatch(.emc_shear_orbit_width(ch, idx, jb$k, function(st) fits, jb$s0),
+             error = function(e) NA_real_)
+  }, n_cores = n_cores))
+  for (j in seq_along(emc)) emc[[j]]$ll_cache_validated <- NULL
+  w <- vapply(widths, function(x)
+    if (is.numeric(x) && length(x) == 1L && is.finite(x) && x > 0) x else NA_real_, numeric(1))
+  chain <- vapply(jobs, `[[`, integer(1), "chain")
+  coord <- vapply(jobs, `[[`, integer(1), "k")
+  unit <- vapply(jobs, `[[`, numeric(1), "unit")
+  for (j in unique(chain)) for (k in unique(coord[chain == j])) {
+    v <- (w * unit)[chain == j & coord == k]^2
+    # Every state must resolve: the wide conditionals carry the mean.
+    if (all(is.finite(v))) emc[[j]]$shear$plan$cond_var[k] <- mean(v)
+  }
+  emc
+}
+
 # Every chain's plan from the proposal window create_chain_proposals() uses.
 # Step scales and the last block's round records carry over to the new
 # directions (.emc_shear_carry_weights; a log group sd always matches
@@ -316,7 +384,8 @@
   if (!length(idx)) return(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_shear_set_plan(emc[[j]], idx, stage)
   emc <- .emc_shear_set_curves(emc, idx, n_cores)
-  .emc_shear_orbit_steps(emc, idx, n_cores)
+  emc <- .emc_shear_orbit_steps(emc, idx, n_cores)
+  .emc_shear_orbit_shares(emc, idx, n_cores)
 }
 
 # The orbit of the current state along coordinate k of the plan, at the
