@@ -87,17 +87,26 @@
 # subject along a straight line, and where the subject's posterior ridge
 # bends (a shift traded against a rate and a threshold) the candidates leave
 # it, so the orbit along the group coordinate is a fraction of the
-# posterior's width. For one mean direction k whose rounds were measured to
-# barely move it, each subject's likelihood is refitted at its conditional
-# mode at a few knots of the coordinate c = (D^-1 mu)_k, and the fits (the
-# precision and linear term) are interpolated linearly in c and held at the
-# end knots beyond them (.emc_shear_curve_subject, emc_shear_curve_fits_cpp).
-# A round whose direction leaves c alone runs as before, on the fits at the
-# current c; one that moves c rebuilds the frames per candidate. The curve is
-# fitted at a rebuild, kept only if the orbit it gives is wider than the
-# fixed fits', and reused over later rebuilds while it covers the window and
-# the rounds move (.emc_shear_set_curves); it costs nothing where no
-# coordinate asks for it.
+# posterior's width. For one mean direction k that mixes slowly, each
+# subject's likelihood is refitted at its conditional mode at a few knots of
+# the coordinate c = (D^-1 mu)_k, and the fits (the precision and linear
+# term) are interpolated linearly in c and held at the end knots beyond them
+# (.emc_shear_curve_subject, emc_shear_curve_fits_cpp). A round whose
+# direction leaves c alone runs as before, on the fits at the current c; one
+# that moves c rebuilds the frames per candidate.
+#
+# A round resamples its coordinate within the orbit only, so with an orbit of
+# r posterior sds of the coordinate it refreshes at most the share r^2 of
+# the coordinate's variance, and a round at the step target
+# .EMC_SHEAR_ROUND_REFRESH of that: its factor on the coordinate's
+# autocorrelation is 1 - .EMC_SHEAR_ROUND_REFRESH r^2
+# (.emc_shear_round_factor). A curve is worth its fits where it widens a
+# narrow orbit, not where the fixed fits' orbit already spans the margin. At
+# a rebuild a coordinate that is slow over the window is a candidate
+# whatever rounds it has had; its curve is kept only if a round under it is
+# worth several under the fixed fits (.emc_shear_curve_worth), and reused
+# over later rebuilds while it covers the window (.emc_shear_set_curves).
+# Where no coordinate is slow the curves cost the window's autocorrelations.
 #
 # Supported hierarchies: those in which every subject's prior mean is the
 # group mean (standard without group designs, diagonal-gamma); the others
@@ -115,18 +124,24 @@
 .EMC_SHEAR_STEP_ROUNDS <- 20
 .EMC_SHEAR_WIDTH_GRID <- seq(-3, 3, by = 0.5)
 .EMC_SHEAR_LOG_STEP_RANGE <- log(c(0.05, 20))
-# Curved frames: the rounds behind a coordinate and the per-round factor from
-# which its rounds count as ineffective, the knots (in posterior sds of the
-# coordinate around the window's mean), the orbit gain a curve must show to
-# be kept, and the rebuilds a coordinate whose curve failed waits before
-# another is tried.
-.EMC_SHEAR_CURVE_ROUNDS <- 20
-.EMC_SHEAR_CURVE_TRIGGER <- 0.9
+# The share of a Gaussian orbit's variance one round refreshes at a step of
+# .EMC_SHEAR_STEP0 orbit sds (the lag-one autocorrelation of the N = 8 round
+# on a standard normal is one minus it).
+.EMC_SHEAR_ROUND_REFRESH <- 0.66
+# Curved frames: the integrated autocorrelation time over the window from
+# which a mean coordinate counts as slow (a thousand iterations then hold
+# fewer than a hundred effective draws of it) and the lags it is summed
+# over, the knots (in posterior sds of the coordinate around the window's
+# mean), and the fixed-frame rounds one round under a curve must be worth
+# for the curve to be kept.
+.EMC_SHEAR_CURVE_TAU <- 10
+.EMC_SHEAR_CURVE_LAGS <- 249L
 .EMC_SHEAR_CURVE_KNOTS <- c(-3, -1.5, 0, 1.5, 3)
-.EMC_SHEAR_CURVE_GAIN <- 1.25
-.EMC_SHEAR_CURVE_WAIT <- 4L
-# Coordinates a chain without a curve may try in one rebuild, and the cosine
-# from which two coordinates count as the same one.
+.EMC_SHEAR_CURVE_WORTH <- 2
+# Per chain and rebuild, the coordinates whose fixed-frame orbit may be
+# measured and those whose curve may be fitted; and the cosine from which two
+# coordinates count as the same one.
+.EMC_SHEAR_CURVE_SCREENS <- 4L
 .EMC_SHEAR_CURVE_TRIES <- 2L
 .EMC_SHEAR_CURVE_SAME <- 0.8
 
@@ -450,27 +465,87 @@
   emc
 }
 
-# The plan's mean coordinates whose rounds do not move them: at least
-# .EMC_SHEAR_CURVE_ROUNDS rounds behind one with a per-round factor of
-# .EMC_SHEAR_CURVE_TRIGGER or more, and a lag-one autocorrelation over the
-# window that high in spite of them (`r1`, returned beside the flags). `cs`
-# holds the chain's window draws of the coordinates, `wvar` their
-# within-chain variances over every chain.
-.emc_shear_curve_slow <- function(plan, cs, wvar) {
-  p <- nrow(plan$dirs)
-  lst <- plan$last
-  none <- list(slow = logical(p), r1 = rep(NA_real_, p))
-  if (!is.list(lst) || length(lst$n) != 2L * p || ncol(cs) < 50L) return(none)
-  n <- lst$n[seq_len(p)]
-  g <- 1 - lst$E[seq_len(p)] / pmax(n, 1e-12) / (2 * wvar)
-  r1 <- vapply(seq_len(p), function(k) {
-    x <- cs[k, ]
-    v <- stats::var(x)
-    if (!is.finite(v) || v <= 0) return(NA_real_)
-    stats::cov(x[-1L], x[-length(x)]) / v
-  }, numeric(1))
-  list(slow = n >= .EMC_SHEAR_CURVE_ROUNDS & is.finite(g) & g >= .EMC_SHEAR_CURVE_TRIGGER &
-         is.finite(r1) & r1 >= .EMC_SHEAR_CURVE_TRIGGER, r1 = r1)
+# The integrated autocorrelation time of one coordinate from its draws in
+# every chain (`xs`, a series per chain): the autocovariances about each
+# chain's own mean, averaged over the chains, summed by Geyer's initial
+# monotone sequence over at most .EMC_SHEAR_CURVE_LAGS lags (a lower bound
+# for a coordinate slower than they resolve). NA when it cannot be measured.
+.emc_shear_window_iact <- function(xs) {
+  lag <- min(min(lengths(xs)) - 2L, .EMC_SHEAR_CURVE_LAGS)
+  lag <- lag - (lag + 1L) %% 2L
+  if (lag < 1L) return(NA_real_)
+  acov <- rowMeans(matrix(vapply(xs, function(x)
+    drop(stats::acf(x, lag.max = lag, type = "covariance", plot = FALSE)$acf),
+    numeric(lag + 1L)), lag + 1L))
+  if (!all(is.finite(acov)) || acov[1L] <= 0) return(NA_real_)
+  odd <- seq.int(1L, lag, by = 2L)
+  pairs <- (acov[odd] + acov[odd + 1L]) / acov[1L]
+  stop <- which(pairs <= 0)
+  if (length(stop)) pairs <- pairs[seq_len(stop[1L] - 1L)]
+  max(0, 2 * sum(cummin(pairs)) - 1)
+}
+
+# The mean coordinates that are slow by the window's own draws: an
+# integrated autocorrelation time (`tau`, returned beside the flags) of
+# .EMC_SHEAR_CURVE_TAU iterations or more over every chain. `cs_all` holds
+# each chain's window draws of the coordinates (a row each); fewer than 50
+# draws measure nothing. The rounds a coordinate has had play no part, so
+# one the allocation gives no rounds can still ask for a curve.
+.emc_shear_curve_slow <- function(cs_all) {
+  p <- nrow(cs_all[[1L]])
+  if (min(vapply(cs_all, ncol, integer(1))) < 50L)
+    return(list(slow = logical(p), tau = rep(NA_real_, p)))
+  tau <- vapply(seq_len(p), function(k)
+    .emc_shear_window_iact(lapply(cs_all, function(x) x[k, ])), numeric(1))
+  list(slow = is.finite(tau) & tau >= .EMC_SHEAR_CURVE_TAU, tau = tau)
+}
+
+# The factor one round at the step target takes off a coordinate's
+# autocorrelation when its orbit is `r` of the coordinate's posterior sd:
+# the round refreshes .EMC_SHEAR_ROUND_REFRESH of the orbit's variance, the
+# share r^2 of the coordinate's. An orbit cannot be wider than the margin on
+# average, so a measured r above one counts as one.
+.emc_shear_round_factor <- function(r) {
+  1 - .EMC_SHEAR_ROUND_REFRESH * pmin(1, pmax(0, r))^2
+}
+
+# The fixed-frame rounds one round under a curve is worth: with orbits
+# r_fixed and r_curve of the coordinate's posterior sd, the n at which n
+# fixed-frame rounds take off what the curved round does,
+# factor(r_fixed)^n = factor(r_curve). A round's factor is bounded below by
+# that of an orbit spanning the margin, so where the fixed fits' orbit
+# already covers most of the margin the worth stays near one however wide
+# the curve's orbit is measured; the width measure's noise cannot make a
+# curve look worth having there. NA when either is not measured.
+.emc_shear_curve_worth <- function(r_fixed, r_curve) {
+  out <- log(.emc_shear_round_factor(r_curve)) / log(.emc_shear_round_factor(r_fixed))
+  out[!(is.finite(r_fixed) & is.finite(r_curve) & r_fixed > 0)] <- NA_real_
+  out
+}
+
+# Whether a coordinate whose curve failed is still to be left alone. `rec`
+# records the failure: the stage, the window's last draw (`at`) and length
+# (`len`), and the failures in a row (`fails`). It is tried again once the
+# evidence has changed: in another stage, or when the draws since outnumber
+# those it was judged on, twice over for each earlier failure.
+.emc_shear_curve_waits <- function(rec, now, stage) {
+  identical(rec$stage, stage) && now >= rec$at &&
+    now - rec$at < 2^(rec$fails - 1L) * rec$len
+}
+
+# The failure records with the coordinate `row` added (`failed` TRUE: its
+# record counts one more failure, from this window) or taken out. Two rows
+# closer than .EMC_SHEAR_CURVE_SAME are one coordinate.
+.emc_shear_curve_note <- function(recs, row, failed, now, len, stage) {
+  same <- vapply(recs, function(r)
+    abs(sum(r$row * row)) / sqrt(sum(r$row^2) * sum(row^2)) >= .EMC_SHEAR_CURVE_SAME,
+    logical(1))
+  fails <- max(0L, vapply(recs[same], function(r) as.integer(r$fails), integer(1)))
+  recs <- recs[!same]
+  if (failed)
+    recs <- c(recs, list(list(row = row, at = now, len = len, stage = stage,
+                              fails = fails + 1L)))
+  utils::tail(recs, 2L * length(row))
 }
 
 # Whether a chain's curve still serves the window: the window's draws of the
@@ -577,9 +652,9 @@
 
 # The coordinates a chain without a curve may try, in order: those another
 # chain's curve runs along (the same ridge, already shown to bend), then
-# `own`, its coordinates whose rounds do not move them. `failed` holds the
-# coordinates (as rows) that failed here in earlier rebuilds and are still
-# waited on; candidates along them stay out.
+# `own`, its slow coordinates. `failed` holds the coordinates (as rows) that
+# failed here in earlier rebuilds and are still waited on; candidates along
+# them stay out.
 .emc_shear_curve_candidates <- function(emc, j, own, failed = NULL) {
   dirs <- emc[[j]]$shear$plan$dirs
   rows <- lapply(emc[-j], function(ch) ch$shear[["curve"]]$row)
@@ -592,69 +667,98 @@
 }
 
 # Each chain's curve for the block (see the header). A chain with a curve
-# keeps it while its rounds move the coordinate and the curve covers the
-# window (.emc_shear_curve_covers), at no cost; otherwise it refits the
-# coordinate's curve. A chain without one tries its candidates
-# (.emc_shear_curve_candidates) one at a time, at most
-# .EMC_SHEAR_CURVE_TRIES in a rebuild. The curved coordinate's direction
+# keeps it, at no cost, while the curve covers the window
+# (.emc_shear_curve_covers); otherwise it refits the coordinate's curve. A
+# chain without one tries its candidates (.emc_shear_curve_candidates) one at
+# a time: those another chain's curve runs along, then its own coordinates
+# that are slow over the window's draws since burn-in
+# (.emc_shear_curve_slow), those that have not failed before the others and
+# the slowest first. The curved coordinate's direction
 # becomes the one the window measures (.emc_shear_curve_dir), and stays the
 # plan's direction k while the curve lasts (.emc_shear_set_plan). The knot
-# fits run as one job per subject over the rebuild's cores; then, per chain,
-# the orbit along the coordinate is measured under the fixed fits and under
-# the curve (the geometric mean width over the states, of five, where both
-# are measured), and the curve stays only if it is .EMC_SHEAR_CURVE_GAIN
-# times wider with it: a curve's rounds cost what the fixed fits' do, so the
-# gain only has to stand clear of the measure's noise. A refit that fails
-# leaves the chain its curve once; a chain whose candidates all failed waits
-# .EMC_SHEAR_CURVE_WAIT rebuilds before trying them again. A coordinate that
-# gains or loses its curve starts its round record afresh, at a step from
-# the measured orbit: its rounds are another kernel's.
+# fits follow the window: its mean and covariance, and its posterior sd of
+# the coordinate.
+#
+# A candidate is judged by what a round along it can deliver. The orbit's
+# width is measured at five of the window's states (their geometric mean,
+# over the states measured under both sets of fits), as a share r of the
+# coordinate's posterior sd over the window, first under the fixed fits. If
+# a curve whose orbit spanned the whole margin would still not make a round
+# worth .EMC_SHEAR_CURVE_WORTH fixed-frame rounds (.emc_shear_curve_worth),
+# no curve is fitted. Otherwise every subject's knots are fitted, the orbit
+# is measured again under the curve, and the curve stays only if its round
+# is worth that many: a curved coordinate runs a round in every iteration,
+# so a round there has to do clearly more than the rounds it replaces.
+#
+# The work of a rebuild is bounded per chain: the fixed-frame orbits of at
+# most .EMC_SHEAR_CURVE_SCREENS coordinates and the knot fits of at most
+# .EMC_SHEAR_CURVE_TRIES, the fits as one job per subject and the widths as
+# one per state over the rebuild's cores. A coordinate that failed is left
+# alone until the evidence has changed (.emc_shear_curve_waits), so the
+# failures of one coordinate thin out geometrically. A refit that fails
+# leaves the chain its curve once. A coordinate that gains or loses its
+# curve starts its round record afresh, at a step from the measured orbit:
+# its rounds are another kernel's.
 .emc_shear_set_curves <- function(emc, idx, n_cores = 1L) {
   if (!isTRUE(getOption("emc2.shear_curve", TRUE)) ||
-      isTRUE(getOption("emc2.shear_delayed", FALSE))) return(emc)
+      isTRUE(getOption("emc2.shear_delayed", FALSE)) || length(idx) < 2L) return(emc)
   nch <- length(emc)
   p <- emc[[1L]]$n_pars
-  tried <- own <- failed0 <- vector("list", nch)
+  now <- max(idx)
+  settled <- idx[!emc[[1L]]$samples$stage[idx] %in% c("preburn", "burn")]
+  gm <- function(w) if (length(w)) exp(mean(log(w))) else NA_real_
+  # Per chain: the window's draws of its coordinates in every chain, its slow
+  # coordinates, and the coordinates still waited on.
+  view <- lapply(emc, function(ch) {
+    plan <- ch$shear$plan
+    if (!is.list(plan) || !is.matrix(plan$dirs)) return(NULL)
+    Dinv <- tryCatch(solve(plan$dirs), error = function(e) NULL)
+    if (is.null(Dinv)) return(NULL)
+    draws <- function(at) lapply(emc, function(c2)
+      Dinv %*% c2$samples$theta_mu[, at, drop = FALSE])
+    slow <- .emc_shear_curve_slow(draws(settled))
+    recs <- Filter(function(r) is.list(r) && length(r$row) == p && length(r$fails) == 1L,
+                   ch$shear$curve_rec$failed)
+    waits <- vapply(recs, .emc_shear_curve_waits, logical(1), now = now, stage = plan$stage)
+    # Coordinates that have not failed come before those tried again.
+    fails <- integer(p)
+    for (r in recs) {
+      m <- .emc_shear_curve_match(plan$dirs, r$row)
+      if (m$cos >= .EMC_SHEAR_CURVE_SAME) fails[m$k] <- as.integer(r$fails)
+    }
+    own <- which(slow$slow)
+    list(Dinv = Dinv, cs = draws(idx), tau = slow$tau, recs = recs,
+         own = own[order(fails[own], -slow$tau[own])],
+         blocked = lapply(recs[waits], `[[`, "row"))
+  })
+  tried <- attempts <- vector("list", nch)
+  builds <- integer(nch)
   done <- logical(nch)
-  for (attempt in seq_len(.EMC_SHEAR_CURVE_TRIES)) {
+  for (attempt in seq_len(.EMC_SHEAR_CURVE_SCREENS)) {
     todo <- vector("list", nch)
     for (j in which(!done)) {
+      done[j] <- TRUE
+      vw <- view[[j]]
+      if (is.null(vw)) next
       st <- emc[[j]]$shear
       plan <- st$plan
-      done[j] <- TRUE
-      if (!is.list(plan) || !is.matrix(plan$dirs) || length(idx) < 2L) next
-      Dinv <- tryCatch(solve(plan$dirs), error = function(e) NULL)
-      if (is.null(Dinv)) next
-      cs_all <- lapply(emc, function(ch) Dinv %*% ch$samples$theta_mu[, idx, drop = FALSE])
-      wvar <- rowMeans(matrix(vapply(cs_all, function(x) apply(x, 1L, stats::var),
-                                     numeric(p)), p))
-      slow <- .emc_shear_curve_slow(plan, cs_all[[j]], wvar)
       k <- st$curve_rec$k
       had <- length(k) == 1L && is.list(st[["curve"]])
       if (had) {
-        if (attempt > 1L || !slow$slow[k] &&
-            .emc_shear_curve_covers(st[["curve"]], unlist(lapply(cs_all, function(x) x[k, ]))))
+        if (attempt > 1L ||
+            .emc_shear_curve_covers(st[["curve"]], unlist(lapply(vw$cs, function(x) x[k, ]))))
           next
       } else {
-        if (attempt == 1L) {
-          # A waiting chain tries only what another chain's curve points to.
-          waiting <- length(st$curve_rec$wait) == 1L && st$curve_rec$wait > 0L
-          if (waiting) failed0[[j]] <- st$curve_rec$failed else {
-            own[[j]] <- which(slow$slow)[order(-slow$r1[slow$slow])]
-            emc[[j]]$shear$curve_rec["failed"] <- list(NULL)
-            st <- emc[[j]]$shear
-          }
-        }
-        cands <- setdiff(.emc_shear_curve_candidates(emc, j, own[[j]], failed0[[j]]),
-                         tried[[j]])
+        if (builds[j] >= .EMC_SHEAR_CURVE_TRIES) next
+        cands <- setdiff(.emc_shear_curve_candidates(emc, j, vw$own, vw$blocked), tried[[j]])
         if (!length(cands)) next
         k <- cands[1L]
         tried[[j]] <- c(tried[[j]], k)
         done[j] <- FALSE
       }
-      sd_c <- stats::sd(unlist(lapply(cs_all, function(x) x[k, ])))
+      sd_c <- stats::sd(unlist(lapply(vw$cs, function(x) x[k, ])))
       if (!is.finite(sd_c) || sd_c <= 0) next
-      row <- Dinv[k, ]
+      row <- vw$Dinv[k, ]
       dirs <- .emc_shear_pin_dir(plan$dirs, k,
                                  .emc_shear_curve_dir(emc, idx, row, plan$dirs[, k]), row)
       if (is.null(dirs)) dirs <- plan$dirs
@@ -664,7 +768,10 @@
       ch$ll_cache_validated <- .emc_ll_data_prepared(ch$data)
       mu_ref <- rowMeans(ch$samples$theta_mu[, idx, drop = FALSE])
       todo[[j]] <- list(
-        k = k, had = had, chain = ch, row = row,
+        k = k, had = had, chain = ch, row = row, sd_c = sd_c, tau = vw$tau[k],
+        fixed = .emc_shear_pack(.emc_shear_fits(ch), p),
+        s0 = exp(plan$log_step[k]) / .EMC_SHEAR_STEP0,
+        at = unique(c(ch$samples$idx, idx[round(length(idx) * (1:4) / 5)])),
         knots = sum(row * mu_ref) + sd_c * .EMC_SHEAR_CURVE_KNOTS,
         mus = mu_ref + outer(dirs[, k], sd_c * .EMC_SHEAR_CURVE_KNOTS),
         V = apply(ch$samples$theta_var[, , idx, drop = FALSE], 1:2, mean),
@@ -673,76 +780,100 @@
     chains <- which(!vapply(todo, is.null, logical(1)))
     if (!length(chains)) break
     started <- proc.time()[["elapsed"]]
-    jobs <- do.call(rbind, lapply(chains, function(j)
-      data.frame(chain = j, subject = seq_len(emc[[j]]$n_subjects))))
-    nodes <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_len(nrow(jobs)), function(m) {
-      td <- todo[[jobs$chain[m]]]
-      s <- jobs$subject[m]
-      .emc_shear_curve_subject(td$chain, s, td$mus, td$V, td$x0[, s])
-    }, n_cores = n_cores))
-    fit_el <- proc.time()[["elapsed"]] - started
-    gated <- .emc_with_preserved_rng(.emc_rebuild_lapply(chains, function(j) {
-      td <- todo[[j]]
-      ch <- td$chain
-      nd <- nodes[jobs$chain == j]
-      have <- which(!vapply(nd, is.null, logical(1)))
-      if (!length(have)) return(NULL)
-      fixed <- .emc_shear_pack(.emc_shear_fits(ch), p)
-      fits <- fixed
-      fits$curve <- c(.emc_shear_curve_pack(ch, td$k, td$knots, nd, have),
-                      list(dir = unname(ch$shear$plan$dirs[, td$k])))
-      s0 <- exp(ch$shear$plan$log_step[td$k]) / .EMC_SHEAR_STEP0
-      at <- unique(c(ch$samples$idx, idx[round(length(idx) * (1:4) / 5)]))
-      widths <- function(f) vapply(at, function(i) {
-        ch$samples$idx <- i
-        tryCatch(.emc_shear_orbit_width(ch, idx, td$k, function(st) f, s0),
+    # The orbit widths of the chains js at their states, under the fits
+    # fits_of gives each.
+    widths <- function(js, fits_of) {
+      jobs <- do.call(rbind, lapply(js, function(j)
+        data.frame(chain = j, at = todo[[j]]$at)))
+      w <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_len(nrow(jobs)), function(m) {
+        td <- todo[[jobs$chain[m]]]
+        ch <- td$chain
+        ch$samples$idx <- jobs$at[m]
+        fits <- fits_of(td)
+        tryCatch(.emc_shear_orbit_width(ch, idx, td$k, function(st) fits, td$s0),
                  error = function(e) NA_real_)
-      }, numeric(1))
-      w_fixed <- widths(fixed)
-      w_curve <- widths(fits)
-      both <- is.finite(w_fixed) & is.finite(w_curve)
-      gm <- function(w) if (any(both)) exp(mean(log(w[both]))) else NA_real_
-      list(w_fixed = gm(w_fixed), w_curve = gm(w_curve), subjects = length(have),
-           curve = fits$curve)
-    }, n_cores = n_cores))
+      }, n_cores = n_cores))
+      w <- vapply(w, function(x) if (is.numeric(x) && length(x) == 1L) x else NA_real_,
+                  numeric(1))
+      out <- vector("list", nch)
+      for (j in js) out[[j]] <- w[jobs$chain == j]
+      out
+    }
+    w_fixed <- widths(chains, function(td) td$fixed)
+    open <- chains[vapply(chains, function(j) {
+      w <- w_fixed[[j]]
+      worth <- .emc_shear_curve_worth(gm(w[is.finite(w)]) / todo[[j]]$sd_c, 1)
+      is.finite(worth) && worth >= .EMC_SHEAR_CURVE_WORTH
+    }, logical(1))]
+    w_curve <- vector("list", nch)
+    screen_el <- fit_el <- proc.time()[["elapsed"]] - started
+    if (length(open)) {
+      jobs <- do.call(rbind, lapply(open, function(j)
+        data.frame(chain = j, subject = seq_len(emc[[j]]$n_subjects))))
+      nodes <- .emc_with_preserved_rng(.emc_rebuild_lapply(seq_len(nrow(jobs)), function(m) {
+        td <- todo[[jobs$chain[m]]]
+        s <- jobs$subject[m]
+        .emc_shear_curve_subject(td$chain, s, td$mus, td$V, td$x0[, s])
+      }, n_cores = n_cores))
+      fit_el <- proc.time()[["elapsed"]] - started
+      for (j in open) {
+        td <- todo[[j]]
+        nd <- nodes[jobs$chain == j]
+        have <- which(!vapply(nd, is.null, logical(1)))
+        builds[j] <- builds[j] + 1L
+        todo[[j]]$subjects <- length(have)
+        if (length(have))
+          todo[[j]]$curve <- c(.emc_shear_curve_pack(td$chain, td$k, td$knots, nd, have),
+                               list(dir = unname(td$chain$shear$plan$dirs[, td$k])))
+      }
+      fitted <- open[vapply(open, function(j) is.list(todo[[j]]$curve), logical(1))]
+      if (length(fitted))
+        w_curve <- widths(fitted, function(td) c(td$fixed, list(curve = td$curve)))
+    }
     el <- proc.time()[["elapsed"]] - started
-    for (m in seq_along(chains)) {
-      j <- chains[m]
+    for (j in chains) {
       td <- todo[[j]]
-      g <- gated[[m]]
-      if (!is.list(g)) g <- list(w_fixed = NA_real_, w_curve = NA_real_, subjects = 0L)
       st <- emc[[j]]$shear
       rec <- st$curve_rec
-      passed <- is.list(g$curve) && is.finite(g$w_curve) && is.finite(g$w_fixed) &&
-        g$w_curve >= .EMC_SHEAR_CURVE_GAIN * g$w_fixed
+      wf <- w_fixed[[j]]
+      wc <- w_curve[[j]]
+      built <- is.list(td$curve) && length(wc) == length(wf)
+      both <- if (built) is.finite(wf) & is.finite(wc) else is.finite(wf)
+      w <- c(fixed = gm(wf[both]), curve = if (built) gm(wc[both]) else NA_real_)
+      r <- w / td$sd_c
+      worth <- .emc_shear_curve_worth(r[["fixed"]], r[["curve"]])
+      passed <- built && is.finite(worth) && worth >= .EMC_SHEAR_CURVE_WORTH
       strikes <- if (passed) 0L else (if (length(rec$strikes)) rec$strikes else 0L) + 1L
       kept <- passed || (td$had && strikes < 2L)
-      info <- list(k = td$k, passed = passed, kept = kept, w_fixed = g$w_fixed,
-                   w_curve = g$w_curve, subjects = g$subjects, fit_seconds = fit_el,
+      info <- list(k = td$k, passed = passed, kept = kept, tau = td$tau,
+                   r_fixed = r[["fixed"]], r_curve = r[["curve"]], worth = worth,
+                   w_fixed = w[["fixed"]], w_curve = w[["curve"]],
+                   fitted = j %in% open, subjects = if (j %in% open) td$subjects else 0L,
+                   screen_seconds = screen_el, fit_seconds = fit_el - screen_el,
                    seconds = el)
       if (passed) {
-        st$curve <- g$curve
+        st$curve <- td$curve
         st$plan$dirs <- td$chain$shear$plan$dirs
       } else if (!kept) st["curve"] <- list(NULL)
       # A chain that keeps its curve is done; one without tries its next
-      # candidate, and waits once they have all failed.
+      # candidate.
       if (kept) done[j] <- TRUE
-      failed <- if (kept) NULL else c(rec$failed, list(td$row))
+      failed <- if (kept && !passed) view[[j]]$recs else
+        .emc_shear_curve_note(view[[j]]$recs, td$row, !kept, now, length(idx), st$plan$stage)
+      view[[j]]$recs <- failed
+      attempts[[j]] <- c(attempts[[j]], list(info))
+      count <- function(x) if (length(x)) x else 0
       st$curve_rec <- c(
-        if (kept) list(k = td$k) else list(wait = .EMC_SHEAR_CURVE_WAIT, failed = failed),
-        list(strikes = strikes, last = info,
-             builds = (if (length(rec$builds)) rec$builds else 0L) + 1L,
-             seconds = (if (length(rec$seconds)) rec$seconds else 0) + el / length(chains)))
+        if (kept) list(k = td$k),
+        list(failed = failed, strikes = strikes, last = info, tried = attempts[[j]],
+             screens = count(rec$screens) + 1L,
+             builds = count(rec$builds) + (j %in% open),
+             seconds = count(rec$seconds) + el / length(chains)))
       if (kept != td$had)
-        st$plan <- .emc_shear_restart_coord(st$plan, td$k, if (kept) g$w_curve else g$w_fixed)
+        st$plan <- .emc_shear_restart_coord(
+          st$plan, td$k, if (kept) w[["curve"]] else w[["fixed"]])
       emc[[j]]$shear <- st
     }
-  }
-  # A waiting chain that tried nothing in this rebuild is one rebuild nearer.
-  for (j in seq_len(nch)) {
-    w <- emc[[j]]$shear$curve_rec$wait
-    if (length(w) == 1L && w > 0L && !length(tried[[j]]))
-      emc[[j]]$shear$curve_rec$wait <- w - 1L
   }
   emc
 }
