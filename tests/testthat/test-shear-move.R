@@ -974,7 +974,8 @@ test_that("rebuilds carry step scales to matching directions and record the wind
   ch$shear$plan <- old
   again <- EMC2:::.emc_shear_set_plan(ch, seq_len(ch$samples$idx), "burn")$shear$plan
   p <- ncol(old$dirs)
-  cw <- EMC2:::.emc_shear_carry_weights(old$dirs, again$dirs)
+  S <- stats::cov(t(ch$samples$theta_mu[, seq_len(ch$samples$idx), drop = FALSE]))
+  cw <- EMC2:::.emc_shear_carry_weights(old$dirs, again$dirs, S)
   for (k in seq_len(p)) {
     expected <- sum(cw$w[k, seq_len(p)] * (log(1.7) + log(cw$scale[k, seq_len(p)])))
     expect_equal(again$log_step[k], expected, tolerance = 1e-10)
@@ -1153,6 +1154,34 @@ test_that("rebuilt mean directions inherit the old directions' records by their 
   cw <- EMC2:::.emc_shear_carry_weights(matrix(0, p, p), D)
   expect_equal(rowSums(cw$w)[1:p], rep(0, p))
   expect_equal(cw$w[sd_k, sd_k], diag(p))
+})
+
+test_that("a carried record keeps its per-round factor in any new basis", {
+  set.seed(5)
+  p <- 4L
+  A <- matrix(rnorm(p * p), p)
+  S <- crossprod(A) + diag(p)
+  var_in <- function(D) { Di <- solve(D); rowSums((Di %*% S) * Di) }
+  # Every old coordinate moves by the same share of its variance per round.
+  g0 <- 0.5
+  D <- matrix(rnorm(p * p), p)
+  E <- c(2 * (1 - g0) * var_in(D) * 100, numeric(p))
+  n <- c(rep(100, p), numeric(p))
+  g_new <- function(Dn) {
+    cw <- EMC2:::.emc_shear_carry_weights(D, Dn, S)
+    1 - drop((cw$w * cw$scale^2) %*% E)[1:p] / drop(cw$w %*% n)[1:p] / (2 * var_in(Dn))
+  }
+  # A fresh basis of unrelated lengths, and the same with one coordinate
+  # pinned to a direction along which mu covaries with it.
+  fresh <- matrix(rnorm(p * p), p) %*% diag(c(0.1, 1, 5, 20))
+  expect_equal(g_new(fresh), rep(g0, p))
+  row <- solve(D)[2, ]
+  pinned <- EMC2:::.emc_shear_pin_dir(fresh, 2L, drop(S %*% row), row)
+  expect_false(is.null(pinned))
+  expect_equal(g_new(pinned), rep(g0, p))
+  # The pinned coordinate is old coordinate 2 itself: its own record, unscaled.
+  cw <- EMC2:::.emc_shear_carry_weights(D, pinned, S)
+  expect_equal(cw$scale[2, 2], 1)
 })
 
 # An arbitrary curve for n subjects of p parameters: K knots of row' mu around
