@@ -343,6 +343,23 @@
   pmin(1, pmax(0, 1 - esjd / (2 * pmax(var, .Machine$double.xmin))))
 }
 
+# The share of each group coordinate's window variance `var` that the group's
+# draw given the subjects redraws every iteration: d' S d / N for a mean
+# coordinate (row d of Dinv, S the group covariance) and 1 / (2 N) for a log
+# group sd. A white part decorrelates at lag one, so it can be no more than
+# the measured lag-one decorrelation 1 - rho; it is held to
+# .EMC_ALLOC_WHITE_CAP of it, against the window variance's noise.
+.EMC_ALLOC_WHITE_CAP <- 0.75
+.emc_alloc_white_share <- function(S, Dinv, n, var, rho) {
+  p <- nrow(Dinv)
+  cv <- c(if (is.matrix(S) && all(dim(S) == p) && all(is.finite(S)))
+            rowSums((Dinv %*% S) * Dinv) / n else rep(NA_real_, p),
+          rep(1 / (2 * n), p))
+  w <- cv / var
+  w[!is.finite(w) | w < 0] <- 0
+  pmin(w, .EMC_ALLOC_WHITE_CAP * pmax(0, 1 - rho))
+}
+
 .emc_alloc_tau <- function(rho) {
   rho <- pmin(rho, 1 - 1e-12)
   (1 + rho) / (1 - rho)
@@ -1093,7 +1110,10 @@
     # Every chain's draws, one contiguous p x draws slice per subject.
     al <- lapply(seq_along(emc), function(i)
       aperm(emc[[i]]$samples$alpha[, , vdraws[[i]], drop = FALSE], c(1L, 3L, 2L)))
-    st <- list(mu = mu, mu_by_chain = mu_by_chain, mu_cov = .emc_alloc_cov(mu),
+    S_mean <- tryCatch(Reduce(`+`, lapply(seq_along(emc), function(i)
+      apply(emc[[i]]$samples$theta_var[, , vdraws[[i]], drop = FALSE], 1:2, mean))) / length(emc),
+      error = function(e) NULL)
+    st <- list(mu = mu, mu_by_chain = mu_by_chain, mu_cov = .emc_alloc_cov(mu), S_mean = S_mean,
                lsd = lsd, lsd_by_chain = lsd_by_chain,
                lsd_var = .emc_alloc_within_share(lsd_by_chain)$var, al = al,
                a_cov = lapply(seq_len(dim(al[[1L]])[3L]), function(s)
@@ -1185,6 +1205,14 @@
   g_rho[!g_valid] <- 1
   g_var[!is.finite(g_var) | g_var <= 0] <- 1
   g_b_share[!is.finite(g_b_share)] <- 0
+  # Each iteration redraws the group given the subjects, so a group
+  # coordinate is a white part (that draw's variance) on a slow part the
+  # moves carry. Its units are priced on the slow part's coefficient, and
+  # the moves' jumps are measured against the slow part's variance.
+  g_white <- .emc_alloc_white_share(ds$S_mean, Dinv, ch$n_subjects, g_var, g_rho)
+  g_white[!g_valid] <- 0
+  g_rho <- pmin(1, g_rho / (1 - g_white))
+  g_var_slow <- (1 - g_white) * g_var
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
   g_measured <- logical(2L * p)
   if (shear) {
@@ -1215,10 +1243,10 @@
     last_iters <- last$iters
     g_measured <- nk > 0
     g_obs <- ifelse(g_measured,
-                    pmin(1, pmax(0, 1 - (last$E / pmax(nk, 1e-12)) / (2 * g_var))), NA_real_)
+                    pmin(1, pmax(0, 1 - (last$E / pmax(nk, 1e-12)) / (2 * g_var_slow))), NA_real_)
     g_fac <- .emc_alloc_shrink_g(g_obs, nk, rep(1:2, each = p))
     g_sat <- .emc_alloc_saturation(
-      g_fac, last$N / pmax(1, rowSums(last$K)) / (2 * g_var), last$K)
+      g_fac, last$N / pmax(1, rowSums(last$K)) / (2 * g_var_slow), last$K)
   }
   # The collapsed move moves every group coordinate at once: its factors come
   # from its acceptance-weighted jumps in the same coordinates.
@@ -1235,11 +1263,11 @@
       # kind's: once measured, a move that does not move earns no credit.
       last <- .emc_collapsed_record(last, p)
       c_obs <- pmin(1, pmax(0, 1 - (rowSums((T_g %*% last$E) * T_g) / last$n) /
-                              (2 * g_var)))
+                              (2 * g_var_slow)))
       n0 <- .EMC_ALLOC_ROUND_EVIDENCE
       c_fac <- (last$n * c_obs + n0 * mean(c_obs)) / (last$n + n0)
       c_sat <- .emc_alloc_saturation(
-        c_fac, rowSums((T_g %*% last$N) * T_g) / max(1, sum(last$K)) / (2 * g_var),
+        c_fac, rowSums((T_g %*% last$N) * T_g) / max(1, sum(last$K)) / (2 * g_var_slow),
         last$K)
     }
   }
@@ -1347,7 +1375,7 @@
     .emc_alloc_marginal(if (stored) NULL else w, f, ch$alloc$last)), .EMC_ALLOC_FAMILIES)
   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), pool = pool,
        shear = shear,
-       g_rho = g_rho, g_var = g_var, g_b_share = g_b_share, g_valid = g_valid,
+       g_rho = g_rho, g_var = g_var, g_white = g_white, g_b_share = g_b_share, g_valid = g_valid,
        g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
        g_curved = if (shear && is.list(ch$shear[["curve"]])) ch$shear$curve_rec$k,
        g_n = if (shear) last_n else numeric(2L * p),

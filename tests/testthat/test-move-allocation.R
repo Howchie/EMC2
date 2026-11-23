@@ -437,7 +437,8 @@ test_that("production measurements use every production draw and pool the stage'
   expect_equal(prod$g_var[1], within_g)
   expect_identical(prod$pairs[["group"]], w_n + 50L)
   expect_equal(prod$pool$G, diag(c(50, 0)))
-  expect_equal(prod$g_rho[1], EMC2:::.emc_alloc_rho(50 / (w_n + 50), within_g))
+  expect_equal(prod$g_rho[1], min(1, EMC2:::.emc_alloc_rho(50 / (w_n + 50), within_g) /
+                                       (1 - prod$g_white[1])))
   expect_equal(prod$g_b_share[1], max(0, stats::var(x) - within_g) / stats::var(x))
   # The first production rebuild measures the window alone and starts the pool.
   first <- emc
@@ -454,6 +455,52 @@ test_that("production measurements use every production draw and pool the stage'
   expect_identical(b$pairs[["group"]], w_n)
 })
 
+test_that("a group coordinate is priced on its slow part, the group's draw given the subjects being white", {
+  share <- EMC2:::.emc_alloc_white_share
+  cap <- EMC2:::.EMC_ALLOC_WHITE_CAP
+  S <- matrix(c(2, 0.5, 0.5, 1), 2)
+  Dinv <- matrix(c(1, 1, 0, 2), 2)
+  var <- c(1, 4, 0.05, 0.5)
+  # Mean coordinates: d' S d / N of their variance; log sds: 1 / (2 N).
+  w <- share(S, Dinv, 10, var, rho = rep(0, 4))
+  expect_equal(w[1:2], rowSums((Dinv %*% S) * Dinv) / 10 / var[1:2])
+  expect_equal(w[4], 1 / 20 / 0.5)
+  # No more than the cap's share of what decorrelated at lag one; nothing
+  # where nothing did, and nothing without a group covariance.
+  expect_equal(w[3], cap)
+  expect_equal(share(S, Dinv, 10, var, rho = c(0.9, 0.9, 1, 0.99))[3:4], c(0, cap * 0.01))
+  expect_equal(share(NULL, Dinv, 10, var, rho = rep(0, 4))[1:2], c(0, 0))
+
+  # An iteration of white noise of share s on an AR(1) part of coefficient r
+  # has lag-one autocorrelation s r; the unit's rho is r again, and a move's
+  # jump counts against the slow part's variance.
+  set.seed(9)
+  p <- 1; N <- 25; k <- 4000; s_true <- 0.2; r <- 0.8
+  slow <- as.numeric(stats::filter(rnorm(k), r, "recursive")) * sqrt(1 - r^2) * sqrt(1 - s_true)
+  mu <- slow + rnorm(k, sd = sqrt(s_true))
+  Sig <- s_true * N
+  ch <- list(n_pars = p, n_subjects = N, type = "diagonal-gamma", par_names = "x",
+             lik_laplace = rep(list(NULL), N),
+             samples = list(idx = k, theta_mu = matrix(mu, 1), theta_var = array(Sig, c(1, 1, k)),
+                            alpha = array(0, c(1, N, k))),
+             shear = list(plan = list(dirs = diag(1),
+                                      last = list(E = c(0.2, 0), n = c(10L, 0L), moved = integer(2)))),
+             alloc = list(window = modifyList(EMC2:::.emc_alloc_empty_window(N, p),
+                                              list(n = k - 1L, nG = k - 1L,
+                                                   G = diag(c(sum(diff(mu)^2), 0))))))
+  local_mocked_bindings(.emc_shear_active = function(sampler) TRUE,
+                        .emc_alloc_draws = function(ch, m) seq_len(ch$samples$idx),
+                        .package = "EMC2")
+  ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
+  v <- ms$g_var[1]
+  lag1 <- EMC2:::.emc_alloc_rho(sum(diff(mu)^2) / (k - 1), v)
+  expect_equal(ms$g_white[1], min(s_true * N / N / v, cap * (1 - lag1)))
+  expect_equal(ms$g_rho[1], lag1 / (1 - ms$g_white[1]))
+  expect_equal(ms$g_rho[1], r, tolerance = 0.03)
+  g_obs <- 1 - (0.2 / 10) / (2 * v * (1 - ms$g_white[1]))
+  expect_equal(ms$g_fac[1], g_obs)
+})
+
 test_that("an unmeasured shear coordinate counts at its kind's measured factor", {
   p <- 2; n <- 1; k <- 50
   a <- matrix(stats::rnorm(p * k), p)
@@ -467,7 +514,7 @@ test_that("an unmeasured shear coordinate counts at its kind's measured factor",
              alloc = list(window = NULL))
   local_mocked_bindings(.emc_shear_active = function(sampler) TRUE, .package = "EMC2")
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
-  g1 <- 1 - 1 / (2 * ms$g_var[1])
+  g1 <- max(0, 1 - 1 / (2 * ms$g_var[1] * (1 - ms$g_white[1])))
   expect_equal(ms$g_fac[1], g1)
   # The other mean direction borrows the measured one; the log sds, with no
   # measured round of their own, borrow it too.
@@ -520,7 +567,7 @@ test_that("a measured collapsed move that never moves earns no credit", {
   # Movement on one coordinate is shaded towards the move's own mean factor.
   ch$collapsed$plan$last$E[1, 1] <- 60
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
-  obs <- c(1 - 0.1 / (2 * ms$g_var[1]), rep(1, 3))
+  obs <- c(max(0, 1 - 0.1 / (2 * ms$g_var[1] * (1 - ms$g_white[1]))), rep(1, 3))
   expect_equal(ms$c_fac, (600 * obs + 20 * mean(obs)) / 620)
 })
 
@@ -660,7 +707,7 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
   # instead of declaring it immovable.
   ch <- chain(list(E = c(50, 0, 0, 0), n = c(50, 5, 0, 0), moved = integer(4)))
   ms <- EMC2:::.emc_alloc_measure(list(ch), 1, NULL, diag(p))
-  g1 <- 1 - 1 / (2 * ms$g_var[1])
+  g1 <- max(0, 1 - 1 / (2 * ms$g_var[1] * (1 - ms$g_white[1])))
   # Two measured coordinates leave the spread at its floor 2 / n0: log
   # movements shrink towards their precision-weighted mean, n0 rounds' worth.
   t2 <- 2 / n0
@@ -678,7 +725,7 @@ test_that("a few rounds shade a coordinate's factor towards its kind's, and log-
   other <- chain(list(E = c(0, 0, 1, 0), n = c(0, 0, 10, 0), moved = integer(4)))
   mine <- chain(list(E = c(0, 0, 0, 0), n = c(0, 0, 0, 0), moved = integer(4)))
   msp <- EMC2:::.emc_alloc_measure(list(mine, other), 1, NULL, diag(p), stage = "sample")
-  g3 <- max(0, 1 - 0.1 / (2 * msp$g_var[3]))
+  g3 <- max(0, 1 - 0.1 / (2 * msp$g_var[3] * (1 - msp$g_white[3])))
   expect_true(msp$g_measured[3]); expect_false(msp$g_measured[1])
   expect_equal(msp$g_fac[3], (10 * g3 + n0 * g3) / (10 + n0))
   # Outside production nothing pools.
