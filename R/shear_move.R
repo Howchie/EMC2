@@ -312,14 +312,20 @@
 # moves only as the subjects' updates change the positions. The mean variance
 # of that conditional over the window's states is therefore the most of the
 # coordinate's variance any number of rounds can refresh, and the move
-# allocation caps the rounds' credit there (.emc_alloc_cap_rounds). It is
-# measured for the coordinates whose rounds the last block ran often enough
-# to pay for the scans, at .EMC_SHEAR_SHARE_STATES window states spread over
+# allocation caps the rounds' credit there (.emc_alloc_cap_rounds).
+#
+# The cap only matters where rounds are bought in number, so it is measured
+# for the coordinates the last block ran at .EMC_SHEAR_SHARE_RATE rounds an
+# iteration or more, at .EMC_SHEAR_SHARE_STATES window states spread over
 # the coordinate's quantiles (the conditional is wider where the coordinate
-# is low), under the block's frames; plan$cond_var holds it in the
-# coordinate's own units, NA where it is not measured.
-.EMC_SHEAR_SHARE_STATES <- 12L
-.EMC_SHEAR_SHARE_MIN_ROUNDS <- 120
+# is low), under the block's frames. plan$cond_var holds it in the
+# coordinate's own units (NA: not measured) and plan$cond_age the rebuilds
+# since; both carry to the next plan's matching coordinates
+# (.emc_shear_set_plan), and a coordinate is measured again only after
+# .EMC_SHEAR_SHARE_AGE rebuilds.
+.EMC_SHEAR_SHARE_STATES <- 6L
+.EMC_SHEAR_SHARE_RATE <- 0.75
+.EMC_SHEAR_SHARE_AGE <- 4
 .emc_shear_orbit_shares <- function(emc, idx, n_cores = 1L) {
   m <- .EMC_SHEAR_SHARE_STATES
   jobs <- list()
@@ -327,13 +333,25 @@
     plan <- emc[[j]]$shear$plan
     if (!is.list(plan) || !is.matrix(plan$dirs)) next
     p <- emc[[j]]$n_pars
-    plan$cond_var <- rep(NA_real_, 2L * p)
+    if (length(plan$cond_var) != 2L * p || length(plan$cond_age) != 2L * p) {
+      plan$cond_var <- rep(NA_real_, 2L * p)
+      plan$cond_age <- rep(NA_real_, 2L * p)
+    }
+    # A measurement long out of date is dropped rather than trusted.
+    stale <- is.finite(plan$cond_age) & plan$cond_age >= 3 * .EMC_SHEAR_SHARE_AGE
+    plan$cond_var[stale | !is.finite(plan$cond_age)] <- NA_real_
     emc[[j]]$shear$plan <- plan
-    if (length(idx) < 4L * m || !is.list(plan$last) || length(plan$last$n) != 2L * p) next
+    last <- plan$last
+    if (length(idx) < 4L * m || !is.list(last) || length(last$n) != 2L * p ||
+        length(last$iters) != 2L * p) next
+    due <- last$iters > 0 & last$n >= .EMC_SHEAR_SHARE_RATE * last$iters &
+      last$n >= 4 * m &
+      !(is.finite(plan$cond_var) & plan$cond_age < .EMC_SHEAR_SHARE_AGE)
+    if (!any(due)) next
     lsd <- .emc_shear_window_lsd(emc[[j]], idx)
     sd_l <- apply(lsd, 1L, stats::sd)
     y_mu <- NULL
-    for (k in which(plan$last$n >= .EMC_SHEAR_SHARE_MIN_ROUNDS)) {
+    for (k in which(due)) {
       unit <- if (k <= p) 1 else sd_l[k - p]
       if (!is.finite(unit) || unit <= 0) next
       if (k <= p && is.null(y_mu)) y_mu <- tryCatch(
@@ -341,9 +359,11 @@
       y <- if (k <= p) y_mu[k, ] else lsd[k - p, ]
       if (is.null(y) || !all(is.finite(y))) next
       at <- idx[order(y)[pmax(1L, round((seq_len(m) - 0.5) / m * length(y)))]]
-      for (d in at) jobs[[length(jobs) + 1L]] <- list(
-        chain = j, k = k, unit = unit, draw = d,
-        s0 = exp(plan$log_step[k]) / .EMC_SHEAR_STEP0 / unit)
+      # The last measurement's width starts the grid where there is one.
+      s0 <- if (is.finite(plan$cond_var[k])) sqrt(plan$cond_var[k]) / unit else
+        exp(plan$log_step[k]) / .EMC_SHEAR_STEP0 / unit
+      for (d in at) jobs[[length(jobs) + 1L]] <- list(chain = j, k = k, unit = unit, draw = d,
+                                                      s0 = s0)
     }
   }
   if (!length(jobs)) return(emc)
@@ -369,7 +389,9 @@
   for (j in unique(chain)) for (k in unique(coord[chain == j])) {
     v <- (w * unit)[chain == j & coord == k]^2
     # Every state must resolve: the wide conditionals carry the mean.
-    if (all(is.finite(v))) emc[[j]]$shear$plan$cond_var[k] <- mean(v)
+    ok <- all(is.finite(v))
+    emc[[j]]$shear$plan$cond_var[k] <- if (ok) mean(v) else NA_real_
+    emc[[j]]$shear$plan$cond_age[k] <- if (ok) 0 else NA_real_
   }
   emc
 }
@@ -1129,6 +1151,15 @@
     }
     recent <- carry(blk)
     recent$iters[got] <- .emc_alloc_block_iters(chain)
+    # What the rounds can refresh (.emc_shear_orbit_shares) follows a
+    # coordinate whose old directions were all measured.
+    if (length(old$cond_var) == 2L * p && length(old$cond_age) == 2L * p) {
+      known <- is.finite(old$cond_var) & is.finite(old$cond_age)
+      whole <- drop(cw$w %*% known) > 0.99
+      plan$cond_var <- ifelse(whole, drop((cw$w * cw$scale^2) %*% ifelse(known, old$cond_var, 0)),
+                              NA_real_)
+      plan$cond_age <- ifelse(whole, drop(cw$w %*% ifelse(known, old$cond_age, 0)) + 1, NA_real_)
+    }
     production_pool <- identical(stage, "sample") && same_stage
     if (production_pool || !identical(stage, "sample")) {
       prev <- carry(if (same_stage) old$pool else old$last)
