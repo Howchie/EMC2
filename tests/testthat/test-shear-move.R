@@ -1314,25 +1314,266 @@ test_that("the shear move with curved frames leaves the joint posterior invarian
   expect_true(all(moved[1:2] > 0.1))
 })
 
-test_that("a curve is asked for only where measured rounds do not move a slow coordinate", {
+test_that("a window's integrated autocorrelation time pools the chains about their own means", {
   set.seed(3)
-  p <- 3L
-  plan <- list(dirs = diag(p), last = list(E = c(0.02, 1.5, 0.02, 0, 0, 0),
-                                           n = c(40, 40, 5, 0, 0, 0)))
+  ar1 <- function(rho, n) as.numeric(stats::filter(rnorm(n), rho, "recursive"))
+  for (rho in c(0.5, 0.8, 0.9)) {
+    xs <- lapply(c(0, 5, -3), function(shift) shift + ar1(rho, 20000))
+    expect_equal(EMC2:::.emc_shear_window_iact(xs), (1 + rho) / (1 - rho), tolerance = 0.1)
+  }
+  # White noise has none to speak of, and a coordinate slower than the summed
+  # lags reads as at least as slow as they resolve.
+  expect_lt(EMC2:::.emc_shear_window_iact(list(rnorm(5000), rnorm(5000))), 1.3)
+  expect_gt(EMC2:::.emc_shear_window_iact(list(ar1(0.999, 5000))), 200)
+  expect_true(is.na(EMC2:::.emc_shear_window_iact(list(rep(1, 100), rep(2, 100)))))
+  expect_true(is.na(EMC2:::.emc_shear_window_iact(list(c(1, 2)))))
+})
+
+test_that("a curve is asked for where the window shows a slow coordinate, whatever its rounds", {
+  set.seed(3)
   ar1 <- function(rho, n = 400) as.numeric(stats::filter(rnorm(n), rho, "recursive"))
-  cs <- rbind(ar1(0.97), ar1(0.97), ar1(0.97))
-  wvar <- apply(cs, 1, var)
-  plan$last$E[1:3] <- plan$last$E[1:3] * wvar * plan$last$n[1:3]
-  out <- EMC2:::.emc_shear_curve_slow(plan, cs, wvar)
-  # 1: slow and its rounds small; 2: slow but its rounds move it; 3: too few
-  # rounds to say.
-  expect_identical(out$slow, c(TRUE, FALSE, FALSE))
-  # Rounds that do not move a coordinate that mixes anyway ask for nothing.
-  fast <- EMC2:::.emc_shear_curve_slow(plan, rbind(ar1(0.2), cs[2:3, ]), wvar)
-  expect_false(fast$slow[1])
-  # No record, or a window too short to measure, asks for nothing.
-  expect_false(any(EMC2:::.emc_shear_curve_slow(plan, cs[, 1:20], wvar)$slow))
-  expect_false(any(EMC2:::.emc_shear_curve_slow(replace(plan, "last", list(NULL)), cs, wvar)$slow))
+  cs_all <- lapply(1:3, function(j) rbind(ar1(0.97), ar1(0.5), ar1(0.9)))
+  out <- EMC2:::.emc_shear_curve_slow(cs_all)
+  # 1 and 3 take tens of iterations per independent draw; 2 takes about three.
+  expect_identical(out$slow, c(TRUE, FALSE, TRUE))
+  expect_gt(out$tau[1], out$tau[3])
+  expect_lt(out$tau[2], EMC2:::.EMC_SHEAR_CURVE_TAU)
+  # A window too short to measure, or one without spread, asks for nothing.
+  expect_false(any(EMC2:::.emc_shear_curve_slow(lapply(cs_all, function(x) x[, 1:20]))$slow))
+  expect_false(any(EMC2:::.emc_shear_curve_slow(lapply(cs_all, function(x) x[, integer(0), drop = FALSE]))$slow))
+  flat <- lapply(cs_all, function(x) rbind(rep(1, ncol(x)), x[2:3, ]))
+  expect_identical(EMC2:::.emc_shear_curve_slow(flat)$slow, c(FALSE, FALSE, TRUE))
+})
+
+test_that("a round at the step target refreshes the stated share of a Gaussian orbit", {
+  set.seed(5)
+  step <- EMC2:::.EMC_SHEAR_STEP0
+  N <- EMC2:::.EMC_SHEAR_CANDIDATES
+  M <- 30000L
+  x <- numeric(M + 1L)
+  for (i in seq_len(M)) {
+    cand <- c(x[i], x[i] + rnorm(1, 0, step) + rnorm(N, 0, step))
+    lw <- stats::dnorm(cand, log = TRUE)
+    x[i + 1L] <- cand[sample.int(N + 1L, 1L, prob = exp(lw - max(lw)))]
+  }
+  expect_equal(1 - stats::cor(x[-1L], x[-(M + 1L)]), EMC2:::.EMC_SHEAR_ROUND_REFRESH,
+               tolerance = 0.03)
+})
+
+test_that("a curve's worth is the fixed-frame rounds its round replaces", {
+  eta <- EMC2:::.EMC_SHEAR_ROUND_REFRESH
+  factor <- EMC2:::.emc_shear_round_factor
+  worth <- EMC2:::.emc_shear_curve_worth
+  expect_equal(factor(c(0, 0.5, 1, 1.3)), c(1, 1 - eta / 4, 1 - eta, 1 - eta))
+  # Two fixed-frame rounds take off the square of one's factor.
+  r_two <- sqrt((1 - factor(0.5)^2) / eta)
+  expect_equal(worth(0.5, r_two), 2)
+  expect_equal(worth(0.6, 0.6), 1)
+  expect_gt(worth(0.4, 0.7), worth(0.4, 0.6))
+  # Narrow orbits: the ratio of the shares of variance refreshed.
+  expect_equal(worth(0.05, 0.1), 4, tolerance = 0.01)
+  # An orbit that spans most of the margin leaves a curve nothing worth
+  # having, however wide the curve's orbit is measured.
+  expect_lt(worth(0.91, 0.99), 1.5)
+  expect_lt(worth(0.8, 1), EMC2:::.EMC_SHEAR_CURVE_WORTH)
+  expect_lt(worth(0.8, 1.2), EMC2:::.EMC_SHEAR_CURVE_WORTH)
+  expect_gt(worth(0.75, 1), EMC2:::.EMC_SHEAR_CURVE_WORTH)
+  expect_identical(worth(c(0.4, NA, 0, 0.4), c(0.4, 0.5, 0.5, NA)), c(1, NA, NA, NA))
+  expect_equal(worth(c(0.4, 0.6), 1), c(worth(0.4, 1), worth(0.6, 1)))
+})
+
+test_that("a coordinate whose curve failed waits until the evidence has changed", {
+  waits <- EMC2:::.emc_shear_curve_waits
+  rec <- list(row = c(1, 0), at = 400L, len = 300L, stage = "sample", fails = 1L)
+  expect_true(waits(rec, 400L, "sample"))
+  expect_true(waits(rec, 699L, "sample"))
+  expect_false(waits(rec, 700L, "sample"))
+  # Each further failure doubles the draws it waits for.
+  expect_true(waits(replace(rec, "fails", 2L), 999L, "sample"))
+  expect_false(waits(replace(rec, "fails", 2L), 1000L, "sample"))
+  expect_true(waits(replace(rec, "fails", 3L), 1599L, "sample"))
+  # Another stage, or stored draws that no longer reach the failure, are new
+  # evidence.
+  expect_false(waits(rec, 450L, "adapt"))
+  expect_false(waits(rec, 100L, "sample"))
+
+  note <- EMC2:::.emc_shear_curve_note
+  recs <- note(list(), c(1, 0), TRUE, 400L, 300L, "sample")
+  expect_identical(recs, list(rec))
+  # The same coordinate, slightly turned, counts its failures in a row.
+  again <- note(recs, c(1, 0.1), TRUE, 900L, 800L, "sample")
+  expect_length(again, 1L)
+  expect_identical(again[[1]][c("at", "len", "fails")], list(at = 900L, len = 800L, fails = 2L))
+  # Another coordinate has its own record; a curve that is kept clears its
+  # coordinate's.
+  both <- note(recs, c(0, 1), TRUE, 900L, 800L, "sample")
+  expect_identical(vapply(both, `[[`, integer(1), "fails"), c(1L, 1L))
+  expect_identical(note(both, c(-1, 0.05), FALSE, 900L, 800L, "sample"), both[2])
+  # The records stay bounded.
+  many <- Reduce(function(r, a) note(r, c(cos(a), sin(a)), TRUE, 1L, 1L, "sample"),
+                 seq(0, 1.5, length.out = 12), list())
+  expect_lte(length(many), 4L)
+})
+
+# Chains of a window of L draws whose mean coordinates (the plan's directions
+# are the axes) are AR(1) series with the autocorrelations rho, for
+# .emc_shear_set_curves with the orbit widths and knot fits mocked.
+curve_chains <- function(rho, L = 3000L, n = 4L, stage = "sample", seed = 21) {
+  set.seed(seed)
+  p <- length(rho)
+  lapply(1:3, function(j) {
+    mu <- t(vapply(rho, function(r) as.numeric(stats::filter(rnorm(L), r, "recursive")) *
+                     sqrt(1 - r^2), numeric(L)))
+    list(n_pars = p, n_subjects = n, par_names = paste0("p", seq_len(p)),
+         lik_laplace = rep(list(list(prec = diag(p), lin = numeric(p))), n),
+         samples = list(theta_mu = mu, theta_var = array(diag(p), c(p, p, L)),
+                        alpha = array(0, c(p, n, L)), stage = rep(stage, L), idx = L),
+         shear = list(plan = list(dirs = diag(p), log_step = rep(0, 2L * p), stage = stage)))
+  })
+}
+
+# Mocks under which a coordinate's orbit is r_fixed (r_curve under a curve) of
+# its posterior sd; returns the counter of knot fits.
+mock_curve_work <- function(emc, r_fixed, r_curve, env = parent.frame()) {
+  sds <- apply(do.call(cbind, lapply(emc, function(ch) ch$samples$theta_mu)), 1, sd)
+  count <- new.env()
+  count$fits <- 0L
+  count$widths <- 0L
+  local_mocked_bindings(
+    .emc_shear_orbit_width = function(ch, idx, k, fits_of, s0, n_cores = 1L) {
+      count$widths <- count$widths + 1L
+      (if (is.null(fits_of(NULL)$curve)) r_fixed else r_curve)[k] * sds[k]
+    },
+    .emc_shear_curve_subject = function(chain, s, mus, V, x0) {
+      count$fits <- count$fits + 1L
+      p <- nrow(mus)
+      rep(list(list(prec = 2 * diag(p), lin = numeric(p), mode = numeric(p))), ncol(mus))
+    }, .package = "EMC2", .env = env)
+  count
+}
+
+test_that("a slow coordinate gets a curve when its round is worth it, and no fits when it cannot be", {
+  # 1 is the slowest but its fixed-frame orbit spans the margin; 2 is slow
+  # and narrow; 3 is narrow but mixes.
+  emc <- curve_chains(c(0.98, 0.95, 0.3))
+  count <- mock_curve_work(emc, r_fixed = c(0.9, 0.4, 0.4), r_curve = c(1, 0.7, 0.9))
+  out <- EMC2:::.emc_shear_set_curves(emc, 1:3000)
+  for (ch in out) {
+    rec <- ch$shear$curve_rec
+    expect_identical(rec$k, 2L)
+    expect_true(is.list(ch$shear[["curve"]]))
+    expect_identical(dim(ch$shear[["curve"]]$cube), c(3L, 3L, 4L, length(EMC2:::.EMC_SHEAR_CURVE_KNOTS)))
+    expect_identical(vapply(rec$tried, `[[`, integer(1), "k"), 1:2)
+    expect_identical(vapply(rec$tried, `[[`, logical(1), "fitted"), c(FALSE, TRUE))
+    expect_identical(vapply(rec$tried, `[[`, logical(1), "passed"), c(FALSE, TRUE))
+    expect_equal(rec$last$r_fixed, 0.4, tolerance = 1e-8)
+    expect_equal(rec$last$r_curve, 0.7, tolerance = 1e-8)
+    expect_equal(rec$last$worth, EMC2:::.emc_shear_curve_worth(0.4, 0.7))
+    expect_gte(rec$last$tau, EMC2:::.EMC_SHEAR_CURVE_TAU)
+    expect_identical(c(rec$screens, rec$builds), c(2, 1))
+    # The screened coordinate is remembered, the curved one is not.
+    expect_length(rec$failed, 1L)
+    expect_equal(rec$failed[[1]]$row, c(1, 0, 0))
+    # The curved coordinate's direction moves it by one.
+    expect_equal(sum(ch$shear[["curve"]]$row * ch$shear$plan$dirs[, 2]), 1)
+  }
+  # Knots were fitted for the one coordinate that could pass, per subject.
+  expect_identical(count$fits, 3L * 4L)
+  # A curve that covers the window is kept without any work.
+  count$fits <- count$widths <- 0L
+  again <- EMC2:::.emc_shear_set_curves(out, 1:3000)
+  expect_identical(c(count$fits, count$widths), c(0L, 0L))
+  expect_identical(again, out)
+})
+
+test_that("a rebuild's curve work is bounded and failures are not repeated on the same evidence", {
+  emc <- curve_chains(c(0.99, 0.985, 0.98, 0.975, 0.9, 0.9), L = 2400L)
+  # Four coordinates' orbits span the margin; two are narrow but no curve
+  # widens them enough.
+  count <- mock_curve_work(emc, r_fixed = c(0.9, 0.9, 0.9, 0.9, 0.4, 0.4),
+                           r_curve = c(1, 1, 1, 1, 0.45, 0.45))
+  tried <- function(e) lapply(e, function(ch) vapply(ch$shear$curve_rec$tried, `[[`, integer(1), "k"))
+  first <- EMC2:::.emc_shear_set_curves(emc, 1:1200)
+  for (ks in tried(first)) expect_length(ks, EMC2:::.EMC_SHEAR_CURVE_SCREENS)
+  expect_identical(count$fits, 0L)
+  expect_false(any(vapply(first, function(ch) is.list(ch$shear[["curve"]]), logical(1))))
+  # The plan is left as it was: a failed candidate changes no round.
+  expect_identical(lapply(first, function(ch) ch$shear$plan), lapply(emc, function(ch) ch$shear$plan))
+  # On the same window the failed coordinates stay out and the next ones are
+  # tried, with knot fits for at most the stated number of coordinates.
+  second <- EMC2:::.emc_shear_set_curves(first, 1:1200)
+  for (j in 1:3) {
+    expect_length(intersect(tried(second)[[j]], tried(first)[[j]]), 0L)
+    expect_length(tried(second)[[j]], 2L)
+    expect_length(second[[j]]$shear$curve_rec$failed, 6L)
+  }
+  expect_identical(count$fits, 3L * 4L * EMC2:::.EMC_SHEAR_CURVE_TRIES)
+  # Every slow coordinate has failed on this window: nothing is tried.
+  count$fits <- count$widths <- 0L
+  third <- EMC2:::.emc_shear_set_curves(second, 1:1200)
+  expect_identical(c(count$fits, count$widths), c(0L, 0L))
+  expect_identical(third, second)
+  # Nor while the new draws are fewer than the failures were judged on.
+  expect_identical(EMC2:::.emc_shear_set_curves(second, 800:1999), second)
+  expect_identical(c(count$fits, count$widths), c(0L, 0L))
+  # Once they outnumber them the coordinates are tried again, and a second
+  # failure waits twice as long.
+  later <- EMC2:::.emc_shear_set_curves(second, 1201:2400)
+  expect_gt(count$widths, 0L)
+  for (ch in later) {
+    again <- Filter(function(r) r$fails == 2L, ch$shear$curve_rec$failed)
+    expect_gte(length(again), EMC2:::.EMC_SHEAR_CURVE_TRIES)
+    expect_true(all(vapply(again, function(r) r$at == 2400L && r$len == 1200L, logical(1))))
+  }
+})
+
+test_that("draws from burn-in ask for no curve, and the switch turns curves off", {
+  emc <- curve_chains(c(0.98, 0.95, 0.3), stage = "burn")
+  count <- mock_curve_work(emc, r_fixed = c(0.3, 0.3, 0.3), r_curve = c(0.9, 0.9, 0.9))
+  expect_identical(EMC2:::.emc_shear_set_curves(emc, 1:3000), emc)
+  expect_identical(count$widths, 0L)
+  # Only the draws after burn-in count: too few of them measure nothing.
+  mixed <- lapply(emc, function(ch) { ch$samples$stage[2971:3000] <- "adapt"; ch })
+  expect_identical(EMC2:::.emc_shear_set_curves(mixed, 1:3000), mixed)
+  settled <- lapply(emc, function(ch) { ch$samples$stage[1001:3000] <- "adapt"; ch })
+  expect_true(all(vapply(EMC2:::.emc_shear_set_curves(settled, 1:3000),
+                         function(ch) is.list(ch$shear[["curve"]]), logical(1))))
+  sampled <- curve_chains(c(0.98, 0.95, 0.3))
+  withr::local_options(emc2.shear_curve = FALSE)
+  expect_identical(EMC2:::.emc_shear_set_curves(sampled, 1:3000), sampled)
+})
+
+test_that("a curve that no longer covers the window is refitted, and dropped once that fails twice", {
+  emc <- curve_chains(c(0.98, 0.95, 0.3))
+  count <- mock_curve_work(emc, r_fixed = c(0.9, 0.4, 0.4), r_curve = c(1, 0.7, 0.9))
+  held <- EMC2:::.emc_shear_set_curves(emc, 1:3000)
+  # The window moves off the knots along the curved coordinate.
+  moved <- lapply(held, function(ch) {
+    ch$samples$theta_mu[2, ] <- ch$samples$theta_mu[2, ] + 5
+    ch
+  })
+  count$fits <- 0L
+  refit <- EMC2:::.emc_shear_set_curves(moved, 1:3000)
+  expect_identical(count$fits, 3L * 4L)
+  for (j in 1:3) {
+    expect_identical(refit[[j]]$shear$curve_rec$k, 2L)
+    expect_identical(refit[[j]]$shear$curve_rec$strikes, 0L)
+    expect_equal(refit[[j]]$shear[["curve"]]$knots, held[[j]]$shear[["curve"]]$knots + 5)
+  }
+  # A refit whose curve is no longer worth it leaves the old curve once.
+  mock_curve_work(emc, r_fixed = c(0.9, 0.4, 0.4), r_curve = c(1, 0.42, 0.9))
+  once <- EMC2:::.emc_shear_set_curves(moved, 1:3000)
+  for (j in 1:3) {
+    expect_identical(once[[j]]$shear[["curve"]], held[[j]]$shear[["curve"]])
+    expect_identical(once[[j]]$shear$curve_rec[c("k", "strikes")], list(k = 2L, strikes = 1L))
+    expect_identical(once[[j]]$shear$curve_rec$failed, held[[j]]$shear$curve_rec$failed)
+  }
+  twice <- EMC2:::.emc_shear_set_curves(once, 1:3000)
+  for (ch in twice) {
+    expect_null(ch$shear[["curve"]])
+    expect_null(ch$shear$curve_rec$k)
+    expect_equal(lapply(ch$shear$curve_rec$failed, `[[`, "row"), list(c(1, 0, 0), c(0, 1, 0)))
+  }
 })
 
 test_that("a curve is reused while it covers the window", {
