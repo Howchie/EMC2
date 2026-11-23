@@ -39,8 +39,8 @@
 #' (1) parallelises the per-subject log-likelihood computation across subjects, and
 #' (2) passed to \code{loo::loo()} as its \code{cores} argument for internal PSIS parallelism.
 #' Only relevant when \code{WAIC} or \code{LOO} is \code{TRUE} and the pw_ll is not already cached.
-#' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.
-#' @param cores_per_prop Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2
+#' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation. Passed to \code{run_bridge_sampling()}.
+#' @param cores_per_prop Integer, multiplies \code{cores_for_props}. Cores used will be cores_for_props * cores_per_prop.
 #' @param both_splits Boolean. Passed to \code{run_bridge_sampling()} for Bayes factor calculation.
 #' @param print_summary Boolean (default `TRUE`), print table of results
 #' @param digits Integer, significant digits in printed table for information criteria

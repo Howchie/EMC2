@@ -83,12 +83,12 @@ double trace_scale_inverse(const arma::mat& L, const double* scale,
 }
 
 // log IW(W | v, diag(exp(log_scale))) with W = L L' (covariance = true) or
-// W = (L L')^-1 (covariance = false), L given by its log-Cholesky vector.
-double log_iwish_log_chol(const double* theta, arma::uword p, double v,
-                          const double* log_scale, bool covariance,
-                          arma::mat& L, std::vector<double>& scale,
-                          std::vector<double>& column) {
-  const double log_diag = unpack_log_chol(theta, p, L);
+// W = (L L')^-1 (covariance = false), for a lower factor L whose log
+// diagonal sums to log_diag.
+double log_iwish_factor(const arma::mat& L, double log_diag, double v,
+                        const double* log_scale, bool covariance,
+                        std::vector<double>& scale, std::vector<double>& column) {
+  const arma::uword p = L.n_rows;
   scale.resize(p);
   double half_logdet_S = 0;
   for (arma::uword j = 0; j < p; ++j) {
@@ -152,8 +152,137 @@ double log_diwish_log_chol(const Rcpp::NumericVector& theta, double v,
     Rcpp::stop("The degrees of freedom must exceed the dimension minus one");
   arma::mat L;
   std::vector<double> scale, column;
-  return log_iwish_log_chol(theta.begin(), p, v, log_scale.begin(), covariance,
-                            L, scale, column);
+  const double log_diag = unpack_log_chol(theta.begin(), p, L);
+  return log_iwish_factor(L, log_diag, v, log_scale.begin(), covariance, scale, column);
+}
+
+// Group likelihood, group prior and Jacobian of the standard hierarchy for
+// each proposal row. `alpha` holds the subject parameters, one subject after
+// another. `group` holds theta_mu, log a_half, the log variances of the
+// parameters in `unblocked`, then one log-Cholesky vector per entry of
+// `blocks`; both index parameters from zero. The covariance factors are read
+// off the proposal, so nothing is factorised per row.
+// [[Rcpp::export(rng = false)]]
+Rcpp::NumericVector bridge_group_standard(
+    const Rcpp::NumericMatrix& alpha, const Rcpp::NumericMatrix& group,
+    const Rcpp::List& group_designs, const Rcpp::IntegerVector& unblocked,
+    const Rcpp::List& blocks, const arma::vec& mu_mean, const arma::mat& mu_var,
+    double v, const Rcpp::NumericVector& A) {
+  const arma::uword p = A.size();
+  const R_xlen_t n = alpha.nrow();
+  if (!p || alpha.ncol() % p || group.nrow() != n ||
+      static_cast<arma::uword>(group_designs.size()) != p)
+    Rcpp::stop("Proposals do not match the number of parameters");
+  const arma::uword n_subj = alpha.ncol() / p;
+
+  std::vector<arma::mat> designs(p);
+  std::vector<arma::uword> first(p);
+  arma::uword n_mu = 0;
+  for (arma::uword k = 0; k < p; ++k) {
+    designs[k] = Rcpp::as<arma::mat>(group_designs[k]);
+    if (designs[k].n_rows != n_subj) Rcpp::stop("A group design does not match the subjects");
+    first[k] = n_mu;
+    n_mu += designs[k].n_cols;
+  }
+  std::vector<std::vector<arma::uword>> block_pars(blocks.size());
+  arma::uword n_cols = n_mu + p + unblocked.size(), max_block = 1;
+  for (R_xlen_t b = 0; b < blocks.size(); ++b) {
+    block_pars[b] = Rcpp::as<std::vector<arma::uword>>(blocks[b]);
+    const arma::uword d = block_pars[b].size();
+    for (arma::uword par : block_pars[b])
+      if (par >= p) Rcpp::stop("A covariance block indexes a missing parameter");
+    n_cols += d * (d + 1) / 2;
+    max_block = std::max(max_block, d);
+  }
+  for (int par : unblocked)
+    if (par < 0 || static_cast<arma::uword>(par) >= p)
+      Rcpp::stop("An unblocked index is out of range");
+  if (static_cast<arma::uword>(group.ncol()) != n_cols || mu_mean.n_elem != n_mu ||
+      mu_var.n_rows != n_mu || mu_var.n_cols != n_mu)
+    Rcpp::stop("The group proposals do not match the hierarchy");
+
+  arma::mat mu_chol;
+  const bool mu_proper = lower_chol(mu_var, mu_chol);
+  double mu_half_logdet = 0;
+  if (mu_proper)
+    for (arma::uword j = 0; j < n_mu; ++j) mu_half_logdet += std::log(mu_chol(j, j));
+  const double log_2pi = std::log(2 * M_PI), log_v = std::log(v);
+  const double lgamma_half_v = R::lgammafn(0.5 * v), lgamma_half = R::lgammafn(0.5);
+  const double constant = -0.5 * log_2pi * (n_mu + static_cast<double>(n_subj) * p) -
+    mu_half_logdet;
+
+  arma::mat resid(p, n_subj), L;
+  std::vector<double> row(n_cols), z(std::max(n_mu, max_block)), log_scale(max_block),
+    scale, column;
+  Rcpp::NumericVector out(n);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    for (arma::uword j = 0; j < n_cols; ++j) row[j] = group(i, j);
+    const double* theta_mu = row.data();
+    const double* theta_a = theta_mu + n_mu;
+    const double* theta_var = theta_a + p;
+    const double* theta_chol = theta_var + unblocked.size();
+    double total = constant;
+
+    // Normal prior on the group mean coefficients.
+    if (!mu_proper) total = R_NegInf;
+    for (arma::uword t = 0; mu_proper && t < n_mu; ++t) {
+      double sum = theta_mu[t] - mu_mean[t];
+      for (arma::uword k = 0; k < t; ++k) sum -= mu_chol(t, k) * z[k];
+      z[t] = sum / mu_chol(t, t);
+      total -= 0.5 * z[t] * z[t];
+    }
+
+    for (arma::uword k = 0; k < p; ++k) {
+      const arma::mat& X = designs[k];
+      for (arma::uword s = 0; s < n_subj; ++s) {
+        double mean = 0;
+        for (arma::uword j = 0; j < X.n_cols; ++j) mean += X(s, j) * theta_mu[first[k] + j];
+        resid(k, s) = alpha(i, s * p + k) - mean;
+      }
+      // a_half is inverse gamma with shape 1/2 and rate 1 / A^2; its log is sampled.
+      total += -std::log(A[k]) - lgamma_half - 0.5 * theta_a[k] -
+        std::exp(-theta_a[k]) / (A[k] * A[k]);
+    }
+
+    for (R_xlen_t u = 0; u < unblocked.size(); ++u) {
+      const arma::uword k = unblocked[u];
+      const double log_var = theta_var[u];
+      double ss = 0;
+      for (arma::uword s = 0; s < n_subj; ++s) ss += resid(k, s) * resid(k, s);
+      total -= 0.5 * (n_subj * log_var + std::exp(-log_var) * ss);
+      // The variance is inverse gamma with shape v / 2 and rate v / a_half;
+      // its log is sampled.
+      total += 0.5 * v * (log_v - theta_a[k]) - lgamma_half_v - 0.5 * v * log_var -
+        v * std::exp(-theta_a[k] - log_var);
+    }
+
+    for (const std::vector<arma::uword>& pars : block_pars) {
+      const arma::uword d = pars.size();
+      const double log_diag = unpack_log_chol(theta_chol, d, L);
+      double ss = 0;
+      for (arma::uword s = 0; s < n_subj; ++s) {
+        for (arma::uword t = 0; t < d; ++t) {
+          double sum = resid(pars[t], s);
+          for (arma::uword k = 0; k < t; ++k) sum -= L(t, k) * z[k];
+          z[t] = sum / L(t, t);
+          ss += z[t] * z[t];
+        }
+      }
+      total -= n_subj * log_diag + 0.5 * ss;
+      // Inverse-Wishart prior with scale 2 v diag(1 / a_half), and the
+      // Jacobian of the covariance with respect to its log-Cholesky vector.
+      total += d * M_LN2;
+      for (arma::uword t = 0; t < d; ++t) {
+        log_scale[t] = M_LN2 + log_v - theta_a[pars[t]];
+        total += (d - t + 1) * *theta_chol;
+        theta_chol += d - t;
+      }
+      total += log_iwish_factor(L, log_diag, v + d - 1, log_scale.data(), true,
+                                scale, column);
+    }
+    out[i] = R_FINITE(total) ? total : R_NegInf;
+  }
+  return out;
 }
 
 // [[Rcpp::export(rng = false)]]

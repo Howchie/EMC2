@@ -525,149 +525,22 @@ unwind_chol <- function(x,reverse=FALSE) {
 }
 
 # bridge_sampling ---------------------------------------------------------
-bridge_group_and_prior_and_jac_standard <- function(
-    proposals_group,   # (n_iter x [theta_mu, theta_a, var1, var2])
-    proposals_list,    # list of length n_iter, each item is the subject-level alpha draws
-    info
-) {
-  # 'info' should contain:
-  #   info$n_pars        = p        (# of rows in alpha)
-  #   info$n_subjects    = n_subj   (# of subjects)
-  #   info$is_blocked    = logical p  (which rows are blocked)
-  #   info$par_group     = integer p  (group IDs for blocked rows)
-  #   info$group_designs   = list of length p, each (n_subj x m_k)
-  #   info$prior:
-  #       - $theta_mu_mean (p+B), $theta_mu_var ((p+B)x(p+B))
-  #       - $v, $A (IW & gamma hyperparams)
-  #
-  # The 'proposals_group' columns are arranged:
-  #   1) theta_mu (p+B columns) - includes both intercepts and slopes
-  #   2) theta_a  (p columns) -> log(a_half)
-  #   3) theta_var1 (sum(!has_cov) columns) -> log of unblocked diagonal
-  #   4) theta_var2 ((d*(d+1))/2 columns)    -> cholesky for the blocked subset
-  #
-  # 'proposals_list' is a list of length n_iter, each item is an (n_subj * p)-vector or
-  #   something that we can reshape into (n_subj x p), i.e. the subject-level alphas.
-
+# Group likelihood, group prior and Jacobian per proposal row.
+# proposals_group holds theta_mu (intercepts and slopes), log(a_half), the log
+# variances of the unblocked parameters, then one log-Cholesky vector per
+# covariance block; proposals_list holds each subject's alpha proposals.
+bridge_group_and_prior_and_jac_standard <- function(proposals_group, proposals_list, info) {
+  prior <- info$prior
+  has_cov <- info$is_blocked
   par_group <- info$par_group
-  has_cov   <- info$is_blocked
-  block_groups <- unique(par_group[has_cov])
-  prior     <- info$prior
-
-  p         <- info$n_pars        # dimension of each alpha_i
-  n_subj    <- info$n_subjects
-  group_designs <- add_group_design(info$par_names, info$group_designs, n_subj)
-
-  # Total parameters (including regressors)
-  total_pars <- length(prior$theta_mu_mean)
-  # Extract columns:
-  theta_mu   <- proposals_group[, seq_len(total_pars), drop=FALSE]  # (n_iter x (p+B))
-  theta_a    <- proposals_group[, total_pars + seq_len(p), drop=FALSE]  # (n_iter x p)
-
-  if(any(!has_cov)){
-    theta_var1 <- proposals_group[, (total_pars + p + 1) : (total_pars + p + sum(!has_cov)), drop=FALSE]  # (n_iter x sum(!has_cov))
-  }
-
-  if(any(has_cov)){
-    min_idx <- (total_pars + p + sum(!has_cov))
-    theta_var2_list <- list()
-    for(block in block_groups){
-      cur_idx <- has_cov[par_group == block]
-      max_idx <- min_idx + (sum(cur_idx)*(sum(cur_idx)+1)) / 2
-      theta_var2_list[[block]] <- proposals_group[, (min_idx + 1) :
-                                      max_idx, drop=FALSE]  # (n_iter x (d*(d+1))/2)
-      min_idx <- max_idx
-    }
-  }
-
-  n_iter <- nrow(theta_mu)
-  sum_out <- numeric(n_iter)
-
-  # Precompute the prior on theta_mu outside the loop (vectorized)
-  prior_mu_log <- dmvnorm(theta_mu,
-                          mean  = prior$theta_mu_mean,
-                          sigma = prior$theta_mu_var,
-                          log   = TRUE)
-
-  # For the Jacobian of var1 => rowSums(theta_var1)
-  # For the Jacobian of a    => rowSums(theta_a)
-  if(any(!has_cov)){
-    jac_var1 <- rowSums(theta_var1)
-  } else{
-    jac_var1 <- 0
-  }
-  jac_a_vec    <- rowSums(theta_a)
-
-  #--- Main loop over MCMC draws ---
-  # We reconstruct var_curr & compute the group-likelihood, plus prior on var1/var2/a
-  # then we store in sum_out[i].  After the loop, we add prior_mu_log + jac_var1 + jac_a.
-  for (i in seq_len(n_iter)) {
-    # Group likelihood = sum over subjects of dmvnorm(alpha_s, mu_s, var_curr).
-    # var_curr is block diagonal and each block's Cholesky factor is the
-    # proposal itself, so no covariance matrix is formed or factorised.
-    subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
-    alpha_i <- matrix(vapply(proposals_list, function(pr) pr[i, ], numeric(p)), nrow = p)  # p x n_subj
-    resid <- alpha_i - subj_mu
-    group_ll <- -0.5 * n_subj * p * log(2 * pi)
-
-    # Unblocked diagonal => variances exp(theta_var1[i, ])
-    if (any(!has_cov)) {
-      group_ll <- group_ll - 0.5 * n_subj * sum(theta_var1[i, ]) -
-        0.5 * sum(resid[!has_cov, , drop = FALSE]^2 * exp(-theta_var1[i, ]))
-    }
-
-    jac_var2 <- 0
-    prior_var2 <- 0
-    if (any(has_cov)) {
-      for(block in block_groups){
-        cur_idx <- par_group == block
-        d_block <- sum(cur_idx)
-        theta_block <- theta_var2_list[[block]][i, ]
-        L <- matrix(0, d_block, d_block)
-        L[lower.tri(L, diag = TRUE)] <- theta_block
-        log_diag <- diag(L)
-        diag(L) <- exp(log_diag)
-        z <- forwardsolve(L, resid[cur_idx, , drop = FALSE])
-        group_ll <- group_ll - n_subj * sum(log_diag) - 0.5 * sum(z^2)
-        # Inverse-Wishart prior with scale 2 v diag(1 / a_half)
-        prior_var2 <- prior_var2 + log_diwish_log_chol(
-          theta_block,
-          v = prior$v + d_block - 1,
-          log_scale = log(2 * prior$v) - theta_a[i, cur_idx]
-        )
-        jac_var2 <- jac_var2 + calc_log_jac_chol(theta_block)
-      }
-    }
-    if (!is.finite(group_ll)) group_ll <- -Inf
-
-    # Prior on var1 and a
-    # "var1" => Inverse-Gamma with shape=v/2, rate=v/exp(theta_a[i, !has_cov])
-    # "a" => a_half = exp(theta_a), shape=1/2, rate=1/(A^2)
-    prior_var1 <- 0
-    if (any(!has_cov)) {
-      # sum of logdinvGamma for each unblocked row
-      # x = exp(theta_var1), shape= v/2, rate= v / exp(theta_a)
-      # note that 'theta_a[i, !has_cov]' picks the relevant subset
-      prior_var1 <- sum( logdinvGamma(
-        x     = exp(theta_var1[i, ]),
-        shape = prior$v/2,
-        rate  = prior$v / exp( theta_a[i, !has_cov, drop=FALSE] )
-      ))
-    }
-
-    prior_a <- sum(logdinvGamma(
-      x     = exp(theta_a[i, ]),
-      shape = 1/2,
-      rate  = 1/(prior$A^2)
-    ))
-    # Combine
-    sum_out[i] <- group_ll + prior_var1 + prior_var2 + jac_var2 + prior_a
-  } # end loop i
-
-  #--- 5) Add the vectorized prior on theta_mu, plus Jacobians var1, a
-  sum_out <- sum_out + prior_mu_log + jac_var1 + jac_a_vec
-
-  return(sum_out)
+  blocks <- lapply(unique(par_group[has_cov]), function(block) which(par_group == block) - 1L)
+  bridge_group_standard(
+    do.call(cbind, proposals_list), proposals_group,
+    add_group_design(info$par_names, info$group_designs, info$n_subjects),
+    which(!has_cov) - 1L, blocks,
+    prior$theta_mu_mean, as.matrix(prior$theta_mu_var), prior$v,
+    rep_len(prior$A, info$n_pars)
+  )
 }
 
 

@@ -133,14 +133,167 @@ test_that("proposal blocks preserve draws and densities at singleton boundaries"
   info <- EMC2:::make_info(samples, samples$type)
   draws <- EMC2:::bridge_draws(samples_LNR, "sample", info)
   fit <- EMC2:::bridge_fit(draws, seq_len(70))
+  kinds <- c("posterior", "reflected", "negative", "positive")
+  evaluate <- function(idx, gen, block_size, cores = 1L) {
+    EMC2:::bridge_eval_kinds(kinds, draws, idx, gen, samples$data, fit$mean, fit$chol,
+                             info, cores, FALSE, block_size)
+  }
   # Only the last block contains a single draw.
   idx <- 71:77
   gen <- matrix(rnorm(length(idx) * ncol(draws)), length(idx))
-  evaluate <- function(block_size) {
-    EMC2:::eval.unnormalized.posterior(draws, idx, gen, samples$data, fit$mean,
-                                     fit$chol, info, 1L, 1L, FALSE, block_size)
+  whole <- evaluate(idx, gen, length(idx))
+  expect_named(whole, kinds)
+  expect_equal(evaluate(idx, gen, 3L), whole, tolerance = 1e-10)
+
+  # Row chunks shared between processes return the rows in order.
+  skip_on_os("windows")
+  idx <- seq_len(nrow(draws))
+  gen <- matrix(rnorm(length(idx) * ncol(draws)), length(idx))
+  expect_equal(evaluate(idx, gen, length(idx), cores = 2L), evaluate(idx, gen, length(idx)),
+               tolerance = 1e-10)
+})
+
+# The standard group term from covariance matrices: multivariate normal
+# densities of the subjects and of the group mean coefficients, inverse-Wishart
+# and inverse-gamma priors, and the Jacobian of the sampled coordinates.
+standard_group_reference <- function(proposals_group, proposals_list, info) {
+  prior <- info$prior
+  p <- info$n_pars
+  designs <- EMC2:::add_group_design(info$par_names, info$group_designs, info$n_subjects)
+  n_mu <- length(prior$theta_mu_mean)
+  log_inv_gamma <- function(x, shape, rate) dgamma(1 / x, shape, rate, log = TRUE) - 2 * log(x)
+  vapply(seq_len(nrow(proposals_group)), function(i) {
+    row <- proposals_group[i, ]
+    theta_mu <- row[seq_len(n_mu)]
+    a_half <- exp(row[n_mu + seq_len(p)])
+    at <- n_mu + p
+    Sigma <- matrix(0, p, p)
+    out <- sum(log_inv_gamma(a_half, 0.5, 1 / prior$A^2)) + sum(log(a_half)) +
+      mvtnorm::dmvnorm(theta_mu, prior$theta_mu_mean, prior$theta_mu_var, log = TRUE)
+    for (k in which(!info$is_blocked)) {
+      at <- at + 1L
+      Sigma[k, k] <- exp(row[at])
+      out <- out + log_inv_gamma(Sigma[k, k], prior$v / 2, prior$v / a_half[k]) + row[at]
+    }
+    for (group in unique(info$par_group[info$is_blocked])) {
+      idx <- which(info$par_group == group)
+      d <- length(idx)
+      L <- matrix(0, d, d)
+      L[lower.tri(L, diag = TRUE)] <- row[at + seq_len(d * (d + 1) / 2)]
+      at <- at + d * (d + 1) / 2
+      log_diag <- diag(L)
+      diag(L) <- exp(log_diag)
+      Sigma[idx, idx] <- tcrossprod(L)
+      out <- out + d * log(2) + sum((d - seq_len(d) + 2) * log_diag) +
+        iwish_reference(Sigma[idx, idx], prior$v + d - 1, diag(2 * prior$v / a_half[idx], d))
+    }
+    mu <- EMC2:::calculate_subject_means(designs, theta_mu)
+    alpha <- matrix(vapply(proposals_list, function(x) x[i, ], numeric(p)), p)
+    out + sum(mvtnorm::dmvnorm(t(alpha - mu), sigma = Sigma, log = TRUE))
+  }, numeric(1))
+}
+
+test_that("native standard group term matches densities built from covariance matrices", {
+  local_test_rng(21)
+  n_subjects <- 7L
+  cases <- list(
+    list(par_group = c(1, 1, 1, 2, 2, 3), design = TRUE),
+    list(par_group = c(1, 1, 1, 1), design = FALSE),
+    list(par_group = c(1, 2, 3), design = FALSE),
+    list(par_group = 1, design = FALSE)
+  )
+  for (case in cases) {
+    p <- length(case$par_group)
+    par_names <- paste0("p", seq_len(p))
+    group_designs <- if (case$design)
+      list(p2 = cbind(1, rnorm(n_subjects)), p5 = cbind(1, rnorm(n_subjects), rnorm(n_subjects)))
+    n_mu <- p + sum(vapply(group_designs, ncol, integer(1)) - 1L)
+    blocked <- duplicated(case$par_group) | duplicated(case$par_group, fromLast = TRUE)
+    info <- list(
+      par_names = par_names, n_pars = p, n_subjects = n_subjects, par_group = case$par_group,
+      is_blocked = blocked, group_designs = group_designs,
+      prior = list(theta_mu_mean = rnorm(n_mu),
+                   theta_mu_var = crossprod(matrix(rnorm(n_mu * (n_mu + 2)), n_mu + 2)) / n_mu,
+                   v = 2.5, A = runif(p, 0.2, 2))
+    )
+    n_group <- n_mu + p + sum(!blocked) +
+      sum(vapply(unique(case$par_group[blocked]), function(group) {
+        d <- sum(case$par_group == group)
+        d * (d + 1) / 2
+      }, numeric(1)))
+    n <- 25L
+    proposals_group <- matrix(rnorm(n * n_group, sd = 0.7), n)
+    proposals_list <- lapply(seq_len(n_subjects), function(s) matrix(rnorm(n * p), n))
+    expect_equal(
+      EMC2:::bridge_group_and_prior_and_jac(proposals_group, proposals_list, info, "standard"),
+      standard_group_reference(proposals_group, proposals_list, info),
+      tolerance = 1e-10
+    )
   }
-  expect_equal(evaluate(3L), evaluate(length(idx)), tolerance = 1e-10)
+
+  # A proposal off the support has zero density.
+  proposals_group[1L, 1L] <- NaN
+  expect_identical(
+    EMC2:::bridge_group_and_prior_and_jac(proposals_group, proposals_list, info, "standard")[1L],
+    -Inf
+  )
+})
+
+test_that("stored subject log-likelihoods stand in for the posterior likelihood pass only when they match", {
+  emc <- samples_LNR
+  samples <- emc[[1L]]
+  info <- EMC2:::make_info(samples, samples$type)
+  draws <- EMC2:::bridge_draws(emc, "sample", info)
+  recomputed <- EMC2:::bridge_ll(EMC2:::bridge_subject_proposals(draws, info), samples$data, info)
+  expect_equal(EMC2:::bridge_stored_ll(emc, "sample", draws, samples$data, info), recomputed,
+               tolerance = 1e-10)
+
+  shifted <- emc
+  shifted[[2L]]$samples$subj_ll <- shifted[[2L]]$samples$subj_ll + 1e-3
+  expect_null(EMC2:::bridge_stored_ll(shifted, "sample", draws, samples$data, info))
+  missing <- emc
+  missing[[3L]]$samples$subj_ll <- NULL
+  expect_null(EMC2:::bridge_stored_ll(missing, "sample", draws, samples$data, info))
+
+  # The estimate does not depend on which route supplied the likelihood.
+  local_test_rng(7)
+  with_stored <- suppressWarnings(run_bridge_sampling(emc, cores_for_props = 1L))
+  set.seed(7)
+  recomputing <- suppressWarnings(run_bridge_sampling(shifted, cores_for_props = 1L))
+  expect_equal(with_stored, recomputing, tolerance = 1e-10)
+})
+
+test_that("repetitions reuse the fits and redraw only the proposals", {
+  local_test_rng(3)
+  together <- suppressWarnings(run_bridge_sampling(samples_LNR, repetitions = 3L,
+                                                   cores_for_props = 1L))
+  set.seed(3)
+  apart <- suppressWarnings(vapply(1:3, function(i)
+    run_bridge_sampling(samples_LNR, cores_for_props = 1L), numeric(1)))
+  expect_equal(together, apart, tolerance = 1e-12)
+  expect_gt(sd(together), 0)
+})
+
+test_that("the filter is applied once", {
+  for (filter in list(20L, 11:40)) {
+    local_test_rng(4)
+    filtered <- suppressWarnings(run_bridge_sampling(samples_LNR, filter = filter,
+                                                     cores_for_props = 1L))
+    set.seed(4)
+    expected <- suppressWarnings(run_bridge_sampling(subset(samples_LNR, filter = filter),
+                                                     cores_for_props = 1L))
+    expect_equal(filtered, expected, tolerance = 1e-12)
+  }
+})
+
+test_that("the proposal moments are those of the fitting draws", {
+  samples <- samples_LNR[[1L]]
+  info <- EMC2:::make_info(samples, samples$type)
+  draws <- EMC2:::bridge_draws(samples_LNR, "sample", info)
+  idx <- seq.int(2L, nrow(draws), by = 2L)
+  fit <- EMC2:::bridge_fit(draws, idx)
+  expect_equal(fit$mean, colMeans(draws[idx, ]), tolerance = 1e-12)
+  expect_equal(crossprod(fit$chol), var(draws[idx, ]), tolerance = 1e-8)
 })
 
 test_that("two bridge estimates swap complementary halves and use all fitting draws", {
