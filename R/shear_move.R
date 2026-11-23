@@ -548,6 +548,45 @@
   utils::tail(recs, 2L * length(row))
 }
 
+# The per-iteration cost of the plan a chain last ran, as its allocation
+# priced it, and of the same plan without its curved coordinate's rounds; NA
+# without one.
+.emc_shear_plan_cost <- function(chain) {
+  h <- chain$alloc$history
+  q <- if (length(h)) h[[length(h)]] else NULL
+  num <- function(x) if (length(x) >= 1L) suppressWarnings(as.numeric(x)[1L]) else NA_real_
+  cost <- if (is.list(q)) num(q$cost) else NA_real_
+  if (!is.finite(cost) || cost <= 0) return(c(with = NA_real_, without = NA_real_))
+  extra <- num(q$c_round) * (if (length(q$curved_rounds)) num(q$curved_rounds) else 0)
+  c(with = cost, without = if (is.finite(extra) && extra < cost) cost - extra else NA_real_)
+}
+
+# Whether chain j's curve has paid for its rounds: the slowest mean
+# coordinate's integrated autocorrelation time (every chain's draws, the
+# chain's plan basis) over the draws since the curve was built, times the
+# plan's cost per iteration, against that time over the window the curve was
+# built on times the cost of the same plan without the curved coordinate's
+# rounds. Both costs are priced at one rebuild, so they share its timings. A
+# curved coordinate's rounds also move the coordinates it is correlated with,
+# which no per-coordinate factor credits, so the allocation runs it at least
+# once per iteration and this decides whether it stays. NA until
+# .EMC_SHEAR_CURVE_JUDGE draws have run under the curve, or when either side
+# is not measured.
+.EMC_SHEAR_CURVE_JUDGE <- 100L
+.emc_shear_curve_pays <- function(emc, j, idx) {
+  b <- emc[[j]]$shear$curve_rec$base
+  if (!is.list(b) || !all(is.finite(c(b$tau, b$at)))) return(NA)
+  after <- idx[idx > b$at]
+  if (length(after) < .EMC_SHEAR_CURVE_JUDGE) return(NA)
+  Dinv <- tryCatch(solve(emc[[j]]$shear$plan$dirs), error = function(e) NULL)
+  if (is.null(Dinv)) return(NA)
+  cs <- lapply(emc, function(ch) Dinv %*% ch$samples$theta_mu[, after, drop = FALSE])
+  tau <- .emc_shear_curve_slow(cs)$tau
+  cost <- .emc_shear_plan_cost(emc[[j]])
+  if (!any(is.finite(tau)) || !all(is.finite(cost))) return(NA)
+  max(tau, na.rm = TRUE) * cost[["with"]] <= b$tau * cost[["without"]]
+}
+
 # Whether a chain's curve still serves the window: the window's draws of the
 # curve's own coordinate (`cc`, every chain's) centre within its inner knots
 # and spread on the knots' scale. A curve that does is not refitted.
@@ -744,6 +783,24 @@
       plan <- st$plan
       k <- st$curve_rec$k
       had <- length(k) == 1L && is.list(st[["curve"]])
+      if (had && attempt == 1L &&
+          identical(.emc_shear_curve_pays(emc, j, idx), FALSE)) {
+        # A curve whose rounds did not pay for themselves is dropped like one
+        # that failed its gate, and its chain tries the other candidates.
+        row <- vw$Dinv[k, ]
+        recs <- .emc_shear_curve_note(vw$recs, row, TRUE, now, length(idx), plan$stage)
+        view[[j]]$recs <- recs
+        view[[j]]$blocked <- c(vw$blocked, list(row))
+        st["curve"] <- list(NULL)
+        st$curve_rec <- list(failed = recs, strikes = 0L,
+                             last = list(k = k, passed = FALSE, kept = FALSE, paid = FALSE),
+                             screens = st$curve_rec$screens, builds = st$curve_rec$builds,
+                             seconds = st$curve_rec$seconds)
+        st$plan <- .emc_shear_restart_coord(st$plan, k)
+        emc[[j]]$shear <- st
+        vw <- view[[j]]
+        had <- FALSE
+      }
       if (had) {
         if (attempt > 1L ||
             .emc_shear_curve_covers(st[["curve"]], unlist(lapply(vw$cs, function(x) x[k, ]))))
@@ -863,8 +920,13 @@
       view[[j]]$recs <- failed
       attempts[[j]] <- c(attempts[[j]], list(info))
       count <- function(x) if (length(x)) x else 0
+      # What the curve has to beat: the slowest coordinate's autocorrelation
+      # time over the window it was built on. A refit keeps the original's.
+      base <- if (kept && td$had && is.list(rec$base)) rec$base else if (passed)
+        list(tau = if (any(is.finite(view[[j]]$tau))) max(view[[j]]$tau, na.rm = TRUE) else NA_real_,
+             at = now)
       st$curve_rec <- c(
-        if (kept) list(k = td$k),
+        if (kept) list(k = td$k, base = base),
         list(failed = failed, strikes = strikes, last = info, tried = attempts[[j]],
              screens = count(rec$screens) + 1L,
              builds = count(rec$builds) + (j %in% open),

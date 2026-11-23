@@ -1434,10 +1434,12 @@
     if (shear_on && is.finite(ms$g_fac[k])) {
       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
                   if (is.null(ms$g_iters)) 0 else ms$g_iters[k], unmeasured_cap = 1)
-      # A curved coordinate is one the rest of the iteration and fractional
-      # rounds were measured not to move, so its factor's credit for a
-      # fraction of a round is not to be relied on: its curve runs a round
-      # in every iteration.
+      # A curved coordinate's rounds are priced on lag one, which credits the
+      # rest of the iteration with movement the subject updates undo, and
+      # cannot see what they do to the coordinates correlated with it; with
+      # no rounds bought its factor is never measured. Its curve runs a round
+      # in every iteration, and is dropped when that does not pay in realised
+      # autocorrelation and cost (.emc_shear_curve_pays).
       if (identical(ms$g_curved, k)) {
         b$floor <- max(b$floor, 1)
         b$cap <- max(b$cap, 1)
@@ -1825,6 +1827,7 @@
       group_rho = .emc_alloc_rho_floor(m$g_rho, m$g_b_share),
       group_g = m$g_fac, group_a = m$g_sat,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
+      curved_rounds = if (shear_on[j] && length(m$g_curved) == 1L) sol$x[m$g_curved] else 0,
       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,
       collapsed_a = if (isTRUE(m$coll)) m$c_sat,
       collapsed_cost = if (is.null(u$joint)) NA_real_ else u$joint$cost,

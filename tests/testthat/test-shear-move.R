@@ -1605,6 +1605,49 @@ test_that("a curve that no longer covers the window is refitted, and dropped onc
   }
 })
 
+test_that("a curve stays while its rounds pay in autocorrelation and cost, and is dropped once they do not", {
+  emc <- curve_chains(c(0.98, 0.95, 0.3), L = 3200L)
+  count <- mock_curve_work(emc, r_fixed = c(0.9, 0.4, 0.4), r_curve = c(1, 0.7, 0.9))
+  held <- EMC2:::.emc_shear_set_curves(emc, 1:3000)
+  for (ch in held) {
+    b <- ch$shear$curve_rec$base
+    expect_identical(b$at, 3000L)
+    expect_gte(b$tau, EMC2:::.EMC_SHEAR_CURVE_TAU)
+  }
+  # The draws since the curve was built mix: it is kept, though its round
+  # doubles the plan's cost.
+  plan_cost <- function(e, cost, c_round) lapply(e, function(ch) {
+    ch$alloc$history <- list(list(cost = cost, c_round = c_round, curved_rounds = 1))
+    ch
+  })
+  mixing <- plan_cost(lapply(held, function(ch) {
+    ch$samples$theta_mu[, 3001:3200] <- matrix(rnorm(3 * 200), 3)
+    ch
+  }), 2, 1)
+  count$fits <- count$widths <- 0L
+  expect_identical(EMC2:::.emc_shear_set_curves(mixing, 1:3200), mixing)
+  expect_identical(c(count$fits, count$widths), c(0L, 0L))
+  # Without a priced plan nothing is judged.
+  unpriced <- lapply(mixing, function(ch) { ch$alloc$history <- NULL; ch })
+  expect_identical(EMC2:::.emc_shear_set_curves(unpriced, 1:3200), unpriced)
+  # The round now costs far more than the autocorrelation time fell, but too
+  # few draws have run under the curve to judge it.
+  dear <- plan_cost(mixing, 1e4, 1e4 - 1)
+  expect_identical(EMC2:::.emc_shear_set_curves(dear, 1:3050), dear)
+  # With enough of them the curve is dropped, its coordinate waits like one
+  # whose curve failed, and the slow one beside it still spans its margin.
+  out <- EMC2:::.emc_shear_set_curves(dear, 1:3200)
+  for (ch in out) {
+    expect_null(ch$shear[["curve"]])
+    expect_null(ch$shear$curve_rec$k)
+    expect_false(ch$shear$curve_rec$last$paid)
+    rows <- lapply(ch$shear$curve_rec$failed, `[[`, "row")
+    expect_true(any(vapply(rows, function(r) isTRUE(all.equal(r, c(0, 1, 0))), logical(1))))
+    expect_true(EMC2:::.emc_shear_curve_waits(ch$shear$curve_rec$failed[[length(rows)]], 3200L, "sample"))
+  }
+  expect_identical(count$fits, 0L)
+})
+
 test_that("a curve is reused while it covers the window", {
   cv <- list(knots = 2 + 0.5 * EMC2:::.EMC_SHEAR_CURVE_KNOTS)
   set.seed(4)
