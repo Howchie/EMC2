@@ -1628,3 +1628,49 @@ test_that("a worker past the deadline counts as lost only when idle", {
   expect_false(EMC2:::.emc_wpool_busy(idle$pid, probe = 0.5))
   expect_false(EMC2:::.emc_wpool_busy(NA_integer_))
 })
+
+test_that("a worker stopped straight after it is spawned still exits", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  cpus <- tryCatch(parallel::mcaffinity(), error = function(e) NULL)
+  skip_if(is.null(cpus), "no control of processor affinity here")
+  # One processor makes the order certain: the workers run only once this
+  # process waits, so each is still opening its ends when the spawn returns
+  # unless the spawn waits for it.
+  parallel::mcaffinity(cpus[1L])
+  on.exit(parallel::mcaffinity(cpus), add = TRUE)
+  dir <- tempfile("emc_wpool_")
+  dir.create(dir)
+  on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+  spawned <- EMC2:::.emc_wpool_spawn(dir, 1:4, list(tag = "ctx"), backend = "fork")
+  skip_if(is.null(spawned), "no pool available here")
+  pids <- vapply(spawned$jobs, function(x) as.integer(x$pid), integer(1))
+  on.exit({
+    try(tools::pskill(pids, tools::SIGKILL), silent = TRUE)
+    suppressWarnings(try(parallel::mccollect(spawned$jobs, wait = TRUE), silent = TRUE))
+  }, add = TRUE)
+  # The stop a pool with a live template sends: the message alone, no signal.
+  for (wc in spawned$wcs) EMC2:::.emc_wpool_send(wc, NULL)
+  for (cn in c(spawned$wcs, spawned$rcs)) close(cn)
+  # A fork worker that has left its loop reports back and waits to be
+  # collected; one still opening its reply end reports nothing.
+  finished <- character()
+  deadline <- proc.time()[["elapsed"]] + 5
+  while (length(finished) < length(pids) && proc.time()[["elapsed"]] < deadline) {
+    got <- suppressWarnings(parallel::mccollect(spawned$jobs, wait = FALSE, timeout = 0.1))
+    finished <- union(finished, names(got))
+  }
+  expect_setequal(finished, as.character(pids))
+})
+
+test_that("waiting for stopped workers ends when one never exits", {
+  skip_on_os("windows")
+  old <- options(emc2.worker_reap_wait = 0.2)
+  on.exit(options(old), add = TRUE)
+  stuck <- parallel::mcparallel(Sys.sleep(60), detached = TRUE)
+  on.exit(try(tools::pskill(stuck$pid, tools::SIGKILL), silent = TRUE), add = TRUE)
+  started <- proc.time()[["elapsed"]]
+  EMC2:::.emc_wpool_wait_gone(list(stuck))
+  expect_lt(proc.time()[["elapsed"]] - started, 5)
+  expect_false(EMC2:::.emc_wpool_pid_alive(stuck$pid))
+})

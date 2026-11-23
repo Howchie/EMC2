@@ -1003,6 +1003,15 @@
     for (w in seq_len(n)) {
       rcs[[w]] <- fifo(ans[w], "rb", blocking = FALSE)
     }
+    # A worker is started once it holds both ends: one stopped before it has
+    # opened its reply end would wait on that end and never read the stop.
+    for (w in seq_len(n)) {
+      ready <- .emc_wpool_recv(
+        rcs[[w]], deadline = 20,
+        alive = local({ pid <- .emc_wpool_job_pid(jobs[[w]])
+          function() is.na(pid) || .emc_wpool_pid_alive(pid) }))
+      if (!isTRUE(ready$ready)) stop("Worker process did not complete its startup")
+    }
     success <- TRUE
   }, error = function(e) NULL)
 
@@ -1932,6 +1941,8 @@
   context_epoch <- as.integer(context_epoch)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE)
             if (!is.null(done)) try(close(done), silent = TRUE) }, add = TRUE)
+  # .emc_wpool_spawn() waits for this before it hands the worker to a pool.
+  if (!.emc_wpool_send(wc, list(ready = TRUE))) return(invisible(NULL))
   repeat {
     msg <- .emc_wpool_recv(rc)
     if (is.null(msg)) break
@@ -2048,11 +2059,23 @@
   invisible(NULL)
 }
 
-# Wait for detached workers to exit; parallel reaps them.
+# Wait for detached workers to exit; parallel reaps them. These workers have
+# been stopped or abandoned by their pool, so one still running after the reap
+# wait is killed, and the wait ends once that has had the same time to act.
 .emc_wpool_wait_gone <- function(jobs) {
   pids <- vapply(jobs, function(x) as.integer(x$pid), integer(1))
   wait <- 0.0005
-  while (any(vapply(pids, .emc_wpool_pid_alive, logical(1)))) {
+  grace <- .emc_wpool_reap_wait()
+  started <- proc.time()[["elapsed"]]
+  killed <- FALSE
+  repeat {
+    alive <- vapply(pids, .emc_wpool_pid_alive, logical(1))
+    if (!any(alive)) break
+    waited <- proc.time()[["elapsed"]] - started
+    if (!killed && waited >= grace) {
+      for (pid in pids[alive]) try(tools::pskill(pid, tools::SIGKILL), silent = TRUE)
+      killed <- TRUE
+    } else if (killed && waited >= 2 * grace + 1) break
     Sys.sleep(wait)
     wait <- min(wait * 2, 0.02)
   }
