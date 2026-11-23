@@ -286,8 +286,12 @@ bool step_shear(SEXP st, SEXP cx, int i) {
   SEXP packed = lget(ctx, "packed");
   SEXP curve = TYPEOF(packed) == VECSXP ? lget(packed, "curve") : R_NilValue;
   const bool curved = TYPEOF(curve) == VECSXP;
+  // The cube shares the memory of the fits' array, so the fits are held for
+  // as long as the cube is in use.
+  RObject curve_fits;
   auto fits_at = [&](SEXP mu) {
     const List f = emc_shear_curve_fits_cpp(as<arma::vec>(mu), List(curve), n);
+    curve_fits = f;
     cube = as<arma::cube>(f["cube"]);
     lin = as<arma::mat>(f["lin"]);
   };
