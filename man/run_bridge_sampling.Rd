@@ -25,9 +25,9 @@ that integer. If vector it will include everything in that range.}
 
 \item{repetitions}{An integer. How many times to repeat the bridge sampling scheme. Can help get an estimate of stability of the estimate.}
 
-\item{cores_for_props}{Integer. Warp-III evaluates the posterior over 4 different proposal densities. If you have the CPU, 4 cores will do this in parallel, 2 is also already helpful.}
+\item{cores_for_props}{Integer. Warp-III evaluates the posterior over 4 different proposal densities. Their draws are split into chunks of rows that are evaluated in parallel on \code{cores_for_props} * \code{cores_per_prop} cores.}
 
-\item{cores_per_prop}{Integer. Per density we can also parallelize across subjects. Eventual cores will be \code{cores_for_props} * \code{cores_per_prop}. For efficiency users should prioritize cores_for_props being 4.}
+\item{cores_per_prop}{Integer. Multiplies \code{cores_for_props}: the evaluations use \code{cores_for_props} * \code{cores_per_prop} cores in total. Must be 1 on Windows.}
 
 \item{both_splits}{Boolean. Bridge sampling uses a proposal density and a target density. We can estimate the stability of our samples and therefore MLL estimate, by running 2 bridge sampling iterations
 The first one uses the first half of the samples as the proposal and the second half as the target, the second run uses the opposite. If this is is set to \code{FALSE}, it will only run bridge sampling once and

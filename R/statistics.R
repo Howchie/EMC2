@@ -39,8 +39,8 @@
 #' (1) parallelises the per-subject log-likelihood computation across subjects, and
 #' (2) passed to \code{loo::loo()} as its \code{cores} argument for internal PSIS parallelism.
 #' Only relevant when \code{WAIC} or \code{LOO} is \code{TRUE} and the pw_ll is not already cached.
-#' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.
-#' @param cores_per_prop Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2
+#' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation. Passed to \code{run_bridge_sampling()}.
+#' @param cores_per_prop Integer, multiplies \code{cores_for_props}. Cores used will be cores_for_props * cores_per_prop.
 #' @param both_splits Boolean. Passed to \code{run_bridge_sampling()} for Bayes factor calculation.
 #' @param print_summary Boolean (default `TRUE`), print table of results
 #' @param digits Integer, significant digits in printed table for information criteria
@@ -501,29 +501,6 @@ add_pw_ll_chain <- function(chain) {
 
 
 
-robust_diwish <- function (W, v, S) { # Stabilize non-positive-definite proposals.
-  if (!is.matrix(S)) S <- matrix(S)
-  if (!is.matrix(W)) W <- matrix(W)
-  if (length(v) == 1L) {
-    density <- bridge_diwish(W, v, S)
-    if (!is.na(density)) return(density)
-  }
-  p <- nrow(S)
-  gammapart <- sum(lgamma((v + 1 - 1:p)/2))
-  ldenom <- gammapart + 0.5 * v * p * log(2) + 0.25 * p * (p - 1) * log(pi)
-  cholW <- base::chol(Matrix::nearPD(W)$mat)
-  cholS <- base::chol(Matrix::nearPD(S)$mat)
-  halflogdetS <- sum(log(diag(cholS)))
-  halflogdetW <- sum(log(diag(cholW)))
-  invW <- chol2inv(cholW)
-  exptrace <- sum(S * invW)
-  lnum <- v * halflogdetS - (v + p + 1) * halflogdetW - 0.5 * exptrace
-  lpdf <- lnum - ldenom
-  out <- exp(lpdf)
-  if(!is.finite(out)) return(1e-100)
-  return(out)
-}
-
 dhalft <- function (x, scale = 25, nu = 1, log = FALSE)
 {
   x <- as.vector(x)
@@ -651,9 +628,6 @@ riwish <- function(v, S, context = NULL){
   })
 }
 
-logdinvGamma <- function(x, shape, rate){
-  dgamma(1/x, shape, rate, log = TRUE) - 2 * log(x)
-}
 
 
 # #' Calculate information criteria (DIC, BPIC), effective number of parameters and

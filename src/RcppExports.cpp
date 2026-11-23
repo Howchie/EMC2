@@ -359,15 +359,46 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// bridge_diwish
-double bridge_diwish(const arma::mat& W, double v, const arma::mat& S);
-RcppExport SEXP _EMC2_bridge_diwish(SEXP WSEXP, SEXP vSEXP, SEXP SSEXP) {
+// log_diwish
+double log_diwish(const arma::mat& W, double v, const arma::mat& S);
+RcppExport SEXP _EMC2_log_diwish(SEXP WSEXP, SEXP vSEXP, SEXP SSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< const arma::mat& >::type W(WSEXP);
     Rcpp::traits::input_parameter< double >::type v(vSEXP);
     Rcpp::traits::input_parameter< const arma::mat& >::type S(SSEXP);
-    rcpp_result_gen = Rcpp::wrap(bridge_diwish(W, v, S));
+    rcpp_result_gen = Rcpp::wrap(log_diwish(W, v, S));
+    return rcpp_result_gen;
+END_RCPP
+}
+// log_diwish_log_chol
+double log_diwish_log_chol(const Rcpp::NumericVector& theta, double v, const Rcpp::NumericVector& log_scale, bool covariance);
+RcppExport SEXP _EMC2_log_diwish_log_chol(SEXP thetaSEXP, SEXP vSEXP, SEXP log_scaleSEXP, SEXP covarianceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type log_scale(log_scaleSEXP);
+    Rcpp::traits::input_parameter< bool >::type covariance(covarianceSEXP);
+    rcpp_result_gen = Rcpp::wrap(log_diwish_log_chol(theta, v, log_scale, covariance));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bridge_group_standard
+Rcpp::NumericVector bridge_group_standard(const Rcpp::NumericMatrix& alpha, const Rcpp::NumericMatrix& group, const Rcpp::List& group_designs, const Rcpp::IntegerVector& unblocked, const Rcpp::List& blocks, const arma::vec& mu_mean, const arma::mat& mu_var, double v, const Rcpp::NumericVector& A);
+RcppExport SEXP _EMC2_bridge_group_standard(SEXP alphaSEXP, SEXP groupSEXP, SEXP group_designsSEXP, SEXP unblockedSEXP, SEXP blocksSEXP, SEXP mu_meanSEXP, SEXP mu_varSEXP, SEXP vSEXP, SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type group(groupSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type group_designs(group_designsSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type unblocked(unblockedSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type blocks(blocksSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type mu_mean(mu_meanSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type mu_var(mu_varSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(bridge_group_standard(alpha, group, group_designs, unblocked, blocks, mu_mean, mu_var, v, A));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4894,7 +4925,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_hmc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_hmc_record_tasks_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
-    {"_EMC2_bridge_diwish", (DL_FUNC) &_EMC2_bridge_diwish, 3},
+    {"_EMC2_log_diwish", (DL_FUNC) &_EMC2_log_diwish, 3},
+    {"_EMC2_log_diwish_log_chol", (DL_FUNC) &_EMC2_log_diwish_log_chol, 4},
+    {"_EMC2_bridge_group_standard", (DL_FUNC) &_EMC2_bridge_group_standard, 9},
     {"_EMC2_bridge_log_add", (DL_FUNC) &_EMC2_bridge_log_add, 2},
     {"_EMC2_bridge_update", (DL_FUNC) &_EMC2_bridge_update, 4},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},

@@ -1088,13 +1088,17 @@ bridge_group_and_prior_and_jac_SEM <- function(proposals_group,
         delta_inv_i[fg_idx, fg_idx] <- L_prec
 
         ##   prior on covariance (inverse-Wishart)  + Jacobian
-        cov_blk   <- solve(L_prec)
         lp_delta  <- lp_delta +
-          log( robust_diwish(W = cov_blk,
-                             v = prior$a_d,
-                             S = diag(prior$b_d, d_blk)) )
+          log_diwish_log_chol(v_blk, v = prior$a_d,
+                              log_scale = rep(log(prior$b_d), d_blk),
+                              covariance = FALSE)
+        ##   Jacobians of the precision with respect to its log-Cholesky
+        ##   vector and of the covariance W = P^-1 with respect to the
+        ##   precision P, |dW/dP| = |P|^-(d+1).
+        chol_blk <- matrix(0, d_blk, d_blk)
+        chol_blk[lower.tri(chol_blk, diag = TRUE)] <- v_blk
         jac_delta <- jac_delta +
-          calc_log_jac_chol(v_blk)
+          calc_log_jac_chol(v_blk) - (d_blk + 1) * 2 * sum(diag(chol_blk))
 
       } else {  # d_blk == 1  (Gamma on precision)
 
