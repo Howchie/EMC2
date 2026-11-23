@@ -171,7 +171,16 @@ bridge_fit <- function(draws, fit_idx) {
   fit <- draws[fit_idx, , drop = FALSE]
   m <- colMeans(fit)
   V <- crossprod(sweep(fit, 2L, m)) / (nrow(fit) - 1L)
-  list(mean = m, chol = chol(Matrix::nearPD(V, base.matrix = TRUE)$mat))
+  # Factorised as a correlation matrix, so that columns on different scales
+  # cannot make a full-rank covariance look singular.
+  s <- sqrt(diag(V))
+  R <- if (nrow(fit) > ncol(fit))
+    tryCatch(chol(V / tcrossprod(s)) * rep(s, each = length(s)), error = function(e) NULL)
+  # Only a covariance that cannot be factorised is moved to a nearby
+  # positive-definite matrix: the move floors eigenvalues relative to the
+  # largest, which narrows the proposal along well-determined directions.
+  if (is.null(R)) R <- chol(Matrix::nearPD(V, base.matrix = TRUE)$mat)
+  list(mean = m, chol = R)
 }
 
 # The terms of one estimate that use no random numbers: the proposal density

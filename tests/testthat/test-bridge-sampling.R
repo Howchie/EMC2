@@ -57,9 +57,9 @@ test_that("inverse-Wishart log density is not repaired off the positive-definite
 
 # Draws from the standard hierarchy's prior in the layout bridge sampling
 # uses: subject parameters, then the group block.
-standard_prior_draws <- function(n, par_group, n_subjects, v, A) {
+standard_prior_draws <- function(n, par_group, n_subjects, v, A, mu_sd = 1) {
   p <- length(par_group)
-  theta_mu <- matrix(rnorm(p * n), p, n)
+  theta_mu <- matrix(rnorm(p * n, 0, mu_sd), p, n)
   a_half <- matrix(1 / rgamma(p * n, shape = 0.5, rate = 1 / A^2), p, n)
   theta_var <- array(0, c(p, p, n))
   alpha <- array(0, c(p, n_subjects, n))
@@ -80,7 +80,8 @@ standard_prior_draws <- function(n, par_group, n_subjects, v, A) {
     subjects = seq_len(n_subjects), par_names = paste0("p", seq_len(p)), n_pars = p,
     n_subjects = n_subjects, par_group = par_group, group_designs = NULL,
     is_blocked = duplicated(par_group) | duplicated(par_group, fromLast = TRUE),
-    prior = list(theta_mu_mean = rep(0, p), theta_mu_var = diag(p), v = v, A = rep(A, p)),
+    prior = list(theta_mu_mean = rep(0, p), theta_mu_var = diag(mu_sd^2, p), v = v,
+                 A = rep(A, p)),
     samples = list(theta_mu = theta_mu, a_half = a_half, theta_var = theta_var)
   )
   group <- EMC2:::bridge_add_group(matrix(numeric(), n, 0L), samples, seq_len(n), "standard")
@@ -95,13 +96,15 @@ test_that("prior draws under a constant likelihood have log marginal likelihood 
     calc_ll_manager = function(proposals, dadm, model, ...) numeric(nrow(proposals)),
     .package = "EMC2"
   )
-  # One covariance block with a wide spread of scales, then blocks of three
-  # and two parameters beside an uncorrelated one.
-  cases <- list(list(par_group = c(1, 1, 1, 1), v = 4, A = 0.3),
-                list(par_group = c(1, 1, 1, 2, 2, 3), v = 8, A = 1))
+  # One covariance block with a wide spread of scales, blocks of three and
+  # two parameters beside an uncorrelated one, and group means whose scales
+  # differ by nine orders of magnitude.
+  cases <- list(list(par_group = c(1, 1, 1, 1), v = 4, A = 0.3, mu_sd = 1),
+                list(par_group = c(1, 1, 1, 2, 2, 3), v = 8, A = 1, mu_sd = 1),
+                list(par_group = c(1, 1, 1, 1), v = 8, A = 1, mu_sd = c(1e6, 1, 1e-3, 0.3)))
   for (settings in cases) {
     case <- standard_prior_draws(30000L, settings$par_group, n_subjects = 5L,
-                                 v = settings$v, A = settings$A)
+                                 v = settings$v, A = settings$A, mu_sd = settings$mu_sd)
     n <- nrow(case$draws)
     for (split in list(seq_len(n / 2), seq.int(n / 2 + 1, n))) {
       fit <- EMC2:::bridge_fit(case$draws, split)
@@ -293,7 +296,18 @@ test_that("the proposal moments are those of the fitting draws", {
   idx <- seq.int(2L, nrow(draws), by = 2L)
   fit <- EMC2:::bridge_fit(draws, idx)
   expect_equal(fit$mean, colMeans(draws[idx, ]), tolerance = 1e-12)
-  expect_equal(crossprod(fit$chol), var(draws[idx, ]), tolerance = 1e-8)
+  expect_equal(crossprod(fit$chol), var(draws[idx, ]), tolerance = 1e-10)
+
+  # Columns on very different scales keep their own variances.
+  scales <- 10^seq(-4, 4, length.out = ncol(draws))
+  wide <- sweep(draws, 2L, scales, "*")
+  fit <- EMC2:::bridge_fit(wide, idx)
+  expect_equal(diag(crossprod(fit$chol)) / scales^2, diag(var(draws[idx, ])),
+               tolerance = 1e-8)
+
+  # Fewer fitting draws than columns still give a usable factor.
+  fit <- EMC2:::bridge_fit(draws, seq_len(5L))
+  expect_true(all(is.finite(fit$chol)) && all(diag(fit$chol) > 0))
 })
 
 test_that("two bridge estimates swap complementary halves and use all fitting draws", {
@@ -310,8 +324,7 @@ test_that("two bridge estimates swap complementary halves and use all fitting dr
     set.seed(12)
     expected <- vapply(halves, function(idx) {
       fitted <- draws[idx, , drop = FALSE]
-      fit <- list(mean = colMeans(fitted),
-                  chol = chol(Matrix::nearPD(var(fitted), base.matrix = TRUE)$mat))
+      fit <- list(mean = colMeans(fitted), chol = chol(var(fitted)))
       EMC2:::bridge_sampling(draws, samples$data, info, n_eff, idx, fit,
                              1L, 1L, 5000L, 1e-5, 1e-10, 1e-6, FALSE)
     }, numeric(1))
