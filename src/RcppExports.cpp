@@ -359,15 +359,28 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// bridge_diwish
-double bridge_diwish(const arma::mat& W, double v, const arma::mat& S);
-RcppExport SEXP _EMC2_bridge_diwish(SEXP WSEXP, SEXP vSEXP, SEXP SSEXP) {
+// log_diwish
+double log_diwish(const arma::mat& W, double v, const arma::mat& S);
+RcppExport SEXP _EMC2_log_diwish(SEXP WSEXP, SEXP vSEXP, SEXP SSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< const arma::mat& >::type W(WSEXP);
     Rcpp::traits::input_parameter< double >::type v(vSEXP);
     Rcpp::traits::input_parameter< const arma::mat& >::type S(SSEXP);
-    rcpp_result_gen = Rcpp::wrap(bridge_diwish(W, v, S));
+    rcpp_result_gen = Rcpp::wrap(log_diwish(W, v, S));
+    return rcpp_result_gen;
+END_RCPP
+}
+// log_diwish_log_chol
+double log_diwish_log_chol(const Rcpp::NumericVector& theta, double v, const Rcpp::NumericVector& log_scale, bool covariance);
+RcppExport SEXP _EMC2_log_diwish_log_chol(SEXP thetaSEXP, SEXP vSEXP, SEXP log_scaleSEXP, SEXP covarianceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type log_scale(log_scaleSEXP);
+    Rcpp::traits::input_parameter< bool >::type covariance(covarianceSEXP);
+    rcpp_result_gen = Rcpp::wrap(log_diwish_log_chol(theta, v, log_scale, covariance));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4894,7 +4907,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_hmc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_hmc_record_tasks_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
-    {"_EMC2_bridge_diwish", (DL_FUNC) &_EMC2_bridge_diwish, 3},
+    {"_EMC2_log_diwish", (DL_FUNC) &_EMC2_log_diwish, 3},
+    {"_EMC2_log_diwish_log_chol", (DL_FUNC) &_EMC2_log_diwish_log_chol, 4},
     {"_EMC2_bridge_log_add", (DL_FUNC) &_EMC2_bridge_log_add, 2},
     {"_EMC2_bridge_update", (DL_FUNC) &_EMC2_bridge_update, 4},
     {"_EMC2_emc_claim_open", (DL_FUNC) &_EMC2_emc_claim_open, 1},

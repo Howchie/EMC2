@@ -501,29 +501,6 @@ add_pw_ll_chain <- function(chain) {
 
 
 
-robust_diwish <- function (W, v, S) { # Stabilize non-positive-definite proposals.
-  if (!is.matrix(S)) S <- matrix(S)
-  if (!is.matrix(W)) W <- matrix(W)
-  if (length(v) == 1L) {
-    density <- bridge_diwish(W, v, S)
-    if (!is.na(density)) return(density)
-  }
-  p <- nrow(S)
-  gammapart <- sum(lgamma((v + 1 - 1:p)/2))
-  ldenom <- gammapart + 0.5 * v * p * log(2) + 0.25 * p * (p - 1) * log(pi)
-  cholW <- base::chol(Matrix::nearPD(W)$mat)
-  cholS <- base::chol(Matrix::nearPD(S)$mat)
-  halflogdetS <- sum(log(diag(cholS)))
-  halflogdetW <- sum(log(diag(cholW)))
-  invW <- chol2inv(cholW)
-  exptrace <- sum(S * invW)
-  lnum <- v * halflogdetS - (v + p + 1) * halflogdetW - 0.5 * exptrace
-  lpdf <- lnum - ldenom
-  out <- exp(lpdf)
-  if(!is.finite(out)) return(1e-100)
-  return(out)
-}
-
 dhalft <- function (x, scale = 25, nu = 1, log = FALSE)
 {
   x <- as.vector(x)

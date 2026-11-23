@@ -602,59 +602,46 @@ bridge_group_and_prior_and_jac_standard <- function(
   # We reconstruct var_curr & compute the group-likelihood, plus prior on var1/var2/a
   # then we store in sum_out[i].  After the loop, we add prior_mu_log + jac_var1 + jac_a.
   for (i in seq_len(n_iter)) {
-    # 1) Reconstruct partial-block var_curr
-    var_curr <- matrix(0, p, p)
-
-    # Unblocked diagonal => exp(theta_var1[i,])
-    if (any(!has_cov)) {
-      var_curr[!has_cov, !has_cov] <- diag(exp(theta_var1[i, ]), sum(!has_cov))
-    }
-
-    # Jacobian for var2
-    jac_var2 <- 0
-    prior_var2 <- 0
-    # Blocked => unwind_chol
-    if (any(has_cov)) {
-      # Fill in theta_var2
-      for(block in block_groups){
-        cur_idx <- par_group == block
-        var_block <- unwind_chol(theta_var2_list[[block]][i, ], reverse=TRUE)
-        var_curr[cur_idx, cur_idx] <- var_block
-        # Prior influence
-        d_block   <- sum(cur_idx)
-        prior_var2 <- prior_var2 + log( robust_diwish(
-          W = var_block,
-          v = prior$v + d_block - 1,
-          S = 2 * prior$v * diag( 1 / exp(theta_a[i,cur_idx]) )
-        ))
-        # Jacobian influence
-        jac_var2 <- jac_var2 + calc_log_jac_chol(theta_var2_list[[block]][i, ])
-      }
-    }
-
-    # 3) Group likelihood = sum_{s=1..n_subj} dmvnorm(alpha_s, mu_s, var_curr).
-    #    Project the stacked beta vector to per-subject means with the shared C++
-    #    routine (same as the sampler start/gibbs steps), then center each
-    #    subject's alpha and evaluate the zero-mean MVN density in one call.
+    # Group likelihood = sum over subjects of dmvnorm(alpha_s, mu_s, var_curr).
+    # var_curr is block diagonal and each block's Cholesky factor is the
+    # proposal itself, so no covariance matrix is formed or factorised.
     subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
     alpha_i <- matrix(vapply(proposals_list, function(pr) pr[i, ], numeric(p)), nrow = p)  # p x n_subj
-    
-    U <- tryCatch(chol(var_curr), error = function(e) NULL)
-    if (is.null(U)) {
-      U <- tryCatch(chol(var_curr + diag(1e-6, p)), error = function(e) NULL)
-    }
-    if (is.null(U)) {
-      group_ll <- -Inf
-    } else {
-      rooti <- backsolve(U, diag(p))
-      log_const <- sum(log(diag(rooti))) - 0.5 * p * log(2*pi)
-      z <- t(alpha_i - subj_mu) %*% rooti
-      group_ll <- -0.5 * sum(z^2) + n_subj * log_const
+    resid <- alpha_i - subj_mu
+    group_ll <- -0.5 * n_subj * p * log(2 * pi)
+
+    # Unblocked diagonal => variances exp(theta_var1[i, ])
+    if (any(!has_cov)) {
+      group_ll <- group_ll - 0.5 * n_subj * sum(theta_var1[i, ]) -
+        0.5 * sum(resid[!has_cov, , drop = FALSE]^2 * exp(-theta_var1[i, ]))
     }
 
-    # 4) Prior on var1, var2, and a => same partial-block logic
+    jac_var2 <- 0
+    prior_var2 <- 0
+    if (any(has_cov)) {
+      for(block in block_groups){
+        cur_idx <- par_group == block
+        d_block <- sum(cur_idx)
+        theta_block <- theta_var2_list[[block]][i, ]
+        L <- matrix(0, d_block, d_block)
+        L[lower.tri(L, diag = TRUE)] <- theta_block
+        log_diag <- diag(L)
+        diag(L) <- exp(log_diag)
+        z <- forwardsolve(L, resid[cur_idx, , drop = FALSE])
+        group_ll <- group_ll - n_subj * sum(log_diag) - 0.5 * sum(z^2)
+        # Inverse-Wishart prior with scale 2 v diag(1 / a_half)
+        prior_var2 <- prior_var2 + log_diwish_log_chol(
+          theta_block,
+          v = prior$v + d_block - 1,
+          log_scale = log(2 * prior$v) - theta_a[i, cur_idx]
+        )
+        jac_var2 <- jac_var2 + calc_log_jac_chol(theta_block)
+      }
+    }
+    if (!is.finite(group_ll)) group_ll <- -Inf
+
+    # Prior on var1 and a
     # "var1" => Inverse-Gamma with shape=v/2, rate=v/exp(theta_a[i, !has_cov])
-    # "var2" => robust_diwish( var_block, v= v + sum(has_cov)-1, S= 2 v diag(1/ a_half ) ), but a_half=exp(theta_a)
     # "a" => a_half = exp(theta_a), shape=1/2, rate=1/(A^2)
     prior_var1 <- 0
     if (any(!has_cov)) {

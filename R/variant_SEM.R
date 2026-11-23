@@ -1088,11 +1088,10 @@ bridge_group_and_prior_and_jac_SEM <- function(proposals_group,
         delta_inv_i[fg_idx, fg_idx] <- L_prec
 
         ##   prior on covariance (inverse-Wishart)  + Jacobian
-        cov_blk   <- solve(L_prec)
         lp_delta  <- lp_delta +
-          log( robust_diwish(W = cov_blk,
-                             v = prior$a_d,
-                             S = diag(prior$b_d, d_blk)) )
+          log_diwish_log_chol(v_blk, v = prior$a_d,
+                              log_scale = rep(log(prior$b_d), d_blk),
+                              covariance = FALSE)
         jac_delta <- jac_delta +
           calc_log_jac_chol(v_blk)
 

@@ -93,8 +93,12 @@ rbou_cpp <- function(n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind = 0L, aInf = as
     .Call(`_EMC2_rbou_cpp`, n, v, a, Z, sv, SZ, t0, st0, s, beta, bkind, aInf, tau, pw, dt, t_max, anchor_at_z, anchor_fix)
 }
 
-bridge_diwish <- function(W, v, S) {
-    .Call(`_EMC2_bridge_diwish`, W, v, S)
+log_diwish <- function(W, v, S) {
+    .Call(`_EMC2_log_diwish`, W, v, S)
+}
+
+log_diwish_log_chol <- function(theta, v, log_scale, covariance = TRUE) {
+    .Call(`_EMC2_log_diwish_log_chol`, theta, v, log_scale, covariance)
 }
 
 bridge_log_add <- function(a, b) {
