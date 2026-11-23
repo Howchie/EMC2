@@ -447,8 +447,9 @@ bridge_group_and_prior_and_jac_factor <- function(proposals_group, proposals_lis
     theta_var_curr <- lambda_curr %*% psi_curr %*% t(lambda_curr) + epsilon_curr
     proposals_curr <- matrix(proposals[i,], ncol = info$n_pars, byrow = T)
     group_ll <- sum(dmvnorm(proposals_curr, theta_mu[i,], theta_var_curr, log = T))
-    prior_epsilon <- sum(logdinvGamma(1/exp(theta_epsilon_inv[i,]), shape = prior$as, rate = prior$bs))
-    prior_psi <- sum(logdinvGamma(1/exp(psi_inv[i,]), prior$ap, rate = prior$bp))
+    # Gamma priors on the precisions, which are sampled on the log scale.
+    prior_epsilon <- sum(dgamma(exp(theta_epsilon_inv[i,]), shape = prior$as, rate = prior$bs, log = TRUE))
+    prior_psi <- sum(dgamma(exp(psi_inv[i,]), shape = prior$ap, rate = prior$bp, log = TRUE))
     sum_out[i] <- group_ll + prior_epsilon + prior_psi
   }
 
@@ -456,7 +457,7 @@ bridge_group_and_prior_and_jac_factor <- function(proposals_group, proposals_lis
                           sigma = diag(prior$theta_lambda_var, ncol(lambda)), log = T)
   prior_mu <- dmvnorm(theta_mu, mean = prior$theta_mu_mean, sigma = diag(prior$theta_mu_var), log =T)
 
-  jac_psi <- rowSums(theta_epsilon_inv)
-  jac_epsilon <- rowSums(psi_inv)
-  return(sum_out + prior_mu + prior_lambda + jac_psi + jac_epsilon) # Output is of length nrow(proposals)
+  jac_epsilon <- rowSums(theta_epsilon_inv)
+  jac_psi <- rowSums(psi_inv)
+  return(sum_out + prior_mu + prior_lambda + jac_epsilon + jac_psi) # Output is of length nrow(proposals)
 }

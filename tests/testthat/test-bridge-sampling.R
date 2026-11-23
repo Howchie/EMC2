@@ -115,6 +115,109 @@ test_that("prior draws under a constant likelihood have log marginal likelihood 
   }
 })
 
+test_that("factor prior draws under a constant likelihood have log marginal likelihood zero", {
+  local_test_rng(12)
+  local_mocked_bindings(
+    calc_ll_manager = function(proposals, dadm, model, ...) numeric(nrow(proposals)),
+    .package = "EMC2"
+  )
+  n <- 30000L
+  p <- 4L
+  n_subjects <- 5L
+  prior <- list(theta_mu_mean = rep(0, p), theta_mu_var = rep(1, p),
+                theta_lambda_var = rep(0.2, p), ap = 20, bp = 2, as = rep(20, p), bs = rep(2, p))
+  Lambda_mat <- matrix(c(1, Inf, Inf, Inf), p, 1L)
+  free <- Lambda_mat == Inf
+  theta_mu <- matrix(rnorm(p * n), p, n)
+  epsilon_inv <- matrix(rgamma(p * n, prior$as, prior$bs), p, n)
+  psi_inv <- matrix(rgamma(n, prior$ap, prior$bp), 1L, n)
+  lambda <- array(0, c(p, 1L, n))
+  alpha <- array(0, c(p, n_subjects, n))
+  for (i in seq_len(n)) {
+    L <- Lambda_mat
+    L[free] <- rnorm(sum(free), 0, sqrt(prior$theta_lambda_var[1]))
+    lambda[, , i] <- L
+    eta <- matrix(rnorm(n_subjects, 0, sqrt(1 / psi_inv[, i])), 1L)
+    alpha[, , i] <- theta_mu[, i] + L %*% eta +
+      matrix(rnorm(p * n_subjects, 0, sqrt(1 / epsilon_inv[, i])), p)
+  }
+  samples <- structure(list(
+    subjects = seq_len(n_subjects), par_names = paste0("p", seq_len(p)), n_pars = p,
+    n_subjects = n_subjects, n_factors = 1L, prior = prior,
+    samples = list(theta_mu = theta_mu, lambda_untransf = lambda,
+                   epsilon_inv = epsilon_inv, psi_inv = psi_inv)
+  ), Lambda_mat = Lambda_mat)
+  draws <- cbind(t(matrix(alpha, p * n_subjects, n)),
+                 EMC2:::bridge_add_group(matrix(numeric(), n, 0L), samples, seq_len(n), "factor"))
+  info <- EMC2:::make_info(samples, "factor")
+  for (split in list(seq_len(n / 2), seq.int(n / 2 + 1, n))) {
+    fit <- EMC2:::bridge_fit(draws, split)
+    log_ml <- EMC2:::bridge_sampling(draws, vector("list", n_subjects), info, n / 2, split, fit,
+                                     1L, 1L, 5000L, 1e-5, 1e-10, 1e-6, FALSE)
+    expect_lt(abs(log_ml), 0.5)
+  }
+})
+
+test_that("SEM prior draws under a constant likelihood have log marginal likelihood zero", {
+  local_test_rng(13)
+  local_mocked_bindings(
+    calc_ll_manager = function(proposals, dadm, model, ...) numeric(nrow(proposals)),
+    .package = "EMC2"
+  )
+  n <- 30000L
+  p <- 4L
+  k <- 2L
+  n_subjects <- 5L
+  prior <- list(theta_mu_mean = rep(0, p), theta_mu_var = rep(1, p), lambda_var = rep(0.5, k),
+                B_var = rep(0.5, k), K_var = numeric(0), G_var = numeric(0),
+                a_d = 20, b_d = 2, a_e = rep(20, p), b_e = rep(2, p))
+  Lambda_mat <- matrix(c(1, Inf, 0, 0, 0, 0, 1, Inf), p, k)
+  free <- Lambda_mat == Inf
+  # Both factors share one covariance block, then each has its own precision.
+  for (factor_groups in list(c(1, 1), c(1, 2))) {
+    theta_mu <- matrix(rnorm(p * n), p, n)
+    epsilon_inv <- matrix(rgamma(p * n, prior$a_e, prior$b_e), p, n)
+    lambda <- array(0, c(p, k, n))
+    delta_inv <- array(0, c(k, k, n))
+    alpha <- array(0, c(p, n_subjects, n))
+    for (i in seq_len(n)) {
+      L <- Lambda_mat
+      L[free] <- rnorm(sum(free), 0, sqrt(prior$lambda_var[col(Lambda_mat)[free]]))
+      lambda[, , i] <- L
+      for (group in unique(factor_groups)) {
+        idx <- which(factor_groups == group)
+        d <- length(idx)
+        delta_inv[idx, idx, i] <- if (d > 1) {
+          rWishart(1, prior$a_d, diag(1 / prior$b_d, d))[, , 1]
+        } else {
+          rgamma(1, prior$a_d, prior$b_d)
+        }
+      }
+      V <- L %*% solve(delta_inv[, , i]) %*% t(L) + diag(1 / epsilon_inv[, i], p)
+      alpha[, , i] <- theta_mu[, i] + t(chol(V)) %*% matrix(rnorm(p * n_subjects), p)
+    }
+    samples <- list(
+      subjects = seq_len(n_subjects), par_names = paste0("p", seq_len(p)), n_pars = p,
+      n_subjects = n_subjects, n_factors = k, prior = prior,
+      sem_settings = list(Lambda_mat = Lambda_mat, B_mat = matrix(0, k, k),
+                          K_mat = matrix(0, p, 0), G_mat = matrix(0, k, 0),
+                          factor_groups = factor_groups, covariates = NULL),
+      samples = list(theta_mu = theta_mu, lambda = lambda, B = array(0, c(k, k, n)),
+                     K = array(0, c(p, 0, n)), G = array(0, c(k, 0, n)),
+                     epsilon_inv = epsilon_inv, delta_inv = delta_inv)
+    )
+    draws <- cbind(t(matrix(alpha, p * n_subjects, n)),
+                   EMC2:::bridge_add_group(matrix(numeric(), n, 0L), samples, seq_len(n), "SEM"))
+    info <- EMC2:::make_info(samples, "SEM")
+    for (split in list(seq_len(n / 2), seq.int(n / 2 + 1, n))) {
+      fit <- EMC2:::bridge_fit(draws, split)
+      log_ml <- EMC2:::bridge_sampling(draws, vector("list", n_subjects), info, n / 2, split,
+                                       fit, 1L, 1L, 5000L, 1e-5, 1e-10, 1e-6, FALSE)
+      expect_lt(abs(log_ml), 0.5)
+    }
+  }
+})
+
 test_that("bridge updates retain mass when both sums underflow on the natural scale", {
   expect_equal(EMC2:::bridge_update(c(1000, 1001), c(-1002, -1003), log(0.5), log(0.5)),
                -2, tolerance = 1e-12)

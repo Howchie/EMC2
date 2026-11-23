@@ -628,9 +628,6 @@ riwish <- function(v, S, context = NULL){
   })
 }
 
-logdinvGamma <- function(x, shape, rate){
-  dgamma(1/x, shape, rate, log = TRUE) - 2 * log(x)
-}
 
 
 # #' Calculate information criteria (DIC, BPIC), effective number of parameters and
