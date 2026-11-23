@@ -360,6 +360,80 @@
   pmin(w, .EMC_ALLOC_WHITE_CAP * pmax(0, 1 - rho))
 }
 
+# The group coordinates as one linear system, for pricing them jointly. A
+# coordinate priced alone is an AR(1) series; where the posterior's slow
+# direction lies across several coordinates, each of them carries part of it
+# and decays slower than its own lag-one correlation says, and a round on
+# one of them moves it only within its conditional given the others. With C
+# the coordinates' (slow-part) covariance and G the rest of the iteration's
+# jump covariance on them, the rest of the iteration acts on linear
+# functions as A_rest = I - G C^-1 / 2, x expected rounds on coordinate k as
+#   M_k = I - theta_k e_k Q[k, ] / Q[k, k],  Q = C^-1,
+# theta_k = 1 - (the rounds' factor within the conditional), and collapsed
+# moves as their per-coordinate factors. An iteration is
+#   A = M_q ... M_1 diag(f_c) A_rest,
+# and coordinate k's integrated autocorrelation time is
+#   tau_k = 2 [(I - A)^-1 C]_kk / C_kk - 1.
+# With C and G diagonal this is each coordinate's own (1 + rho) / (1 - rho).
+#
+# cov: the coordinates' within-chain covariance (its diagonal set to `var`);
+# G: the rest of the iteration's mean jump outer product; S, Dinv, n: for
+# the white part, the group's draw given the subjects (mean coordinates
+# Dinv S Dinv' / n, log sds 1 / (2 n)), held to .EMC_ALLOC_WHITE_CAP of the
+# jump in every direction. Off-diagonal correlations are shrunk by
+# .EMC_ALLOC_COUPLING_SHRINK, and fully where the m jumps behind them are
+# fewer than the coordinates. NULL where the system is not usable (the
+# coordinates are then priced one by one).
+.EMC_ALLOC_COUPLING_SHRINK <- 0.4
+.emc_alloc_coupling <- function(cov, var, G, S, Dinv, n, m) {
+  q <- length(var)
+  p <- nrow(Dinv)
+  ok <- function(M) is.matrix(M) && all(dim(M) == q) && all(is.finite(M))
+  if (!ok(cov) || !ok(G) || q != 2L * p || !all(is.finite(var)) || any(var <= 0) ||
+      any(diag(cov) <= 0) || any(diag(G) <= 0) || !is.finite(m) || m < 2)
+    return(NULL)
+  lam <- min(1, max(.EMC_ALLOC_COUPLING_SHRINK, q / m))
+  off <- function(M) {
+    D <- diag(diag(M), q)
+    (1 - lam) * M + lam * D
+  }
+  s <- sqrt(var / diag(cov))
+  C <- off(cov * outer(s, s))
+  G <- off((G + t(G)) / 2)
+  W <- matrix(0, q, q)
+  if (is.matrix(S) && all(dim(S) == p) && all(is.finite(S)))
+    W[seq_len(p), seq_len(p)] <- Dinv %*% S %*% t(Dinv) / n
+  diag(W)[p + seq_len(p)] <- 1 / (2 * n)
+  W <- off((W + t(W)) / 2)
+  out <- tryCatch({
+    R <- chol(G)
+    Ri <- backsolve(R, diag(q))
+    ev <- eigen(crossprod(Ri, 2 * W %*% Ri), symmetric = TRUE)
+    Wc <- crossprod(R, ev$vectors %*% (pmin(pmax(ev$values, 0), .EMC_ALLOC_WHITE_CAP) *
+                                          t(ev$vectors)) %*% R) / 2
+    Cs <- C - Wc
+    Cs <- (Cs + t(Cs)) / 2
+    Q <- chol2inv(chol(Cs))
+    Ar <- diag(q) - (G - 2 * Wc) %*% Q / 2
+    if (!all(is.finite(Ar)) || !all(is.finite(Q)) ||
+        max(Mod(eigen(Ar, only.values = TRUE)$values)) >= 1 - 1e-9) NULL else
+      list(C = Cs, Q = Q, Ar = Ar, shrink = lam)
+  }, error = function(e) NULL)
+  out
+}
+
+# Each group coordinate's equivalent lag-one rho, (tau - 1) / (tau + 1),
+# under the plans in the columns of X (expected rounds per coordinate) with
+# the collapsed move's factors fac; g, a: each coordinate's round factor and
+# saturation within its conditional (NA: no rounds).
+.emc_alloc_group_rho <- function(coupling, g, a, X, fac = NULL) {
+  q <- nrow(coupling$C)
+  X <- matrix(as.numeric(X), q)
+  emc_alloc_group_rho_cpp(coupling$C, coupling$Q, coupling$Ar,
+                          if (is.null(fac)) rep(1, q) else rep_len(as.numeric(fac), q),
+                          as.numeric(g), as.numeric(a), X)
+}
+
 .emc_alloc_tau <- function(rho) {
   rho <- pmin(rho, 1 - 1e-12)
   (1 + rho) / (1 - rho)
@@ -562,15 +636,15 @@
 # collapsed move's (joint$fixed) at min(1, x_c).
 .emc_alloc_solve <- function(units, C_rest, max_rounds = .EMC_ALLOC_MAX_ROUNDS,
                              joint = NULL, movable = NULL, shear_fixed = 0,
-                             hmc_fixed = 0) {
+                             hmc_fixed = 0, coupling = NULL) {
   if (!isTRUE(.emc_alloc_memo$on))
     return(.emc_alloc_solve_now(units, C_rest, max_rounds, joint, movable,
-                                shear_fixed, hmc_fixed))
-  args <- list(units, C_rest, max_rounds, joint, movable, shear_fixed, hmc_fixed)
+                                shear_fixed, hmc_fixed, coupling))
+  args <- list(units, C_rest, max_rounds, joint, movable, shear_fixed, hmc_fixed, coupling)
   for (entry in .emc_alloc_memo$entries)
     if (identical(entry$args, args)) return(entry$value)
   value <- .emc_alloc_solve_now(units, C_rest, max_rounds, joint, movable,
-                                shear_fixed, hmc_fixed)
+                                shear_fixed, hmc_fixed, coupling)
   .emc_alloc_memo$entries[[length(.emc_alloc_memo$entries) + 1L]] <-
     list(args = args, value = value)
   value
@@ -580,18 +654,71 @@
 # choice asks for the same plans) are answered from the rebuild's own record.
 .emc_alloc_memo <- new.env(parent = emptyenv())
 
+# The group units' fields for the joint system (coupling: the leading units,
+# one per group coordinate), or NULL where the units are not that block.
+.emc_alloc_group_fields <- function(units, coupling, joint, max_rounds) {
+  if (is.null(coupling)) return(NULL)
+  q <- nrow(coupling$C)
+  if (length(units) < q || (!is.null(joint) && !identical(as.integer(joint$idx), seq_len(q))))
+    return(NULL)
+  us <- units[seq_len(q)]
+  kind <- vapply(us, function(u) u$kind, character(1))
+  if (!all(kind %in% c("shear", "fixed")) || any(lengths(lapply(us, `[[`, "rho")) != 1L))
+    return(NULL)
+  sh <- kind == "shear"
+  num <- function(f, d, only = TRUE) vapply(seq_len(q), function(k)
+    if (only && !sh[k] || is.null(us[[k]][[f]])) d else as.numeric(us[[k]][[f]]), numeric(1))
+  g <- num("g", NA_real_)
+  a <- num("a", NA_real_)
+  a[is.na(a)] <- g[is.na(a)]
+  cap <- pmin(num("cap", max_rounds), max_rounds)
+  cap[!sh] <- 0
+  floor <- pmin(num("floor", 0), cap)
+  list(idx = seq_len(q), g = g, a = a, floor = floor, cap = cap, cost = num("cost", 0),
+       b = num("b_share", 0, only = FALSE))
+}
+
+# The group units' unallocated and least reachable rho under the joint system
+# with the collapsed move's factors fac.
+.emc_alloc_group_parts <- function(coupling, gf, fac) {
+  rho <- .emc_alloc_group_rho(coupling, gf$g, gf$a, cbind(gf$floor, gf$cap), fac)
+  list(levels = gf$b + (1 - gf$b) * rho[, 1L], best = gf$b + (1 - gf$b) * rho[, 2L])
+}
+
+# The group units' allocation at each target (.emc_alloc_units_need's form)
+# under the joint system.
+.emc_alloc_group_need <- function(coupling, gf, fac, movable, rs) {
+  got <- emc_alloc_group_need_cpp(coupling$C, coupling$Q, coupling$Ar, as.numeric(fac),
+                                  gf$g, gf$a, gf$floor, gf$cap, gf$cost, gf$b,
+                                  as.logical(movable), as.numeric(rs), 16L)
+  n_t <- length(rs)
+  lapply(seq_along(gf$idx), function(k) {
+    x <- got$x[k, ]
+    cost <- x * gf$cost[k]
+    if (k == 1L) cost[!got$reached] <- Inf
+    list(x = x, q = rep(1, n_t), cost = cost)
+  })
+}
+
 .emc_alloc_solve_now <- function(units, C_rest, max_rounds, joint, movable,
-                                 shear_fixed, hmc_fixed) {
+                                 shear_fixed, hmc_fixed, coupling = NULL) {
   units <- lapply(units, .emc_alloc_as_subject)
   n_u <- length(units)
-  moved_idx <- if (is.null(joint)) integer(0) else as.integer(joint$idx)
+  gf <- .emc_alloc_group_fields(units, coupling, joint, max_rounds)
+  if (is.null(gf)) coupling <- NULL
+  moved_idx <- if (!is.null(gf)) gf$idx else if (is.null(joint)) integer(0) else
+    as.integer(joint$idx)
+  # The collapsed move's factor on each group unit at xc expected moves.
+  fac_of <- function(xc) if (xc == 0 || is.null(joint)) rep(1, length(moved_idx)) else
+    rep_len(.emc_alloc_factor(joint$g, xc, if (is.null(joint$a)) joint$g else joint$a),
+            length(moved_idx))
   j_floor <- if (is.null(joint) || is.null(joint$floor)) 0 else min(joint$floor, joint$cap)
   xcs <- if (is.null(joint)) 0 else {
     grid <- .emc_alloc_joint_grid(joint$cap)
     unique(c(j_floor, grid[grid > j_floor]))
   }
   cand <- lapply(xcs, function(xc) {
-    if (xc == 0) return(units)
+    if (xc == 0 || !is.null(gf)) return(units)
     fac <- .emc_alloc_factor(joint$g, xc, if (is.null(joint$a)) joint$g else joint$a)
     moved <- units
     for (i in seq_along(moved_idx))
@@ -601,10 +728,12 @@
   # Only the moved units' levels change with the collapsed rate.
   parts0 <- .emc_alloc_range_parts(units, max_rounds)
   if (is.null(movable)) movable <- .emc_alloc_movable(units, max_rounds, joint, parts0)
-  moved_parts <- .emc_alloc_scaled_parts(units[moved_idx], max_rounds)
+  moved_parts <- if (is.null(gf)) .emc_alloc_scaled_parts(units[moved_idx], max_rounds)
   ranges <- lapply(seq_along(cand), function(c) {
-    if (xcs[c] == 0 || !length(moved_idx)) return(.emc_alloc_range_of(parts0, movable))
-    pm <- moved_parts(cand[[c]][moved_idx])
+    if (is.null(gf) && (xcs[c] == 0 || !length(moved_idx)))
+      return(.emc_alloc_range_of(parts0, movable))
+    pm <- if (is.null(gf)) moved_parts(cand[[c]][moved_idx]) else
+      .emc_alloc_group_parts(coupling, gf, fac_of(xcs[c]))
     pc <- parts0
     pc$levels[moved_idx] <- pm$levels
     pc$best[moved_idx] <- pm$best
@@ -674,7 +803,10 @@
       if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
     best_k <- NULL
     for (c in seq_along(xcs)) {
-      nm <- need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx], moved_layout)
+      nm <- if (is.null(gf))
+        need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx], moved_layout) else
+        .emc_alloc_group_need(coupling, gf, fac_of(xcs[c]), ranges[[c]]$movable[moved_idx],
+                              targets)
       need_c <- need
       need_c[moved_idx] <- nm
       act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
@@ -715,6 +847,13 @@
   # The slowest coordinate of all, moved or not.
   best$tau0_all <- .emc_alloc_tau(r0$hi_all)
   best$pred <- .emc_alloc_predict(units, best, joint, max_rounds)
+  if (!is.null(gf)) {
+    x <- if (length(best$x) >= length(gf$idx)) best$x[gf$idx] else gf$floor
+    x[!is.finite(x)] <- 0
+    rho <- .emc_alloc_group_rho(coupling, gf$g, gf$a, x,
+                                fac_of(if (is.null(best$joint)) 0 else best$joint))
+    best$pred[gf$idx] <- as.list(gf$b + (1 - gf$b) * rho[, 1L])
+  }
   best
 }
 
@@ -1215,6 +1354,7 @@
   g_var_slow <- (1 - g_white) * g_var
   g_fac <- g_sat <- rep(NA_real_, 2L * p)
   g_measured <- logical(2L * p)
+  coupling <- NULL
   if (shear) {
     last <- .emc_shear_record(ch$shear$plan$last, p)
     # The log-sd coordinates are the same in every chain, so in production
@@ -1247,6 +1387,25 @@
     g_fac <- .emc_alloc_shrink_g(g_obs, nk, rep(1:2, each = p))
     g_sat <- .emc_alloc_saturation(
       g_fac, last$N / pmax(1, rowSums(last$K)) / (2 * g_var_slow), last$K)
+    # The group block priced jointly: its coordinates' covariance and the
+    # rest of the iteration's operator on them, and each coordinate's rounds
+    # as moves within its conditional given the others.
+    if (all(g_valid) && w$nG > 0) {
+      chains_y <- lapply(seq_along(ds$mu_by_chain), function(i)
+        rbind(Dinv %*% ds$mu_by_chain[[i]], ds$lsd_by_chain[[i]]))
+      coupling <- .emc_alloc_coupling(
+        Reduce(`+`, lapply(chains_y, .emc_alloc_cov)) / length(chains_y), g_var,
+        T_g %*% (w$G / w$nG) %*% t(T_g), ds$S_mean, Dinv, ch$n_subjects,
+        min(w$nG, sum(lengths(vdraws))))
+      if (!is.null(coupling)) {
+        cv <- 1 / diag(coupling$Q)
+        c_obs <- ifelse(g_measured,
+                        pmin(1, pmax(0, 1 - (last$E / pmax(nk, 1e-12)) / (2 * cv))), NA_real_)
+        coupling$g <- .emc_alloc_shrink_g(c_obs, nk, rep(1:2, each = p))
+        coupling$a <- .emc_alloc_saturation(
+          coupling$g, last$N / pmax(1, rowSums(last$K)) / (2 * cv), last$K)
+      }
+    }
   }
   # The collapsed move moves every group coordinate at once: its factors come
   # from its acceptance-weighted jumps in the same coordinates.
@@ -1376,7 +1535,7 @@
   list(stored = stored, pairs = c(group = w$nG, subjects = w$nA), pool = pool,
        shear = shear,
        g_rho = g_rho, g_var = g_var, g_white = g_white, g_b_share = g_b_share, g_valid = g_valid,
-       g_fac = g_fac, g_sat = g_sat, g_measured = g_measured,
+       g_fac = g_fac, g_sat = g_sat, g_measured = g_measured, coupling = coupling,
        g_curved = if (shear && is.list(ch$shear[["curve"]])) ch$shear$curve_rec$k,
        g_n = if (shear) last_n else numeric(2L * p),
        g_iters = if (shear) last_iters else numeric(2L * p),
@@ -1458,6 +1617,8 @@
   # Unmeasured costs are guessed against the whole iteration's.
   C_iter <- C_rest + sum(ms$c_part[is.finite(ms$c_part)])
   c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_iter
+  coupled <- shear_on && is.list(ms$coupling) && length(ms$coupling$g) == length(ms$g_rho) &&
+    all(is.finite(ms$coupling$g[is.finite(ms$g_fac)]))
   units <- lapply(seq_along(ms$g_rho), function(k)
     if (shear_on && is.finite(ms$g_fac[k])) {
       b <- bounds(if (is.null(ms$g_n)) 0 else ms$g_n[k],
@@ -1472,10 +1633,13 @@
         b$floor <- max(b$floor, 1)
         b$cap <- max(b$cap, 1)
       }
+      # Under the joint system a round's factor is the one within the
+      # coordinate's conditional.
+      g_k <- if (coupled) ms$coupling$g[k] else ms$g_fac[k]
+      a_k <- if (coupled) ms$coupling$a[k] else if (is.null(ms$g_sat)) g_k else ms$g_sat[k]
       list(kind = "shear", rho = ms$g_rho[k],
            b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k],
-           g = ms$g_fac[k],
-           a = if (is.null(ms$g_sat)) ms$g_fac[k] else ms$g_sat[k], cost = c_round,
+           g = g_k, a = a_k, cost = c_round,
            floor = min(b$floor, .EMC_ALLOC_MAX_ROUNDS), cap = min(b$cap, .EMC_ALLOC_MAX_ROUNDS))
     } else list(kind = "fixed", rho = ms$g_rho[k],
                 b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k], cost = 0))
@@ -1551,6 +1715,7 @@
   }
   for (k in length(ms$g_rho) + seq_len(n)) units[[k]] <- .emc_alloc_dev_rows(units[[k]])
   list(units = units, C_rest = C_rest, c_round = c_round, joint = joint,
+       coupling = if (coupled) ms$coupling[c("C", "Q", "Ar")],
        hmc_fixed = if (isTRUE(is.finite(ms$hmc_fixed))) ms$hmc_fixed else 0,
        shear_fixed = if (isTRUE(is.finite(ms$shear_fixed))) ms$shear_fixed else 0)
 }
@@ -1671,11 +1836,12 @@
   hmc_fixed <- if (is.null(u$hmc_fixed)) 0 else u$hmc_fixed
   # Without HMC every particle step runs.
   without <- .emc_alloc_solve(off, u$C_rest, joint = u$joint, movable = movable,
-                              shear_fixed = shear_act)
+                              shear_fixed = shear_act, coupling = u$coupling)
   if (!has_h) return(without)
   # The plan at the HMC rates the solver picks.
   plans <- list("0" = .emc_alloc_solve(u$units, u$C_rest, joint = u$joint, movable = movable,
-                                       shear_fixed = shear_act, hmc_fixed = hmc_fixed))
+                                       shear_fixed = shear_act, hmc_fixed = hmc_fixed,
+                                       coupling = u$coupling))
   # Each choice's objective, for the choice shared across chains: a plan
   # with HMC must clear the minimum gain against the iteration without any
   # moves; held particle rates rule out the plan without HMC.
@@ -1854,6 +2020,11 @@
         .emc_alloc_subject_base(x)[seq_len(ch$n_pars)])),
       group_rho = .emc_alloc_rho_floor(m$g_rho, m$g_b_share),
       group_g = m$g_fac, group_a = m$g_sat,
+      # Whether the group coordinates were priced jointly, with the
+      # conditional round factors and the off-diagonal shrinkage used.
+      coupled = !is.null(u$coupling),
+      coupled_g = if (!is.null(u$coupling)) m$coupling$g,
+      coupled_shrink = if (!is.null(u$coupling)) m$coupling$shrink,
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
       curved_rounds = if (shear_on[j] && length(m$g_curved) == 1L) sol$x[m$g_curved] else 0,
       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,

@@ -11,6 +11,46 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// emc_alloc_group_rho_cpp
+SEXP emc_alloc_group_rho_cpp(const arma::mat& C, const arma::mat& Q, const arma::mat& Ar, const Rcpp::NumericVector& fac, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericMatrix& X);
+RcppExport SEXP _EMC2_emc_alloc_group_rho_cpp(SEXP CSEXP, SEXP QSEXP, SEXP ArSEXP, SEXP facSEXP, SEXP gSEXP, SEXP aSEXP, SEXP XSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type C(CSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Q(QSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Ar(ArSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type fac(facSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type g(gSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type X(XSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_group_rho_cpp(C, Q, Ar, fac, g, a, X));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_alloc_group_need_cpp
+SEXP emc_alloc_group_need_cpp(const arma::mat& C, const arma::mat& Q, const arma::mat& Ar, const Rcpp::NumericVector& fac, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& b_share, const Rcpp::LogicalVector& movable, const Rcpp::NumericVector& rs, int rebuild);
+RcppExport SEXP _EMC2_emc_alloc_group_need_cpp(SEXP CSEXP, SEXP QSEXP, SEXP ArSEXP, SEXP facSEXP, SEXP gSEXP, SEXP aSEXP, SEXP floorSEXP, SEXP capSEXP, SEXP costSEXP, SEXP b_shareSEXP, SEXP movableSEXP, SEXP rsSEXP, SEXP rebuildSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::mat& >::type C(CSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Q(QSEXP);
+    Rcpp::traits::input_parameter< const arma::mat& >::type Ar(ArSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type fac(facSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type g(gSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type a(aSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type floor(floorSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cap(capSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cost(costSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type b_share(b_shareSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type movable(movableSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
+    Rcpp::traits::input_parameter< int >::type rebuild(rebuildSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_group_need_cpp(C, Q, Ar, fac, g, a, floor, cap, cost, b_share, movable, rs, rebuild));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_alloc_subject_need_cpp
 Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& b_share, const Rcpp::NumericVector& p, Rcpp::Nullable<Rcpp::NumericVector> h_, const Rcpp::NumericVector& level, const Rcpp::NumericVector& qs, const Rcpp::NumericVector& rs, double r_min);
 RcppExport SEXP _EMC2_emc_alloc_subject_need_cpp(SEXP rhoSEXP, SEXP b_shareSEXP, SEXP pSEXP, SEXP h_SEXP, SEXP levelSEXP, SEXP qsSEXP, SEXP rsSEXP, SEXP r_minSEXP) {
@@ -4902,6 +4942,8 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_EMC2_emc_alloc_group_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_rho_cpp, 7},
+    {"_EMC2_emc_alloc_group_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_need_cpp, 13},
     {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
     {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},

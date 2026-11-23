@@ -1132,3 +1132,130 @@ test_that("a curved shear coordinate runs a round in every iteration", {
   expect_gte(sol$x[1], 1)
   expect_lt(EMC2:::.emc_alloc_solve_units(plain)$x[1], 1)
 })
+
+# A reversible rest-of-iteration kernel on q coordinates with covariance cov:
+# its jump covariance, slow directions decaying at rho.
+joint_system <- function(q, rho, seed) {
+  set.seed(seed)
+  cov <- crossprod(matrix(rnorm(q * q), q)) / q + diag(q)
+  e <- eigen(cov)
+  h <- e$vectors %*% (sqrt(e$values) * t(e$vectors))
+  o <- qr.Q(qr(matrix(rnorm(q * q), q)))
+  list(cov = cov, G = 2 * h %*% (o %*% ((1 - rho) * t(o))) %*% h)
+}
+
+test_that("group coordinates priced jointly reduce to their own pricing when uncoupled", {
+  v <- c(0.5, 1, 2, 0.7, 1.3, 0.9)
+  rho <- c(0.6, 0.9, 0.97, 0.8, 0.95, 0.7)
+  cp <- EMC2:::.emc_alloc_coupling(diag(v), v, diag(2 * v * (1 - rho)), matrix(0, 3, 3), diag(3),
+                                   1e9, 1e6)
+  expect_equal(diag(cp$Ar), rho, tolerance = 1e-6)
+  g <- c(0.4, 0.8, 0.9, 0.5, 0.7, NA)
+  a <- c(0.4, 0.5, 0.9, 0.2, 0.7, NA)
+  x <- c(0.5, 2, 3.25, 0, 1, 0)
+  fac <- c(1, 0.9, 0.8, 1, 0.95, 0.7)
+  own <- diag(cp$Ar) * fac * c(mapply(EMC2:::.emc_alloc_factor, g[1:5], x[1:5], a[1:5]), 1)
+  expect_equal(EMC2:::.emc_alloc_group_rho(cp, g, a, x, fac)[, 1], own, tolerance = 1e-10)
+  # The cheapest rounds to a target are each coordinate's own, to the path's step.
+  gf <- list(idx = 1:6, g = g, a = a, floor = rep(0, 6), cap = c(rep(4, 5), 0),
+             cost = rep(0.05, 6), b = rep(0, 6))
+  rs <- seq(0.72, 0.97, length.out = 12)
+  nd <- EMC2:::.emc_alloc_group_need(cp, gf, rep(1, 6), c(rep(TRUE, 5), FALSE), rs)
+  sep <- EMC2:::emc_alloc_shears_need_cpp(diag(cp$Ar)[1:5], rep(0, 5), g[1:5], a[1:5],
+                                          gf$cost[1:5], gf$cap[1:5], gf$floor[1:5], rs)
+  xj <- do.call(rbind, lapply(nd[1:5], `[[`, "x"))
+  xs <- do.call(rbind, lapply(sep, `[[`, "x"))
+  fin <- is.finite(colSums(xs))
+  expect_identical(is.finite(Reduce(`+`, lapply(nd, `[[`, "cost"))), fin)
+  expect_true(all(xj[, fin] >= xs[, fin] - 1e-9))
+  expect_true(all(xj[, fin] <= xs[, fin] + 0.5))
+})
+
+test_that("a coupled group system prices each coordinate's rounds within its conditional", {
+  q <- 8
+  s <- joint_system(q, seq(0.5, 0.98, length.out = q), 11)
+  cp <- EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(4) * 0.01, diag(4), 50, 1e6)
+  expect_identical(cp$shrink, EMC2:::.EMC_ALLOC_COUPLING_SHRINK)
+  g <- c(0.5, 0.9, 0.7, 0.95, 0.6, 0.8, 0.85, NA)
+  a <- g * c(1, 0.5, 0.8, 1, 0.6, 0.9, 0.7, NA)
+  x <- c(1, 0.5, 2.5, 0, 3, 0.25, 1.75, 0)
+  fac <- seq(1, 0.8, length.out = q)
+  A <- diag(fac) %*% cp$Ar
+  for (k in seq_len(q)) {
+    th <- if (is.finite(g[k]) && x[k] > 0) 1 - EMC2:::.emc_alloc_factor(g[k], x[k], a[k]) else 0
+    A <- (diag(q) - th * outer(replace(numeric(q), k, 1), cp$Q[k, ] / cp$Q[k, k])) %*% A
+  }
+  tau <- 2 * diag(solve(diag(q) - A) %*% cp$C) / diag(cp$C) - 1
+  expect_equal(EMC2:::.emc_alloc_group_rho(cp, g, a, x, fac)[, 1], (tau - 1) / (tau + 1),
+               tolerance = 1e-10)
+  # A round that fully redraws one coordinate within its conditional leaves
+  # the autocorrelation the other coordinates carry into it.
+  none <- EMC2:::.emc_alloc_group_rho(cp, rep(NA_real_, q), rep(0, q), numeric(q))[, 1]
+  k <- which.max(none)
+  full <- EMC2:::.emc_alloc_group_rho(cp, replace(rep(NA_real_, q), k, 0), rep(0, q),
+                                      replace(numeric(q), k, 1))[k, 1]
+  expect_gt(full, 0)
+  expect_lt(full, none[k])
+})
+
+test_that("the joint rounds for a target meet it within floors and caps", {
+  q <- 8
+  s <- joint_system(q, seq(0.6, 0.985, length.out = q), 5)
+  cp <- EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(4) * 0.01, diag(4), 50, 1e6)
+  g <- c(0.5, 0.9, 0.7, 0.95, 0.6, 0.8, 0.85, NA)
+  a <- g * c(1, 0.5, 0.8, 1, 0.6, 0.9, 0.7, NA)
+  gf <- list(idx = seq_len(q), g = g, a = a, floor = c(0.25, rep(0, q - 1)),
+             cap = c(rep(3, q - 1), 0), cost = seq(0.03, 0.06, length.out = q),
+             b = rep(0.02, q))
+  movable <- c(rep(TRUE, q - 1), FALSE)
+  parts <- EMC2:::.emc_alloc_group_parts(cp, gf, rep(1, q))
+  rs <- seq(max(parts$best[movable]) - 0.05, max(parts$levels[movable]) + 0.005, length.out = 30)
+  nd <- EMC2:::.emc_alloc_group_need(cp, gf, rep(1, q), movable, rs)
+  X <- do.call(rbind, lapply(nd, `[[`, "x"))
+  cost <- Reduce(`+`, lapply(nd, `[[`, "cost"))
+  expect_true(any(is.finite(cost)) && any(!is.finite(cost)))
+  expect_equal(cost[length(rs)], sum(gf$floor * gf$cost))
+  expect_true(all(diff(cost[is.finite(cost)]) <= 1e-12))
+  for (t in which(is.finite(cost))) {
+    r <- gf$b + (1 - gf$b) * EMC2:::.emc_alloc_group_rho(cp, g, a, X[, t])[, 1]
+    expect_true(all(r[movable] <= rs[t] + 1e-9))
+    expect_true(all(X[, t] <= gf$cap + 1e-9 & X[, t] >= gf$floor - 1e-9))
+  }
+  # Steps updated in place give the path a full rebuild at every step does.
+  path <- function(rebuild) EMC2:::emc_alloc_group_need_cpp(
+    cp$C, cp$Q, cp$Ar, rep(1, q), g, a, gf$floor, gf$cap, gf$cost, gf$b, movable, rs, rebuild)
+  expect_equal(path(1000L)$x, path(1L)$x, tolerance = 1e-9)
+  expect_identical(path(1000L)$reached, path(1L)$reached)
+})
+
+test_that("coupling is shrunk away where the window cannot support it", {
+  q <- 6
+  s <- joint_system(q, rep(0.9, q), 3)
+  few <- EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(3) * 0.01, diag(3), 50, q)
+  expect_identical(few$shrink, 1)
+  expect_equal(few$C[upper.tri(few$C)], numeric(15))
+  expect_equal(few$Ar[upper.tri(few$Ar)], numeric(15))
+  expect_null(EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G * NA, diag(3), diag(3), 50, 1e3))
+  expect_null(EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(3), diag(3), 50, 1))
+  expect_null(EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), -s$G, diag(3), diag(3), 50, 1e3))
+})
+
+test_that("the solver prices a coupled group block on the joint system", {
+  q <- 4
+  s <- joint_system(q, c(0.7, 0.9, 0.95, 0.98), 7)
+  cp <- EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(2) * 0.001, diag(2), 200, 1e6)
+  g <- c(0.5, 0.6, 0.7, 0.6)
+  units <- c(lapply(seq_len(q), function(k)
+    list(kind = "shear", rho = cp$Ar[k, k], b_share = 0, g = g[k], a = g[k], cost = 0.05,
+         floor = 0, cap = 4)),
+    list(list(kind = "subject", rho = 0.5, b_share = 0, p = NULL, c_p = 0, h = NULL, c_h = 0)))
+  sol <- EMC2:::.emc_alloc_solve(units, 1, coupling = cp[c("C", "Q", "Ar")])
+  xg <- sol$x[seq_len(q)]
+  expect_true(all(is.finite(xg)))
+  expect_gt(sum(xg), 0)
+  expect_equal(unlist(sol$pred[seq_len(q)]), EMC2:::.emc_alloc_group_rho(cp, g, g, xg)[, 1],
+               tolerance = 1e-9)
+  # Without the coupling the same units are priced one by one.
+  alone <- EMC2:::.emc_alloc_solve(units, 1)
+  expect_false(isTRUE(all.equal(alone$x[seq_len(q)], xg)))
+})
