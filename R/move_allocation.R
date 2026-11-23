@@ -528,6 +528,104 @@
   pad(A) + pad(B)
 }
 
+# The integrated autocorrelation time of one coordinate over a block, from
+# its draws in every chain (`xs`, a series per chain, cut to the shortest).
+# The autocovariances are taken about the mean over all chains: centring a
+# chain on its own block mean removes the slow variation being measured.
+# What the common mean still removes is modelled: the pooled
+# autocovariances at lags 0..K are fitted by a white part and one
+# exponential part, each entering through the expectation of its estimated
+# autocovariance (.emc_alloc_centred_acov), over a grid of the exponential's
+# time; a coordinate the block resolves well (Geyer's initial monotone
+# sequence, with the centring loss restored self-consistently, under
+# .EMC_ALLOC_TAU_RESOLVED of the block) takes that estimate instead, which
+# assumes no shape. Returns tau, and the fit's white share and slow time (NA
+# where it was not needed); all NA when nothing can be measured.
+.EMC_ALLOC_TAU_RESOLVED <- 0.05
+.EMC_ALLOC_TAU_GRID <- 28L
+.emc_alloc_series_tau <- function(xs) {
+  none <- list(tau = NA_real_, white = NA_real_, slow = NA_real_)
+  m <- length(xs)
+  B <- min(lengths(xs))
+  if (m < 1L || B < 20L) return(none)
+  X <- vapply(xs, function(x) as.numeric(x[seq_len(B)]), numeric(B))
+  if (!all(is.finite(X))) return(none)
+  X <- X - mean(X)
+  K <- min(B - 2L, max(40L, B %/% 2L))
+  g <- rowMeans(matrix(vapply(seq_len(m), function(j)
+    drop(stats::acf(X[, j], lag.max = K, type = "covariance", plot = FALSE,
+                    demean = FALSE)$acf), numeric(K + 1L)), K + 1L))
+  if (!all(is.finite(g)) || g[1L] <= 0) return(none)
+  ims <- function(a) {
+    lag <- K - (K + 1L) %% 2L
+    odd <- seq.int(1L, lag, by = 2L)
+    pairs <- (a[odd] + a[odd + 1L]) / a[1L]
+    stop <- which(pairs <= 0)
+    if (length(stop)) pairs <- pairs[seq_len(stop[1L] - 1L)]
+    if (!length(pairs)) 0 else max(0, 2 * sum(cummin(pairs)) - 1)
+  }
+  # Geyer's sum on the unbiased-lag autocovariances, the variance of the
+  # common mean (g0 tau / (m B) of the true variance) added back.
+  gu <- g * B / (B - 0:K)
+  tau <- ims(gu)
+  for (it in seq_len(100L)) {
+    r <- min(tau / (m * B), 0.95)
+    new <- min(ims(gu + g[1L] * r / (1 - r)), 2 * B)
+    if (abs(new - tau) < 1e-3 * max(tau, 1e-8)) {
+      tau <- new
+      break
+    }
+    tau <- (tau + new) / 2
+  }
+  resolved <- list(tau = max(1, tau), white = NA_real_, slow = NA_real_)
+  if (tau < .EMC_ALLOC_TAU_RESOLVED * B) return(resolved)
+  white <- .emc_alloc_centred_acov(NA_real_, B, K, m)
+  best <- NULL
+  for (ts in exp(seq(log(1.5), log(2 * B), length.out = .EMC_ALLOC_TAU_GRID))) {
+    M <- cbind(white, .emc_alloc_centred_acov((ts - 1) / (ts + 1), B, K, m))
+    w <- .emc_alloc_nnls2(M, g)
+    rss <- sum((g - M %*% w)^2)
+    if (sum(w) > 0 && (is.null(best) || rss < best$rss)) best <- list(rss = rss, w = w, ts = ts)
+  }
+  if (is.null(best)) return(resolved)
+  list(tau = sum(best$w * c(1, best$ts)) / sum(best$w), white = best$w[1L] / sum(best$w),
+       slow = best$ts)
+}
+
+# The expectation, at lags 0..K, of the autocovariance estimated from m
+# chains of B draws about their common mean, for a unit-variance component
+# with autocorrelation phi^lag (phi NA: white).
+.emc_alloc_centred_acov <- function(phi, B, K, m) {
+  k <- 0:K
+  if (is.na(phi)) {
+    out <- -(B - k) / (m * B^2)
+    out[1L] <- 1 - 1 / (m * B)
+    return(out)
+  }
+  t <- seq_len(B)
+  rs <- (1 + phi - phi^t - phi^(B - t + 1)) / (1 - phi)
+  cs <- c(0, cumsum(rs))
+  S <- cs[B + 1L]
+  ((B - k) * phi^k - (cs[B - k + 1L] + S - cs[k + 1L]) / (m * B) + (B - k) * S / (m * B^2)) / B
+}
+
+# The nonnegative least-squares weights of the two columns of M for y.
+.emc_alloc_nnls2 <- function(M, y) {
+  a <- sum(M[, 1L]^2)
+  b <- sum(M[, 1L] * M[, 2L])
+  d <- sum(M[, 2L]^2)
+  u <- sum(M[, 1L] * y)
+  v <- sum(M[, 2L] * y)
+  det <- a * d - b^2
+  if (det > 1e-12 * a * d) {
+    w <- c(d * u - b * v, a * v - b * u) / det
+    if (all(w >= 0)) return(w)
+  }
+  w1 <- c(max(0, u / a), 0)
+  w2 <- c(0, max(0, v / d))
+  if (sum((y - M %*% w1)^2) <= sum((y - M %*% w2)^2)) w1 else w2
+}
+
 # Round factors held to what the rounds can refresh: with `share` of the
 # coordinate's variance inside the conditional its rounds sample
 # (.emc_shear_orbit_shares), no number of rounds takes the factor below

@@ -1279,3 +1279,50 @@ test_that("round factors level off at what the rounds can refresh", {
                    list(g = c(0.9, NA, 0.7), a = c(0.6, NA, NA)))
   expect_equal(cap(0.9, 0.9, 1)$a, 0.9)
 })
+
+test_that("a block's autocorrelation time allows for what its common mean removes", {
+  series_tau <- EMC2:::.emc_alloc_series_tau
+  centred <- EMC2:::.emc_alloc_centred_acov
+  # The expected autocovariance of an estimate about the common mean: a
+  # white series loses its mean's variance at lag zero, and an exponential
+  # one more at every lag the slower it is.
+  expect_equal(centred(NA_real_, 100L, 3L, 3L)[1], 1 - 1 / 300)
+  expect_equal(centred(NA_real_, 100L, 3L, 3L)[3], -98 / (3 * 100^2))
+  expect_equal(centred(0, 100L, 2L, 3L)[1], 1 - 1 / 300)
+  slow <- centred(0.98, 200L, 50L, 3L)
+  expect_lt(slow[1], 0.9)
+  expect_true(all(slow < 0.98^(0:50)))
+  set.seed(8)
+  mc <- rowMeans(replicate(400, {
+    x <- vapply(1:3, function(j) as.numeric(arima.sim(list(ar = 0.9), 60, n.start = 500)),
+                numeric(60)) * sqrt(1 - 0.81)
+    x <- x - mean(x)
+    rowMeans(apply(x, 2, function(v) stats::acf(v, 5, type = "covariance", plot = FALSE,
+                                                demean = FALSE)$acf))
+  }))
+  expect_equal(mc, centred(0.9, 60L, 5L, 3L), tolerance = 0.05)
+  # A white part on a slow one: tau = w + (1 - w) tau_slow, which autocovariances
+  # about each chain's own mean fall well short of.
+  sim <- function(B, w, ts) {
+    phi <- (ts - 1) / (ts + 1)
+    lapply(1:3, function(j) sqrt(w) * rnorm(B) + sqrt((1 - w) * (1 - phi^2)) *
+             as.numeric(arima.sim(list(ar = phi), B, n.start = 2000)))
+  }
+  est <- t(replicate(60, {
+    xs <- sim(300L, 0.2, 60)
+    c(series_tau(xs)$tau, EMC2:::.emc_shear_window_iact(xs))
+  }))
+  truth <- 0.2 + 0.8 * 60
+  expect_gt(median(est[, 1]), 0.75 * truth)
+  expect_lt(median(est[, 1]), 1.3 * truth)
+  expect_lt(median(est[, 2]), 0.65 * truth)
+  one <- series_tau(sim(300L, 0.2, 60))
+  expect_true(one$white >= 0 && one$white < 1 && one$slow > one$tau)
+  # A coordinate the block resolves takes the shape-free estimate.
+  fast <- series_tau(sim(400L, 0, 3))
+  expect_true(is.na(fast$slow))
+  expect_gt(fast$tau, 2)
+  expect_lt(fast$tau, 4.5)
+  expect_true(is.na(series_tau(list(rnorm(10), rnorm(10)))$tau))
+  expect_true(is.na(series_tau(list(c(rnorm(50), NA), rnorm(51)))$tau))
+})
