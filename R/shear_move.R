@@ -763,19 +763,36 @@
   plan
 }
 
+# Posterior sds of the mean coordinates c = D^-1 mu under the covariance S of
+# mu; 1 / |d| when S does not give them.
+.emc_shear_coord_sd <- function(dirs, S = NULL) {
+  fall <- 1 / sqrt(colSums(dirs^2))
+  if (!is.matrix(S) || !all(dim(S) == nrow(dirs)) || !all(is.finite(S))) return(fall)
+  Di <- tryCatch(solve(dirs), error = function(e) NULL)
+  if (is.null(Di)) return(fall)
+  v <- rowSums((Di %*% S) * Di)
+  if (!all(is.finite(v)) || any(v <= 0)) return(fall)
+  sqrt(v)
+}
+
 # How a rebuilt plan's coordinates inherit the old plan's step scales and
-# round records. A new mean direction is a combination sum_m c_m d_m of the
-# old ones, each of which moves mu by one posterior sd of its direction; it
-# takes old direction m's per-round statistics with weight c_m^2 / sum c^2,
-# rescaled by the length ratio |d_m| / |d| (round moves are in units of
-# the direction). A direction the old plan already had inherits its own
-# record alone. Directions with nearly equal lambda are fixed only up to a
-# rotation among themselves, so a rebuild can turn them into new
-# combinations of the old ones; matching one old direction each would leave
-# them unmeasured. w and scale are 2p x 2p (new by old coordinate); a log
-# group sd inherits its own record unscaled, and an old basis that cannot
-# be inverted passes nothing to the mean directions.
-.emc_shear_carry_weights <- function(old_dirs, new_dirs) {
+# round records. Round moves and steps are in units of their coordinate, and
+# a record means through its ratio to the coordinate's variance, so the carry
+# works in posterior sds of the coordinates under S, the covariance of mu
+# over the proposal window. A new mean direction is a combination
+# sum_m c_m d_m of the old ones; in sds, old coordinate m moves by
+# c_m / sd_m per sd of the new one, and the new coordinate takes old m's
+# per-round statistics with weight (c_m / sd_m)^2 over their sum, rescaled by
+# sd_new / sd_m. A record's squared moves over the variance then carry as a
+# weighted mean of the old records' ratios, whatever the directions'
+# lengths. A direction the old plan already had inherits its own record
+# alone. Directions with nearly equal lambda are fixed only up to a rotation
+# among themselves, so a rebuild can turn them into new combinations of the
+# old ones; matching one old direction each would leave them unmeasured. w
+# and scale are 2p x 2p (new by old coordinate); a log group sd inherits its
+# own record unscaled, and an old basis that cannot be inverted passes
+# nothing to the mean directions.
+.emc_shear_carry_weights <- function(old_dirs, new_dirs, S = NULL) {
   p <- ncol(new_dirs)
   w <- scale <- matrix(0, 2L * p, 2L * p)
   sd_k <- p + seq_len(p)
@@ -783,12 +800,13 @@
   scale[] <- 1
   cf <- tryCatch(solve(old_dirs, new_dirs), error = function(e) NULL)
   if (!is.null(cf) && all(is.finite(cf))) {
-    wm <- t(cf^2)
+    s_old <- .emc_shear_coord_sd(old_dirs, S)
+    s_new <- .emc_shear_coord_sd(new_dirs, S)
+    wm <- t(cf^2 / s_old^2)
     tot <- rowSums(wm)
     wm[tot > 0, ] <- wm[tot > 0, , drop = FALSE] / tot[tot > 0]
     w[seq_len(p), seq_len(p)] <- wm
-    scale[seq_len(p), seq_len(p)] <- outer(1 / sqrt(colSums(new_dirs^2)),
-                                           sqrt(colSums(old_dirs^2)))
+    scale[seq_len(p), seq_len(p)] <- outer(s_new, 1 / s_old)
   }
   list(w = w, scale = scale)
 }
@@ -812,7 +830,10 @@
   recent <- plan$pool <- zero
   same_stage <- identical(stage, old$stage)
   if (is.list(old) && is.matrix(old$dirs) && all(dim(old$dirs) == p)) {
-    cw <- .emc_shear_carry_weights(old$dirs, plan$dirs)
+    S <- if (length(idx) > p) tryCatch(
+      stats::cov(t(chain$samples$theta_mu[, idx, drop = FALSE])),
+      error = function(e) NULL)
+    cw <- .emc_shear_carry_weights(old$dirs, plan$dirs, S)
     # A curve keeps its direction and coordinate: they take the place of the
     # new direction that is mostly the old one (.emc_shear_pin_dir).
     k_old <- st$curve_rec$k
@@ -823,7 +844,7 @@
       if (!is.null(pinned)) {
         plan$dirs <- pinned
         st$curve_rec$k <- k_new
-        cw <- .emc_shear_carry_weights(old$dirs, plan$dirs)
+        cw <- .emc_shear_carry_weights(old$dirs, plan$dirs, S)
       }
     }
     if (is.null(st$curve_rec$k)) st["curve"] <- list(NULL)
