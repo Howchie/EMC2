@@ -378,6 +378,20 @@ bool step_ensemble(SEXP st, SEXP cx, int i) {
         d[k] = REAL(tmu)[k] - REAL(theta_mu)[k + at * p];
         d[p + k] = now[k] - was[k];
       }
+      // Less the jump the shear and collapsed moves made within that span
+      // (.emc_alloc_record_group): theirs, not the rest's.
+      SEXP from = var(st, "shear_from");
+      SEXP pmu = lget(pars, "tmu"), pvar = lget(pars, "tvar");
+      if (TYPEOF(from) == REALSXP && XLENGTH(from) == q && TYPEOF(pmu) == REALSXP &&
+          XLENGTH(pmu) == p && TYPEOF(pvar) == REALSXP &&
+          XLENGTH(pvar) == static_cast<R_xlen_t>(p) * p) {
+        std::vector<double> pre(p);
+        log_sd(REAL(pvar), p, pre.data());
+        for (int k = 0; k < p; ++k) {
+          d[k] = d[k] - (REAL(pmu)[k] - REAL(from)[k]);
+          d[p + k] = d[p + k] - (pre[k] - REAL(from)[p + k]);
+        }
+      }
       for (int k = 0; k < q; ++k) finite = finite && R_FINITE(d[k]);
       RObject w2 = w;
       if (finite) {

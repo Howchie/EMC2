@@ -179,7 +179,8 @@ SEXP emc_alloc_group_rho_cpp(const arma::mat& C, const arma::mat& Q, const arma:
 }
 
 // The cheapest rounds that bring every movable coordinate's rho (floored by
-// its between-chain share) to each target rs (ascending). One path from the
+// its between-chain share, its autocorrelation time raised by 1 + `rel`)
+// to each target rs (ascending). One path from the
 // floors: while a movable coordinate is above the loosest unmet target, the
 // coordinate whose next step (an eighth of a round below one round, a
 // quarter below two, a half beyond) takes most of the movable coordinates'
@@ -194,20 +195,23 @@ SEXP emc_alloc_group_need_cpp(const arma::mat& C, const arma::mat& Q, const arma
                               const Rcpp::NumericVector& a, const Rcpp::NumericVector& floor,
                               const Rcpp::NumericVector& cap, const Rcpp::NumericVector& cost,
                               const Rcpp::NumericVector& b_share,
+                              const Rcpp::NumericVector& rel,
                               const Rcpp::LogicalVector& movable,
                               const Rcpp::NumericVector& rs, int rebuild = 16) {
   if (!group_dims(C, Q, Ar, fac.size(), g.size(), a.size())) return R_NilValue;
   const GroupSystem sys = group_system(C, Q, Ar, fac, g, a);
   const int q = sys.q, n_t = rs.size();
   if (floor.size() != q || cap.size() != q || cost.size() != q || b_share.size() != q ||
-      movable.size() != q)
+      rel.size() != q || movable.size() != q)
     return R_NilValue;
   std::vector<double> x(q);
   for (int k = 0; k < q; ++k) x[k] = std::min<double>(floor[k], cap[k]);
+  // The system's time floored by the between-chain share, raised by the share
+  // of it the system misses (rel).
   auto floored_tau = [&](int j, double tau) {
     const double r = b_share[j] + (1.0 - b_share[j]) * tau_to_rho(tau);
     const double rr = std::min(r, 1.0 - 1e-12);
-    return (1.0 + rr) / (1.0 - rr);
+    return std::max(1.0, (1.0 + rr) / (1.0 - rr) * (1.0 + rel[j]));
   };
   Rcpp::NumericMatrix X(q, n_t);
   Rcpp::LogicalVector reached(n_t);

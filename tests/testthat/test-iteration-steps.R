@@ -105,6 +105,20 @@ native_steps_match <- function(cores_per_chain, pooled = NULL, curve = FALSE, wa
   expect_gt(min(runs[steps]) / runs[["iter"]], 0.4)
 }
 
+test_that("the ensemble update follows the shear and collapsed moves", {
+  ran <- character()
+  logger <- function(nm) function(st, cx, i) ran <<- c(ran, nm)
+  local_mocked_bindings(
+    .emc_step_group = logger("group"), .emc_step_particle = logger("particle"),
+    .emc_step_shear = logger("shear"), .emc_step_collapsed = logger("collapsed"),
+    .emc_step_ensemble = logger("ensemble"), .emc_step_hmc = logger("hmc"),
+    .emc_step_store = logger("store"), .package = "EMC2")
+  cx <- list(verbose_progress = FALSE, pooled = FALSE, sampler_profile = FALSE,
+             native_ok = FALSE, iter = 1L)
+  EMC2:::.emc_steps_run(new.env(), cx)
+  expect_identical(ran, c("group", "particle", "shear", "collapsed", "ensemble", "hmc", "store"))
+})
+
 test_that("the native iteration steps are the R steps on the same random stream", {
   skip_on_cran()
   native_steps_match(1L)

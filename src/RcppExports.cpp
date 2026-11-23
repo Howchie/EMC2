@@ -29,8 +29,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_alloc_group_need_cpp
-SEXP emc_alloc_group_need_cpp(const arma::mat& C, const arma::mat& Q, const arma::mat& Ar, const Rcpp::NumericVector& fac, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& b_share, const Rcpp::LogicalVector& movable, const Rcpp::NumericVector& rs, int rebuild);
-RcppExport SEXP _EMC2_emc_alloc_group_need_cpp(SEXP CSEXP, SEXP QSEXP, SEXP ArSEXP, SEXP facSEXP, SEXP gSEXP, SEXP aSEXP, SEXP floorSEXP, SEXP capSEXP, SEXP costSEXP, SEXP b_shareSEXP, SEXP movableSEXP, SEXP rsSEXP, SEXP rebuildSEXP) {
+SEXP emc_alloc_group_need_cpp(const arma::mat& C, const arma::mat& Q, const arma::mat& Ar, const Rcpp::NumericVector& fac, const Rcpp::NumericVector& g, const Rcpp::NumericVector& a, const Rcpp::NumericVector& floor, const Rcpp::NumericVector& cap, const Rcpp::NumericVector& cost, const Rcpp::NumericVector& b_share, const Rcpp::NumericVector& rel, const Rcpp::LogicalVector& movable, const Rcpp::NumericVector& rs, int rebuild);
+RcppExport SEXP _EMC2_emc_alloc_group_need_cpp(SEXP CSEXP, SEXP QSEXP, SEXP ArSEXP, SEXP facSEXP, SEXP gSEXP, SEXP aSEXP, SEXP floorSEXP, SEXP capSEXP, SEXP costSEXP, SEXP b_shareSEXP, SEXP relSEXP, SEXP movableSEXP, SEXP rsSEXP, SEXP rebuildSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -44,10 +44,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cap(capSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type cost(costSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type b_share(b_shareSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rel(relSEXP);
     Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type movable(movableSEXP);
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
     Rcpp::traits::input_parameter< int >::type rebuild(rebuildSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_group_need_cpp(C, Q, Ar, fac, g, a, floor, cap, cost, b_share, movable, rs, rebuild));
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_group_need_cpp(C, Q, Ar, fac, g, a, floor, cap, cost, b_share, rel, movable, rs, rebuild));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4943,7 +4944,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_group_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_rho_cpp, 7},
-    {"_EMC2_emc_alloc_group_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_need_cpp, 13},
+    {"_EMC2_emc_alloc_group_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_need_cpp, 14},
     {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
     {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},

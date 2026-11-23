@@ -223,12 +223,16 @@
 }
 
 # The group state the rest of the iteration produced, against the previous
-# iteration's final (stored) one.
-.emc_alloc_record_group <- function(sampler, pars) {
+# iteration's final (stored) one. from, before: the group state (mu, log
+# sds) the shear and collapsed moves started from and left; the rest runs
+# around them, stored -> from and before -> pars, and their jump is not the
+# rest's.
+.emc_alloc_record_group <- function(sampler, pars, from = NULL, before = NULL) {
   idx <- sampler$samples$idx
   w <- .emc_alloc_window(sampler)
   d <- c(as.numeric(pars$tmu), .emc_alloc_lsd(pars$tvar)) -
     c(sampler$samples$theta_mu[, idx], .emc_alloc_lsd(sampler$samples$theta_var[, , idx]))
+  if (length(from) == length(d) && length(before) == length(d)) d <- d - (before - from)
   if (all(is.finite(d))) {
     w$G <- w$G + tcrossprod(d)
     w$nG <- w$nG + 1L
@@ -740,6 +744,9 @@
 # unallocated maximum, plus every unit's own level under every candidate
 # collapsed rate. The units the collapsed move does not touch are priced once
 # on that grid; only the group units are re-priced per candidate rate.
+# Where the group's measured excess time is known (coupling$E), the search
+# also runs over the holds on the subjects' deviations that scale it
+# (.emc_alloc_excess_holds), the other units priced once per hold.
 # movable: which units count towards the target (default: those a move can
 # lower), given so that solves of the same problem with and without a kernel
 # are judged on the same coordinates. shear_fixed and hmc_fixed: each
@@ -792,16 +799,25 @@
 
 # The group units' unallocated and least reachable rho under the joint system
 # with the collapsed move's factors fac.
-.emc_alloc_group_parts <- function(coupling, gf, fac) {
+.emc_alloc_group_parts <- function(coupling, gf, fac, ex = NULL) {
   rho <- .emc_alloc_group_rho(coupling, gf$g, gf$a, cbind(gf$floor, gf$cap), fac)
-  list(levels = gf$b + (1 - gf$b) * rho[, 1L], best = gf$b + (1 - gf$b) * rho[, 2L])
+  list(levels = .emc_alloc_add_tau(gf$b + (1 - gf$b) * rho[, 1L], ex),
+       best = .emc_alloc_add_tau(gf$b + (1 - gf$b) * rho[, 2L], ex))
+}
+
+# rho with its autocorrelation time raised by 1 + ex (NULL: as it is).
+.emc_alloc_add_tau <- function(rho, ex) {
+  if (is.null(ex)) return(rho)
+  tau <- pmax(1, .emc_alloc_tau(rho) * (1 + ex))
+  (tau - 1) / (tau + 1)
 }
 
 # The group units' allocation at each target (.emc_alloc_units_need's form)
-# under the joint system.
-.emc_alloc_group_need <- function(coupling, gf, fac, movable, rs) {
+# under the joint system, each coordinate's time raised by 1 + ex.
+.emc_alloc_group_need <- function(coupling, gf, fac, movable, rs, ex = NULL) {
   got <- emc_alloc_group_need_cpp(coupling$C, coupling$Q, coupling$Ar, as.numeric(fac),
                                   gf$g, gf$a, gf$floor, gf$cap, gf$cost, gf$b,
+                                  if (is.null(ex)) numeric(length(gf$b)) else as.numeric(ex),
                                   as.logical(movable), as.numeric(rs), 16L)
   n_t <- length(rs)
   lapply(seq_along(gf$idx), function(k) {
@@ -841,17 +857,21 @@
   parts0 <- .emc_alloc_range_parts(units, max_rounds)
   if (is.null(movable)) movable <- .emc_alloc_movable(units, max_rounds, joint, parts0)
   moved_parts <- if (is.null(gf)) .emc_alloc_scaled_parts(units[moved_idx], max_rounds)
-  ranges <- lapply(seq_along(cand), function(c) {
+  # The holds on the subjects' deviations a plan may run under, with the
+  # group's excess time at each; the first holds nothing.
+  holds <- .emc_alloc_excess_holds(units, if (!is.null(gf)) coupling$E, movable)
+  ranges <- lapply(holds, function(hd) lapply(seq_along(cand), function(c) {
     if (is.null(gf) && (xcs[c] == 0 || !length(moved_idx)))
       return(.emc_alloc_range_of(parts0, movable))
     pm <- if (is.null(gf)) moved_parts(cand[[c]][moved_idx]) else
-      .emc_alloc_group_parts(coupling, gf, fac_of(xcs[c]))
+      .emc_alloc_group_parts(coupling, gf, fac_of(xcs[c]), hd$ex)
     pc <- parts0
     pc$levels[moved_idx] <- pm$levels
     pc$best[moved_idx] <- pm$best
     .emc_alloc_range_of(pc, movable)
-  })
-  r0 <- ranges[[1L]]
+  }))
+  flat <- unlist(ranges, recursive = FALSE)
+  r0 <- flat[[1L]]
   # The units' fields read once; NULL leaves each to its own pass below.
   us <- if (getOption("emc2.native_alloc_summary", TRUE)) emc_alloc_unit_summary_cpp(units)
   c_p0 <- sum(if (!is.null(us)) us$c_p else vapply(units, function(u)
@@ -874,12 +894,12 @@
     vapply(units, function(u) if (is.null(u$cost)) 0 else u$cost, numeric(1)))) +
     (if (j_floor > 0) j_floor * joint$cost else 0) + j_fixed(j_floor) +
     activation(matrix(x0, ncol = 1L))
-  r00 <- if (j_floor > 0) ranges[[1L]] else r0
+  r00 <- r0
   zero <- list(x = x0, q = rep(1, n_u), rho = r00$hi, tau = .emc_alloc_tau(r00$hi),
                cost = C_rest + c_p0 + c_f0,
                objective = .emc_alloc_tau(r00$hi) * (C_rest + c_p0 + c_f0),
-               joint = j_floor)
-  lo <- min(vapply(ranges, `[[`, numeric(1), "lo"))
+               joint = j_floor, hold = 1L)
+  lo <- min(vapply(flat, `[[`, numeric(1), "lo"))
   # The plan with nothing chosen runs every particle step and no HMC, so
   # particle rates held below one, or HMC rates held above zero (the group
   # was credited at them), leave it as the reference only.
@@ -890,7 +910,7 @@
   if (r0$hi > lo + 1e-12 || c_p0 > 0 || held) {
     tau_grid <- exp(seq(log(.emc_alloc_tau(lo)), log(.emc_alloc_tau(r0$hi)),
                         length.out = 400L))
-    lv <- unlist(lapply(ranges, function(r) r$levels[r$levels >= r$lo & r$levels <= r$hi]))
+    lv <- unlist(lapply(flat, function(r) r$levels[r$levels >= r$lo & r$levels <= r$hi]))
     targets <- sort(unique(c((tau_grid - 1) / (tau_grid + 1), lv)))
     tau_t <- .emc_alloc_tau(targets)
     still <- setdiff(seq_len(n_u), moved_idx)
@@ -898,11 +918,6 @@
       .emc_alloc_units_need(us, movable, targets, max_rounds, layout)
     # Every candidate's moved units differ from the units only in rho.
     moved_layout <- .emc_alloc_need_layout(units[moved_idx], max_rounds)
-    need <- vector("list", n_u)
-    need[still] <- need_of(units[still], r0$movable[still])
-    base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
-    # A family's activation term is the same at every collapsed rate unless
-    # the collapsed move shifts one of its units.
     act_add <- list(shear = 0, hmc = r_min[act_rows$hmc])
     act_fixed <- list(shear = shear_fixed, hmc = hmc_fixed)
     act_part <- function(nd, f) {
@@ -911,43 +926,52 @@
       act_fixed[[f]] * emc_alloc_act_term_list_cpp(lapply(nd[rows], `[[`, "x"),
                                                    rep_len(as.numeric(act_add[[f]]), length(rows)))
     }
-    act_held <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
-      if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
     best_k <- NULL
-    for (c in seq_along(xcs)) {
-      nm <- if (is.null(gf))
-        need_of(cand[[c]][moved_idx], ranges[[c]]$movable[moved_idx], moved_layout) else
-        .emc_alloc_group_need(coupling, gf, fac_of(xcs[c]), ranges[[c]]$movable[moved_idx],
-                              targets)
-      need_c <- need
-      need_c[moved_idx] <- nm
-      act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
-        if (is.null(act_held[[f]])) act_part(need_c, f) else act_held[[f]][[1L]])
-      c_joint <- xcs[c] * (if (xcs[c] > 0) joint$cost else 0)
-      c_fixed <- j_fixed(xcs[c])
-      at <- if (getOption("emc2.native_alloc_candidate", TRUE) && is.double(c_joint) &&
-                length(c_joint) == 1L && is.double(c_fixed) && length(c_fixed) == 1L)
-        emc_alloc_candidate_cpp(base, c_joint, c_fixed, nm, act$shear, act$hmc, tau_t)
-      if (is.null(at)) {
-        cost <- base + c_joint + c_fixed +
-          Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
-          .emc_alloc_act_sum(act$shear, act$hmc, length(targets))
-        obj <- tau_t * cost
-        k <- which.min(obj)
-        at <- if (length(k)) list(k = k, cost = cost[k], objective = obj[k]) else list(k = 0L)
+    for (hd in seq_along(holds)) {
+      # The units the collapsed move does not touch, under this hold.
+      need <- vector("list", n_u)
+      need[still] <- need_of(holds[[hd]]$units[still], r0$movable[still])
+      base <- C_rest + Reduce(`+`, lapply(need[still], `[[`, "cost"), numeric(length(targets)))
+      # A hold whose subjects alone cost more than the best plan cannot win.
+      if (!(min(tau_t * base) < best$objective * (1 - 1e-9))) next
+      # A family's activation term is the same at every collapsed rate unless
+      # the collapsed move shifts one of its units.
+      act_held <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
+        if (any(act_rows[[f]] %in% moved_idx)) NULL else list(act_part(need, f)))
+      for (c in seq_along(xcs)) {
+        nm <- if (is.null(gf))
+          need_of(cand[[c]][moved_idx], ranges[[hd]][[c]]$movable[moved_idx], moved_layout) else
+          .emc_alloc_group_need(coupling, gf, fac_of(xcs[c]),
+                                ranges[[hd]][[c]]$movable[moved_idx], targets, holds[[hd]]$ex)
+        need_c <- need
+        need_c[moved_idx] <- nm
+        act <- lapply(c(shear = "shear", hmc = "hmc"), function(f)
+          if (is.null(act_held[[f]])) act_part(need_c, f) else act_held[[f]][[1L]])
+        c_joint <- xcs[c] * (if (xcs[c] > 0) joint$cost else 0)
+        c_fixed <- j_fixed(xcs[c])
+        at <- if (getOption("emc2.native_alloc_candidate", TRUE) && is.double(c_joint) &&
+                  length(c_joint) == 1L && is.double(c_fixed) && length(c_fixed) == 1L)
+          emc_alloc_candidate_cpp(base, c_joint, c_fixed, nm, act$shear, act$hmc, tau_t)
+        if (is.null(at)) {
+          cost <- base + c_joint + c_fixed +
+            Reduce(`+`, lapply(nm, `[[`, "cost"), numeric(length(targets))) +
+            .emc_alloc_act_sum(act$shear, act$hmc, length(targets))
+          obj <- tau_t * cost
+          k <- which.min(obj)
+          at <- if (length(k)) list(k = k, cost = cost[k], objective = obj[k]) else list(k = 0L)
+        }
+        k <- at$k
+        if (k < 1L || !is.finite(at$objective) || at$objective >= best$objective * (1 - 1e-9)) next
+        best_need <- need_c
+        best_k <- k
+        best <- list(x = NULL, q = NULL, rho = targets[k], tau = tau_t[k], cost = at$cost,
+                     objective = at$objective, joint = xcs[c], hold = hd)
       }
-      k <- at$k
-      if (k < 1L || !is.finite(at$objective) || at$objective >= best$objective * (1 - 1e-9)) next
-      best_nm <- nm
-      best_k <- k
-      best <- list(x = NULL, q = NULL, rho = targets[k], tau = tau_t[k], cost = at$cost,
-                   objective = at$objective, joint = xcs[c])
     }
     # The winning plan's allocation, read once.
     if (!is.null(best_k)) {
-      need[moved_idx] <- best_nm
-      best$x <- vapply(need, function(z) z$x[best_k], numeric(1))
-      best$q <- vapply(need, function(z) z$q[best_k], numeric(1))
+      best$x <- vapply(best_need, function(z) z$x[best_k], numeric(1))
+      best$q <- vapply(best_need, function(z) z$q[best_k], numeric(1))
     }
   }
   # The lag-one surrogate is coarse, so a small predicted gain is not worth
@@ -964,9 +988,121 @@
     x[!is.finite(x)] <- 0
     rho <- .emc_alloc_group_rho(coupling, gf$g, gf$a, x,
                                 fac_of(if (is.null(best$joint)) 0 else best$joint))
-    best$pred[gf$idx] <- as.list(gf$b + (1 - gf$b) * rho[, 1L])
+    best$pred[gf$idx] <- as.list(.emc_alloc_add_tau(gf$b + (1 - gf$b) * rho[, 1L],
+                                                    holds[[best$hold]]$ex))
   }
+  best$hold <- holds[[best$hold]]$hold
   best
+}
+
+# The share of the joint system's autocorrelation time the group runs beyond
+# it (E per group coordinate, the system's units leading; rounds act on it as
+# on the system's) is carried by the subjects' deviations from the group, so
+# it scales with their time under the plan
+# against their time when it was measured (a subject's tau_base). A plan may
+# hold the subjects to a share of that time: each hold gives the units with
+# the limits on the deviation rows of the subjects that can reach it (lim),
+# the excess at the subjects' mean ratio under it (ex), and the share (hold;
+# Inf holds nothing). A time the system overstates (E < 0) does not scale.
+.EMC_ALLOC_EXCESS_HOLDS <- c(1, 0.7, 0.5, 0.35, 0.25)
+.emc_alloc_excess_holds <- function(units, E, movable) {
+  if (is.null(E) || !any(E != 0)) return(list(list(units = units, ex = NULL, hold = Inf)))
+  subject <- vapply(units, function(u) identical(u$kind, "subject"), logical(1))
+  info <- Filter(Negate(is.null), lapply(which(subject), function(i) {
+    u <- units[[i]]
+    rows <- .emc_alloc_dev_measured(u)
+    if (!length(rows) || !isTRUE(is.finite(u$tau_base))) return(NULL)
+    best <- if (is.null(u$h) || !isTRUE(movable[i])) Inf else
+      max(.emc_alloc_tau(.emc_alloc_rho_floor(
+        u$rho * (if (is.null(u$p)) 1 else u$p) * u$h, u$b_share))[rows])
+    list(i = i, rows = rows, level = .emc_alloc_tau(.emc_alloc_level(u))[rows], best = best,
+         base = max(1, u$tau_base))
+  }))
+  ratio <- function(s) {
+    r <- vapply(info, function(z)
+      (if (z$best <= s * z$base) sum(pmin(z$level, s * z$base)) else sum(z$level)) /
+        (length(z$level) * z$base), numeric(1))
+    (sum(r) + sum(subject) - length(info)) / max(1, sum(subject))
+  }
+  ex_at <- function(R) pmax(E, 0) * R + pmin(E, 0)
+  last <- ratio(Inf)
+  out <- list(list(units = units, ex = ex_at(last), hold = Inf))
+  for (s in .EMC_ALLOC_EXCESS_HOLDS) {
+    R <- ratio(s)
+    if (!(R < 0.9 * last)) next
+    held <- units
+    for (z in info) if (z$best <= s * z$base) {
+      lim <- rep(NA_real_, length(units[[z$i]]$rho))
+      lim[z$rows] <- (s * z$base - 1) / (s * z$base + 1)
+      held[[z$i]]$lim <- lim
+    }
+    out[[length(out) + 1L]] <- list(units = held, ex = ex_at(R), hold = s)
+    last <- R
+  }
+  out
+}
+
+# The rows of a subject unit that hold its measured deviations from the
+# group (an unmeasured one has rho one).
+.emc_alloc_dev_measured <- function(u) {
+  if (is.null(u$n_dev)) return(integer(0))
+  rows <- length(u$rho) - u$n_dev + seq_len(u$n_dev)
+  rows[u$rho[rows] < 1 - 1e-9]
+}
+
+# The group's autocorrelation time beyond the joint system's, as a share of
+# the system's. ys: each
+# chain's draws of the group coordinates (coordinates by draws) over the
+# iterations the system's time `model` describes. The measured time is
+# shrunk towards the system's in logs by the independent blocks behind it
+# (.EMC_ALLOC_EXCESS_BLOCKS of them weigh as much as the system), since a
+# time measured over few of its own lengths regresses. Long series are
+# thinned to .EMC_ALLOC_EXCESS_POINTS draws a chain, and the thinned time
+# read back through its lag-one equivalent.
+.EMC_ALLOC_EXCESS_BLOCKS <- 14
+.EMC_ALLOC_EXCESS_POINTS <- 1000L
+.emc_alloc_excess <- function(ys, model) {
+  n <- vapply(ys, ncol, integer(1))
+  thin <- max(1L, as.integer(ceiling(max(n) / .EMC_ALLOC_EXCESS_POINTS)))
+  hist <- vapply(seq_along(model), function(k) {
+    xs <- lapply(ys, function(y) if (ncol(y) >= thin) y[k, seq.int(thin, ncol(y), by = thin)]
+                 else numeric(0))
+    tau <- .emc_alloc_series_tau(xs[lengths(xs) > 1L])$tau
+    if (thin == 1L || !isTRUE(tau >= 1)) return(tau)
+    rho <- ((tau - 1) / (tau + 1))^(1 / thin)
+    (1 + rho) / (1 - rho)
+  }, numeric(1))
+  ok <- is.finite(hist) & hist >= 1 & is.finite(model) & model >= 1 & model < 1e6
+  if (!any(ok)) return(numeric(length(model)))
+  t <- log(pmax(model, 1))
+  for (i in seq_len(50L)) {
+    w <- sum(n) / (sum(n) + .EMC_ALLOC_EXCESS_BLOCKS * exp(t))
+    t <- w * log(pmax(hist, 1)) + (1 - w) * log(pmax(model, 1))
+    t[!ok] <- 0
+  }
+  ifelse(ok, exp(t) / model - 1, 0)
+}
+
+# The plans the stage's pooled iterations ran under, as sums over them: the
+# iterations (n), each group coordinate's rounds (x), the collapsed rate
+# (xc), and each subject's predicted deviation time (dev, over dw
+# iterations). Only blocks whose plan recorded that prediction count.
+.emc_alloc_pool_plans <- function(pool, ch, w) {
+  q <- 2L * ch$n_pars
+  ns <- ch$n_subjects
+  out <- list(n = 0, x = numeric(q), xc = 0, dev = numeric(ns), dw = numeric(ns))
+  if (is.list(pool) && length(pool$x) == q && length(pool$dev) == ns) out <- pool[names(out)]
+  last <- ch$alloc$last
+  if (length(last$dev_tau) != ns || length(last$rounds) != q || w$n < 1L) return(out)
+  xc <- if (length(last$collapsed_rounds) == 1L && is.finite(last$collapsed_rounds))
+    last$collapsed_rounds else 0
+  out$n <- out$n + w$n
+  out$x <- out$x + w$n * ifelse(is.finite(last$rounds), last$rounds, 0)
+  out$xc <- out$xc + w$n * xc
+  ok <- is.finite(last$dev_tau)
+  out$dev[ok] <- out$dev[ok] + w$n * last$dev_tau[ok]
+  out$dw[ok] <- out$dw[ok] + w$n
+  out
 }
 
 # Each unit's lag-one rho under a solved plan (sol$x, sol$q, sol$joint): the
@@ -1148,6 +1284,13 @@
   .emc_alloc_rho_floor(u$rho * f, u$b_share)
 }
 
+# The rho a subject's coordinates must reach at every target: its particle
+# step's alone, or the limit a coordinate is held to (lim; NA: none).
+.emc_alloc_subject_cap <- function(u) {
+  base <- .emc_alloc_subject_base(u)
+  if (is.null(u$lim)) base else pmin(base, u$lim, na.rm = TRUE)
+}
+
 # A unit's rho with nothing allocated: subjects run their particle step and
 # any HMC rate they are held to.
 .emc_alloc_level <- function(u) {
@@ -1197,7 +1340,7 @@
   rho <- u$rho
   # The floor is the subject's particle step alone: with HMC a subject may
   # stand its particle step down where the HMC moves it at least as well.
-  level <- .emc_alloc_subject_base(u)
+  level <- .emc_alloc_subject_cap(u)
   qs <- if (is.null(u$p) || is.null(u$h)) 1 else if (!is.null(u$q_fixed)) u$q_fixed else
     .EMC_ALLOC_PARTICLE_RATES
   r_min <- if (is.null(u$h) || is.null(u$r_min)) 0 else u$r_min
@@ -1283,7 +1426,7 @@
     unlist(lapply(us[idx], function(u) num(u$b_share, rep(0, length(u$rho))))),
     unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$p, rep(1, k[j])))),
     unlist(lapply(seq_along(idx), function(j) num(us[[idx[j]]]$h, rep(1, k[j])))),
-    unlist(lapply(us[idx], function(u) as.numeric(.emc_alloc_subject_base(u)))),
+    unlist(lapply(us[idx], function(u) as.numeric(.emc_alloc_subject_cap(u)))),
     c(0L, cumsum(k)), has_p, has_h,
     vapply(us[idx], function(u) num(u$q_fixed, NA_real_), numeric(1)),
     vapply(us[idx], function(u) num(u$r_fixed, NA_real_), numeric(1)),
@@ -1403,16 +1546,18 @@
         w$G <- w$G + pool$G
         w$nG <- w$nG + pool$nG
       }
-      pool <- list(G = w$G, nG = w$nG)
+      pool <- c(list(G = w$G, nG = w$nG), .emc_alloc_pool_plans(pool, ch, w))
     }
   }
   vdraws <- draws
+  on_prod <- FALSE
   if (production) {
     prod <- lapply(emc, function(x) {
       st <- x$samples$stage[seq_len(x$samples$idx)]
       which(st == "sample")
     })
-    if (all(lengths(prod) >= lengths(draws))) vdraws <- prod
+    on_prod <- all(lengths(prod) >= lengths(draws))
+    if (on_prod) vdraws <- prod
   }
   if (stored) {
     # Whole-iteration jumps between consecutive stored draws stand in for a
@@ -1564,6 +1709,21 @@
   }
   c_fac[!g_valid] <- 1
   c_sat[!g_valid] <- 1
+  # The group's time beyond the joint system's, over the pooled iterations
+  # at the plans they ran under.
+  if (!is.null(coupling) && on_prod && is.list(pool) &&
+      isTRUE(pool$n >= .EMC_ALLOC_MIN_PAIRS)) {
+    ys <- lapply(seq_along(ds$mu_by_chain), function(i) {
+      y <- rbind(Dinv %*% ds$mu_by_chain[[i]], ds$lsd_by_chain[[i]])
+      y[, utils::tail(seq_len(ncol(y)), pool$n), drop = FALSE]
+    })
+    xc_h <- pool$xc / pool$n
+    rho_h <- .emc_alloc_group_rho(
+      coupling, coupling$g, coupling$a, pool$x / pool$n,
+      if (coll && xc_h > 0) .emc_alloc_factor(c_fac, xc_h, c_sat))[, 1L]
+    coupling$E <- .emc_alloc_excess(
+      ys, .emc_alloc_tau(.emc_alloc_rho_floor(rho_h, g_b_share)))
+  }
   # Subject coordinates: alpha_s whitened in its fit's reference frame.
   lik <- ch$lik_laplace
   W <- lapply(seq_len(n), function(s) {
@@ -1669,6 +1829,8 @@
        g_rho = g_rho, g_var = g_var, g_white = g_white, g_b_share = g_b_share, g_valid = g_valid,
        g_fac = g_fac, g_sat = g_sat, g_measured = g_measured, g_share = g_share,
        coupling = coupling,
+       dev_base = if (is.list(pool) && length(pool$dw) == n)
+         ifelse(pool$dw > 0, pool$dev / pmax(pool$dw, 1), NA_real_),
        g_curved = if (shear && is.list(ch$shear[["curve"]])) ch$shear$curve_rec$k,
        g_n = if (shear) last_n else numeric(2L * p),
        g_iters = if (shear) last_iters else numeric(2L * p),
@@ -1811,6 +1973,7 @@
       if (!is.null(ms$d_b_share)) u$d_b_share <- ms$d_b_share[s, ]
       if (!is.null(ms$p_dev) && all(is.finite(ms$p_dev[s, ]))) u$p_dev <- ms$p_dev[s, ]
       u$q_old <- if (is.null(ms$q_old)) 1 else ms$q_old[s]
+      if (isTRUE(is.finite(ms$dev_base[s]))) u$tau_base <- ms$dev_base[s]
     }
     if (priced) {
       u$rho <- ms$t_rho[s, ]
@@ -1848,7 +2011,7 @@
   }
   for (k in length(ms$g_rho) + seq_len(n)) units[[k]] <- .emc_alloc_dev_rows(units[[k]])
   list(units = units, C_rest = C_rest, c_round = c_round, joint = joint,
-       coupling = if (coupled) ms$coupling[c("C", "Q", "Ar")],
+       coupling = if (coupled) ms$coupling[intersect(c("C", "Q", "Ar", "E"), names(ms$coupling))],
        hmc_fixed = if (isTRUE(is.finite(ms$hmc_fixed))) ms$hmc_fixed else 0,
        shear_fixed = if (isTRUE(is.finite(ms$shear_fixed))) ms$shear_fixed else 0)
 }
@@ -1871,6 +2034,7 @@
     u$p <- c(u$p, u$p_dev)
   }
   if (!is.null(u$h)) u$h <- c(u$h, u$h_dev)
+  u$n_dev <- length(rho)
   u$rho <- c(u$rho, rho)
   if (!is.null(u$b_share) || !is.null(u$d_b_share))
     u$b_share <- c(rep_len(if (is.null(u$b_share)) 0 else u$b_share,
@@ -2159,6 +2323,17 @@
       coupled = !is.null(u$coupling),
       coupled_g = if (!is.null(u$coupling)) m$coupling$g,
       coupled_shrink = if (!is.null(u$coupling)) m$coupling$shrink,
+      # The group's measured time beyond the joint system's, the share of the
+      # subjects' deviation time the plan holds them to, and each subject's
+      # predicted deviation time under the plan (mean over its deviations).
+      group_excess = if (!is.null(u$coupling)) m$coupling$E,
+      excess_hold = sol$hold,
+      dev_tau = vapply(seq_len(ch$n_subjects), function(s) {
+        rows <- .emc_alloc_dev_measured(u$units[[n_g + s]])
+        pr <- if (length(sol$pred) >= n_g + s) sol$pred[[n_g + s]]
+        if (!length(rows) || length(pr) < max(rows)) NA_real_ else
+          mean(.emc_alloc_tau(pr[rows]))
+      }, numeric(1)),
       rounds = if (shear_on[j]) sol$x[seq_len(n_g)] else numeric(n_g),
       curved_rounds = if (shear_on[j] && length(m$g_curved) == 1L) sol$x[m$g_curved] else 0,
       collapsed_rounds = sol$joint, collapsed_g = if (isTRUE(m$coll)) m$c_fac,

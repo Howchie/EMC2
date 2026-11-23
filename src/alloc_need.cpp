@@ -333,12 +333,13 @@ SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::Nume
   for (int j = 0; j < n; ++j) {
     SEXP u = units[j];
     SEXP r = unit_field(u, "rho"), b = unit_field(u, "b_share"), pp = unit_field(u, "p"),
-         hh = unit_field(u, "h");
+         hh = unit_field(u, "h"), lm = unit_field(u, "lim");
     if (!numeric(r)) return R_NilValue;
     const R_xlen_t k = XLENGTH(r);
     if ((b != R_NilValue && (!numeric(b) || XLENGTH(b) != k)) ||
         (pp != R_NilValue && (!numeric(pp) || XLENGTH(pp) != k)) ||
-        (hh != R_NilValue && (!numeric(hh) || XLENGTH(hh) != k)))
+        (hh != R_NilValue && (!numeric(hh) || XLENGTH(hh) != k)) ||
+        (lm != R_NilValue && (TYPEOF(lm) != REALSXP || XLENGTH(lm) != k)))
       return R_NilValue;
     double qf, rf, rm, cp, ch;
     if (!unit_scalar(u, "q_fixed", NA_REAL, qf) || !unit_scalar(u, "r_fixed", NA_REAL, rf) ||
@@ -365,7 +366,9 @@ SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::Nume
       b_share.push_back(b == R_NilValue ? 0.0 : bv[i]);
       p.push_back(f);
       h.push_back(hh == R_NilValue ? 1.0 : hv[i]);
-      level.push_back(base);
+      // A coordinate held to a limit must reach it at every target.
+      level.push_back(lm == R_NilValue || ISNAN(REAL(lm)[i]) ? base
+                                                              : std::min(base, REAL(lm)[i]));
     }
     off[j + 1] = off[j] + static_cast<int>(k);
     has_p[j] = pp != R_NilValue;

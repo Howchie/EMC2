@@ -156,6 +156,12 @@ test_that("the rest of the iteration is recorded against the previous final stat
   s <- EMC2:::.emc_alloc_record_group(s, list(tmu = c(3, 4), tvar = diag(c(1, 16))))
   d <- c(2, 2, -log(2), log(4 / 3))
   expect_equal(s$alloc$window$G, tcrossprod(d))
+  # The shear and collapsed moves' own jump is not the rest's.
+  from <- c(1.5, 2, 0.1, log(3))
+  before <- c(2, 1, 0.2, log(3))
+  s2 <- EMC2:::.emc_alloc_record_group(within(s, alloc <- NULL),
+                                       list(tmu = c(3, 4), tvar = diag(c(1, 16))), from, before)
+  expect_equal(s2$alloc$window$G, tcrossprod(d - (before - from)))
   s <- EMC2:::.emc_alloc_record_subjects(s, matrix(1:6, p) + 1)
   expect_equal(s$alloc$window$A[[2]], matrix(1, p, p))
   s <- EMC2:::.emc_alloc_record_cost(s, 0.5, list(NULL, list(cpu = 0.2), NULL),
@@ -1223,7 +1229,8 @@ test_that("the joint rounds for a target meet it within floors and caps", {
   }
   # Steps updated in place give the path a full rebuild at every step does.
   path <- function(rebuild) EMC2:::emc_alloc_group_need_cpp(
-    cp$C, cp$Q, cp$Ar, rep(1, q), g, a, gf$floor, gf$cap, gf$cost, gf$b, movable, rs, rebuild)
+    cp$C, cp$Q, cp$Ar, rep(1, q), g, a, gf$floor, gf$cap, gf$cost, gf$b, numeric(q), movable, rs,
+    rebuild)
   expect_equal(path(1000L)$x, path(1L)$x, tolerance = 1e-9)
   expect_identical(path(1000L)$reached, path(1L)$reached)
 })
@@ -1325,4 +1332,100 @@ test_that("a block's autocorrelation time allows for what its common mean remove
   expect_lt(fast$tau, 4.5)
   expect_true(is.na(series_tau(list(rnorm(10), rnorm(10)))$tau))
   expect_true(is.na(series_tau(list(c(rnorm(50), NA), rnorm(51)))$tau))
+})
+
+test_that("the group's excess raises the joint system's time", {
+  q <- 8
+  s <- joint_system(q, seq(0.6, 0.985, length.out = q), 5)
+  cp <- EMC2:::.emc_alloc_coupling(s$cov, diag(s$cov), s$G, diag(4) * 0.01, diag(4), 50, 1e6)
+  g <- c(0.5, 0.9, 0.7, 0.95, 0.6, 0.8, 0.85, NA)
+  gf <- list(idx = seq_len(q), g = g, a = g, floor = numeric(q), cap = c(rep(3, q - 1), 0),
+             cost = rep(0.05, q), b = rep(0.02, q))
+  movable <- c(rep(TRUE, q - 1), FALSE)
+  tau <- function(r) (1 + r) / (1 - r)
+  plain <- EMC2:::.emc_alloc_group_parts(cp, gf, rep(1, q))
+  expect_equal(EMC2:::.emc_alloc_group_parts(cp, gf, rep(1, q), numeric(q)), plain,
+               tolerance = 1e-12)
+  ex <- c(2, 0, -0.3, 0.5, 0, 0, 0, 0)
+  with <- EMC2:::.emc_alloc_group_parts(cp, gf, rep(1, q), ex)
+  expect_equal(tau(with$levels), pmax(1, tau(plain$levels) * (1 + ex)), tolerance = 1e-8)
+  expect_equal(tau(with$best), pmax(1, tau(plain$best) * (1 + ex)), tolerance = 1e-8)
+  rs <- seq(max(with$best[movable]) + 0.002, max(with$levels[movable]), length.out = 12)
+  nd <- EMC2:::.emc_alloc_group_need(cp, gf, rep(1, q), movable, rs, ex)
+  X <- do.call(rbind, lapply(nd, `[[`, "x"))
+  cost <- Reduce(`+`, lapply(nd, `[[`, "cost"))
+  expect_true(any(is.finite(cost)))
+  for (t in which(is.finite(cost))) {
+    r <- gf$b + (1 - gf$b) * EMC2:::.emc_alloc_group_rho(cp, g, g, X[, t])[, 1]
+    expect_true(all((pmax(1, tau(r) * (1 + ex)))[movable] <= tau(rs[t]) * (1 + 1e-8)))
+  }
+})
+
+test_that("a measured time is shrunk towards the system's by the blocks behind it", {
+  set.seed(3)
+  ar <- function(n, rho) as.numeric(stats::filter(rnorm(n), rho, "recursive"))
+  ys <- function(n) lapply(1:3, function(i) rbind(ar(n, 0.95), ar(n, 0.5)))
+  # A time of 39 against a system that says 10, and one of 3 against 3.
+  long <- EMC2:::.emc_alloc_excess(ys(4000), c(10, 3))
+  expect_gt(long[1], 1.5)
+  expect_lt(long[1], 3.5)
+  expect_lt(abs(long[2]), 0.85)
+  short <- EMC2:::.emc_alloc_excess(ys(150), c(10, 3))
+  expect_lt(abs(short[1]), long[1] / 2)
+  expect_identical(EMC2:::.emc_alloc_excess(lapply(1:3, function(i) matrix(rnorm(8), 2)),
+                                            c(10, 3)), c(0, 0))
+  expect_identical(EMC2:::.emc_alloc_excess(ys(500), c(Inf, NA)), c(0, 0))
+})
+
+test_that("holds on the subjects' deviations scale the group's excess", {
+  subject <- function(h, base = 8) {
+    u <- list(kind = "subject", rho = c(0.5, 0.6, 0.8, 0.85), b_share = rep(0, 4),
+              p = rep(1, 4), c_p = 0, c_h = 1, n_dev = 2L, tau_base = base)
+    u["h"] <- list(h)
+    u
+  }
+  group <- list(kind = "shear", rho = 0.9, g = 0.5, cost = 1)
+  units <- list(group, subject(rep(0.3, 4)), subject(NULL), subject(rep(0.3, 4), NA))
+  movable <- rep(TRUE, 4)
+  expect_identical(EMC2:::.emc_alloc_excess_holds(units, NULL, movable),
+                   list(list(units = units, ex = NULL, hold = Inf)))
+  holds <- EMC2:::.emc_alloc_excess_holds(units, c(30, -2), movable)
+  tau <- function(r) (1 + r) / (1 - r)
+  # Nothing held: a subject with a measured base at its particle step's time
+  # over the base, one without at one.
+  level <- mean(tau(c(0.8, 0.85))) / 8
+  expect_equal(holds[[1]]$ex, c(30 * (2 * level + 1) / 3, -2))
+  expect_identical(holds[[1]]$units, units)
+  expect_gt(length(holds), 1L)
+  for (hd in holds[-1]) {
+    # Only the subject that can reach the hold is limited, on its deviations.
+    expect_null(hd$units[[3]]$lim)
+    expect_null(hd$units[[4]]$lim)
+    lim <- hd$units[[2]]$lim
+    expect_identical(is.na(lim), c(TRUE, TRUE, FALSE, FALSE))
+    expect_equal(tau(lim[3:4]), rep(hd$hold * 8, 2))
+    expect_equal(hd$ex, c(30 * (min(hd$hold, level) + level + 1) / 3, -2))
+    # The limited subject's need reaches the limit at every target.
+    rs <- c(0.5, 0.9, 0.99)
+    nd <- EMC2:::.emc_alloc_units_need(hd$units[2], TRUE, rs, 4)[[1]]
+    expect_true(all(is.finite(nd$cost)))
+    expect_gt(nd$x[3], 0)
+    expect_lte(max(tau(c(0.8, 0.85) * (1 - nd$x[3] * 0.7))), hd$hold * 8 * (1 + 1e-8))
+    expect_equal(EMC2:::.emc_alloc_unit_need(hd$units[[2]], rs, 4)$x, nd$x)
+  }
+  expect_true(all(diff(vapply(holds, `[[`, numeric(1), "hold")) < 0))
+})
+
+test_that("the pooled blocks' plans accumulate only where the plan recorded them", {
+  ch <- list(n_pars = 2L, n_subjects = 3L,
+             alloc = list(last = list(rounds = c(1, 0, 0.5, NA), collapsed_rounds = 0.2,
+                                      dev_tau = c(4, NA, 6))))
+  first <- EMC2:::.emc_alloc_pool_plans(NULL, ch, list(n = 100L))
+  expect_equal(first, list(n = 100, x = c(100, 0, 50, 0), xc = 20, dev = c(400, 0, 600),
+                           dw = c(100, 0, 100)))
+  again <- EMC2:::.emc_alloc_pool_plans(c(list(G = 1, nG = 1), first), ch, list(n = 50L))
+  expect_equal(again$n, 150)
+  expect_equal(again$dev / pmax(again$dw, 1), c(4, 0, 6))
+  ch$alloc$last$dev_tau <- NULL
+  expect_identical(EMC2:::.emc_alloc_pool_plans(first, ch, list(n = 100L)), first)
 })

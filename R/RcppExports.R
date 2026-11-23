@@ -5,8 +5,8 @@ emc_alloc_group_rho_cpp <- function(C, Q, Ar, fac, g, a, X) {
     .Call(`_EMC2_emc_alloc_group_rho_cpp`, C, Q, Ar, fac, g, a, X)
 }
 
-emc_alloc_group_need_cpp <- function(C, Q, Ar, fac, g, a, floor, cap, cost, b_share, movable, rs, rebuild = 16L) {
-    .Call(`_EMC2_emc_alloc_group_need_cpp`, C, Q, Ar, fac, g, a, floor, cap, cost, b_share, movable, rs, rebuild)
+emc_alloc_group_need_cpp <- function(C, Q, Ar, fac, g, a, floor, cap, cost, b_share, rel, movable, rs, rebuild = 16L) {
+    .Call(`_EMC2_emc_alloc_group_need_cpp`, C, Q, Ar, fac, g, a, floor, cap, cost, b_share, rel, movable, rs, rebuild)
 }
 
 emc_alloc_subject_need_cpp <- function(rho, b_share, p, h_, level, qs, rs, r_min) {
