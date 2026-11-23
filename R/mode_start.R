@@ -780,7 +780,7 @@
 
 # One rebuild task is self-contained apart from the immutable likelihood
 # context held by its worker. Its subject seed is explicit, so moving a task
-# between retained workers cannot change the fit's random stream.
+# between workers cannot change the fit's random stream.
 .emc_laplace_rebuild_compute <- function(task, ctx) {
   .emc_with_preserved_rng({
     assign(".Random.seed", task$seed, envir = globalenv())
@@ -1027,30 +1027,10 @@
        ll_cache_validated = TRUE)
 }
 
-# Tasks use the chain process's retained workers when it exists; initial
-# rebuilds and non-persistent runs use the adaptive fork/serial dispatcher.
+# Tasks run on the adaptive fork/serial dispatcher.
 .emc_laplace_rebuild_dispatch <- function(emc, jobs, tasks, n_cores, cost,
-                                          cost_key, chain_pool = NULL,
-                                          max_active = length(emc)) {
+                                          cost_key) {
   if (!length(tasks)) return(vector("list", 0L))
-  if (!is.null(chain_pool)) {
-    by_chain <- vector("list", length(emc))
-    positions <- vector("list", length(emc))
-    for (k in seq_along(tasks)) {
-      j <- jobs$chain[k]
-      by_chain[[j]][[length(by_chain[[j]]) + 1L]] <- tasks[[k]]
-      positions[[j]] <- c(positions[[j]], k)
-    }
-    rebuilt <- .emc_chain_process_pool_rebuild(
-      chain_pool, emc, by_chain, lapply(emc, .emc_laplace_rebuild_context),
-      max_active = max_active)
-    if (!is.null(rebuilt)) {
-      out <- vector("list", length(tasks))
-      for (j in seq_along(rebuilt))
-        if (length(positions[[j]])) out[positions[[j]]] <- rebuilt[[j]]
-      return(out)
-    }
-  }
   contexts <- lapply(emc, .emc_laplace_rebuild_context)
   # Fewer jobs than cores (a fit without a group level shares one job across
   # its chains): each job splits its large likelihood batches over its share.
@@ -1066,8 +1046,7 @@
 
 # Check the Gaussian proposal from each likelihood fit and the current subject
 # prior. The check belongs to that fit, including any change to its location.
-.emc_check_likelihood_fits <- function(emc, n_cores, chain_pool = NULL,
-                                      max_active = length(emc)) {
+.emc_check_likelihood_fits <- function(emc, n_cores) {
   has_fits <- vapply(emc, function(chain)
     any(vapply(chain$lik_laplace, is.list, logical(1))), logical(1))
   if (!any(has_fits)) return(emc)
@@ -1116,8 +1095,7 @@
   })
   task_jobs <- jobs[run_idx, , drop = FALSE]
   results <- .emc_laplace_rebuild_dispatch(
-    emc, task_jobs, tasks, n_cores, cost, "laplace_check", chain_pool,
-    max_active)
+    emc, task_jobs, tasks, n_cores, cost, "laplace_check")
   pending_idx <- run_idx
   for (i in seq_along(pending_idx)) {
     k <- pending_idx[i]
@@ -1144,8 +1122,7 @@
 # find every chain's conditional mode for each subject under that chain's
 # current group state and store the Laplace covariance (and mode). The chain
 # state is not moved. create_chain_proposals() consumes these once.
-.emc_laplace_refresh <- function(emc, n_cores, chain_pool = NULL,
-                                 max_active = length(emc)) {
+.emc_laplace_refresh <- function(emc, n_cores) {
   if (any(emc[[1L]]$nuisance)) return(emc)
   emc <- .emc_prepare_subject_fit_cache(emc)
   for (j in seq_along(emc)) emc[[j]] <- .emc_pooled_sync(emc[[j]])
@@ -1195,8 +1172,7 @@
          seed = chain$rng$subjects[[s]])
   })
   results <- .emc_laplace_rebuild_dispatch(
-    emc, jobs, tasks, n_cores, cost, "laplace_refresh", chain_pool,
-    max_active)
+    emc, jobs, tasks, n_cores, cost, "laplace_refresh")
   for (k in seq_len(nrow(jobs))) {
     job_result <- results[[k]]
     result <- if (is.list(job_result)) job_result$result else NULL

@@ -232,7 +232,7 @@ bool particle_local(SEXP st, SEXP cx, int i) {
     return false;
   if (TYPEOF(consts) != VECSXP || TYPEOF(pmwgs) != VECSXP || TYPEOF(wpool) != VECSXP ||
       flag(lget(wpool, "alive")) || num(lget(wpool, "n"), 0.0) != 1.0 ||
-      lget(wpool, "retained") != R_NilValue || TYPEOF(pm_settings) != VECSXP ||
+      TYPEOF(pm_settings) != VECSXP ||
       TYPEOF(streams) != VECSXP)
     return false;
   const int n = static_cast<int>(XLENGTH(pm_settings));
@@ -461,13 +461,11 @@ bool particle_pool(SEXP st, SEXP cx, int i) {
 
   // The pool's upkeep: recycling on its schedule, growth onto freed cores.
   RObject pool = wpool;
-  const bool persistent = flag(lget(cx, "persistent_workers"));
-  const int at = persistent ? Rf_asInteger(var(st, "pool_iteration")) : i;
   const int every = Rf_asInteger(lget(cx, "recycle_every"));
-  if (every != NA_INTEGER && every > 0 && at > 1 && Rf_asInteger(lget(pool, "n")) > 1 &&
-      ((at - 1) % every) == 0) {
+  if (every != NA_INTEGER && every > 0 && i > 1 && Rf_asInteger(lget(pool, "n")) > 1 &&
+      ((i - 1) % every) == 0) {
     static Function recycle = package_function(".emc_wpool_recycle");
-    pool = recycle(pool, at, every, ctx);
+    pool = recycle(pool, i, every, ctx);
   }
   const double chain_cores = emc_pool::cores_now(lget(cx, "core_ctl"),
                                                  Rf_asReal(lget(cx, "n_cores")));
@@ -478,7 +476,6 @@ bool particle_pool(SEXP st, SEXP cx, int i) {
     static Function grow = package_function(".emc_wpool_grow");
     pool = grow(pool, target, ctx);
   }
-  if (persistent) pool = lset(pool, "iterations", var(st, "pool_iteration"));
   const int n_workers = Rf_asInteger(lget(pool, "n"));
   RObject part = var(st, "wpool_part");
   if (n_workers != n_before || skipping) {

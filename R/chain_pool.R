@@ -1,546 +1,6 @@
 
 .emc_pool_state <- new.env(parent = emptyenv())
 
-# A persistent chain keeps these large inputs from its initial fork.  They are
-# immutable during a run_emc() stage; the rest of the sampler is the bounded
-# continuation state exchanged at block boundaries.
-.EMC_CHAIN_RETAINED_FIELDS <- c("data", "model", "prior")
-
-.emc_chain_state_pack <- function(sampler) {
-  fields <- setdiff(names(sampler), .EMC_CHAIN_RETAINED_FIELDS)
-  list(version = 1L,
-       names = names(sampler),
-       attributes = attributes(sampler),
-       fields = sampler[fields])
-}
-
-.emc_chain_state_apply <- function(base, state) {
-  if (!is.list(state) || !identical(state$version, 1L) ||
-      !is.character(state$names) || anyDuplicated(state$names) ||
-      !is.list(state$fields) || is.null(names(state$fields)) ||
-      !is.list(state$attributes) ||
-      !all(setdiff(state$names, .EMC_CHAIN_RETAINED_FIELDS) %in%
-             names(state$fields)) ||
-      !all(intersect(state$names, .EMC_CHAIN_RETAINED_FIELDS) %in%
-             names(base))) {
-    stop("invalid persistent-chain state message", call. = FALSE)
-  }
-  out <- vector("list", length(state$names))
-  names(out) <- state$names
-  retained <- intersect(state$names, .EMC_CHAIN_RETAINED_FIELDS)
-  dynamic <- setdiff(state$names, .EMC_CHAIN_RETAINED_FIELDS)
-  out[retained] <- base[retained]
-  out[dynamic] <- state$fields[dynamic]
-  attributes(out) <- state$attributes
-  out
-}
-
-.emc_chain_process_serve <- function(req, ans, sampler, runner, slot,
-                                     other_slots) {
-  if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L))
-    return(invisible(NULL))
-  for (other in other_slots) {
-    if (is.null(other$template) || identical(other, slot)) next
-    for (cn in list(other$template$wc, other$template$rc))
-      if (!is.null(cn)) try(close(cn), silent = TRUE)
-  }
-  .emc_pool_state$session_slot <- slot
-  .emc_pool_state$session_in_use <- FALSE
-  .emc_pool_state$chain_persistent <- TRUE
-  .emc_pool_state$worker_stage_blocks <- 0L
-  .emc_pool_state$subject_pool <- NULL
-  .emc_pool_state$subject_ll_pool <- NULL
-  on.exit({
-    subject_pool <- .emc_pool_state$subject_pool
-    subject_ll_pool <- .emc_pool_state$subject_ll_pool
-    .emc_pool_state$subject_pool <- NULL
-    .emc_pool_state$subject_ll_pool <- NULL
-    .emc_pool_state$chain_persistent <- FALSE
-    .emc_wpool_stop(subject_pool)
-    .emc_wpool_stop(subject_ll_pool)
-  }, add = TRUE)
-  rc <- fifo(req, "rb", blocking = TRUE)
-  wc <- fifo(ans, "wb", blocking = TRUE)
-  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
-          add = TRUE)
-  .emc_wpool_send(wc, list(ready = TRUE, pid = Sys.getpid()))
-  repeat {
-    msg <- .emc_wpool_recv(rc)
-    if (is.null(msg)) break
-    if (identical(msg$command, "stop")) {
-      .emc_wpool_send(wc, list(id = msg$id, stopped = TRUE))
-      break
-    }
-    if (identical(msg$command, "rebuild")) {
-      result <- tryCatch(.emc_chain_process_rebuild(msg$tasks, sampler),
-                         error = identity)
-      reply <- if (inherits(result, "error")) {
-        list(id = msg$id, error = result)
-      } else list(id = msg$id, results = result)
-      if (!is.null(msg$done)) try(file.create(msg$done), silent = TRUE)
-      sent <- .emc_wpool_send(wc, reply)
-      if (!sent || inherits(result, "error")) break
-      next
-    }
-    warnings <- character()
-    result <- tryCatch(withCallingHandlers({
-      sampler <- .emc_chain_state_apply(sampler, msg$state)
-      sampler <- do.call(runner, c(list(sampler = sampler), msg$args))
-      list(state = .emc_chain_state_pack(sampler))
-    }, warning = function(w) {
-      warnings <<- c(warnings, conditionMessage(w))
-      invokeRestart("muffleWarning")
-    }), error = identity)
-    reply <- if (inherits(result, "error")) {
-      list(id = msg$id, error = result, warnings = warnings)
-    } else {
-      list(id = msg$id, state = result$state, warnings = warnings)
-    }
-    # The parent waits on this marker before reading the response. Publish it
-    # before writing: an error condition can serialize to more than a FIFO's
-    # capacity, otherwise leaving the child blocked in write while the parent
-    # waits for the marker that follows the write.
-    if (!is.null(msg$done)) {
-      try(file.create(msg$done), silent = TRUE)
-    }
-    sent <- .emc_wpool_send(wc, reply)
-    if (!sent || inherits(result, "error")) break
-  }
-  invisible(NULL)
-}
-
-.emc_chain_run_stage <- function(sampler, ...) {
-  sampler <- .emc_set_sampler_rng(sampler)
-  run_stages(sampler, ...)
-}
-
-.emc_chain_process_start <- function(sampler, runner = .emc_chain_run_stage,
-                                     slot = NULL, other_slots = list()) {
-  if (Sys.info()[["sysname"]] == "Windows" || !nzchar(Sys.which("mkfifo")))
-    return(NULL)
-  dir <- tempfile("emc_chain_")
-  if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
-  req <- file.path(dir, "req")
-  ans <- file.path(dir, "ans")
-  made <- tryCatch(system2("mkfifo", shQuote(c(req, ans)),
-                           stdout = FALSE, stderr = FALSE),
-                   warning = function(e) 1L, error = function(e) 1L)
-  if (!identical(as.integer(made), 0L)) {
-    unlink(dir, recursive = TRUE)
-    return(NULL)
-  }
-  wc <- rc <- NULL
-  job <- NULL
-  success <- FALSE
-  on.exit({
-    if (!success) {
-      for (cn in list(wc, rc)) if (!is.null(cn)) try(close(cn), silent = TRUE)
-      if (!is.null(job)) .emc_wpool_terminate_jobs(list(job), wait = TRUE)
-      unlink(dir, recursive = TRUE)
-    }
-  }, add = TRUE)
-
-  old_slot <- .emc_pool_state$session_slot
-  .emc_pool_state$session_slot <- slot
-  on.exit(.emc_pool_state$session_slot <- old_slot, add = TRUE)
-  serve <- .emc_armed(function() .emc_chain_process_serve(
-    req, ans, sampler, runner, slot, other_slots))
-  job <- tryCatch(parallel::mcparallel(serve(), detached = FALSE),
-                  error = function(e) NULL)
-  .emc_pool_state$session_slot <- old_slot
-  if (is.null(job)) return(NULL)
-
-  f <- NULL
-  deadline <- proc.time()[["elapsed"]] + 20
-  wait <- 0.0002
-  repeat {
-    if (!.emc_wpool_pid_alive(job$pid)) break
-    f <- tryCatch(suppressWarnings(fifo(req, "wb", blocking = FALSE)),
-                  error = function(e) NULL)
-    if (!is.null(f) || proc.time()[["elapsed"]] > deadline) break
-    Sys.sleep(wait)
-    wait <- min(wait * 2, 0.01)
-  }
-  if (is.null(f)) return(NULL)
-  wc <- fifo(req, "wb", blocking = TRUE)
-  close(f)
-  rc <- fifo(ans, "rb", blocking = FALSE)
-  alive <- local({ j <- job; function() .emc_wpool_pid_alive(j$pid) })
-  ready <- .emc_wpool_recv(rc, deadline = 20, alive = alive)
-  if (!isTRUE(ready$ready) || !identical(as.integer(ready$pid), job$pid))
-    return(NULL)
-  success <- TRUE
-  slot_pid <- if (is.null(slot$template$job)) NA_integer_ else
-    .emc_wpool_job_pid(slot$template$job)
-  list(dir = dir, job = job, wc = wc, rc = rc, next_id = 0L,
-       slot_pid = slot_pid)
-}
-
-.emc_chain_slot_pid <- function(slot) {
-  if (is.null(slot$template$job)) NA_integer_ else
-    .emc_wpool_job_pid(slot$template$job)
-}
-
-.emc_chain_process_stop <- function(worker) {
-  if (is.null(worker)) return(invisible(NULL))
-  pid <- .emc_wpool_job_pid(worker$job)
-  stopped <- FALSE
-  if (!is.na(pid) && .emc_wpool_pid_alive(pid)) {
-    id <- worker$next_id + 1L
-    if (.emc_wpool_send(worker$wc, list(command = "stop", id = id))) {
-      reply <- .emc_wpool_recv(worker$rc, deadline = 2,
-                               alive = function() .emc_wpool_pid_alive(pid))
-      stopped <- isTRUE(reply$stopped)
-    }
-  }
-  for (cn in list(worker$wc, worker$rc)) try(close(cn), silent = TRUE)
-  .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE,
-                            terminate = !stopped)
-  unlink(worker$dir, recursive = TRUE)
-  invisible(stopped)
-}
-
-.emc_chain_process_pool_start <- function(samplers, runner = .emc_chain_run_stage,
-                                          slots = NULL) {
-  if (is.null(slots)) slots <- vector("list", length(samplers))
-  if (length(slots) != length(samplers))
-    stop("one process slot is required per chain", call. = FALSE)
-  if (!is.null(getOption("emc2.chain_process_memory_file", NULL)))
-    .emc_pool_state$chain_process_blocks <- 0L
-  workers <- vector("list", length(samplers))
-  ok <- FALSE
-  on.exit(if (!ok) for (w in workers) .emc_chain_process_stop(w), add = TRUE)
-  for (i in seq_along(samplers)) {
-    workers[[i]] <- .emc_chain_process_start(
-      samplers[[i]], runner, slot = slots[[i]], other_slots = slots[-i])
-    if (is.null(workers[[i]])) return(NULL)
-  }
-  ok <- TRUE
-  pool <- new.env(parent = emptyenv())
-  pool$workers <- workers
-  pool$next_id <- 0L
-  pool$blocks <- integer(length(workers))
-  pool$runner <- runner
-  pool$slots <- slots
-  pool
-}
-
-.emc_chain_process_pool_stop <- function(pool) {
-  if (is.null(pool)) return(invisible(NULL))
-  stopped <- vapply(pool$workers, function(w)
-    isTRUE(.emc_chain_process_stop(w)), logical(1))
-  invisible(all(stopped))
-}
-
-.emc_chain_process_pool_refresh_slots <- function(pool, samplers, slots) {
-  if (is.null(pool) || length(pool$workers) != length(samplers) ||
-      length(slots) != length(samplers))
-    stop("persistent chain slots do not match the active chains", call. = FALSE)
-  for (i in seq_along(samplers)) {
-    new_pid <- .emc_chain_slot_pid(slots[[i]])
-    if (identical(pool$workers[[i]]$slot_pid, new_pid)) next
-    .emc_chain_process_stop(pool$workers[[i]])
-    replacement <- .emc_chain_process_start(
-      samplers[[i]], pool$runner, slot = slots[[i]], other_slots = slots[-i])
-    if (is.null(replacement))
-      stop(sprintf("could not refresh persistent chain process %d", i),
-           call. = FALSE)
-    pool$workers[[i]] <- replacement
-    pool$slots[[i]] <- slots[[i]]
-    pool$blocks[[i]] <- 0L
-  }
-  invisible(pool)
-}
-
-.emc_chain_process_memory_record <- function(pool) {
-  path <- getOption("emc2.chain_process_memory_file", NULL)
-  if (!is.character(path) || length(path) != 1L || !nzchar(path) ||
-      !dir.exists(dirname(path))) return(invisible(NULL))
-  block <- if (is.null(.emc_pool_state$chain_process_blocks)) 1L else
-    as.integer(.emc_pool_state$chain_process_blocks) + 1L
-  .emc_pool_state$chain_process_blocks <- block
-  rows <- lapply(seq_along(pool$workers), function(i) {
-    pid <- .emc_wpool_job_pid(pool$workers[[i]]$job)
-    file <- file.path("/proc", pid, "smaps_rollup")
-    lines <- if (file.exists(file))
-      tryCatch(suppressWarnings(readLines(file, warn = FALSE)),
-               error = function(e) character()) else character()
-    value <- function(key) {
-      hit <- grep(paste0("^", key, ":"), lines, value = TRUE)
-      if (!length(hit)) return(NA_real_)
-      suppressWarnings(as.numeric(sub("^[^:]+:\\s*([0-9]+).*$", "\\1", hit[1L])))
-    }
-    data.frame(block = block, chain = i, pid = pid,
-               rss_kb = value("Rss"), pss_kb = value("Pss"),
-               private_kb = value("Private_Clean") + value("Private_Dirty"))
-  })
-  write.table(do.call(rbind, rows), path, sep = ",", row.names = FALSE,
-              col.names = !file.exists(path), append = file.exists(path))
-  invisible(NULL)
-}
-
-.emc_chain_process_pool_run <- function(pool, samplers, args = list(),
-                                        max_active = length(samplers),
-                                        restart_blocks = getOption(
-                                          "emc2.persistent_chain_restart_blocks", 2L)) {
-  if (is.null(pool) || length(pool$workers) != length(samplers))
-    stop("persistent chain process pool is unavailable", call. = FALSE)
-  max_active <- max(1L, min(length(samplers), as.integer(max_active)))
-  out <- vector("list", length(samplers))
-  pending <- seq_along(samplers)
-  active <- integer()
-  ids <- integer(length(samplers))
-  submit <- function(i) {
-    worker <- pool$workers[[i]]
-    pool$next_id <- pool$next_id + 1L
-    id <- pool$next_id
-    marker <- file.path(worker$dir, paste0("done_", id))
-    unlink(marker)
-    ok <- .emc_wpool_send(worker$wc, list(
-      command = "run", id = id, done = marker,
-      state = .emc_chain_state_pack(samplers[[i]]), args = args))
-    if (!ok) stop(.emc_wpool_transport_error("chain request send failed"),
-                   call. = FALSE)
-    ids[i] <<- id
-    active <<- c(active, i)
-  }
-  while (length(pending) && length(active) < max_active) {
-    i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
-  }
-  # The done markers are cheap to test; the liveness check reads /proc, so it
-  # runs at most every 0.2 s, and the wait backs off to 5 ms between tests.
-  alive_checked <- proc.time()[["elapsed"]]
-  nap <- 0.001
-  while (length(active)) {
-    finished <- active[vapply(active, function(i) {
-      file.exists(file.path(pool$workers[[i]]$dir,
-                            paste0("done_", ids[i])))
-    }, logical(1))]
-    if (!length(finished)) {
-      now <- proc.time()[["elapsed"]]
-      if (now - alive_checked >= 0.2) {
-        alive_checked <- now
-        dead <- active[!vapply(active, function(i)
-          .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
-        if (length(dead))
-          stop("persistent chain process exited without a reply", call. = FALSE)
-      }
-      Sys.sleep(nap)
-      nap <- min(0.005, nap * 1.5)
-      next
-    }
-    nap <- 0.001
-    for (i in finished) {
-      worker <- pool$workers[[i]]
-      reply <- .emc_wpool_recv(
-        worker$rc, deadline = .emc_wpool_deadline(),
-        alive = local({ pid <- worker$job$pid
-          function() .emc_wpool_pid_alive(pid) }))
-      if (is.null(reply) || !identical(as.integer(reply$id), ids[i]))
-        stop(.emc_wpool_transport_error("invalid persistent-chain reply"),
-             call. = FALSE)
-      for (msg in reply$warnings) warning(msg, call. = FALSE)
-      if (inherits(reply$error, "error")) stop(reply$error)
-      if (is.null(reply$state))
-        stop("persistent chain returned no continuation state", call. = FALSE)
-      out[[i]] <- .emc_chain_state_apply(samplers[[i]], reply$state)
-      active <- active[active != i]
-      if (length(pending)) {
-        next_i <- pending[[1L]]; pending <- pending[-1L]; submit(next_i)
-      }
-    }
-  }
-  .emc_chain_process_memory_record(pool)
-  # A chain process's heap only grows: it starts with a copy of the session's
-  # and ratchets up with every block's largest temporaries. A fresh fork costs
-  # about as much as the block boundary it replaces.
-  if (identical(restart_blocks, FALSE) || is.null(restart_blocks)) {
-    restart_blocks <- Inf
-  } else {
-    restart_blocks <- suppressWarnings(as.numeric(restart_blocks)[1L])
-    if (!length(restart_blocks) || !is.finite(restart_blocks) ||
-        restart_blocks < 1) restart_blocks <- Inf
-  }
-  if (is.finite(restart_blocks)) {
-    for (i in seq_along(samplers)) {
-      pool$blocks[i] <- pool$blocks[i] + 1L
-      if (pool$blocks[i] < restart_blocks) next
-      slot <- pool$slots[[i]]
-      .emc_chain_process_stop(pool$workers[[i]])
-      replacement <- .emc_chain_process_start(
-        out[[i]], pool$runner, slot = slot, other_slots = pool$slots[-i])
-      if (is.null(replacement))
-        stop(sprintf("could not restart persistent chain process %d", i),
-             call. = FALSE)
-      pool$workers[[i]] <- replacement
-      pool$blocks[i] <- 0L
-    }
-  }
-  out
-}
-
-# Rebuild jobs run on the same workers retained by this chain's sampling
-# process. A lost worker pool falls back to the owning chain process; each task
-# restores its original subject RNG seed before it computes.
-.emc_chain_process_rebuild <- function(tasks, sampler) {
-  usable <- function(p) !is.null(p) && (isTRUE(p$alive) || isTRUE(p$parked))
-  pool_name <- if (usable(.emc_pool_state$subject_pool)) {
-    "subject_pool"
-  } else "subject_ll_pool"
-  pool <- .emc_pool_state[[pool_name]]
-  if (isTRUE(pool$parked)) {
-    unparked <- .emc_wpool_unpark(pool, pool$ctx, pool$n)
-    if (!is.null(unparked)) {
-      pool <- unparked
-      .emc_pool_state[[pool_name]] <- pool
-      on.exit(.emc_pool_state[[pool_name]] <-
-                .emc_wpool_park(.emc_pool_state[[pool_name]]), add = TRUE)
-    }
-  }
-  ctx <- if (!is.null(pool) && !is.null(pool$ctx)) pool$ctx else
-    list(data = sampler$data, model = sampler$model,
-         par_names = rownames(sampler$samples$alpha), n_pars = sampler$n_pars)
-  ctx$data <- sampler$data
-  run <- function(task) .emc_laplace_rebuild_compute(task, ctx)
-  if (is.null(pool) || !isTRUE(pool$alive) || !length(pool$jobs))
-    return(lapply(tasks, run))
-
-  costs <- .emc_subject_cost(ctx$data)
-  task_cost <- vapply(tasks, function(task) costs[[task$subject]], numeric(1))
-  partition <- .emc_lpt_partition(task_cost, pool$n)
-  messages <- lapply(partition, function(idx) list(
-    kind = "laplace_rebuild_batch", tasks = tasks[idx]))
-  sent <- vapply(seq_len(pool$n), function(w) {
-    if (!length(partition[[w]])) return(TRUE)
-    .emc_wpool_request(pool, w, messages[[w]])
-  }, logical(1))
-  replies <- vector("list", pool$n)
-  if (all(sent)) replies <- lapply(seq_len(pool$n), function(w) {
-    if (!length(partition[[w]])) return(list(results = list()))
-    .emc_wpool_reply(pool, w)
-  })
-  valid <- all(vapply(seq_len(pool$n), function(w)
-    !length(partition[[w]]) ||
-      (is.list(replies[[w]]) && is.list(replies[[w]]$results) &&
-       length(replies[[w]]$results) == length(partition[[w]]) &&
-       all(vapply(replies[[w]]$results, function(x)
-         is.list(x) && !is.null(x$seed), logical(1)))), logical(1)))
-  if (!valid) {
-    pool$alive <- FALSE
-    .emc_pool_state[[pool_name]] <- pool
-    detail <- if (!all(sent)) "request send failed" else {
-      failed <- vapply(replies, function(reply) {
-        if (!is.list(reply)) return("worker returned no reply")
-        if (!is.null(reply$failed)) return(as.character(reply$failed)[1L])
-        if (!is.list(reply$results)) return("worker reply has no results")
-        "worker result omitted its subject seed"
-      }, character(1))
-      paste(unique(failed[nzchar(failed)]), collapse = "; ")
-    }
-    .emc_wpool_degraded(paste0(
-      "retained rebuild worker failed (", detail,
-      "); retrying in its chain"))
-    return(lapply(tasks, run))
-  }
-  out <- vector("list", length(tasks))
-  for (w in seq_len(pool$n)) if (length(partition[[w]]))
-    out[partition[[w]]] <- replies[[w]]$results
-  out
-}
-
-# Fan one chain's rebuild tasks out over its retained worker pool. Rebuild
-# tasks are independent and carry explicit subject streams, so an LPT batch per
-# worker keeps scheduling overhead low while balancing uneven subjects.
-.emc_chain_process_pool_rebuild <- function(pool, samplers, tasks_by_chain,
-                                           contexts,
-                                           max_active = length(samplers)) {
-  if (is.null(pool) || length(pool$workers) != length(samplers) ||
-      length(tasks_by_chain) != length(samplers) ||
-      length(contexts) != length(samplers)) return(NULL)
-  max_active <- max(1L, min(length(samplers), as.integer(max_active)))
-  out <- vector("list", length(samplers))
-  pending <- which(lengths(tasks_by_chain) > 0L)
-  active <- integer()
-  ids <- integer(length(samplers))
-  recover <- function(i) {
-    worker <- pool$workers[[i]]
-    for (cn in list(worker$wc, worker$rc)) try(close(cn), silent = TRUE)
-    .emc_wpool_terminate_jobs(list(worker$job), wait = TRUE, terminate = TRUE)
-    unlink(worker$dir, recursive = TRUE)
-    replacement <- .emc_chain_process_start(
-      samplers[[i]], pool$runner, slot = pool$slots[[i]],
-      other_slots = pool$slots[-i])
-    if (is.null(replacement))
-      stop(sprintf("could not restart persistent chain process %d after rebuild failure", i),
-           call. = FALSE)
-    pool$workers[[i]] <- replacement
-    lapply(tasks_by_chain[[i]], function(task)
-      .emc_laplace_rebuild_compute(task, contexts[[i]]))
-  }
-  submit <- function(i) {
-    worker <- pool$workers[[i]]
-    pool$next_id <- pool$next_id + 1L
-    id <- pool$next_id
-    marker <- file.path(worker$dir, paste0("done_", id))
-    unlink(marker)
-    ok <- .emc_wpool_send(worker$wc, list(
-      command = "rebuild", id = id, done = marker,
-      tasks = tasks_by_chain[[i]]))
-    if (!ok) {
-      out[[i]] <<- recover(i)
-      return(FALSE)
-    }
-    ids[i] <<- id
-    active <<- c(active, i)
-    TRUE
-  }
-  while (length(pending) && length(active) < max_active) {
-    i <- pending[[1L]]; pending <- pending[-1L]; submit(i)
-  }
-  alive_checked <- proc.time()[["elapsed"]]
-  nap <- 0.001
-  while (length(active)) {
-    finished <- active[vapply(active, function(i) {
-      file.exists(file.path(pool$workers[[i]]$dir,
-                            paste0("done_", ids[i])))
-    }, logical(1))]
-    if (!length(finished)) {
-      now <- proc.time()[["elapsed"]]
-      dead <- integer()
-      if (now - alive_checked >= 0.2) {
-        alive_checked <- now
-        dead <- active[!vapply(active, function(i)
-          .emc_wpool_pid_alive(pool$workers[[i]]$job$pid), logical(1))]
-      }
-      if (length(dead)) finished <- dead else {
-        Sys.sleep(nap)
-        nap <- min(0.005, nap * 1.5)
-        next
-      }
-    }
-    nap <- 0.001
-    for (i in finished) {
-      worker <- pool$workers[[i]]
-      reply <- tryCatch(.emc_wpool_recv(
-        worker$rc, deadline = .emc_wpool_deadline(),
-        alive = local({ pid <- worker$job$pid
-          function() .emc_wpool_pid_alive(pid) })), error = function(e) NULL)
-      if (is.list(reply) && identical(as.integer(reply$id), ids[i]) &&
-          is.list(reply$results) &&
-          length(reply$results) == length(tasks_by_chain[[i]])) {
-        out[[i]] <- reply$results
-      } else {
-        out[[i]] <- recover(i)
-      }
-      active <- active[active != i]
-      if (length(pending)) {
-        next_i <- pending[[1L]]; pending <- pending[-1L]; submit(next_i)
-      }
-    }
-  }
-  out
-}
-
 .emc_wpool_degraded <- function(msg) {
   .emc_pool_state$last_error <- msg
   if (!isTRUE(.emc_pool_state$warned)) {
@@ -908,7 +368,7 @@
 
 
 .emc_wpool_spawn <- function(dir, idx, ctx, backend = "fork", template = NULL,
-                             ctx_update = NULL, context_epoch = 0L) {
+                             ctx_update = NULL) {
   req <- file.path(dir, sprintf("req%d", idx))
   ans <- file.path(dir, sprintf("ans%d", idx))
   made <- tryCatch(
@@ -939,8 +399,7 @@
       id <- .emc_wpool_next_request()
       if (!.emc_wpool_send(template$wc, list(command = "spawn", idx = idx,
                                              req = req, ans = ans,
-                                             ctx = ctx_update, id = id,
-                                             context_epoch = context_epoch))) {
+                                             ctx = ctx_update, id = id))) {
         stop(.emc_wpool_transport_error("template stopped accepting requests"))
       }
       # A template kept across blocks may still hold the reply to a command
@@ -964,8 +423,7 @@
       for (w in seq_len(n)) {
         jobs[[w]] <- local({
           i <- w
-          parallel::mcparallel(.emc_wpool_serve(
-            req[i], ans[i], ctx, context_epoch = context_epoch),
+          parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx),
                                detached = FALSE)
         })
       }
@@ -1175,12 +633,8 @@
 # `persistent = TRUE` forks the workers from this chain's template kept by
 # run_emc() across blocks (.emc_wpool_session_start()) when one is available,
 # instead of booting a template for this pool alone.
-# `retain_across_blocks = TRUE` instead keeps fork workers owned by one
-# persistent chain process, refreshing their mutable context between blocks;
-# they too are forked from the chain's session template when it has one.
 .emc_wpool_start <- function(n_workers, ctx, allow_one = FALSE,
-                             persistent = FALSE, backend = NULL,
-                             retain_across_blocks = FALSE) {
+                             persistent = FALSE, backend = NULL) {
   n_workers <- as.integer(n_workers)
   if (is.na(n_workers) || n_workers < 1L ||
       (!isTRUE(allow_one) && n_workers <= 1L)) return(NULL)
@@ -1192,18 +646,9 @@
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
 
-  if ((isTRUE(persistent) || isTRUE(retain_across_blocks)) && is.null(backend)) {
+  if (isTRUE(persistent) && is.null(backend)) {
     pool <- .emc_wpool_start_kept(dir, n_workers, ctx)
-    if (!is.null(pool)) {
-      if (isTRUE(retain_across_blocks)) {
-        pool$ctx <- ctx
-        pool$retained <- TRUE
-        pool$iterations <- 0L
-        pool$base_n <- n_workers
-        pool$context_epoch <- 0L
-      }
-      return(pool)
-    }
+    if (!is.null(pool)) return(pool)
   }
 
   if (is.null(backend)) backend <- .emc_wpool_backend(ctx)
@@ -1241,209 +686,7 @@
        generation = .emc_wpool_next_generation(),
        ctx_file = ctx_file, lib = lib, template = template,
        template_data = if (is.null(template)) NULL else ctx$data,
-       done = .emc_wpool_done_open(dir), ctx = ctx,
-       retained = isTRUE(retain_across_blocks), iterations = 0L,
-       base_n = n_workers, context_epoch = 0L)
-}
-
-.emc_wpool_retained_idle <- function(ctx, iterations = 0L, base_n = 1L) {
-  base_n <- max(1L, as.integer(base_n))
-  list(n = base_n, dir = NULL, jobs = list(), wcs = list(), rcs = list(),
-       alive = FALSE, backend = "fork", template = NULL, done = NULL,
-       ctx = ctx, retained = TRUE, iterations = as.integer(iterations),
-       base_n = as.integer(base_n), context_epoch = 0L,
-       generation = .emc_wpool_next_generation())
-}
-
-.emc_wpool_trace_retained <- function(pool, role, block, stage) {
-  path <- getOption("emc2.worker_trace_file", NULL)
-  if (!is.character(path) || length(path) != 1L || !nzchar(path) ||
-      is.null(pool) || !isTRUE(pool$retained)) return(invisible(NULL))
-  pids <- if (length(pool$jobs)) {
-    vapply(pool$jobs, .emc_wpool_job_pid, integer(1))
-  } else integer(0)
-  memory <- lapply(pids, function(pid) {
-    lines <- tryCatch(readLines(sprintf("/proc/%d/smaps_rollup", pid),
-                                warn = FALSE), error = function(e) character())
-    value <- function(key) {
-      hit <- grep(paste0("^", key, ":"), lines, value = TRUE)
-      if (!length(hit)) return(NA_real_)
-      suppressWarnings(as.numeric(sub("^[^:]+:\\s*([0-9]+).*$", "\\1", hit[1L])))
-    }
-    c(rss = value("Rss"), pss = value("Pss"),
-      private = value("Private_Clean") + value("Private_Dirty"))
-  })
-  mem <- if (length(memory)) {
-    do.call(rbind, memory)
-  } else matrix(numeric(), nrow = 0L, ncol = 3L,
-                dimnames = list(NULL, c("rss", "pss", "private")))
-  mem_sum <- function(name) {
-    x <- mem[, name]
-    if (!length(x) || all(!is.finite(x))) NA_real_ else sum(x, na.rm = TRUE)
-  }
-  file <- sprintf("%s-%d.tsv", path, Sys.getpid())
-  row <- data.frame(owner = Sys.getpid(), block = as.integer(block),
-                    stage = as.character(stage), role = as.character(role),
-                    workers = as.integer(pool$n), alive = isTRUE(pool$alive),
-                    epoch = as.integer(pool$context_epoch),
-                    worker_rss_kb = mem_sum("rss"),
-                    worker_pss_kb = mem_sum("pss"),
-                    worker_private_kb = mem_sum("private"),
-                    pids = paste(pids, collapse = ";"),
-                    stringsAsFactors = FALSE)
-  utils::write.table(row, file = file, sep = "\t", quote = FALSE,
-                     row.names = FALSE, col.names = !file.exists(file),
-                     append = file.exists(file))
-  invisible(NULL)
-}
-
-.emc_wpool_retained_static_equal <- function(a, b) {
-  strip_pooled <- function(x) {
-    if (is.list(x)) for (i in seq_along(x)) x[[i]] <- strip_pooled(x[[i]])
-    attr(x, "pooled_values") <- NULL
-    x
-  }
-  identical(strip_pooled(a$data), strip_pooled(b$data)) &&
-    isTRUE(all.equal(a$model, b$model, tolerance = 0)) &&
-    identical(a$type, b$type) && identical(a$n_pars, b$n_pars)
-}
-
-.emc_wpool_context_update <- function(pool, ctx) {
-  if (is.null(pool) || !isTRUE(pool$retained) ||
-      !isTRUE(pool$alive) || !length(pool$jobs) ||
-      !.emc_wpool_retained_static_equal(pool$ctx, ctx)) return(NULL)
-  values <- ctx[setdiff(names(ctx), c("data", "model"))]
-  epoch <- as.integer(pool$context_epoch) + 1L
-  sent <- vapply(seq_len(pool$n), function(w) {
-    .emc_wpool_send(pool$wcs[[w]],
-                    list(control = "context_update", epoch = epoch,
-                         values = values))
-  }, logical(1))
-  if (!all(sent)) return(NULL)
-  replies <- lapply(seq_len(pool$n), function(w)
-    .emc_wpool_reply(pool, w))
-  ok <- vapply(replies, function(x) is.list(x) && isTRUE(x$ok) &&
-                 identical(as.integer(x$epoch), epoch), logical(1))
-  if (!all(ok)) return(NULL)
-  pool$ctx <- ctx
-  pool$context_epoch <- epoch
-  pool
-}
-
-.emc_wpool_shrink <- function(pool, n_total) {
-  if (is.null(pool) || !isTRUE(pool$retained)) return(pool)
-  n_total <- max(1L, as.integer(n_total))
-  if (n_total >= pool$n) return(pool)
-  iterations <- pool$iterations
-  base_n <- pool$base_n
-  ctx <- pool$ctx
-  if (n_total <= 1L) {
-    .emc_wpool_stop(pool)
-    return(.emc_wpool_retained_idle(ctx, iterations, base_n))
-  }
-  if (!isTRUE(pool$alive) || is.null(pool$dir)) {
-    .emc_wpool_stop(pool)
-    return(.emc_wpool_retained_idle(ctx, iterations, n_total))
-  }
-  drop_idx <- seq.int(n_total + 1L, pool$n)
-  dropped <- list(n = length(drop_idx), dir = pool$dir,
-                  jobs = pool$jobs[drop_idx], wcs = pool$wcs[drop_idx],
-                  rcs = pool$rcs[drop_idx], backend = pool$backend)
-  .emc_wpool_stop_workers(dropped)
-  unlink(file.path(pool$dir,
-                   c(sprintf("req%d", drop_idx), sprintf("ans%d", drop_idx))))
-  pool$n <- n_total
-  pool$jobs <- pool$jobs[seq_len(n_total)]
-  pool$wcs <- pool$wcs[seq_len(n_total)]
-  pool$rcs <- pool$rcs[seq_len(n_total)]
-  pool$generation <- .emc_wpool_next_generation()
-  .emc_wpool_retire(pool)
-  pool
-}
-
-.emc_wpool_reconfigure <- function(pool, ctx, n_workers) {
-  n_workers <- max(1L, as.integer(n_workers))
-  iterations <- if (is.null(pool$iterations)) 0L else pool$iterations
-  compatible <- !is.null(pool) && isTRUE(pool$retained) &&
-    .emc_wpool_retained_static_equal(pool$ctx, ctx)
-  if (n_workers <= 1L) {
-    if (compatible) {
-      pool$base_n <- 1L
-      return(.emc_wpool_shrink(pool, 1L))
-    }
-    if (!is.null(pool)) .emc_wpool_stop(pool)
-    return(.emc_wpool_retained_idle(ctx, iterations, 1L))
-  }
-  if (compatible && isTRUE(pool$parked)) {
-    unparked <- .emc_wpool_unpark(pool, ctx, n_workers)
-    if (!is.null(unparked)) {
-      unparked$iterations <- iterations
-      unparked$base_n <- n_workers
-      return(unparked)
-    }
-  }
-  if (!compatible || !isTRUE(pool$alive)) {
-    if (!is.null(pool)) .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_workers, ctx, retain_across_blocks = TRUE)
-    if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
-                                                       n_workers))
-    fresh$iterations <- iterations
-    fresh$base_n <- n_workers
-    return(fresh)
-  }
-  refreshed <- .emc_wpool_context_update(pool, ctx)
-  if (is.null(refreshed)) {
-    .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_workers, ctx, retain_across_blocks = TRUE)
-    if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
-                                                       n_workers))
-    fresh$iterations <- iterations
-    fresh$base_n <- n_workers
-    return(fresh)
-  }
-  pool <- refreshed
-  pool$base_n <- n_workers
-  if (pool$n > n_workers) pool <- .emc_wpool_shrink(pool, n_workers)
-  if (pool$n < n_workers) pool <- .emc_wpool_grow(pool, n_workers, ctx)
-  pool
-}
-
-.emc_wpool_reclaim_persistent <- function() {
-  if (!isTRUE(.emc_pool_state$chain_persistent)) return(invisible(NULL))
-  for (name in c("subject_pool", "subject_ll_pool")) {
-    pool <- .emc_pool_state[[name]]
-    if (is.null(pool) || !isTRUE(pool$retained)) next
-    .emc_pool_state[[name]] <- .emc_wpool_park(
-      .emc_wpool_shrink(pool, pool$base_n))
-  }
-  invisible(NULL)
-}
-
-.emc_wpool_template_live <- function(pool) {
-  identical(pool$backend, "spawn") && !is.null(pool$template) &&
-    isTRUE(pool$template$alive) &&
-    .emc_wpool_pid_alive(.emc_wpool_job_pid(pool$template$job))
-}
-
-# Between blocks a persistent chain's workers would sit idle while the session
-# forks its own jobs, so a pool with a live template stops its workers and
-# keeps the template; the workers are forked again, with the then-current
-# context, when the pool is next needed. Workers are re-forked from the
-# template every few dozen iterations anyway, so this adds little.
-.emc_wpool_park <- function(pool) {
-  if (is.null(pool) || !isTRUE(pool$retained) || !isTRUE(pool$alive) ||
-      !length(pool$jobs) || !.emc_wpool_template_live(pool)) return(pool)
-  .emc_wpool_stop_workers(pool)
-  unlink(file.path(pool$dir, c(sprintf("req%d", seq_len(pool$n)),
-                               sprintf("ans%d", seq_len(pool$n)))))
-  pool$jobs <- list()
-  pool$wcs <- list()
-  pool$rcs <- list()
-  pool$alive <- FALSE
-  pool$parked <- TRUE
-  pool$generation <- .emc_wpool_next_generation()
-  .emc_wpool_retire(pool)
-  pool
+       done = .emc_wpool_done_open(dir))
 }
 
 # Writes ctx as an update over the context a template booted with.  The data
@@ -1455,30 +698,6 @@
     upd$data <- NULL
   tryCatch({ saveRDS(upd, path, compress = FALSE); TRUE },
            error = function(e) FALSE)
-}
-
-# NULL when the template can no longer fork the workers.
-.emc_wpool_unpark <- function(pool, ctx, n_workers) {
-  if (!isTRUE(pool$parked) || !.emc_wpool_template_live(pool)) return(NULL)
-  n_workers <- max(1L, as.integer(n_workers))
-  ctx_update <- file.path(pool$dir, "context_current.rds")
-  if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update)) return(NULL)
-  spawned <- .emc_wpool_spawn(pool$dir, seq_len(n_workers), ctx,
-                              backend = "spawn", template = pool$template,
-                              ctx_update = ctx_update,
-                              context_epoch = pool$context_epoch)
-  unlink(ctx_update)
-  if (is.null(spawned)) return(NULL)
-  pool$n <- n_workers
-  pool$jobs <- spawned$jobs
-  pool$wcs <- spawned$wcs
-  pool$rcs <- spawned$rcs
-  pool$ctx <- ctx
-  pool$alive <- TRUE
-  pool$parked <- NULL
-  pool$generation <- .emc_wpool_next_generation()
-  .emc_wpool_retire(pool)
-  pool
 }
 
 # Fork a pool from the session template for this chain, sending it this
@@ -1727,18 +946,6 @@
 .emc_wpool_grow <- function(pool, n_total, ctx) {
   n_total <- as.integer(n_total)
   if (is.null(pool) || is.na(n_total)) return(pool)
-  if (isTRUE(pool$retained) && n_total > pool$n &&
-      (!isTRUE(pool$alive) || is.null(pool$dir))) {
-    iterations <- pool$iterations
-    base_n <- pool$base_n
-    .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(n_total, ctx, retain_across_blocks = TRUE)
-    if (is.null(fresh)) return(.emc_wpool_retained_idle(ctx, iterations,
-                                                       base_n))
-    fresh$iterations <- iterations
-    fresh$base_n <- base_n
-    return(fresh)
-  }
   if (!isTRUE(pool$alive)) return(pool)
   n_total <- min(n_total, pool$n + .emc_wpool_feasible_workers(n_total - pool$n))
   n_new <- n_total - pool$n
@@ -1749,18 +956,9 @@
     return(pool)
   }
 
-  ctx_update <- NULL
-  if (isTRUE(pool$retained) && identical(pool$backend, "spawn") &&
-      !is.null(pool$template)) {
-    ctx_update <- file.path(pool$dir, "context_current.rds")
-    if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update))
-      ctx_update <- NULL
-  }
   spawned <- .emc_wpool_spawn(pool$dir, pool$n + seq_len(n_new), ctx,
                               backend = if (is.null(pool$backend)) "fork" else pool$backend,
-                              template = pool$template, ctx_update = ctx_update,
-                              context_epoch = pool$context_epoch)
-  if (!is.null(ctx_update)) unlink(ctx_update)
+                              template = pool$template)
   if (is.null(spawned)) {
     fails <- if (is.null(pool$grow_fails)) 1L else pool$grow_fails + 1L
     pool$grow_fails <- fails
@@ -1773,7 +971,6 @@
   pool$jobs <- c(pool$jobs, spawned$jobs)
   pool$wcs <- c(pool$wcs, spawned$wcs)
   pool$rcs <- c(pool$rcs, spawned$rcs)
-  pool$ctx <- ctx
   pool$alive <- TRUE
   pool$grow_fails <- 0L
   pool$grow_skip <- 0L
@@ -1794,41 +991,15 @@
     return(pool)
   }
 
-  # A retained pool with a live template re-forks its workers from the
-  # template, which takes the current context as an update; other retained
-  # pools are restarted.
   spawn_alive <- identical(pool$backend, "spawn") && !is.null(pool$template) &&
     isTRUE(pool$template$alive)
-  if (isTRUE(pool$retained) && !spawn_alive) {
-    iterations <- pool$iterations
-    base_n <- pool$base_n
-    .emc_wpool_stop(pool)
-    fresh <- .emc_wpool_start(target, ctx, retain_across_blocks = TRUE)
-    if (is.null(fresh)) {
-      if (!dead) .emc_wpool_degraded("could not re-fork the retained pool when recycling")
-      return(.emc_wpool_retained_idle(ctx, iterations, base_n))
-    }
-    fresh$iterations <- iterations
-    fresh$base_n <- base_n
-    return(fresh)
-  }
-
   if (spawn_alive) {
     .emc_wpool_stop_workers(pool)
     unlink(file.path(pool$dir,
                      c(sprintf("req%d", seq_len(target)),
                        sprintf("ans%d", seq_len(target)))))
-    ctx_update <- NULL
-    if (isTRUE(pool$retained)) {
-      ctx_update <- file.path(pool$dir, "context_current.rds")
-      if (!.emc_wpool_save_update(ctx, pool$template_data, ctx_update))
-        ctx_update <- NULL
-    }
     spawned <- .emc_wpool_spawn(pool$dir, seq_len(target), ctx,
-                                backend = "spawn", template = pool$template,
-                                ctx_update = ctx_update,
-                                context_epoch = pool$context_epoch)
-    if (!is.null(ctx_update)) unlink(ctx_update)
+                                backend = "spawn", template = pool$template)
     fresh <- if (is.null(spawned)) NULL else {
       pool$jobs <- spawned$jobs
       pool$wcs <- spawned$wcs
@@ -1929,8 +1100,7 @@
   }, error = function(e) FALSE)
 }
 
-.emc_wpool_serve <- function(req, ans, ctx, inherited = NULL,
-                             context_epoch = 0L) {
+.emc_wpool_serve <- function(req, ans, ctx, inherited = NULL) {
   for (cn in inherited) try(close(cn), silent = TRUE)
   if (identical(tryCatch(emc_arm_parent_death(), error = function(e) 0L), -1L)) {
     return(invisible(NULL))
@@ -1938,7 +1108,6 @@
   rc <- fifo(req, "rb", blocking = TRUE)
   wc <- fifo(ans, "wb", blocking = TRUE)
   done <- NULL
-  context_epoch <- as.integer(context_epoch)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE)
             if (!is.null(done)) try(close(done), silent = TRUE) }, add = TRUE)
   # .emc_wpool_spawn() waits for this before it hands the worker to a pool.
@@ -1946,20 +1115,6 @@
   repeat {
     msg <- .emc_wpool_recv(rc)
     if (is.null(msg)) break
-    if (identical(msg$control, "context_update")) {
-      values <- msg$values
-      epoch <- suppressWarnings(as.integer(msg$epoch))
-      ok <- is.list(values) && !is.null(names(values)) &&
-        length(epoch) == 1L && !is.na(epoch) &&
-        identical(epoch, context_epoch + 1L) &&
-        !any(names(values) %in% c("data", "model"))
-      if (ok) {
-        ctx[names(values)] <- values
-        context_epoch <- epoch
-      }
-      if (!.emc_wpool_send(wc, list(ok = ok, epoch = epoch))) break
-      next
-    }
     if (isTRUE(msg$notify)) {
       if (is.null(done)) done <- .emc_wpool_done_connect(req)
       if (!.emc_wpool_done_write(done, msg, .EMC_WPOOL_ST_START)) break
@@ -2021,9 +1176,7 @@
             # collects only when it next forks a worker in the same slot.
             parallel::mcparallel(
               .emc_wpool_serve(command$req[i], command$ans[i], ctx,
-                               inherited = list(rc, wc),
-                               context_epoch = if (is.null(command$context_epoch))
-                                 0L else command$context_epoch),
+                               inherited = list(rc, wc)),
               detached = TRUE
             )
           })

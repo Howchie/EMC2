@@ -147,37 +147,11 @@ run_emc <- function(emc, stage, stop_criteria,
     last_snap <- lapply(emc, function(chain) .emc_chain_snapshot(chain$samples))
   }
   # Chain runners fork their subject workers from clean templates shared
-  # across blocks; persistent chain processes fork their retained pools from
-  # the same templates.
+  # across blocks.
   pool_slots <- if (cores_for_chains >= length(emc)) length(emc)
                 else if (cores_for_chains <= 1L) 1L else 0L
   pool_session <- NULL
-  chain_process_pool <- NULL
-  persistent_chain_option <- getOption("emc2.persistent_chains")
-  # Reuse the workers across progress reports in verbose production fits.
-  # An explicit setting still controls the runner for every stage.
-  reuse_progress_workers <- is.null(persistent_chain_option) &&
-    stage == "sample" && verbose && .Platform$OS.type == "unix" &&
-    length(emc) > 1L && cores_for_chains >= length(emc) &&
-    nzchar(Sys.which("mkfifo")) &&
-    isTRUE(iter - total_iters_stage > step_size) &&
-    is.null(fileName) && isFALSE(thin) &&
-    is.null(stop_criteria$max_sample_iter)
-  persistent_chain_requested <- isTRUE(persistent_chain_option) ||
-    reuse_progress_workers
-  # Amortize worker startup while still periodically releasing their heaps.
-  progress_worker_restart <- if (reuse_progress_workers) 10L else 2L
-  persistent_chain_supported <- persistent_chain_requested &&
-    .Platform$OS.type == "unix"
-  if (persistent_chain_requested && .Platform$OS.type != "unix") {
-    warning("Persistent chain processes currently require Unix; using the ",
-            "existing chain runner.",
-            call. = FALSE)
-  }
-  on.exit({
-    .emc_chain_process_pool_stop(chain_process_pool)
-    .emc_wpool_session_stop(pool_session)
-  }, add = TRUE)
+  on.exit(.emc_wpool_session_stop(pool_session), add = TRUE)
   pool_session <- if (cores_per_chain > 1L && pool_slots > 0L) {
     .emc_wpool_session_start(
       list(data = emc[[1L]]$data,
@@ -206,16 +180,12 @@ run_emc <- function(emc, stage, stop_criteria,
     } else if (stage %in% c("burn", "adapt") ||
                (stage == "sample" && (is.null(emc[[1L]]$sample_proposals_next) ||
                                       .emc_sample_rebuild_due(emc)))) {
-      emc <- .emc_laplace_refresh(
-        emc, cores_per_chain * cores_for_chains,
-        chain_pool = chain_process_pool, max_active = cores_for_chains)
+      emc <- .emc_laplace_refresh(emc, cores_per_chain * cores_for_chains)
     }
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
     prop_started <- proc.time()[["elapsed"]]
     emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks,
-                         block_iter = progress$step_size * max(1, cur_thin),
-                         chain_pool = chain_process_pool,
-                         max_active = cores_for_chains)
+                         block_iter = progress$step_size * max(1, cur_thin))
     prop_elapsed <- proc.time()[["elapsed"]] - prop_started
     last_stage <- get_last_stage(emc)
     if(stage == "preburn"){
@@ -230,10 +200,11 @@ run_emc <- function(emc, stage, stop_criteria,
     sample_started <- proc.time()[["elapsed"]]
     # Every stop rule waits for the iteration target, and production proposals
     # change only at their rebuild points, so a sample-stage block runs
-    # straight to whichever comes first. Batching reduces chain dispatches
-    # and forks. Verbose runs need the chain draws back at each
-    # step to report fresh diagnostics. Checkpoints and thinning also keep
-    # per-step blocks. block_units counts the steps the block stands for.
+    # straight to whichever comes first. Each block is a fork whose children
+    # copy the session heap, so batching saves forks. Verbose runs need the
+    # chain draws back at each step to report fresh diagnostics. Checkpoints
+    # and thinning also keep per-step blocks. block_units counts the steps
+    # the block stands for.
     block_units <- 1L
     if (stage == "sample" && !verbose && is.null(fileName) && isFALSE(thin) &&
         is.null(stop_criteria$max_sample_iter)) {
@@ -253,55 +224,20 @@ run_emc <- function(emc, stage, stop_criteria,
       attr(sub_emc[[j]], "emc_pool_slot") <-
         .emc_wpool_session_slot(pool_session, min(j, pool_slots))
     }
-    if (persistent_chain_supported) {
-      chain_samplers <- lapply(sub_emc, function(sampler) {
-        attr(sampler, "emc_pool_slot") <- NULL
-        sampler
-      })
-      chain_slots <- lapply(seq_along(sub_emc), function(j)
-        .emc_wpool_session_slot(pool_session, min(j, max(1L, pool_slots))))
-      if (is.null(chain_process_pool)) {
-        chain_process_pool <- .emc_chain_process_pool_start(
-          chain_samplers, slots = chain_slots)
-        if (is.null(chain_process_pool)) {
-          warning("Could not start persistent chain processes; using the ",
-                  "existing chain runner for this fit.", call. = FALSE)
-          persistent_chain_supported <- FALSE
-        }
-      } else {
-        .emc_chain_process_pool_refresh_slots(chain_process_pool,
-                                              chain_samplers, chain_slots)
-      }
-      if (persistent_chain_supported)
-        for (j in seq_along(sub_emc)) attr(sub_emc[[j]], "emc_pool_slot") <- NULL
-    }
-    if (persistent_chain_supported) {
-      sub_emc <- .emc_chain_process_pool_run(
-        chain_process_pool, sub_emc,
-        args = list(stage = stage, iter = stage_iter,
-                    verbose = verbose, verboseProgress = verboseProgress,
-                    particle_factor = particle_factor,
-                    search_width = search_width, n_cores = cores_per_chain,
-                    r_cores = r_cores, core_ctl = core_ctl),
-        max_active = cores_for_chains,
-        restart_blocks = getOption("emc2.persistent_chain_restart_blocks",
-                                   progress_worker_restart))
-    } else {
-      sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
-                               outer_slot <- .emc_pool_state$session_slot
-                               on.exit(.emc_pool_state$session_slot <- outer_slot,
-                                       add = TRUE)
-                               .emc_pool_state$session_slot <- attr(sampler, "emc_pool_slot")
-                               attr(sampler, "emc_pool_slot") <- NULL
-                               sampler <- .emc_set_sampler_rng(sampler)
-                               run_stages(sampler, ...)
-                             }, stage = stage, iter= stage_iter,
-                               verbose=verbose,  verboseProgress = verboseProgress,
-                               particle_factor=particle_factor,search_width=search_width,
-                               n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                               r_cores = r_cores, core_ctl = core_ctl,
-                               mc.preschedule = FALSE, mc.set.seed = FALSE)
-    }
+    sub_emc <- auto_mclapply(sub_emc, function(sampler, ...) {
+                             outer_slot <- .emc_pool_state$session_slot
+                             on.exit(.emc_pool_state$session_slot <- outer_slot,
+                                     add = TRUE)
+                             .emc_pool_state$session_slot <- attr(sampler, "emc_pool_slot")
+                             attr(sampler, "emc_pool_slot") <- NULL
+                             sampler <- .emc_set_sampler_rng(sampler)
+                             run_stages(sampler, ...)
+                           }, stage = stage, iter= stage_iter,
+                             verbose=verbose,  verboseProgress = verboseProgress,
+                             particle_factor=particle_factor,search_width=search_width,
+                             n_cores=cores_per_chain, mc.cores = cores_for_chains,
+                             r_cores = r_cores, core_ctl = core_ctl,
+                             mc.preschedule = FALSE, mc.set.seed = FALSE)
     if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
     sample_elapsed <- proc.time()[["elapsed"]] - sample_started
     concat_started <- proc.time()[["elapsed"]]
@@ -455,8 +391,7 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   if (n_sample < 100) 100L else 4L * as.integer(n_sample)
 }
 
-add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L,
-                          chain_pool = NULL, max_active = length(emc)){
+add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
   prof <- .emc_profile_enabled()
   split <- c(chain = 0, eff = 0)
   proposal_started <- if (prof) proc.time()[["elapsed"]] else NA_real_
@@ -484,8 +419,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L,
     emc <- create_chain_proposals(
       emc, samples_idx = sample_window, do_block = stage != "sample",
       stage = stage)
-    emc <- .emc_check_likelihood_fits(
-      emc, n_cores, chain_pool = chain_pool, max_active = max_active)
+    emc <- .emc_check_likelihood_fits(emc, n_cores)
     # The shear plan uses only checked fits, so it is built after the checks.
     emc <- .emc_shear_set_plans(emc, sample_window, stage, n_cores)
     emc <- .emc_collapsed_set_plans(emc, sample_window, stage, n_cores)
@@ -1651,7 +1585,6 @@ extractDadms <- function(dadms, names = NULL, par_names = NULL){
 }
 
 .emc_core_release <- function(core_ctl) {
-  .emc_wpool_reclaim_persistent()
   if (!is.null(core_ctl)) {
     file.create(file.path(core_ctl$dir, paste0("done_", Sys.getpid())),
                 showWarnings = FALSE)

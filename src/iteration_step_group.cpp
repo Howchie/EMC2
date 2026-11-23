@@ -73,9 +73,6 @@ namespace {
 // Wall-clock start of the iteration and the chain's cores, for the
 // allocation's costs.
 void iteration_costs(SEXP st, SEXP cx, const Clock& started) {
-  if (flag(lget(cx, "persistent_workers")))
-    set_var(st, "pool_iteration",
-            Rf_ScalarInteger(Rf_asInteger(var(st, "pool_iteration")) + 1));
   if (!flag(lget(cx, "alloc_on"))) return;
   SEXP ctl = lget(cx, "core_ctl");
   double cores = num(lget(cx, "n_cores"), 1.0);

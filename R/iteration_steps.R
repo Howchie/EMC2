@@ -44,8 +44,7 @@
 # tuning constants (NULL when the kernel does not cover the block), and
 # whether the group covariance has one factor over all the parameters.
 .emc_steps_constants <- function(pmwgs, stage, chains_mu, chains_var, idx_list_blk,
-                                 marginal_idx_blk, include_full, ctx,
-                                 persistent_workers) {
+                                 marginal_idx_blk, include_full, ctx) {
   p <- pmwgs$n_pars
   n <- pmwgs$n_subjects
   out <- list()
@@ -118,7 +117,7 @@
       length(unique(tune$shared_ll_idx)) == 1L && !isTRUE(ctx$r_cores > 1L) &&
       !(!is.null(.emc_pool_state$ll_pool) && isTRUE(.emc_pool_state$ll_pool$alive)) &&
       !nzchar(Sys.getenv("EMC2_LL_TRACE")) && isTRUE(ctx$ll_cache_validated) &&
-      !persistent_workers && all(lengths(tune_in) == 1L))
+      all(lengths(tune_in) == 1L))
     out$particle <- list(tune_in = tune_in)
   out$subject_cost <- .emc_subject_cost(ctx$data)
   out$hmc_warmup <- c(accept = .EMC_HMC_WARMUP_ACCEPT, moves = .EMC_HMC_WARMUP_MOVES,
@@ -176,7 +175,6 @@
 .emc_step_group <- function(st, cx, i) {
   j <- cx$start_iter + i
   prof <- cx$sampler_profile
-  if (cx$persistent_workers) st$pool_iteration <- st$pool_iteration + 1L
   if (prof) st$prof <- list(started = proc.time()[["elapsed"]])
   if (cx$alloc_on) {
     # The allocation charges wall time on the chain's own share of the
@@ -303,11 +301,8 @@
   pool_profile <- NULL
   it <- NULL
   if (!is.null(st$llpool)) {
-    llpool <- .emc_wpool_recycle(
-      st$llpool, if (cx$persistent_workers) st$pool_iteration else i,
-      cx$recycle_every, wpool_ctx)
+    llpool <- .emc_wpool_recycle(st$llpool, i, cx$recycle_every, wpool_ctx)
     llpool <- .emc_wpool_grow(llpool, .emc_cores_now(cx$core_ctl, cx$n_cores), wpool_ctx)
-    if (cx$persistent_workers) llpool$iterations <- st$pool_iteration
     .emc_ll_pool_set(llpool, 1L, reset = FALSE)
     st$llpool <- llpool
   }
@@ -315,9 +310,7 @@
     n_before <- wpool$n
     if (!maintained) {
       recycle_started <- if (prof) proc.time()[["elapsed"]]
-      wpool <- .emc_wpool_recycle(
-        wpool, if (cx$persistent_workers) st$pool_iteration else i,
-        cx$recycle_every, wpool_ctx)
+      wpool <- .emc_wpool_recycle(wpool, i, cx$recycle_every, wpool_ctx)
       if (prof) recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
       chain_cores <- .emc_cores_now(cx$core_ctl, cx$n_cores)
       target_workers <- min(
@@ -327,7 +320,6 @@
       n_before <- wpool$n
       grow_started <- if (prof) proc.time()[["elapsed"]]
       wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
-      if (cx$persistent_workers) wpool$iterations <- st$pool_iteration
       if (prof) grow_elapsed <- proc.time()[["elapsed"]] - grow_started
     }
     if (wpool$n != n_before || !is.null(part_skip)) {
