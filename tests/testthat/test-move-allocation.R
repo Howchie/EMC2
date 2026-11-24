@@ -571,44 +571,26 @@ test_that("a measured collapsed move that never moves earns no credit", {
   expect_equal(ms$c_fac, (600 * obs + 20 * mean(obs)) / 620)
 })
 
-test_that("subject HMC factors weigh their transitions against the subjects' pooled factor", {
-  n0 <- EMC2:::.EMC_ALLOC_ROUND_EVIDENCE
-  p <- 1
-  ev <- function(n, M) list(n = n, M = matrix(M), cpu = n * 0.01)
+test_that("subject units are fixed: the subject kernel is not priced and its cost stays in the base", {
+  ev <- function(n, M) list(n = n, M = matrix(M), cpu = n * 0.01, arows = c(20, 40))
   ms <- list(s_rho = matrix(0.9, 2, 1), g_rho = 0.5, g_fac = 0.5, g_measured = FALSE,
              C_rest = 1, c_round = 0.1, coll = FALSE, W = list(diag(1), diag(1)),
-             s_var = matrix(1, 2, 1), c_hmc = c(0.1, 0.1), c_part = c(NA, NA), hmc_fixed = 0)
+             s_var = matrix(1, 2, 1), c_hmc = c(0.1, NA), c_part = c(0.3, 0.3), hmc_fixed = 0)
   st <- list(supported = TRUE,
-             subjects = list(list(eligible = TRUE), list(eligible = TRUE)),
-             evidence = list(ev(10, 16), ev(100, 0)))  # subject 1 moves (h 0.2), subject 2 does not (h 1)
+             subjects = list(list(eligible = TRUE), list(eligible = FALSE)),
+             evidence = list(ev(10, 16), NULL))
   u <- EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)
-  h1 <- 1 - 16 / 10 / 2; h2 <- 1
-  ref <- (10 * h1 + 100 * h2) / 110
-  expect_equal(u$units[[2]]$h, (10 * h1 + n0 * ref) / (10 + n0))
-  expect_equal(u$units[[3]]$h, (100 * h2 + n0 * ref) / (100 + n0))
+  expect_length(u$units, 3L)
+  for (k in 2:3) {
+    expect_identical(u$units[[k]]$kind, "fixed")
+    expect_equal(u$units[[k]]$cost, 0)
+    expect_null(u$units[[k]]$h)
+  }
+  expect_equal(u$C_rest, 1)
+  expect_true(EMC2:::.EMC_SUBJECT_HMC_RATE > 0 && EMC2:::.EMC_SUBJECT_PARTICLE_RATE > 0)
   # Decay halves a subject's evidence at a production rebuild.
   d <- EMC2:::.emc_hmc_decay_evidence(ev(10, 16))
   expect_equal(c(d$n, d$M[1], d$cpu), EMC2:::.EMC_ALLOC_EVIDENCE_DECAY * c(10, 16, 0.1))
-})
-
-test_that("a subject without HMC in the block is priced by the rows its transitions evaluate", {
-  ms <- list(s_rho = matrix(0.9, 2, 1), g_rho = 0.5, g_fac = 0.5, g_measured = FALSE,
-             C_rest = 1, c_round = 0.1, coll = FALSE, W = list(diag(1), diag(1)),
-             s_var = matrix(1, 2, 1), c_hmc = c(0.1, NA), c_part = c(NA, NA), hmc_fixed = 0,
-             data_rows = c(100, 300), hmc_row_cpu = 2e-6)
-  ev <- function(cpu) list(n = 10, M = matrix(8), cpu = cpu, arows = c(20, 40))
-  st <- list(supported = TRUE, subjects = list(list(eligible = TRUE), list(eligible = TRUE)),
-             evidence = list(ev(1), ev(7)))
-  u <- EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)
-  # Measured in the block: its own cost. Otherwise mean rows per transition
-  # x data rows x the chain's time per row, whatever its pilots' CPU was.
-  expect_equal(u$units[[2]]$c_h, 0.1)
-  expect_equal(u$units[[3]]$c_h, 30 * 300 * 2e-6)
-  st$evidence[[2]]$cpu <- 99
-  expect_equal(EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)$units[[3]]$c_h, 30 * 300 * 2e-6)
-  # Without a time per row, the evidence's own CPU.
-  ms$hmc_row_cpu <- NA_real_
-  expect_equal(EMC2:::.emc_alloc_units(ms, st, TRUE, FALSE)$units[[3]]$c_h, 99 / 10)
   expect_equal(EMC2:::.emc_alloc_data_rows(list(data.frame(x = 1:3), data.frame(x = 1:2))), 5)
 })
 

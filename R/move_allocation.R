@@ -1641,11 +1641,12 @@
     den <- 1 - q_old[s] * (1 - p_fac[s, ])
     t_rho[s, ] <- .emc_alloc_remove_factor(s_rho[s, ], den)
   }
-  # The rest of the iteration, less the particle steps the units now price.
-  part_in_rest <- if (stored || is.null(w$cpu_part)) 0 else
-    sum(w$cpu_part[is.finite(c_part)])
-  C_rest <- if (!stored && w$n > 0 && w$cpu_rest > part_in_rest)
-    (w$cpu_rest - part_in_rest) / w$n else NA_real_
+  # The base cost per iteration: the rest of the iteration (the particle
+  # steps included) and the HMC rounds, both wall time on the chain's cores
+  # like every move the units price.
+  hmc_wall <- if (!stored && !is.null(w$fam$hmc)) w$fam$hmc$cpu else 0
+  C_rest <- if (!stored && w$n > 0 && w$cpu_rest > 0)
+    (w$cpu_rest + hmc_wall) / w$n else NA_real_
   if (!is.finite(C_rest)) {
     carried <- ch$alloc$last$C_rest
     if (isTRUE(is.finite(carried))) C_rest <- carried
@@ -1736,7 +1737,7 @@
   # With no measured iteration cost, put all observed and guessed costs on
   # the same normalized scale before solving.
   normalize_costs <- !has_C_rest
-  C_iter <- C_rest + sum(ms$c_part[is.finite(ms$c_part)])
+  C_iter <- C_rest
   cost_scale <- if (normalize_costs && is.finite(C_iter) && C_iter > 0) 1 / C_iter else 1
   C_rest <- C_rest * cost_scale
   ms$c_part <- ms$c_part * cost_scale
@@ -1748,7 +1749,7 @@
   ms$shear_fixed <- ms$shear_fixed * cost_scale
   ms$coll_fixed <- ms$coll_fixed * cost_scale
   # Unmeasured costs are guessed against the whole iteration's.
-  C_iter <- C_rest + sum(ms$c_part[is.finite(ms$c_part)])
+  C_iter <- C_rest
   c_round <- if (is.finite(ms$c_round)) ms$c_round else 0.1 * C_iter
   coupled <- shear_on && is.list(ms$coupling) && length(ms$coupling$g) == length(ms$g_rho) &&
     all(is.finite(ms$coupling$g[is.finite(ms$g_fac)]))
@@ -1776,49 +1777,11 @@
            floor = min(b$floor, .EMC_ALLOC_MAX_ROUNDS), cap = min(b$cap, .EMC_ALLOC_MAX_ROUNDS))
     } else list(kind = "fixed", rho = ms$g_rho[k],
                 b_share = if (is.null(ms$g_b_share)) NULL else ms$g_b_share[k], cost = 0))
-  for (s in seq_len(n)) {
-    sj <- if (is.null(hmc_state)) NULL else hmc_state$subjects[[s]]
-    # A measured particle step is priced in the subject's unit (and left out
-    # of C_rest); without an HMC rate to stand in for it, it always runs.
-    priced <- !is.null(ms$c_part) && is.finite(ms$c_part[s])
-    u <- list(kind = "subject", rho = ms$s_rho[s, ],
-              b_share = if (is.null(ms$s_b_share)) NULL else ms$s_b_share[s, ],
-              p = NULL, c_p = 0, h = NULL, c_h = 0)
-    if (isTRUE(sj$eligible)) {
-      ev <- hmc_state$evidence[[s]]
-      h <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$s_var[s, ], .EMC_HMC_MIN_EVIDENCE)
-      if (is.null(h) && optimistic) h <- numeric(length(ms$s_rho[s, ]))
-      else if (!is.null(h)) u$h_n <- ev$n
-      if (!is.null(h)) {
-        c_s <- if (is.finite(ms$c_hmc[s])) ms$c_hmc[s] else if (!is.null(ev) && length(ev$arows) &&
-          isTRUE(is.finite(ms$hmc_row_cpu)) && !is.null(ms$data_rows))
-          mean(ev$arows) * ms$data_rows[s] * ms$hmc_row_cpu else if (!is.null(ev) && ev$n > 0 &&
-          ev$cpu > 0) ev$cpu / ev$n else 3 * C_iter / n
-        u$h <- h
-        u$c_h <- c_s
-        # Its factor on the deviations.
-        if (!is.null(ms$d_var) && all(is.finite(ms$d_var[s, ]))) {
-          u$h_dev <- .emc_alloc_hmc_factor(ev, ms$W[[s]], ms$d_var[s, ], .EMC_HMC_MIN_EVIDENCE)
-          if (is.null(u$h_dev)) u$h_dev <- h
-        }
-        if (!is.null(ms$s_measured)) u$h[!ms$s_measured[s, ]] <- 1
-        if (!is.null(u$h_dev) && !is.null(ms$d_measured))
-          u$h_dev[!ms$d_measured[s, ]] <- 1
-      }
-    }
-    if (!is.null(ms$d_rho) && all(is.finite(ms$d_rho[s, ]))) {
-      u$d_rho <- ms$d_rho[s, ]
-      if (!is.null(ms$d_b_share)) u$d_b_share <- ms$d_b_share[s, ]
-      if (!is.null(ms$p_dev) && all(is.finite(ms$p_dev[s, ]))) u$p_dev <- ms$p_dev[s, ]
-      u$q_old <- if (is.null(ms$q_old)) 1 else ms$q_old[s]
-    }
-    if (priced) {
-      u$rho <- ms$t_rho[s, ]
-      u$p <- ms$p_fac[s, ]
-      u$c_p <- ms$c_part[s]
-    }
-    units[[length(units) + 1L]] <- u
-  }
+  # The subject kernel is fixed (.EMC_SUBJECT_HMC_RATE,
+  # .EMC_SUBJECT_PARTICLE_RATE) and its cost is in C_rest: a subject's unit
+  # holds no move to buy and no coordinate the plan answers for.
+  for (s in seq_len(n))
+    units[[length(units) + 1L]] <- list(kind = "fixed", rho = 0, b_share = NULL, cost = 0)
   joint <- if (isTRUE(ms$coll)) {
     b <- bounds(if (is.null(ms$c_n)) 0 else ms$c_n, if (is.null(ms$c_iters)) 0 else ms$c_iters)
     list(idx = seq_along(ms$g_rho), g = ms$c_fac,
@@ -1828,25 +1791,6 @@
          floor = b$floor,
          cap = min(b$cap, max(.EMC_ALLOC_MAX_ROUNDS, 2 * ms$c_rate)))
   }
-  # A subject's HMC factor weighs its own transitions against the subjects'
-  # pooled factor by the transitions behind each (the shear rule).
-  n0 <- .EMC_ALLOC_ROUND_EVIDENCE
-  hs <- lapply(units[-seq_along(ms$g_rho)], function(x) x$h)
-  ns <- vapply(units[-seq_along(ms$g_rho)], function(x)
-    if (is.null(x$h_n)) 0 else x$h_n, numeric(1))
-  with_h <- which(ns > 0 & !vapply(hs, is.null, logical(1)))
-  if (length(with_h)) {
-    pooled <- .emc_alloc_pool_factors(hs, ns, with_h, n0)
-    for (j in seq_along(with_h)) units[[length(ms$g_rho) + with_h[j]]]$h <- pooled[[j]]
-    # The deviation factors have their own variances, so their own reference.
-    hd <- lapply(units[-seq_along(ms$g_rho)], function(x) x$h_dev)
-    with_d <- with_h[!vapply(hd[with_h], is.null, logical(1))]
-    if (length(with_d)) {
-      pooled <- .emc_alloc_pool_factors(hd, ns, with_d, n0)
-      for (j in seq_along(with_d)) units[[length(ms$g_rho) + with_d[j]]]$h_dev <- pooled[[j]]
-    }
-  }
-  for (k in length(ms$g_rho) + seq_len(n)) units[[k]] <- .emc_alloc_dev_rows(units[[k]])
   list(units = units, C_rest = C_rest, c_round = c_round, joint = joint,
        coupling = if (coupled) ms$coupling[c("C", "Q", "Ar")],
        hmc_fixed = if (isTRUE(is.finite(ms$hmc_fixed))) ms$hmc_fixed else 0,
@@ -2044,19 +1988,14 @@
   ms <- lapply(seq_len(nch), function(j)
     .emc_alloc_measure(emc, j, hst[[j]], Vbar[[j]], stage, cache = stats_cache))
   shear_on <- vapply(seq_len(nch), function(j) ms[[j]]$shear, logical(1))
-  # Calibration for subjects the optimistic allocation would use but that
-  # lack measured HMC moves.
+  # Calibration for eligible subjects without a step size or measured HMC
+  # moves: every one runs HMC.
   jobs <- NULL
   for (j in seq_len(nch)) {
     if (!isTRUE(hst[[j]]$supported)) next
-    u <- .emc_alloc_units(ms[[j]], hst[[j]], shear_on[j], optimistic = TRUE, B = B)
-    sol <- .emc_alloc_solve_units(u)
-    x <- sol$x
-    n_g <- length(ms[[j]]$g_rho)
     for (s in seq_len(emc[[j]]$n_subjects)) {
       sj <- hst[[j]]$subjects[[s]]
       if (!isTRUE(sj$eligible) || isTRUE(sj$warmup)) next
-      if (x[n_g + s] <= 0) next
       ev <- hst[[j]]$evidence[[s]]
       lacking <- is.null(ev) || ev$n < .EMC_HMC_MIN_EVIDENCE
       bracket <- is.na(sj$eps)
@@ -2099,18 +2038,15 @@
     n_g <- length(m$g_rho)
     u$choice_fixed <- choice
     sol <- .emc_alloc_solve_units(u)
-    pr <- .emc_alloc_plan_rates(u$units, sol)
-    rate <- pr$r[n_g + seq_len(ch$n_subjects)]
     q <- rep(1, ch$n_subjects)
     if (!is.null(st) && isTRUE(st$supported)) {
       for (s in seq_len(ch$n_subjects)) {
         sj <- st$subjects[[s]]
-        sj$rate <- if (!isTRUE(sj$eligible)) 0 else if (isTRUE(sj$warmup))
-          .EMC_HMC_WARMUP_RATE else rate[s]
-        # The particle step stands down only for the rate chosen with it.
-        if (isTRUE(sj$eligible) && !isTRUE(sj$warmup) &&
-            length(sol$q) >= n_g + s)
-          q[s] <- sol$q[n_g + s]
+        ready <- isTRUE(sj$eligible) && !isTRUE(sj$warmup)
+        sj$rate <- if (!isTRUE(sj$eligible)) 0 else if (ready) .EMC_SUBJECT_HMC_RATE else
+          .EMC_HMC_WARMUP_RATE
+        # The particle step stands down only beside a warmed-up HMC kernel.
+        if (ready) q[s] <- .EMC_SUBJECT_PARTICLE_RATE
         st$subjects[[s]] <- sj
       }
     }

@@ -56,6 +56,11 @@
 # A subject's first burn block runs at an even rate while its step size is
 # found by stochastic approximation towards this acceptance rate.
 .EMC_HMC_WARMUP_RATE <- 0.5
+# After warm-up an eligible subject runs an HMC transition and its particle
+# step each with these probabilities in every stage. The allocation does not
+# price them: their cost is part of the iteration's base cost.
+.EMC_SUBJECT_HMC_RATE <- 0.5
+.EMC_SUBJECT_PARTICLE_RATE <- 0.5
 .EMC_HMC_WARMUP_ACCEPT <- 0.75
 # Transitions after which a subject's warmup stops for the rest of the
 # block: its step size has settled, and the allocation has the evidence it
