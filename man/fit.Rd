@@ -21,6 +21,7 @@
   thin = FALSE,
   rhat_version = "old",
   save_pw_ll = FALSE,
+  hmc_share = 0.5,
   ...
 )
 
@@ -70,6 +71,12 @@ ignored if the required number of iterations has not been reached yet.}
 
 \item{thin}{A boolean. If \code{TRUE} will automatically thin the MCMC samples, closely matched to the ESS.
 Can also be set to a double, in which case 1/thin of the chain will be removed (does not have to be an integer).}
+
+\item{hmc_share}{A number in [0, 1]. The probability that an eligible subject's
+update in an iteration is a Hamiltonian Monte Carlo transition on its conditional
+posterior rather than its particle step. Subjects are eligible under a standard or
+diagonal-gamma hierarchy with one likelihood per subject and a usable fit of it.
+\code{0} runs the particle step alone.}
 
 \item{...}{Additional optional arguments}
 }

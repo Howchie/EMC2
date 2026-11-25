@@ -467,12 +467,10 @@ test_that("the allocation buys collapsed moves only where they pay", {
   expect_identical(EMC2:::.emc_alloc_joint_grid(0.1), 0.1)
   # The cap: the shared round cap until measured, then twice the measured
   # rate where that is larger.
-  ms <- list(s_rho = matrix(0.5, 1, 1), g_rho = 0.99, g_fac = NA_real_,
-             g_measured = FALSE, C_rest = 1, c_round = NA_real_, coll = TRUE,
-             c_fac = 0.9, c_measured = FALSE, c_coll = 0.02, c_rate = 0,
-             W = list(diag(1)), s_var = matrix(1, 1, 1), c_hmc = NA_real_)
-  cap_of <- function(...) EMC2:::.emc_alloc_units(modifyList(ms, list(...)), NULL,
-                                                  FALSE, FALSE)$joint$cap
+  ms <- list(g_rho = 0.99, g_fac = NA_real_, g_measured = FALSE, C_rest = 1,
+             c_round = NA_real_, coll = TRUE, c_fac = 0.9, c_measured = FALSE, c_coll = 0.02,
+             c_rate = 0)
+  cap_of <- function(...) EMC2:::.emc_alloc_units(modifyList(ms, list(...)), FALSE)$joint$cap
   expect_identical(cap_of(), EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   expect_identical(cap_of(c_measured = TRUE, c_rate = 0.25), EMC2:::.EMC_ALLOC_MAX_ROUNDS)
   expect_identical(cap_of(c_measured = TRUE, c_rate = 3.9), 7.8)
@@ -523,10 +521,10 @@ test_that("collapsed plans pool production and retain same-stage measurements", 
   # Evidence below five moves does not qualify as a new-stage measurement.
   chain <- rebuild(chain, "adapt", block(0L, 0))
   expect_equal(chain$collapsed$plan$last$n, 0)
-  u <- EMC2:::.emc_alloc_units(list(s_rho = matrix(0.5, 1, 1), g_rho = rep(0.99, 2 * p),
+  u <- EMC2:::.emc_alloc_units(list(g_rho = rep(0.99, 2 * p),
     g_fac = rep(0.5, 2 * p), g_measured = rep(FALSE, 2 * p), C_rest = 1, c_round = 0.05,
-    coll = TRUE, c_fac = rep(1, 2 * p), c_measured = TRUE, c_n = d * 6, c_coll = 0.1, c_rate = 0,
-    W = list(diag(p)), s_var = matrix(1, 1, p), c_hmc = NA_real_), NULL, TRUE, FALSE, B = 100)
+    coll = TRUE, c_fac = rep(1, 2 * p), c_measured = TRUE, c_n = d * 6, c_coll = 0.1, c_rate = 0),
+    TRUE, B = 100)
   expect_equal(u$joint$floor, (EMC2:::.EMC_ALLOC_ROUND_EVIDENCE - d * 6) / 100)
   # Without a usable measurement a new stage starts unmeasured.
   chain$collapsed$plan$last$n <- 2

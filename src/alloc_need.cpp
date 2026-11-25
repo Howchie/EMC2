@@ -4,158 +4,6 @@
 #include <limits>
 #include <vector>
 
-// The least HMC rate a subject needs, for each particle rate qs[a] (rows) and
-// target rs[t] (columns): the largest over coordinates i of the rate at which
-// rho_i F(q, r) falls to the coordinate's target, where F, the kernels' joint
-// factor under coupled selection, falls at slope 1 - h_i up to the knee
-// r = 1 - q and at slope p_i (1 - h_i) beyond it. Coordinates already at
-// their target contribute nothing; one the HMC cannot move (no h, or h_i >= 1)
-// makes the target unreachable. NaN propagates as R's pmax does.
-// [[Rcpp::export]]
-Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho,
-                                               const Rcpp::NumericVector& b_share,
-                                               const Rcpp::NumericVector& p,
-                                               Rcpp::Nullable<Rcpp::NumericVector> h_,
-                                               const Rcpp::NumericVector& level,
-                                               const Rcpp::NumericVector& qs,
-                                               const Rcpp::NumericVector& rs,
-                                               double r_min) {
-  const int n_i = rho.size(), n_q = qs.size(), n_t = rs.size();
-  const bool has_h = h_.isNotNull();
-  Rcpp::NumericVector h = has_h ? Rcpp::NumericVector(h_) : Rcpp::NumericVector(0);
-  const double inf = std::numeric_limits<double>::infinity();
-  Rcpp::NumericMatrix out(n_q, n_t);
-  for (int t = 0; t < n_t; ++t) {
-    for (int a = 0; a < n_q; ++a) {
-      const double q = qs[a];
-      double rn = r_min;
-      for (int i = 0; i < n_i; ++i) {
-        const double K = std::min(rs[t], level[i]);
-        const double P = p[i];
-        const double b = b_share[i];
-        const double alone = 1.0 - q * (1.0 - P);
-        const double base = b + (1.0 - b) * rho[i] * alone;
-        if (!(base > K * (1.0 + 1e-12))) continue;
-        if (!has_h || h[i] >= 1.0) { rn = inf; continue; }
-        const double H = h[i];
-        const double den = (1.0 - b) * rho[i];
-        if (!(den > 0.0)) { rn = inf; continue; }
-        const double tt = (K - b) / den;
-        const double r1 = (alone - tt) / (1.0 - H);
-        const double knee = 1.0 - q;
-        double val;
-        if (std::isnan(r1)) val = r1;
-        else if (r1 <= knee) val = r1;
-        else val = knee + (q * P + (1.0 - q) * H - tt) / (P * (1.0 - H));
-        if (std::isnan(rn) || std::isnan(val)) rn = std::numeric_limits<double>::quiet_NaN();
-        else if (val > rn) rn = val;
-      }
-      out(a, t) = rn;
-    }
-  }
-  return out;
-}
-
-// Every subject unit's cheapest allocation for each target rs[t], in one call:
-// row u of x, q and cost holds unit u's HMC rate above its r_min, particle
-// rate and cost (Inf where out of reach), as .emc_alloc_unit_need gives them
-// one unit at a time. Units are packed: coordinates off[u]..off[u+1]-1 of rho,
-// p and level (p is 1 where the unit has no particle factor), h where has_h;
-// q_fixed and r_fixed are NA unless held. A unit without p or h runs its
-// particle step (q = 1).
-// [[Rcpp::export]]
-Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho,
-                                       const Rcpp::NumericVector& b_share,
-                                       const Rcpp::NumericVector& p,
-                                       const Rcpp::NumericVector& h,
-                                       const Rcpp::NumericVector& level,
-                                       const Rcpp::IntegerVector& off,
-                                       const Rcpp::LogicalVector& has_p,
-                                       const Rcpp::LogicalVector& has_h,
-                                       const Rcpp::NumericVector& q_fixed,
-                                       const Rcpp::NumericVector& r_fixed,
-                                       const Rcpp::NumericVector& r_min,
-                                       const Rcpp::NumericVector& c_p,
-                                       const Rcpp::NumericVector& c_h,
-                                       const Rcpp::NumericVector& q_grid,
-                                       const Rcpp::NumericVector& rs) {
-  const int n_u = has_p.size(), n_t = rs.size();
-  const double inf = std::numeric_limits<double>::infinity();
-  Rcpp::NumericMatrix X(n_u, n_t), Q(n_u, n_t), C(n_u, n_t);
-  std::vector<double> qs, rn;
-  for (int u = 0; u < n_u; ++u) {
-    const bool hp = has_p[u], hh = has_h[u];
-    qs.clear();
-    if (!hp || !hh) qs.push_back(1.0);
-    else if (!Rcpp::NumericVector::is_na(q_fixed[u])) qs.push_back(q_fixed[u]);
-    else qs.assign(q_grid.begin(), q_grid.end());
-    const int n_q = qs.size();
-    const double rmin = hh ? r_min[u] : 0.0;
-    const bool held = hh && !Rcpp::NumericVector::is_na(r_fixed[u]);
-    rn.assign(n_q, 0.0);
-    // At targets at or above every coordinate's level each coordinate's
-    // target is its level, so the allocation is the same at all of them:
-    // computed at the first and copied.
-    double top = -inf;
-    for (int i = off[u]; i < off[u + 1]; ++i) top = std::max(top, level[i]);
-    int first_top = -1;
-    for (int t = 0; t < n_t; ++t) {
-      if (rs[t] >= top) {
-        if (first_top >= 0) {
-          X(u, t) = X(u, first_top);
-          Q(u, t) = Q(u, first_top);
-          C(u, t) = C(u, first_top);
-          continue;
-        }
-        first_top = t;
-      }
-      for (int a = 0; a < n_q; ++a) {
-        const double q = qs[a];
-        double r = rmin;
-        for (int i = off[u]; i < off[u + 1]; ++i) {
-          const double K = std::min(rs[t], level[i]);
-          const double P = p[i];
-          const double b = b_share[i];
-          const double alone = 1.0 - q * (1.0 - P);
-          const double base = b + (1.0 - b) * rho[i] * alone;
-          if (!(base > K * (1.0 + 1e-12))) continue;
-          if (!hh || h[i] >= 1.0) { r = inf; continue; }
-          const double H = h[i];
-          const double den = (1.0 - b) * rho[i];
-          if (!(den > 0.0)) { r = inf; continue; }
-          const double tt = (K - b) / den;
-          const double r1 = (alone - tt) / (1.0 - H);
-          const double knee = 1.0 - q;
-          double val;
-          if (std::isnan(r1)) val = r1;
-          else if (r1 <= knee) val = r1;
-          else val = knee + (q * P + (1.0 - q) * H - tt) / (P * (1.0 - H));
-          if (std::isnan(r) || std::isnan(val)) r = std::numeric_limits<double>::quiet_NaN();
-          else if (val > r) r = val;
-        }
-        if (r > 1 + 1e-9) r = inf;
-        else if (std::isfinite(r)) r = std::min(r, 1.0);
-        if (held) r = (r <= r_fixed[u] + 1e-9) ? r_fixed[u] : inf;
-        rn[a] = r;
-      }
-      // The cheapest particle rate, the first (highest) of equal costs.
-      int best = 0;
-      double best_c = inf;
-      bool any = false;
-      for (int a = 0; a < n_q; ++a) {
-        if (!std::isfinite(rn[a])) continue;
-        const double c = qs[a] * c_p[u] + (rn[a] - rmin) * c_h[u];
-        if (!any || c < best_c) { best = a; best_c = c; any = true; }
-      }
-      X(u, t) = rn[best] - rmin;
-      Q(u, t) = qs[best];
-      C(u, t) = any ? best_c : inf;
-    }
-  }
-  return Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
-                            Rcpp::Named("cost") = C);
-}
-
 // A family's activation probability at each target (column of X): one minus
 // the product over its units (rows) of one minus min(x + add, 1), a
 // non-finite rate counting as one. The product is accumulated in long double,
@@ -236,7 +84,7 @@ static inline double alloc_factor_inverse(double g, double a, double t) {
 }
 
 // Every shear unit's rounds and cost at each target rs, as
-// .emc_alloc_unit_need prices one (a list per unit: x, q, cost): the floor
+// .emc_alloc_unit_need prices one (a list per unit: x, cost): the floor
 // where the coordinate already meets the target, else the least rounds that
 // reach it, raised to the floor and Inf beyond the cap.
 // [[Rcpp::export]]
@@ -253,7 +101,7 @@ Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
   Rcpp::List out(n_u);
   for (int i = 0; i < n_u; ++i) {
     const bool reach = g[i] < 1 - 1e-9;
-    Rcpp::NumericVector X(n_t), C(n_t), Q(n_t, 1.0);
+    Rcpp::NumericVector X(n_t), C(n_t);
     for (int t = 0; t < n_t; ++t) {
       double x = floor[i];
       const double base = b_share[i] + (1.0 - b_share[i]) * rho[i];
@@ -267,8 +115,7 @@ Rcpp::List emc_alloc_shears_need_cpp(const Rcpp::NumericVector& rho,
       X[t] = x;
       C[t] = std::isfinite(x) ? x * cost[i] : inf;
     }
-    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
-                                Rcpp::Named("cost") = C);
+    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("cost") = C);
   }
   return out;
 }
@@ -282,10 +129,9 @@ Rcpp::List emc_alloc_fixed_need_cpp(const Rcpp::NumericVector& rho_max,
   const double inf = std::numeric_limits<double>::infinity();
   Rcpp::List out(n_u);
   for (int i = 0; i < n_u; ++i) {
-    Rcpp::NumericVector X(n_t), C(n_t), Q(n_t, 1.0);
+    Rcpp::NumericVector X(n_t), C(n_t);
     for (int t = 0; t < n_t; ++t) C[t] = rho_max[i] > rs[t] ? inf : 0.0;
-    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("q") = Q,
-                                Rcpp::Named("cost") = C);
+    out[i] = Rcpp::List::create(Rcpp::Named("x") = X, Rcpp::Named("cost") = C);
   }
   return out;
 }
@@ -301,101 +147,7 @@ SEXP unit_field(SEXP u, const char* name) {
   return R_NilValue;
 }
 
-// A unit's scalar field as a number, `if_null` when absent; false for a
-// field that is not one number.
-bool unit_scalar(SEXP u, const char* name, double if_null, double& out) {
-  SEXP v = unit_field(u, name);
-  if (v == R_NilValue) {
-    out = if_null;
-    return true;
-  }
-  if ((TYPEOF(v) != REALSXP && TYPEOF(v) != INTSXP && TYPEOF(v) != LGLSXP) || XLENGTH(v) != 1)
-    return false;
-  out = Rf_asReal(v);
-  return true;
-}
-
 }  // namespace
-
-// The subject units' cheapest allocations at each target, from the units
-// themselves: emc_alloc_subjects_need_cpp() on their packed fields, each
-// unit's row returned as its own list (x, q, cost). NULL for units whose
-// fields are not in the expected form, which R then packs itself.
-// [[Rcpp::export]]
-SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::NumericVector& q_grid,
-                                       const Rcpp::NumericVector& rs) {
-  const int n = units.size();
-  std::vector<double> rho, b_share, p, h, level;
-  Rcpp::IntegerVector off(n + 1);
-  Rcpp::LogicalVector has_p(n), has_h(n);
-  Rcpp::NumericVector q_fixed(n), r_fixed(n), r_min(n), c_p(n), c_h(n);
-  auto numeric = [](SEXP v) { return TYPEOF(v) == REALSXP || TYPEOF(v) == INTSXP; };
-  for (int j = 0; j < n; ++j) {
-    SEXP u = units[j];
-    SEXP r = unit_field(u, "rho"), b = unit_field(u, "b_share"), pp = unit_field(u, "p"),
-         hh = unit_field(u, "h");
-    if (!numeric(r)) return R_NilValue;
-    const R_xlen_t k = XLENGTH(r);
-    if ((b != R_NilValue && (!numeric(b) || XLENGTH(b) != k)) ||
-        (pp != R_NilValue && (!numeric(pp) || XLENGTH(pp) != k)) ||
-        (hh != R_NilValue && (!numeric(hh) || XLENGTH(hh) != k)))
-      return R_NilValue;
-    double qf, rf, rm, cp, ch;
-    if (!unit_scalar(u, "q_fixed", NA_REAL, qf) || !unit_scalar(u, "r_fixed", NA_REAL, rf) ||
-        !unit_scalar(u, "r_min", 0.0, rm) || !unit_scalar(u, "c_p", 0.0, cp) ||
-        !unit_scalar(u, "c_h", 0.0, ch))
-      return R_NilValue;
-    Rcpp::NumericVector rv = Rcpp::as<Rcpp::NumericVector>(r);
-    Rcpp::NumericVector bv, pv, hv;
-    if (b != R_NilValue) bv = Rcpp::as<Rcpp::NumericVector>(b);
-    if (pp != R_NilValue) pv = Rcpp::as<Rcpp::NumericVector>(pp);
-    if (hh != R_NilValue) hv = Rcpp::as<Rcpp::NumericVector>(hh);
-    for (R_xlen_t i = 0; i < k; ++i) {
-      const double f = pp == R_NilValue ? 1.0 : pv[i];
-      // The unit's rho under its particle step alone.
-      volatile double stepped = rv[i] * f;
-      double base = stepped;
-      if (b != R_NilValue) {
-        volatile double rest = 1 - bv[i];
-        volatile double scaled = rest * stepped;
-        volatile double sum = bv[i] + scaled;
-        base = sum;
-      }
-      rho.push_back(rv[i]);
-      b_share.push_back(b == R_NilValue ? 0.0 : bv[i]);
-      p.push_back(f);
-      h.push_back(hh == R_NilValue ? 1.0 : hv[i]);
-      level.push_back(base);
-    }
-    off[j + 1] = off[j] + static_cast<int>(k);
-    has_p[j] = pp != R_NilValue;
-    has_h[j] = hh != R_NilValue;
-    q_fixed[j] = qf;
-    r_fixed[j] = rf;
-    r_min[j] = rm;
-    c_p[j] = cp;
-    c_h[j] = ch;
-  }
-  const Rcpp::List got = emc_alloc_subjects_need_cpp(
-      Rcpp::NumericVector(rho.begin(), rho.end()),
-      Rcpp::NumericVector(b_share.begin(), b_share.end()),
-      Rcpp::NumericVector(p.begin(), p.end()), Rcpp::NumericVector(h.begin(), h.end()),
-      Rcpp::NumericVector(level.begin(), level.end()), off, has_p, has_h, q_fixed, r_fixed, r_min,
-      c_p, c_h, q_grid, rs);
-  const Rcpp::NumericMatrix x = got["x"], q = got["q"], cost = got["cost"];
-  const int n_t = x.ncol();
-  Rcpp::List out(n);
-  for (int j = 0; j < n; ++j) {
-    Rcpp::NumericVector xj(n_t), qj(n_t), cj(n_t);
-    for (int t = 0; t < n_t; ++t) {
-      xj[t] = x(j, t);
-      qj[t] = q(j, t);
-      cj[t] = cost(j, t);
-    }
-    out[j] = Rcpp::List::create(Rcpp::_["x"] = xj, Rcpp::_["q"] = qj, Rcpp::_["cost"] = cj);
-  }
-  return out;
-}
 
 // .emc_alloc_factor(): the factor on a coordinate's rho from x expected moves
 // (floor(x) moves, and one more with probability x - floor(x)), given one
@@ -471,18 +223,16 @@ bool kind_is(SEXP u, const char* kind) {
 }  // namespace
 
 // .emc_alloc_predict(): each unit's lag-one rho under a solved plan, given
-// the plan's allocations x and particle rates q, and the collapsed move's
-// factor `fac` on the units numbered `idx` (NULL when it does not run). NULL
-// for units whose fields are not plain numbers, which the R form handles.
+// the plan's allocations x and the collapsed move's factor `fac` on the units
+// numbered `idx` (NULL when it does not run). NULL for units whose fields are
+// not plain numbers, which the R form handles.
 // [[Rcpp::export(rng = false)]]
-SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP idx, SEXP fac) {
+SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP idx, SEXP fac) {
   const int n = units.size();
-  if ((sol_x != R_NilValue && TYPEOF(sol_x) != REALSXP) ||
-      (sol_q != R_NilValue && TYPEOF(sol_q) != REALSXP) || TYPEOF(idx) != INTSXP ||
+  if ((sol_x != R_NilValue && TYPEOF(sol_x) != REALSXP) || TYPEOF(idx) != INTSXP ||
       (fac != R_NilValue && (TYPEOF(fac) != REALSXP || XLENGTH(fac) != XLENGTH(idx))))
     return R_NilValue;
   const R_xlen_t nx = sol_x == R_NilValue ? 0 : XLENGTH(sol_x);
-  const R_xlen_t nq = sol_q == R_NilValue ? 0 : XLENGTH(sol_q);
   Rcpp::List out(n);
   for (int i = 0; i < n; ++i) {
     SEXP u = units[i];
@@ -501,13 +251,11 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
         }
     double x = 0.0;
     if (nx > i && R_FINITE(REAL(sol_x)[i])) x = REAL(sol_x)[i];
-    const bool hmc = kind_is(u, "hmc"), subject = hmc || kind_is(u, "subject");
-    const bool shear = kind_is(u, "shear"), fixed = kind_is(u, "fixed");
-    // The unit's own moves' factor on each coordinate.
+    // The unit's own rounds' factor on each coordinate.
     std::vector<double> own(k, 1.0);
     bool scaled = false;
     Rcpp::RObject f_keep;
-    if (shear) {
+    if (kind_is(u, "shear")) {
       SEXP g = unit_field(u, "g"), a = unit_field(u, "a");
       if (!plain_field(g, k) || (a != R_NilValue && !plain_field(a, k))) return R_NilValue;
       Rcpp::NumericVector xv = Rcpp::NumericVector::create(x);
@@ -516,45 +264,7 @@ SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP
       if (f == R_NilValue || (XLENGTH(f) != 1 && XLENGTH(f) != k)) return R_NilValue;
       for (R_xlen_t c = 0; c < k; ++c) own[c] = REAL(f)[XLENGTH(f) == 1 ? 0 : c];
       scaled = true;
-    } else if (subject) {
-      SEXP p = hmc ? R_NilValue : unit_field(u, "p"), h = unit_field(u, "h");
-      SEXP rm = unit_field(u, "r_min");
-      if ((p != R_NilValue && !plain_field(p, k)) || (h != R_NilValue && !plain_field(h, k)))
-        return R_NilValue;
-      double r_min = 0.0;
-      if (rm != R_NilValue && !hmc) {
-        if (!plain_field(rm, 1)) return R_NilValue;
-        r_min = REAL(rm)[0];
-      }
-      const double q = (p == R_NilValue || nq <= i) ? 1.0 : REAL(sol_q)[i];
-      if (ISNAN(q)) return R_NilValue;
-      double rate = 0.0;
-      if (h != R_NilValue) {
-        volatile double total = x + r_min;
-        rate = std::min(1.0, static_cast<double>(total));
-      }
-      volatile double excess = q + rate;
-      volatile double over = excess - 1;
-      const double both = std::max(0.0, static_cast<double>(over));
-      volatile double a0 = 1 - q;
-      volatile double a1 = a0 - rate;
-      volatile double none = a1 + both;
-      volatile double only_p = q - both;
-      volatile double only_h = rate - both;
-      for (R_xlen_t c = 0; c < k; ++c) {
-        const double P = p == R_NilValue ? 1.0 : REAL(p)[XLENGTH(p) == 1 ? 0 : c];
-        const double H = h == R_NilValue ? 1.0 : REAL(h)[XLENGTH(h) == 1 ? 0 : c];
-        volatile double t1 = only_p * P;
-        volatile double t2 = only_h * H;
-        volatile double t3 = both * P;
-        volatile double t4 = t3 * H;
-        volatile double s1 = none + t1;
-        volatile double s2 = s1 + t2;
-        volatile double s3 = s2 + t4;
-        own[c] = s3;
-      }
-      scaled = true;
-    } else if (!fixed) {
+    } else if (!kind_is(u, "fixed")) {
       SEXP kind = unit_field(u, "kind");
       if (TYPEOF(kind) != STRSXP || XLENGTH(kind) != 1) return R_NilValue;
     }
@@ -713,8 +423,8 @@ SEXP emc_alloc_range_parts_cpp(const Rcpp::List& units, SEXP max_rounds) {
     if (!plain_field(r, -1)) return R_NilValue;
     const R_xlen_t k = XLENGTH(r);
     if (b != R_NilValue && !plain_field(b, k)) return R_NilValue;
-    const bool shear = kind_is(u, "shear"), subject = kind_is(u, "subject");
-    if (!shear && !subject && !kind_is(u, "fixed")) return R_NilValue;
+    const bool shear = kind_is(u, "shear");
+    if (!shear && !kind_is(u, "fixed")) return R_NilValue;
     double level = R_NegInf, least = R_NegInf;
     auto raise = [](double& top, double v) { if (v > top) top = v; };
     bool bad = false;
@@ -733,32 +443,6 @@ SEXP emc_alloc_range_parts_cpp(const Rcpp::List& units, SEXP max_rounds) {
         raise(level, seen(with_share(b, c, at_floor)));
         volatile double at_cap = rho * f_cap[c];
         raise(least, seen(with_share(b, c, at_cap)));
-      }
-    } else if (subject) {
-      SEXP p = unit_field(u, "p"), h = unit_field(u, "h"), rm = unit_field(u, "r_min");
-      if ((p != R_NilValue && !plain_field(p, k)) || (h != R_NilValue && !plain_field(h, k)) ||
-          (rm != R_NilValue && !plain_field(rm, k)))
-        return R_NilValue;
-      for (R_xlen_t c = 0; c < k; ++c) {
-        const double rho = REAL(r)[c];
-        volatile double base = p == R_NilValue ? rho : rho * field_at(p, c);
-        double lv;
-        if (rm != R_NilValue && h != R_NilValue) {
-          volatile double miss = 1 - field_at(h, c);
-          volatile double cut = field_at(rm, c) * miss;
-          volatile double kept = 1 - cut;
-          volatile double held = base * kept;
-          lv = with_share(b, c, held);
-        } else {
-          lv = with_share(b, c, base);
-        }
-        raise(level, seen(lv));
-        if (h == R_NilValue) {
-          raise(least, lv);
-        } else {
-          volatile double reached = base * field_at(h, c);
-          raise(least, seen(with_share(b, c, reached)));
-        }
       }
     } else {
       for (R_xlen_t c = 0; c < k; ++c) raise(level, seen(with_share(b, c, REAL(r)[c])));
@@ -869,75 +553,50 @@ SEXP emc_alloc_within_share_cpp(const Rcpp::List& chains) {
 }
 
 // What .emc_alloc_solve_now() reads off its units before pricing them: each
-// unit's priced particle cost (c_p), exploration floor (x0), held HMC rate
-// (r_min) and cost per move (cost), the shear units and the subjects with HMC
-// (shear, hmc, numbered from one), and whether a particle rate is held below
-// one or an HMC rate above zero (held). NULL for named units or fields that
-// are not one double, which the R form handles.
+// unit's exploration floor (x0) and cost per move (cost), and the shear units
+// (numbered from one). NULL for named units or fields that are not one
+// double, which the R form handles.
 // [[Rcpp::export(rng = false)]]
 SEXP emc_alloc_unit_summary_cpp(const Rcpp::List& units) {
   if (Rf_getAttrib(units, R_NamesSymbol) != R_NilValue) return R_NilValue;
   const int n = units.size();
-  Rcpp::NumericVector c_p(n), x0(n), r_min(n), cost(n);
-  std::vector<int> shear, hmc;
-  bool held = false;
+  Rcpp::NumericVector x0(n), cost(n);
+  std::vector<int> shear;
   auto one = [](SEXP v) {
     return TYPEOF(v) == REALSXP && XLENGTH(v) == 1 && !Rf_isObject(v);
   };
   for (int i = 0; i < n; ++i) {
     SEXP u = units[i];
     if (TYPEOF(u) != VECSXP) return R_NilValue;
-    const bool is_shear = kind_is(u, "shear"), subject = kind_is(u, "subject");
-    SEXP p = unit_field(u, "p"), h = unit_field(u, "h"), cp = unit_field(u, "c_p");
-    SEXP fl = unit_field(u, "floor"), rm = unit_field(u, "r_min"), co = unit_field(u, "cost");
-    SEXP qf = unit_field(u, "q_fixed"), rf = unit_field(u, "r_fixed");
-    if (subject && p != R_NilValue && cp != R_NilValue) {
-      if (!one(cp)) return R_NilValue;
-      c_p[i] = REAL(cp)[0];
-    }
+    const bool is_shear = kind_is(u, "shear");
+    SEXP fl = unit_field(u, "floor"), co = unit_field(u, "cost");
     if (is_shear && fl != R_NilValue) {
       if (!one(fl)) return R_NilValue;
       x0[i] = REAL(fl)[0];
-    }
-    if (subject && h != R_NilValue && rm != R_NilValue) {
-      if (!one(rm)) return R_NilValue;
-      r_min[i] = REAL(rm)[0];
     }
     if (co != R_NilValue) {
       if (!one(co)) return R_NilValue;
       cost[i] = REAL(co)[0];
     }
     if (is_shear) shear.push_back(i + 1);
-    if (subject && h != R_NilValue) hmc.push_back(i + 1);
-    if (subject && qf != R_NilValue) {
-      if (!one(qf)) return R_NilValue;
-      if (R_FINITE(REAL(qf)[0]) && REAL(qf)[0] < 1) held = true;
-    }
-    if (subject && h != R_NilValue && rf != R_NilValue) {
-      if (!one(rf)) return R_NilValue;
-      if (REAL(rf)[0] > 0) held = true;
-    }
   }
-  return Rcpp::List::create(
-    Rcpp::Named("c_p") = c_p, Rcpp::Named("x0") = x0, Rcpp::Named("r_min") = r_min,
-    Rcpp::Named("cost") = cost, Rcpp::Named("shear") = Rcpp::wrap(shear),
-    Rcpp::Named("hmc") = Rcpp::wrap(hmc), Rcpp::Named("held") = held);
+  return Rcpp::List::create(Rcpp::Named("x0") = x0, Rcpp::Named("cost") = cost,
+                            Rcpp::Named("shear") = Rcpp::wrap(shear));
 }
 
 // One candidate collapsed rate's plan in .emc_alloc_solve_now(): the cost at
 // each target, base + joint + fixed + the moved units' costs (need[[i]]$cost,
-// summed in order from zero) + the families' activation terms (NULL without
+// summed in order from zero) + the shear's activation term (NULL without
 // one), and the target with the least tau * cost. list(k, cost, objective) at
 // that target, k zero where no objective is a number. NULL for vectors that
 // are not doubles of the targets' length, which the R form handles.
 // [[Rcpp::export(rng = false)]]
 SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::List& need,
-                             SEXP act_shear, SEXP act_hmc, SEXP tau) {
+                             SEXP act_shear, SEXP tau) {
   if (TYPEOF(base) != REALSXP || TYPEOF(tau) != REALSXP) return R_NilValue;
   const R_xlen_t n = XLENGTH(tau);
   auto fits = [n](SEXP v) { return TYPEOF(v) == REALSXP && XLENGTH(v) == n; };
-  if (n < 1 || !fits(base) || (act_shear != R_NilValue && !fits(act_shear)) ||
-      (act_hmc != R_NilValue && !fits(act_hmc)))
+  if (n < 1 || !fits(base) || (act_shear != R_NilValue && !fits(act_shear)))
     return R_NilValue;
   std::vector<const double*> costs(need.size());
   for (R_xlen_t i = 0; i < need.size(); ++i) {
@@ -956,10 +615,6 @@ SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::
     volatile double act = 0.0;
     if (act_shear != R_NilValue) {
       volatile double next = act + REAL(act_shear)[t];
-      act = next;
-    }
-    if (act_hmc != R_NilValue) {
-      volatile double next = act + REAL(act_hmc)[t];
       act = next;
     }
     volatile double c1 = REAL(base)[t] + joint;
@@ -1051,65 +706,6 @@ SEXP emc_alloc_lsd_draws_cpp(SEXP V, SEXP k) {
     }
   }
   UNPROTECT(1);
-  return out;
-}
-
-// .emc_alloc_pool_factors(): the factors fs[idx] each weighed against their
-// pooled factor, the mean of the factors weighted by the transitions ns
-// behind each, the pooled factor counting as n0 transitions. NULL for
-// factors that are not plain vectors of doubles of one length without
-// missing values, which the R form handles.
-// [[Rcpp::export(rng = false)]]
-SEXP emc_alloc_pool_factors_cpp(const Rcpp::List& fs, SEXP ns, SEXP idx, double n0) {
-  if (TYPEOF(ns) != REALSXP || TYPEOF(idx) != INTSXP || XLENGTH(idx) < 1 || ISNAN(n0))
-    return R_NilValue;
-  const R_xlen_t m = XLENGTH(idx);
-  R_xlen_t len = -1;
-  long double total = 0.0;
-  for (R_xlen_t j = 0; j < m; ++j) {
-    const int i = INTEGER(idx)[j];
-    if (i == NA_INTEGER || i < 1 || i > fs.size() || i > XLENGTH(ns) || ISNAN(REAL(ns)[i - 1]))
-      return R_NilValue;
-    SEXP f = fs[i - 1];
-    if (!plain_field(f, -1)) return R_NilValue;
-    if (len < 0) len = XLENGTH(f);
-    if (XLENGTH(f) != len) return R_NilValue;
-    total += REAL(ns)[i - 1];
-  }
-  volatile double weight = static_cast<double>(total);
-  std::vector<double> ref(len);
-  for (R_xlen_t c = 0; c < len; ++c) {
-    volatile double sum = 0.0;
-    for (R_xlen_t j = 0; j < m; ++j) {
-      const int i = INTEGER(idx)[j];
-      volatile double term = REAL(ns)[i - 1] * REAL(VECTOR_ELT(fs, i - 1))[c];
-      if (j == 0) {
-        sum = term;
-      } else {
-        volatile double next = sum + term;
-        sum = next;
-      }
-    }
-    volatile double mean = sum / weight;
-    ref[c] = mean;
-  }
-  Rcpp::List out(m);
-  for (R_xlen_t j = 0; j < m; ++j) {
-    const int i = INTEGER(idx)[j];
-    const double n_i = REAL(ns)[i - 1];
-    const double* f = REAL(VECTOR_ELT(fs, i - 1));
-    Rcpp::NumericVector pooled(len);
-    volatile double den = n_i + n0;
-    for (R_xlen_t c = 0; c < len; ++c) {
-      volatile double own = n_i * f[c];
-      volatile double prior = n0 * ref[c];
-      volatile double num = own + prior;
-      volatile double value = num / den;
-      if (ISNAN(static_cast<double>(value))) return R_NilValue;
-      pooled[c] = value;
-    }
-    out[j] = pooled;
-  }
   return out;
 }
 

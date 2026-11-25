@@ -9,14 +9,6 @@ emc_alloc_group_need_cpp <- function(C, Q, Ar, fac, g, a, floor, cap, cost, b_sh
     .Call(`_EMC2_emc_alloc_group_need_cpp`, C, Q, Ar, fac, g, a, floor, cap, cost, b_share, movable, rs, rebuild)
 }
 
-emc_alloc_subject_need_cpp <- function(rho, b_share, p, h_, level, qs, rs, r_min) {
-    .Call(`_EMC2_emc_alloc_subject_need_cpp`, rho, b_share, p, h_, level, qs, rs, r_min)
-}
-
-emc_alloc_subjects_need_cpp <- function(rho, b_share, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs) {
-    .Call(`_EMC2_emc_alloc_subjects_need_cpp`, rho, b_share, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs)
-}
-
 emc_alloc_act_term_cpp <- function(X, add) {
     .Call(`_EMC2_emc_alloc_act_term_cpp`, X, add)
 }
@@ -33,16 +25,12 @@ emc_alloc_fixed_need_cpp <- function(rho_max, rs) {
     .Call(`_EMC2_emc_alloc_fixed_need_cpp`, rho_max, rs)
 }
 
-emc_alloc_units_subjects_need_cpp <- function(units, q_grid, rs) {
-    .Call(`_EMC2_emc_alloc_units_subjects_need_cpp`, units, q_grid, rs)
-}
-
 emc_alloc_factor_cpp <- function(g, x, a) {
     .Call(`_EMC2_emc_alloc_factor_cpp`, g, x, a)
 }
 
-emc_alloc_predict_cpp <- function(units, sol_x, sol_q, idx, fac) {
-    .Call(`_EMC2_emc_alloc_predict_cpp`, units, sol_x, sol_q, idx, fac)
+emc_alloc_predict_cpp <- function(units, sol_x, idx, fac) {
+    .Call(`_EMC2_emc_alloc_predict_cpp`, units, sol_x, idx, fac)
 }
 
 emc_alloc_saturation_cpp <- function(g, D, K) {
@@ -61,8 +49,8 @@ emc_alloc_unit_summary_cpp <- function(units) {
     .Call(`_EMC2_emc_alloc_unit_summary_cpp`, units)
 }
 
-emc_alloc_candidate_cpp <- function(base, joint, fixed, need, act_shear, act_hmc, tau) {
-    .Call(`_EMC2_emc_alloc_candidate_cpp`, base, joint, fixed, need, act_shear, act_hmc, tau)
+emc_alloc_candidate_cpp <- function(base, joint, fixed, need, act_shear, tau) {
+    .Call(`_EMC2_emc_alloc_candidate_cpp`, base, joint, fixed, need, act_shear, tau)
 }
 
 emc_alloc_rho_cpp <- function(esjd, var) {
@@ -71,22 +59,6 @@ emc_alloc_rho_cpp <- function(esjd, var) {
 
 emc_alloc_lsd_draws_cpp <- function(V, k) {
     .Call(`_EMC2_emc_alloc_lsd_draws_cpp`, V, k)
-}
-
-emc_alloc_pool_factors_cpp <- function(fs, ns, idx, n0) {
-    .Call(`_EMC2_emc_alloc_pool_factors_cpp`, fs, ns, idx, n0)
-}
-
-emc_alloc_record_particle_cpp <- function(P, nP, cpu_part, before, after, ran, cost, times) {
-    .Call(`_EMC2_emc_alloc_record_particle_cpp`, P, nP, cpu_part, before, after, ran, cost, times)
-}
-
-emc_alloc_record_subjects_cpp <- function(A, D, alpha, old, shift) {
-    .Call(`_EMC2_emc_alloc_record_subjects_cpp`, A, D, alpha, old, shift)
-}
-
-emc_alloc_record_tasks_cpp <- function(cpu_hmc, hmc_att, rows_hmc, tasks) {
-    .Call(`_EMC2_emc_alloc_record_tasks_cpp`, cpu_hmc, hmc_att, rows_hmc, tasks)
 }
 
 emc_hmc_record_tasks_cpp <- function(st, tasks) {
@@ -150,10 +122,6 @@ emc_covariance_ok_cpp <- function(S) {
 
 emc_collapsed_to_phi_cpp <- function(mu, V, chart) {
     .Call(`_EMC2_emc_collapsed_to_phi_cpp`, mu, V, chart)
-}
-
-emc_alloc_quad_diag_cpp <- function(A, S) {
-    .Call(`_EMC2_emc_alloc_quad_diag_cpp`, A, S)
 }
 
 collapsed_surrogate_cpp <- function(phi, model) {

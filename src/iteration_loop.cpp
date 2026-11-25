@@ -23,8 +23,6 @@ void emc_set_particle_slice(NumericVector alpha, NumericVector subj_ll,
                             NumericMatrix proposals, int j, int n_pars);
 SEXP emc_refresh_scores_cpp(const NumericMatrix& alpha, int kind, const List& pars,
                             SEXP covariates);
-SEXP emc_alloc_record_tasks_cpp(NumericVector cpu_hmc, IntegerVector hmc_att,
-                                NumericVector rows_hmc, List tasks);
 
 namespace emc_iter {
 
@@ -310,24 +308,9 @@ bool step_store(SEXP st, SEXP cx, int i) {
     return false;
   const bool alloc_on = flag(lget(cx, "alloc_on"));
   SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window"), fam = lget(w, "fam");
-  SEXP tasks = var(st, "hmc_tasks");
-  SEXP r_tasks = R_NilValue;
-  if (alloc_on) {
-    if (!int_scalar(lget(w, "n")) || !real_scalar(lget(w, "cpu_rest")) ||
-        !family_ok(lget(fam, "shear")) || !family_ok(lget(fam, "collapsed")) ||
-        !family_ok(lget(fam, "hmc")))
-      return false;
-    if (tasks != R_NilValue) {
-      SEXP cpu_hmc = lget(w, "cpu_hmc"), hmc_att = lget(w, "hmc_att"),
-           rows_hmc = lget(w, "rows_hmc");
-      if (TYPEOF(tasks) != VECSXP || TYPEOF(cpu_hmc) != REALSXP ||
-          TYPEOF(hmc_att) != INTSXP || TYPEOF(rows_hmc) != REALSXP)
-        return false;
-      r_tasks = emc_alloc_record_tasks_cpp(cpu_hmc, hmc_att, rows_hmc, tasks);
-      if (r_tasks == R_NilValue) return false;
-    }
-  }
-  Shield<SEXP> r_keep(r_tasks);
+  if (alloc_on && (!int_scalar(lget(w, "n")) || !real_scalar(lget(w, "cpu_rest")) ||
+                   !family_ok(lget(fam, "shear")) || !family_ok(lget(fam, "collapsed"))))
+    return false;
 
   Shield<SEXP> j(iteration_index(cx, i));
   const int jj = static_cast<int>(Rf_asReal(j));
@@ -348,32 +331,20 @@ bool step_store(SEXP st, SEXP cx, int i) {
   RObject result = lset(pmwgs, "samples", s2);
   if (alloc_on) {
     const double cores = num(var(st, "cores_it"), 1.0);
-    const double shear_el = num(var(st, "shear_el"), 0.0), coll_el = num(var(st, "coll_el"), 0.0),
-                 hmc_el = num(var(st, "hmc_el"), 0.0);
+    const double shear_el = num(var(st, "shear_el"), 0.0), coll_el = num(var(st, "coll_el"), 0.0);
     const double rest = reserved_cost(clock_now().elapsed - num(var(st, "el_iter"), 0.0) -
-                                      shear_el - coll_el - hmc_el, cores);
+                                      shear_el - coll_el, cores);
     RObject wc = lset(w, "n", Rf_ScalarInteger(INTEGER(lget(w, "n"))[0] + 1));
     wc = lset(wc, "cpu_rest", Rf_ScalarReal(REAL(lget(w, "cpu_rest"))[0] + rest));
     Shield<SEXP> famc(Rf_shallow_duplicate(fam));
-    double work = 0.0;
-    int attempts = 0;
-    if (r_tasks != R_NilValue) {
-      wc = lset(wc, "cpu_hmc", lget(r_tasks, "cpu_hmc"));
-      wc = lset(wc, "hmc_att", lget(r_tasks, "hmc_att"));
-      wc = lset(wc, "rows_hmc", lget(r_tasks, "rows_hmc"));
-      work = Rf_asReal(lget(r_tasks, "work"));
-      attempts = Rf_asInteger(lget(r_tasks, "attempts"));
-    }
-    const char* fams[3] = {"shear", "collapsed", "hmc"};
-    const double m_cpu[3] = {num(var(st, "shear_cpu"), 0.0), num(var(st, "coll_cpu"), 0.0),
-                             reserved_cost(hmc_el, cores)};
-    const double m_own[3] = {num(var(st, "shear_round_cpu"), 0.0),
-                             num(var(st, "coll_round_cpu"), 0.0), work};
-    const double m_n[3] = {num(var(st, "shear_rounds"), 0.0), num(var(st, "coll_moves"), 0.0),
-                           static_cast<double>(attempts)};
+    const char* fams[2] = {"shear", "collapsed"};
+    const double m_cpu[2] = {num(var(st, "shear_cpu"), 0.0), num(var(st, "coll_cpu"), 0.0)};
+    const double m_own[2] = {num(var(st, "shear_round_cpu"), 0.0),
+                             num(var(st, "coll_round_cpu"), 0.0)};
+    const double m_n[2] = {num(var(st, "shear_rounds"), 0.0), num(var(st, "coll_moves"), 0.0)};
     const R_xlen_t n_fam = XLENGTH(famc);
     SEXP fam_names = Rf_getAttrib(famc, R_NamesSymbol);
-    for (int k = 0; k < 3; ++k) {
+    for (int k = 0; k < 2; ++k) {
       if (!R_FINITE(m_n[k]) || m_n[k] <= 0) continue;
       for (R_xlen_t q = 0; q < n_fam; ++q)
         if (std::strcmp(CHAR(STRING_ELT(fam_names, q)), fams[k]) == 0)

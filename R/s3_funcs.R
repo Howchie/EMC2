@@ -476,8 +476,9 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                     particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20,
                     thin = FALSE, rhat_version = "old",
-                    save_pw_ll = FALSE,
+                    save_pw_ll = FALSE, hmc_share = 0.5,
                     ...){
+  .emc_check_hmc_share(hmc_share)
   # Run in a fresh process holding only the fit (R/fit_host.R), so that the
   # forks the fit makes do not each copy the calling session's workspace.
   n_chains <- if (missing(cores_for_chains)) {
@@ -526,7 +527,8 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                    step_size = step_size,  verbose = verbose, verboseProgress = dots$verboseProgress,
                    fileName = fileName, particle_factor =  particle_factor, trim = dots$trim,
                    cores_per_chain = cores_per_chain, max_tries = max_tries, thin = thin, n_blocks = dots$n_blocks,
-                   r_cores = dots$r_cores, rhat_version = rhat_version)
+                   r_cores = dots$r_cores, rhat_version = rhat_version,
+                   hmc_share = hmc_share)
   }
   if (save_pw_ll) {
     if (verbose) message("Calculating pointwise log-likelihoods...")
@@ -652,6 +654,11 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #' of parameters these should hold. See the details and examples section.
 #' @param thin A boolean. If `TRUE` will automatically thin the MCMC samples, closely matched to the ESS.
 #' Can also be set to a double, in which case 1/thin of the chain will be removed (does not have to be an integer).
+#' @param hmc_share A number in \[0, 1\]. The probability that an eligible subject's
+#' update in an iteration is a Hamiltonian Monte Carlo transition on its conditional
+#' posterior rather than its particle step. Subjects are eligible under a standard or
+#' diagonal-gamma hierarchy with one likelihood per subject and a usable fit of it.
+#' `0` runs the particle step alone.
 #' @param ... Additional optional arguments
 #' @return An emc object
 #' @examples \donttest{

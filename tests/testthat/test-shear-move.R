@@ -965,7 +965,7 @@ test_that("rebuilds carry step scales to matching directions and record the wind
     h <- ch$alloc$history
     expect_gt(length(h), 2L)
     expect_false(h[[length(h)]]$stored)
-    expect_gt(h[[length(h)]]$pairs[["group"]], 0)
+    expect_gt(h[[length(h)]]$pairs, 0)
   }
   # A rebuilt plan whose directions match keeps their scales.
   ch <- emc[[1]]

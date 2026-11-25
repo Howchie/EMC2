@@ -21,7 +21,8 @@ run_emc(
   thin = FALSE,
   trim = TRUE,
   r_cores = 1,
-  rhat_version = "old"
+  rhat_version = "old",
+  hmc_share = 0.5
 )
 }
 \arguments{
@@ -71,6 +72,12 @@ both R and registered C++ likelihoods. It defaults to 1; single-participant
 fits automatically inherit a larger \code{cores_per_chain} budget. When nested
 likelihood work would exceed the current global core budget, the effective
 value is capped so the outer budget remains authoritative.}
+
+\item{hmc_share}{A number in [0, 1]. The probability that an eligible subject's
+update in an iteration is a Hamiltonian Monte Carlo transition on its conditional
+posterior rather than its particle step. Subjects are eligible under a standard or
+diagonal-gamma hierarchy with one likelihood per subject and a usable fit of it.
+\code{0} runs the particle step alone.}
 }
 \value{
 An emc object

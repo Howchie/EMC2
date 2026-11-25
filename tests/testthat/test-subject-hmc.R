@@ -171,11 +171,11 @@ test_that("unsupported hierarchies take no HMC and a round without rates draws n
   expect_equal(EMC2:::.emc_hmc_plan_rates(NULL, 2), c(0, 0))
 })
 
-# A small fit; with `rate` the allocation is fixed at that HMC rate for
-# every subject and no group moves, so the plan does not depend on timings.
-hmc_small_fit <- function(route = "static", stages = c(20, 50), seed = 17, rate = 0.5) {
+# A small fit; `fixed` runs no group moves, so the plan does not depend on
+# timings.
+hmc_small_fit <- function(route = "static", stages = c(20, 50), seed = 17, fixed = TRUE) {
   withr::local_options(emc2.worker_queue = route == "queued")
-  if (!is.null(rate)) force_allocation(shear = 0, collapsed = 0, hmc = rate)
+  if (fixed) force_allocation(shear = 0, collapsed = 0)
   if (route == "serial") local_mocked_bindings(.emc_wpool_start = function(...) NULL,
                                                .package = "EMC2")
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:4], ]
@@ -213,7 +213,7 @@ test_that("the first burn block moves every eligible subject while its step size
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
-  fit <- hmc_small_fit("static", stages = c(20, 45), rate = NULL)
+  fit <- hmc_small_fit("static", stages = c(20, 45), fixed = FALSE)
   h <- fit[[1]]$subject_hmc
   first <- fit[[1]]$alloc$history[[1]]
   eligible <- vapply(h$subjects, function(x) isTRUE(x$eligible), logical(1))
@@ -232,11 +232,11 @@ test_that("the first burn block moves every eligible subject while its step size
   }
 })
 
-test_that("a pilot's failed likelihood is counted and follows the failure policy", {
+test_that("a calibration's failed likelihood is counted and follows the failure policy", {
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
-  fit <- hmc_small_fit("static", stages = c(20, 45), rate = NULL)
+  fit <- hmc_small_fit("static", stages = c(20, 45), fixed = FALSE)
   ch <- fit[[1]]
   h <- ch$subject_hmc
   s <- which(vapply(h$subjects, function(x) isTRUE(x$eligible), logical(1)))[1]
@@ -249,7 +249,7 @@ test_that("a pilot's failed likelihood is counted and follows the failure policy
   st$reject_msgs <- NULL
   calibrate <- function(msg) {
     with_mocked_bindings(
-      EMC2:::.emc_hmc_calibrate(ch, h, s, bracket = TRUE, pilots = 2L),
+      EMC2:::.emc_hmc_calibrate(ch, h, s),
       calc_ll_manager = function(...) stop(msg), .package = "EMC2")
   }
 
@@ -273,9 +273,9 @@ test_that("serial, static and queued HMC rounds give the same chain", {
   skip_on_os("windows")
   skip_on_cran()
   local_rng_guard()
-  # hmc_small_fit fixes the allocation: the production allocator prices moves
-  # from measured CPU time, so adaptive fits can select different plans even
-  # with identical seeds.
+  # hmc_small_fit fixes the allocation: the allocator prices moves from
+  # measured wall time, so adaptive fits can select different plans even with
+  # identical seeds.
   static <- hmc_small_fit("static")
   h <- static[[1]]$subject_hmc
   expect_true(h$supported)
@@ -328,7 +328,7 @@ test_that("a split run continues exactly and an old checkpoint starts without HM
   whole <- hmc_small_fit("static", stages = c(20, 50))
   half <- hmc_small_fit("static", stages = c(20, 25))
   half <- EMC2:::restore_duplicates(EMC2:::strip_duplicates(half))
-  force_allocation(shear = 0, collapsed = 0, hmc = 0.5)
+  force_allocation(shear = 0, collapsed = 0)
   rest <- suppressMessages(run_emc(half, stage = "burn", cores_for_chains = 1,
     cores_per_chain = 2, step_size = 25, max_tries = 1, verbose = FALSE,
     stop_criteria = list(iter = 25, max_gd = Inf, min_unique = 0, min_es = 0)))
@@ -339,6 +339,24 @@ test_that("a split run continues exactly and an old checkpoint starts without HM
   old <- half
   old[[1]]$subject_hmc <- NULL
   expect_null(EMC2:::.emc_hmc_worker_plan(old[[1]]))
+})
+
+test_that("hmc_share sets every warmed-up subject's kernel", {
+  sj <- function(...) modifyList(list(eligible = TRUE, warmup = FALSE, eps = 0.3, rate = 0),
+                                 list(...))
+  st <- list(supported = TRUE, subjects = list(sj(), sj(warmup = TRUE), sj(eligible = FALSE),
+                                               sj(eps = NA_real_)))
+  rates <- function(k) vapply(k$st$subjects, `[[`, 0, "rate")
+  k <- EMC2:::.emc_hmc_set_rates(st, 4, 0.3)
+  expect_equal(rates(k), c(0.3, EMC2:::.EMC_HMC_WARMUP_RATE, 0, 0))
+  expect_equal(k$q, c(0.7, 1, 1, 1))
+  expect_false(k$st$subjects[[4]]$eligible)
+  off <- EMC2:::.emc_hmc_set_rates(st, 4, 0)
+  expect_equal(rates(off), rep(0, 4))
+  expect_equal(off$q, rep(1, 4))
+  expect_equal(EMC2:::.emc_hmc_set_rates(list(supported = FALSE), 2, 0.5)$q, c(1, 1))
+  for (bad in list(-0.1, 1.5, c(0.2, 0.3), NA_real_, "0.5"))
+    expect_error(EMC2:::.emc_check_hmc_share(bad), "hmc_share")
 })
 
 test_that("step sizes stay in their bounds", {

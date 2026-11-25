@@ -16,8 +16,6 @@
 using namespace Rcpp;
 using namespace emc_iter;
 
-SEXP emc_alloc_record_subjects_cpp(List A, List D, NumericMatrix alpha, NumericVector old,
-                                   SEXP shift);
 SEXP emc_hmc_record_tasks_cpp(List st, List tasks);
 List emc2_native_hmc_subjects(NumericMatrix alpha, NumericVector ll, NumericMatrix mu,
                               NumericMatrix var, List seeds, NumericVector eps_base,
@@ -107,39 +105,8 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
   if (TYPEOF(proposals) != REALSXP || !Rf_isMatrix(proposals) || TYPEOF(pmwgs) != VECSXP)
     return false;
   const int p = Rf_nrows(proposals) - 1, n = Rf_ncols(proposals);
-  const bool alloc_on = flag(lget(cx, "alloc_on"));
   if (plan != R_NilValue && !flag(lget(cx, "moves_native"))) return false;
-  SEXP samples = lget(pmwgs, "samples");
   RObject sampler = pmwgs;
-
-  if (alloc_on) {
-    SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window");
-    SEXP A = lget(w, "A"), D = lget(w, "D"), nA = lget(w, "nA");
-    SEXP s_alpha = lget(samples, "alpha"), theta_mu = lget(samples, "theta_mu");
-    SEXP tmu = lget(pars, "tmu"), idx = lget(samples, "idx");
-    if (TYPEOF(A) != VECSXP || TYPEOF(D) != VECSXP || TYPEOF(nA) != INTSXP ||
-        XLENGTH(nA) != 1 || TYPEOF(s_alpha) != REALSXP || TYPEOF(theta_mu) != REALSXP ||
-        TYPEOF(tmu) != REALSXP || XLENGTH(tmu) != p || Rf_length(idx) != 1)
-      return false;
-    const R_xlen_t ix = static_cast<R_xlen_t>(Rf_asReal(idx)) - 1;
-    const R_xlen_t slice = static_cast<R_xlen_t>(p) * n;
-    if (ix < 0 || XLENGTH(s_alpha) < (ix + 1) * slice || XLENGTH(theta_mu) < (ix + 1) * p)
-      return false;
-    Shield<SEXP> alpha_new(proposal_rows(proposals, p));
-    NumericVector old(slice), shift(p);
-    std::copy(REAL(s_alpha) + ix * slice, REAL(s_alpha) + (ix + 1) * slice, old.begin());
-    for (int k = 0; k < p; ++k) shift[k] = REAL(tmu)[k] - REAL(theta_mu)[k + ix * p];
-    Shield<SEXP> r(emc_alloc_record_subjects_cpp(A, D, NumericMatrix(static_cast<SEXP>(alpha_new)), old, shift));
-    if (r == R_NilValue) return false;
-    RObject w2 = w;
-    if (flag(lget(r, "finite"))) {
-      w2 = lset(w2, "A", lget(r, "A"));
-      w2 = lset(w2, "D", lget(r, "D"));
-      w2 = lset(w2, "nA", Rf_ScalarInteger(INTEGER(nA)[0] + 1));
-    }
-    Shield<SEXP> alloc2(lset(alloc, "window", w2));
-    sampler = lset(pmwgs, "alloc", alloc2);
-  }
 
   if (plan == R_NilValue) {
     set_var(st, "pmwgs", sampler);
@@ -369,26 +336,10 @@ bool step_hmc(SEXP st, SEXP cx, int i) {
     const Clock ended = clock_now();
     const double master = ended.cpu - started.cpu;
     hmc_el = ended.elapsed - started.elapsed;
-    std::vector<double> cpu(m);
-    long double total = 0.0L;
     for (int k = 0; k < m; ++k) {
       SEXP tk = VECTOR_ELT(tasks, subs[k]);
-      const double work = num(lget(tk, "cpu"), 0.0);
-      cpu[k] = work + master / m;
-      total += cpu[k];
-      RObject t2 = lset(tk, "work", Rf_ScalarReal(work));
-      t2 = lset(t2, "cpu", Rf_ScalarReal(cpu[k]));
-      SET_VECTOR_ELT(tasks, subs[k], t2);
-    }
-    if (alloc_on) {
-      const double round_cost = reserved_cost(hmc_el, num(var(st, "cores_it"), 1.0));
-      const double tot = static_cast<double>(total);
-      for (int k = 0; k < m; ++k) {
-        const double share = tot > 0 ? cpu[k] / tot : 1.0 / m;
-        SET_VECTOR_ELT(tasks, subs[k],
-                       lset(VECTOR_ELT(tasks, subs[k]), "cost",
-                            Rf_ScalarReal(round_cost * share)));
-      }
+      SET_VECTOR_ELT(tasks, subs[k],
+                     lset(tk, "cpu", Rf_ScalarReal(num(lget(tk, "cpu"), 0.0) + master / m)));
     }
   } else {
     hmc_el = clock_now().elapsed - started.elapsed;

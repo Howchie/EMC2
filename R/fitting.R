@@ -90,6 +90,11 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 #' fits automatically inherit a larger `cores_per_chain` budget. When nested
 #' likelihood work would exceed the current global core budget, the effective
 #' value is capped so the outer budget remains authoritative.
+#' @param hmc_share A number in \[0, 1\]. The probability that an eligible subject's
+#' update in an iteration is a Hamiltonian Monte Carlo transition on its conditional
+#' posterior rather than its particle step. Subjects are eligible under a standard or
+#' diagonal-gamma hierarchy with one likelihood per subject and a usable fit of it.
+#' `0` runs the particle step alone.
 #' @export
 #' @return An emc object
 #' @examples \donttest{
@@ -109,7 +114,9 @@ run_emc <- function(emc, stage, stop_criteria,
                     search_width = 1, step_size = 100, verbose = FALSE, verboseProgress = FALSE,
                     fileName = NULL,particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
-                    thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
+                    thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old",
+                    hmc_share = 0.5){
+  .emc_check_hmc_share(hmc_share)
   emc <- restore_custom_kernel_pointers(emc, quiet = TRUE)
   emc <- restore_duplicates(emc, warn = TRUE)
   # Validate the immutable likelihood configuration once at the fit boundary;
@@ -185,7 +192,8 @@ run_emc <- function(emc, stage, stop_criteria,
     if(!is.null(progress$n_blocks)) n_blocks <- progress$n_blocks
     prop_started <- proc.time()[["elapsed"]]
     emc <- add_proposals(emc, stage, cores_per_chain*cores_for_chains, n_blocks,
-                         block_iter = progress$step_size * max(1, cur_thin))
+                         block_iter = progress$step_size * max(1, cur_thin),
+                         hmc_share = hmc_share)
     prop_elapsed <- proc.time()[["elapsed"]] - prop_started
     last_stage <- get_last_stage(emc)
     if(stage == "preburn"){
@@ -391,7 +399,8 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   if (n_sample < 100) 100L else 4L * as.integer(n_sample)
 }
 
-add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
+add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L,
+                          hmc_share = 0.5){
   prof <- .emc_profile_enabled()
   split <- c(chain = 0, eff = 0)
   proposal_started <- if (prof) proc.time()[["elapsed"]] else NA_real_
@@ -467,10 +476,10 @@ add_proposals <- function(emc, stage, n_cores, n_blocks, block_iter = 100L){
     block_iter <- next_at - n_sample
   }
   if (prof) split[["eff"]] <- proc.time()[["elapsed"]] - eff_started
-  # Shear rounds and subject HMC rates (R/move_allocation.R) on the same
-  # rebuild clock, after the likelihood fits are checked and the shear plans
-  # built; block_iter transitions run before the next.
-  emc <- tryCatch(.emc_alloc_rebuild(emc, stage, n_cores, block_iter),
+  # Shear rounds, collapsed rate and subject HMC rates (R/move_allocation.R)
+  # on the same rebuild clock, after the likelihood fits are checked and the
+  # shear plans built; block_iter transitions run before the next.
+  emc <- tryCatch(.emc_alloc_rebuild(emc, stage, n_cores, block_iter, hmc_share),
     error = function(e) {
       cls <- .emc_classify_failure(e)
       .emc_reject_record(e, "allocator")

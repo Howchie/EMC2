@@ -22,9 +22,6 @@ List emc2_native_particle_subjects(List statics, NumericMatrix alpha, NumericVec
                                    List group, List pm_list, List seeds, LogicalVector skip,
                                    std::string stage, List tune_in);
 List emc2_ll_cached_subjects(List rows, List data, SEXP model);
-SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part,
-                                   NumericMatrix before, NumericMatrix after,
-                                   LogicalVector ran, double cost, SEXP times);
 
 namespace {
 
@@ -257,10 +254,6 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   if (prev < 0 || XLENGTH(s_alpha) < (prev + 1) * slice || XLENGTH(s_ll) < (prev + 1) * n)
     return false;
   const bool alloc_on = flag(lget(cx, "alloc_on"));
-  SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window");
-  if (alloc_on && (TYPEOF(lget(w, "P")) != VECSXP || TYPEOF(lget(w, "nP")) != INTSXP ||
-                   TYPEOF(lget(w, "cpu_part")) != REALSXP))
-    return false;
   SEXP extra = lget(ens_pools, "rows");
   if (ens_pools != R_NilValue) {
     if (TYPEOF(extra) != VECSXP || XLENGTH(extra) != n) return false;
@@ -272,7 +265,6 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   LogicalVector skip(n);
   RObject hmc_pick;
   draw_skips(pmwgs, var(st, "hmc_plan"), alloc_on, n, streams2, skip, hmc_pick);
-  const Clock started = clock_now();
 
   // The subjects' states and prior means as .emc_wpool_iter sends them.
   Shield<SEXP> alpha(Rf_allocMatrix(REALSXP, p, n));
@@ -346,37 +338,6 @@ bool particle_local(SEXP st, SEXP cx, int i) {
     }
   }
 
-  // The steps' jumps and costs into the allocation window.
-  RObject sampler = pmwgs;
-  if (alloc_on) {
-    LogicalVector ran(n);
-    bool any_ran = false;
-    for (int s = 0; s < n; ++s) {
-      ran[s] = !skip[s];
-      any_ran = any_ran || ran[s];
-    }
-    if (any_ran) {
-      NumericMatrix before(p, n);
-      std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice,
-                before.begin());
-      Shield<SEXP> after(proposal_rows(props, p));
-      const double cost = reserved_cost(clock_now().elapsed - started.elapsed,
-                                        num(var(st, "cores_it"), 1.0));
-      Shield<SEXP> r(emc_alloc_record_particle_cpp(
-          List(lget(w, "P")), IntegerVector(lget(w, "nP")), NumericVector(lget(w, "cpu_part")),
-          before, NumericMatrix(static_cast<SEXP>(after)), ran, cost, times));
-      if (r == R_NilValue) {
-        set_global_seed(seed0);
-        return false;
-      }
-      RObject w2 = lset(w, "P", lget(r, "P"));
-      w2 = lset(w2, "nP", lget(r, "nP"));
-      w2 = lset(w2, "cpu_part", lget(r, "cpu_part"));
-      Shield<SEXP> alloc2(lset(alloc, "window", w2));
-      sampler = lset(pmwgs, "alloc", alloc2);
-    }
-  }
-
   // The subjects' relative costs for the next partition.
   SEXP cost0 = var(st, "wpool_cost");
   if (TYPEOF(cost0) == REALSXP && XLENGTH(cost0) == n) {
@@ -392,7 +353,6 @@ bool particle_local(SEXP st, SEXP cx, int i) {
   set_var(st, "wpool_part", List::create(subs));
   if (ens_pools != R_NilValue) set_var(st, "ens_pools", lset(ens_pools, "ll", extra_ll));
   set_global_seed(seed0);
-  set_var(st, "pmwgs", sampler);
   set_var(st, "proposals", props);
   set_var(st, "pm_settings", pm2);
   set_var(st, "streams", streams2);
@@ -457,7 +417,6 @@ bool particle_pool(SEXP st, SEXP cx, int i) {
   const bool skipping = draw_skips(pmwgs, var(st, "hmc_plan"), alloc_on, n, streams2, skip,
                                    hmc_pick);
   set_global_seed(seed0);
-  const Clock started = clock_now();
 
   // The pool's upkeep: recycling on its schedule, growth onto freed cores.
   RObject pool = wpool;
@@ -556,49 +515,6 @@ bool particle_pool(SEXP st, SEXP cx, int i) {
   // The steps' jumps and costs into the allocation window. The pass also
   // computes the ensemble candidates: the particle steps' share of it is
   // their share of the workers' CPU.
-  RObject sampler = pmwgs;
-  if (alloc_on) {
-    double share = 1.0;
-    if (reply.worker_cpu > 0) {
-      long double total = 0.0L;
-      for (int s = 0; s < n; ++s) total += times[s];
-      share = std::min(1.0, static_cast<double>(total) / reply.worker_cpu);
-    }
-    LogicalVector ran(n);
-    bool any_ran = false;
-    for (int s = 0; s < n; ++s) {
-      ran[s] = !skip[s];
-      any_ran = any_ran || ran[s];
-    }
-    if (any_ran) {
-      NumericMatrix before(p, n);
-      std::copy(REAL(s_alpha) + prev * slice, REAL(s_alpha) + (prev + 1) * slice,
-                before.begin());
-      Shield<SEXP> after(proposal_rows(reply.props, p));
-      const double cost_now = share * reserved_cost(clock_now().elapsed - started.elapsed,
-                                                    num(var(st, "cores_it"), 1.0));
-      SEXP alloc = lget(pmwgs, "alloc"), w = lget(alloc, "window");
-      RObject r;
-      if (TYPEOF(lget(w, "P")) == VECSXP && TYPEOF(lget(w, "nP")) == INTSXP &&
-          TYPEOF(lget(w, "cpu_part")) == REALSXP)
-        r = emc_alloc_record_particle_cpp(
-            List(lget(w, "P")), IntegerVector(lget(w, "nP")),
-            NumericVector(lget(w, "cpu_part")), before, NumericMatrix(static_cast<SEXP>(after)),
-            ran, cost_now, times);
-      if (!r.isNULL()) {
-        RObject w2 = lset(w, "P", lget(r, "P"));
-        w2 = lset(w2, "nP", lget(r, "nP"));
-        w2 = lset(w2, "cpu_part", lget(r, "cpu_part"));
-        Shield<SEXP> alloc2(lset(alloc, "window", w2));
-        sampler = lset(pmwgs, "alloc", alloc2);
-      } else {
-        static Function record = package_function(".emc_alloc_record_particle");
-        sampler = record(pmwgs, before, after, ran, cost_now, times);
-      }
-    }
-  }
-
-  set_var(st, "pmwgs", sampler);
   set_var(st, "proposals", reply.props);
   set_var(st, "pm_settings", reply.pm_settings);
   set_var(st, "streams", reply.seeds);

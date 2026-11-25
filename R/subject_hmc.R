@@ -6,8 +6,7 @@
 #   log pi_s(a) = ll_s(a) - (a - mu)' V^-1 (a - mu) / 2 + const,
 # in the sampler's own alpha coordinates. The particle step moves locally or
 # jumps between fitted Gaussians; neither follows a curved ridge of a
-# subject's likelihood. A trajectory does. Coming last, its rest-of-iteration
-# measure (R/move_allocation.R) is exactly everything else the iteration does.
+# subject's likelihood. A trajectory does.
 #
 # Kernel. The likelihood fit lik_laplace (precision H_s, positive
 # semi-definite, see .emc_lik_canonical) and the current group prior give
@@ -33,21 +32,22 @@
 # rate is in (0, 1)), the step-size jitter, p momenta, the acceptance uniform.
 # A subject with rate 0 draws nothing.
 #
-# Adaptation. Rates come from the move allocation (R/move_allocation.R).
-# Rates, step sizes and the likelihood metric change only at the proposal
+# Adaptation. After warm-up an eligible subject takes an HMC transition with
+# probability hmc_share and its particle step otherwise (fit()'s
+# `hmc_share`). Rates, step sizes and the likelihood metric change only at
+# the proposal
 # rebuilds (every block in burn and adapt, at 100, 400, 1600, ... production
 # transitions) and are fixed in between: each block runs a fixed kernel that
 # leaves the subject conditional invariant. The exception is a subject's
 # first burn block, whose draws are discarded: every eligible subject then
 # moves at an even rate while its step size adapts after each transition
 # (Robbins-Monro on log eps towards an acceptance target), until a fixed
-# number of transitions, so the first allocation reads measured moves rather
-# than a short, transient window.
+# number of transitions.
 # Later, step sizes move by acceptance-weighted squared jump per likelihood
 # row, compared between the two halves of the jitter. A subject first
 # eligible outside burn has its step size bracketed with one-step trials
-# (Hoffman and Gelman 2014, algorithm 4) and pilot transitions on private
-# copies of its state; they inform the allocation and never replace a draw.
+# (Hoffman and Gelman 2014, algorithm 4) on a private copy of its state,
+# which never replaces a draw.
 
 # Bounds on the step size in whitened units: above 2 leapfrog is unstable on
 # the Gaussian approximation, and the lower bound caps a trajectory at 79
@@ -56,21 +56,19 @@
 # A subject's first burn block runs at an even rate while its step size is
 # found by stochastic approximation towards this acceptance rate.
 .EMC_HMC_WARMUP_RATE <- 0.5
-# After warm-up an eligible subject runs an HMC transition and its particle
-# step each with these probabilities in every stage. The allocation does not
-# price them: their cost is part of the iteration's base cost.
-.EMC_SUBJECT_HMC_RATE <- 0.5
-.EMC_SUBJECT_PARTICLE_RATE <- 0.5
 .EMC_HMC_WARMUP_ACCEPT <- 0.75
 # Transitions after which a subject's warmup stops for the rest of the
-# block: its step size has settled, and the allocation has the evidence it
-# needs.
+# block: its step size has settled.
 .EMC_HMC_WARMUP_MOVES <- 20L
-# Finite-difference step of the likelihood gradient, pilot trajectories run
-# for a subject that lacks evidence, and the moves that count as evidence.
+# Finite-difference step of the likelihood gradient.
 .EMC_HMC_H <- 1e-4
-.EMC_HMC_PILOTS <- 20L
-.EMC_HMC_MIN_EVIDENCE <- 10L
+
+.emc_check_hmc_share <- function(hmc_share) {
+  if (!is.numeric(hmc_share) || length(hmc_share) != 1L || !is.finite(hmc_share) ||
+      hmc_share < 0 || hmc_share > 1)
+    stop("hmc_share must be a single number in [0, 1]", call. = FALSE)
+  invisible(hmc_share)
+}
 
 .emc_hmc_clip_eps <- function(eps) {
   if (!is.finite(eps)) return(eps)
@@ -475,28 +473,16 @@
   if (all(vapply(plan, is.null, logical(1)))) NULL else plan
 }
 
-.emc_hmc_new_evidence <- function(p, key) {
-  list(key = key, n = 0L, M = matrix(0, p, p), accepted = 0L, aborts = 0L,
-       rows = 0, cpu = 0, U = numeric(0), score = numeric(0), arows = numeric(0),
+# A subject's evidence at one step size: the transitions, and per transition
+# the jitter U, the acceptance-weighted squared jump (score), the likelihood
+# rows and the acceptance probability.
+.emc_hmc_new_evidence <- function(key) {
+  list(key = key, n = 0L, U = numeric(0), score = numeric(0), arows = numeric(0),
        accp = numeric(0))
-}
-
-.emc_hmc_decay_evidence <- function(ev) {
-  if (is.null(ev)) return(ev)
-  d <- .EMC_ALLOC_EVIDENCE_DECAY
-  ev$n <- ev$n * d
-  ev$M <- ev$M * d
-  ev$cpu <- ev$cpu * d
-  ev
 }
 
 .emc_hmc_add_evidence <- function(ev, task) {
   ev$n <- ev$n + 1L
-  ev$M <- ev$M + task$acc_prob * tcrossprod(task$disp)
-  ev$accepted <- ev$accepted + as.integer(isTRUE(task$accepted))
-  ev$aborts <- ev$aborts + as.integer(!identical(task$status, "ok"))
-  ev$rows <- ev$rows + task$rows
-  ev$cpu <- ev$cpu + if (is.null(task$cpu)) 0 else task$cpu
   ev$U <- c(ev$U, task$U)
   ev$score <- c(ev$score, task$score)
   ev$arows <- c(ev$arows, task$rows)
@@ -521,8 +507,7 @@
     st$totals$accepted <- st$totals$accepted + as.integer(isTRUE(tk$accepted))
     st$totals$aborts <- st$totals$aborts + as.integer(!identical(tk$status, "ok"))
     ev <- st$evidence[[s]]
-    if (is.null(ev)) ev <- .emc_hmc_new_evidence(
-      st$p, .emc_hmc_key(st$subjects[[s]]$eps))
+    if (is.null(ev)) ev <- .emc_hmc_new_evidence(.emc_hmc_key(st$subjects[[s]]$eps))
     ev <- .emc_hmc_add_evidence(ev, tk)
     # Warmup moves are kept as the evidence of the step size they reach.
     if (!is.null(tk$eps_next)) {
@@ -541,8 +526,8 @@
 
 # A chain's HMC state at a rebuild: per subject, eligibility (a usable
 # likelihood precision and frame), the reference whitening W (the frame its
-# moves are measured in), the bound floor, and a step size moved by the
-# last evidence; rates are set by the move allocation.
+# jumps are scored in), the bound floor, and a step size moved by the last
+# evidence; rates are set by .emc_hmc_set_rates.
 .emc_hmc_plan_chain <- function(sampler, stage, Vbar) {
   sup <- .emc_hmc_support(sampler)
   old <- sampler$subject_hmc
@@ -554,10 +539,6 @@
   if (!sup$ok) return(st)
   lik <- sampler$lik_laplace
   evidence <- if (length(old$evidence) == n) old$evidence else vector("list", n)
-  # Production evidence decays at each rebuild like every move family's, so
-  # a subject whose HMC stopped is measured afresh when it runs again.
-  if (identical(stage, "sample") && identical(old$stage, "sample"))
-    evidence <- lapply(evidence, .emc_hmc_decay_evidence)
   subjects <- vector("list", n)
   for (s in seq_len(n)) {
     fit <- if (length(lik) >= s) lik[[s]] else NULL
@@ -618,9 +599,9 @@
 }
 
 # Calibration of one subject on a private copy of its state with the group
-# fixed: a bracketed step size, then pilot transitions. Returns the evidence,
-# the CPU spent and the advanced RNG stream.
-.emc_hmc_calibrate <- function(sampler, st, s, bracket = TRUE, pilots = 0L) {
+# fixed: a bracketed step size. Returns it, the CPU spent and the advanced
+# RNG stream.
+.emc_hmc_calibrate <- function(sampler, st, s) {
   started <- proc.time()
   assign(".Random.seed", sampler$rng$subjects[[s]], envir = globalenv())
   sj <- st$subjects[[s]]
@@ -649,29 +630,14 @@
   ll <- sampler$samples$subj_ll[s, sampler$samples$idx]
   rows <- 0
   eps <- sj$eps
-  if (!is.null(fr) && bracket) {
+  if (!is.null(fr)) {
     b <- .emc_hmc_bracket(a, ll, fr, ll_fn, sj$h, sj$floor,
                           if (is.finite(eps)) eps else st$p^(-1 / 4))
     rows <- rows + b$rows
     if (is.finite(b$eps)) eps <- .emc_hmc_clip_eps(b$eps)
   }
-  ev <- NULL
-  if (!is.null(fr) && is.finite(eps) && pilots > 0L) {
-    ev <- .emc_hmc_new_evidence(st$p, .emc_hmc_key(eps))
-    for (k in seq_len(pilots)) {
-      t0 <- proc.time()
-      tr <- .emc_hmc_transition(a, ll, fr, ll_fn, eps, sj$h, sj$floor)
-      t1 <- proc.time() - t0
-      tr$cpu <- unname(t1[["user.self"]] + t1[["sys.self"]])
-      rows <- rows + tr$rows
-      tr$score <- tr$acc_prob * mean(drop(sj$W %*% tr$disp)^2)
-      ev <- .emc_hmc_add_evidence(ev, tr)
-      a <- tr$alpha
-      ll <- tr$ll
-    }
-  }
   spent <- proc.time() - started
-  list(eps = if (is.null(fr)) NA_real_ else eps, evidence = ev, rows = rows,
+  list(eps = if (is.null(fr)) NA_real_ else eps, rows = rows,
        cpu = unname(spent[["user.self"]] + spent[["sys.self"]]),
        seed = get(".Random.seed", envir = globalenv()), rejects = failed)
 }
@@ -691,18 +657,29 @@
         st$evidence[s] <- list(NULL)
     }
     sj$eps <- r$eps
-    if (!is.null(r$evidence)) {
-      ev <- st$evidence[[s]]
-      st$evidence[[s]] <- if (is.null(ev)) r$evidence else .emc_hmc_merge_evidence(ev, r$evidence)
-    }
   }
   st$subjects[[s]] <- sj
   st
 }
 
-.emc_hmc_merge_evidence <- function(a, b) {
-  for (k in c("n", "M", "accepted", "aborts", "rows", "cpu"))
-    a[[k]] <- a[[k]] + b[[k]]
-  for (k in c("U", "score", "arows", "accp")) a[[k]] <- c(a[[k]], b[[k]])
-  a
+# The subject kernel at a rebuild: an eligible subject's HMC rate is the
+# warm-up rate while its step size adapts (its particle step still running),
+# then hmc_share, with its particle step at 1 - hmc_share. Returns the HMC
+# state and the particle rates.
+.emc_hmc_set_rates <- function(st, n, hmc_share) {
+  q <- rep(1, n)
+  if (is.null(st) || !isTRUE(st$supported)) return(list(st = st, q = q))
+  for (s in seq_len(n)) {
+    sj <- st$subjects[[s]]
+    if (hmc_share > 0 && isTRUE(sj$eligible) && !is.finite(sj$eps)) {
+      sj$eligible <- FALSE
+      sj$reason <- "no usable step size"
+    }
+    ready <- isTRUE(sj$eligible) && !isTRUE(sj$warmup)
+    sj$rate <- if (!isTRUE(sj$eligible) || hmc_share <= 0) 0 else
+      if (ready) hmc_share else .EMC_HMC_WARMUP_RATE
+    if (ready && hmc_share > 0) q[s] <- 1 - hmc_share
+    st$subjects[[s]] <- sj
+  }
+  list(st = st, q = q)
 }

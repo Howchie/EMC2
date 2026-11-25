@@ -287,8 +287,6 @@
   j <- cx$start_iter + i
   prof <- cx$sampler_profile
   pmwgs <- st$pmwgs
-  part_started <- proc.time()[["elapsed"]]
-  part_cpu_share <- 1
   wpool <- st$wpool
   wpool_part <- st$wpool_part
   wpool_cost <- st$wpool_cost
@@ -347,10 +345,6 @@
       wpool_cost[ran] <- fresh[ran]
     }
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
-    # The pass also computes the ensemble candidates: the particle steps'
-    # share of it is their share of the workers' CPU.
-    if (is.numeric(it$worker_cpu) && it$worker_cpu > 0)
-      part_cpu_share <- min(1, sum(it$times) / it$worker_cpu)
   } else {
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = cx$n_cores,
                                          r_cores = cx$r_cores,
@@ -407,15 +401,6 @@
       stage = cx$stage, iteration = j)
     pm_settings <- assembled$pm_settings
     proposals <- assembled$proposals
-  }
-  if (cx$alloc_on) {
-    pmwgs <- .emc_alloc_record_particle(
-      pmwgs, matrix(pmwgs$samples$alpha[, , j - 1L], nrow = pmwgs$n_pars),
-      proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
-      if (is.null(part_skip)) rep(TRUE, pmwgs$n_subjects) else !part_skip,
-      part_cpu_share * .emc_reserved_cost(proc.time()[["elapsed"]] - part_started,
-                                          st$cores_it),
-      if (is.null(wpool)) NULL else it$times)
   }
   if (prof) {
     st$prof$recycle <- recycle_elapsed
@@ -545,10 +530,6 @@
   proposals <- st$proposals
   hmc_tasks <- NULL
   hmc_el <- 0
-  if (cx$alloc_on)
-    pmwgs <- .emc_alloc_record_subjects(pmwgs,
-                                        proposals[seq_len(pmwgs$n_pars), , drop = FALSE],
-                                        st$pars$tmu)
   if (!is.null(st$hmc_plan)) {
     hmc_started <- .emc_cpu_self()
     hmc_el0 <- proc.time()[["elapsed"]]
@@ -566,21 +547,8 @@
     hmc_master <- .emc_cpu_self() - hmc_started
     hmc_el <- proc.time()[["elapsed"]] - hmc_el0
     attempted <- !vapply(hmc_tasks, is.null, logical(1))
-    if (any(attempted)) {
-      for (s in which(attempted)) {
-        hmc_tasks[[s]]$work <- hmc_tasks[[s]]$cpu
-        hmc_tasks[[s]]$cpu <- hmc_tasks[[s]]$cpu + hmc_master / sum(attempted)
-      }
-      # The round's wall time on the chain's cores, shared by CPU.
-      if (cx$alloc_on) {
-        cpu_s <- vapply(hmc_tasks[attempted], function(x) x$cpu, numeric(1))
-        share <- if (sum(cpu_s) > 0) cpu_s / sum(cpu_s) else
-          rep(1 / sum(attempted), sum(attempted))
-        for (k in seq_along(share))
-          hmc_tasks[[which(attempted)[k]]]$cost <-
-            .emc_reserved_cost(hmc_el, st$cores_it) * share[k]
-      }
-    }
+    for (s in which(attempted))
+      hmc_tasks[[s]]$cpu <- hmc_tasks[[s]]$cpu + hmc_master / sum(attempted)
     pmwgs$subject_hmc <- .emc_hmc_record_tasks(pmwgs$subject_hmc, hmc_tasks)
   }
   st$pmwgs <- pmwgs
@@ -613,11 +581,10 @@
   if (!is.null(pmwgs$pooled)) pmwgs$samples$pooled[, j] <- pmwgs$pooled$value
   if (cx$alloc_on) {
     rest_cpu <- .emc_reserved_cost(proc.time()[["elapsed"]] - st$el_iter - st$shear_el -
-                                     st$coll_el - st$hmc_el, st$cores_it)
-    pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, st$hmc_tasks, moves = list(
+                                     st$coll_el, st$cores_it)
+    pmwgs <- .emc_alloc_record_cost(pmwgs, rest_cpu, moves = list(
       shear = c(cpu = st$shear_cpu, own = st$shear_round_cpu, n = st$shear_rounds),
-      collapsed = c(cpu = st$coll_cpu, own = st$coll_round_cpu, n = st$coll_moves),
-      hmc = .emc_reserved_cost(st$hmc_el, st$cores_it)))
+      collapsed = c(cpu = st$coll_cpu, own = st$coll_round_cpu, n = st$coll_moves)))
   }
   if (prof) st$prof$fill <- proc.time()[["elapsed"]] - fill_started
   st$pmwgs <- pmwgs

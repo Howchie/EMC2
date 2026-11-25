@@ -51,49 +51,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// emc_alloc_subject_need_cpp
-Rcpp::NumericMatrix emc_alloc_subject_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& b_share, const Rcpp::NumericVector& p, Rcpp::Nullable<Rcpp::NumericVector> h_, const Rcpp::NumericVector& level, const Rcpp::NumericVector& qs, const Rcpp::NumericVector& rs, double r_min);
-RcppExport SEXP _EMC2_emc_alloc_subject_need_cpp(SEXP rhoSEXP, SEXP b_shareSEXP, SEXP pSEXP, SEXP h_SEXP, SEXP levelSEXP, SEXP qsSEXP, SEXP rsSEXP, SEXP r_minSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type b_share(b_shareSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type p(pSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type h_(h_SEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type level(levelSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type qs(qsSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
-    Rcpp::traits::input_parameter< double >::type r_min(r_minSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_subject_need_cpp(rho, b_share, p, h_, level, qs, rs, r_min));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_subjects_need_cpp
-Rcpp::List emc_alloc_subjects_need_cpp(const Rcpp::NumericVector& rho, const Rcpp::NumericVector& b_share, const Rcpp::NumericVector& p, const Rcpp::NumericVector& h, const Rcpp::NumericVector& level, const Rcpp::IntegerVector& off, const Rcpp::LogicalVector& has_p, const Rcpp::LogicalVector& has_h, const Rcpp::NumericVector& q_fixed, const Rcpp::NumericVector& r_fixed, const Rcpp::NumericVector& r_min, const Rcpp::NumericVector& c_p, const Rcpp::NumericVector& c_h, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs);
-RcppExport SEXP _EMC2_emc_alloc_subjects_need_cpp(SEXP rhoSEXP, SEXP b_shareSEXP, SEXP pSEXP, SEXP hSEXP, SEXP levelSEXP, SEXP offSEXP, SEXP has_pSEXP, SEXP has_hSEXP, SEXP q_fixedSEXP, SEXP r_fixedSEXP, SEXP r_minSEXP, SEXP c_pSEXP, SEXP c_hSEXP, SEXP q_gridSEXP, SEXP rsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type b_share(b_shareSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type p(pSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type h(hSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type level(levelSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type off(offSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has_p(has_pSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::LogicalVector& >::type has_h(has_hSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_fixed(q_fixedSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type r_fixed(r_fixedSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type r_min(r_minSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type c_p(c_pSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type c_h(c_hSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_grid(q_gridSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_subjects_need_cpp(rho, b_share, p, h, level, off, has_p, has_h, q_fixed, r_fixed, r_min, c_p, c_h, q_grid, rs));
-    return rcpp_result_gen;
-END_RCPP
-}
 // emc_alloc_act_term_cpp
 Rcpp::NumericVector emc_alloc_act_term_cpp(const Rcpp::NumericMatrix& X, const Rcpp::NumericVector& add);
 RcppExport SEXP _EMC2_emc_alloc_act_term_cpp(SEXP XSEXP, SEXP addSEXP) {
@@ -148,19 +105,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// emc_alloc_units_subjects_need_cpp
-SEXP emc_alloc_units_subjects_need_cpp(const Rcpp::List& units, const Rcpp::NumericVector& q_grid, const Rcpp::NumericVector& rs);
-RcppExport SEXP _EMC2_emc_alloc_units_subjects_need_cpp(SEXP unitsSEXP, SEXP q_gridSEXP, SEXP rsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type units(unitsSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type q_grid(q_gridSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rs(rsSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_units_subjects_need_cpp(units, q_grid, rs));
-    return rcpp_result_gen;
-END_RCPP
-}
 // emc_alloc_factor_cpp
 SEXP emc_alloc_factor_cpp(SEXP g, SEXP x, SEXP a);
 RcppExport SEXP _EMC2_emc_alloc_factor_cpp(SEXP gSEXP, SEXP xSEXP, SEXP aSEXP) {
@@ -174,16 +118,15 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_alloc_predict_cpp
-SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP sol_q, SEXP idx, SEXP fac);
-RcppExport SEXP _EMC2_emc_alloc_predict_cpp(SEXP unitsSEXP, SEXP sol_xSEXP, SEXP sol_qSEXP, SEXP idxSEXP, SEXP facSEXP) {
+SEXP emc_alloc_predict_cpp(const Rcpp::List& units, SEXP sol_x, SEXP idx, SEXP fac);
+RcppExport SEXP _EMC2_emc_alloc_predict_cpp(SEXP unitsSEXP, SEXP sol_xSEXP, SEXP idxSEXP, SEXP facSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< const Rcpp::List& >::type units(unitsSEXP);
     Rcpp::traits::input_parameter< SEXP >::type sol_x(sol_xSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type sol_q(sol_qSEXP);
     Rcpp::traits::input_parameter< SEXP >::type idx(idxSEXP);
     Rcpp::traits::input_parameter< SEXP >::type fac(facSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_predict_cpp(units, sol_x, sol_q, idx, fac));
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_predict_cpp(units, sol_x, idx, fac));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -231,8 +174,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // emc_alloc_candidate_cpp
-SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::List& need, SEXP act_shear, SEXP act_hmc, SEXP tau);
-RcppExport SEXP _EMC2_emc_alloc_candidate_cpp(SEXP baseSEXP, SEXP jointSEXP, SEXP fixedSEXP, SEXP needSEXP, SEXP act_shearSEXP, SEXP act_hmcSEXP, SEXP tauSEXP) {
+SEXP emc_alloc_candidate_cpp(SEXP base, double joint, double fixed, const Rcpp::List& need, SEXP act_shear, SEXP tau);
+RcppExport SEXP _EMC2_emc_alloc_candidate_cpp(SEXP baseSEXP, SEXP jointSEXP, SEXP fixedSEXP, SEXP needSEXP, SEXP act_shearSEXP, SEXP tauSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< SEXP >::type base(baseSEXP);
@@ -240,9 +183,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type fixed(fixedSEXP);
     Rcpp::traits::input_parameter< const Rcpp::List& >::type need(needSEXP);
     Rcpp::traits::input_parameter< SEXP >::type act_shear(act_shearSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type act_hmc(act_hmcSEXP);
     Rcpp::traits::input_parameter< SEXP >::type tau(tauSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_candidate_cpp(base, joint, fixed, need, act_shear, act_hmc, tau));
+    rcpp_result_gen = Rcpp::wrap(emc_alloc_candidate_cpp(base, joint, fixed, need, act_shear, tau));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -265,63 +207,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type V(VSEXP);
     Rcpp::traits::input_parameter< SEXP >::type k(kSEXP);
     rcpp_result_gen = Rcpp::wrap(emc_alloc_lsd_draws_cpp(V, k));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_pool_factors_cpp
-SEXP emc_alloc_pool_factors_cpp(const Rcpp::List& fs, SEXP ns, SEXP idx, double n0);
-RcppExport SEXP _EMC2_emc_alloc_pool_factors_cpp(SEXP fsSEXP, SEXP nsSEXP, SEXP idxSEXP, SEXP n0SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type fs(fsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type ns(nsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type idx(idxSEXP);
-    Rcpp::traits::input_parameter< double >::type n0(n0SEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_pool_factors_cpp(fs, ns, idx, n0));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_record_particle_cpp
-SEXP emc_alloc_record_particle_cpp(List P, IntegerVector nP, NumericVector cpu_part, NumericMatrix before, NumericMatrix after, LogicalVector ran, double cost, SEXP times);
-RcppExport SEXP _EMC2_emc_alloc_record_particle_cpp(SEXP PSEXP, SEXP nPSEXP, SEXP cpu_partSEXP, SEXP beforeSEXP, SEXP afterSEXP, SEXP ranSEXP, SEXP costSEXP, SEXP timesSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< List >::type P(PSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type nP(nPSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type cpu_part(cpu_partSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type before(beforeSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type after(afterSEXP);
-    Rcpp::traits::input_parameter< LogicalVector >::type ran(ranSEXP);
-    Rcpp::traits::input_parameter< double >::type cost(costSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type times(timesSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_particle_cpp(P, nP, cpu_part, before, after, ran, cost, times));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_record_subjects_cpp
-SEXP emc_alloc_record_subjects_cpp(List A, List D, NumericMatrix alpha, NumericVector old, SEXP shift);
-RcppExport SEXP _EMC2_emc_alloc_record_subjects_cpp(SEXP ASEXP, SEXP DSEXP, SEXP alphaSEXP, SEXP oldSEXP, SEXP shiftSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< List >::type A(ASEXP);
-    Rcpp::traits::input_parameter< List >::type D(DSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type alpha(alphaSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type old(oldSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type shift(shiftSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_subjects_cpp(A, D, alpha, old, shift));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_record_tasks_cpp
-SEXP emc_alloc_record_tasks_cpp(NumericVector cpu_hmc, IntegerVector hmc_att, NumericVector rows_hmc, List tasks);
-RcppExport SEXP _EMC2_emc_alloc_record_tasks_cpp(SEXP cpu_hmcSEXP, SEXP hmc_attSEXP, SEXP rows_hmcSEXP, SEXP tasksSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type cpu_hmc(cpu_hmcSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type hmc_att(hmc_attSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type rows_hmc(rows_hmcSEXP);
-    Rcpp::traits::input_parameter< List >::type tasks(tasksSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_record_tasks_cpp(cpu_hmc, hmc_att, rows_hmc, tasks));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -531,17 +416,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type V(VSEXP);
     Rcpp::traits::input_parameter< const Rcpp::List& >::type chart(chartSEXP);
     rcpp_result_gen = Rcpp::wrap(emc_collapsed_to_phi_cpp(mu, V, chart));
-    return rcpp_result_gen;
-END_RCPP
-}
-// emc_alloc_quad_diag_cpp
-SEXP emc_alloc_quad_diag_cpp(SEXP A, SEXP S);
-RcppExport SEXP _EMC2_emc_alloc_quad_diag_cpp(SEXP ASEXP, SEXP SSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::traits::input_parameter< SEXP >::type A(ASEXP);
-    Rcpp::traits::input_parameter< SEXP >::type S(SSEXP);
-    rcpp_result_gen = Rcpp::wrap(emc_alloc_quad_diag_cpp(A, S));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -4944,26 +4818,19 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_alloc_group_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_rho_cpp, 7},
     {"_EMC2_emc_alloc_group_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_group_need_cpp, 13},
-    {"_EMC2_emc_alloc_subject_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subject_need_cpp, 8},
-    {"_EMC2_emc_alloc_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_subjects_need_cpp, 15},
     {"_EMC2_emc_alloc_act_term_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_cpp, 2},
     {"_EMC2_emc_alloc_act_term_list_cpp", (DL_FUNC) &_EMC2_emc_alloc_act_term_list_cpp, 2},
     {"_EMC2_emc_alloc_shears_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_shears_need_cpp, 8},
     {"_EMC2_emc_alloc_fixed_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_fixed_need_cpp, 2},
-    {"_EMC2_emc_alloc_units_subjects_need_cpp", (DL_FUNC) &_EMC2_emc_alloc_units_subjects_need_cpp, 3},
     {"_EMC2_emc_alloc_factor_cpp", (DL_FUNC) &_EMC2_emc_alloc_factor_cpp, 3},
-    {"_EMC2_emc_alloc_predict_cpp", (DL_FUNC) &_EMC2_emc_alloc_predict_cpp, 5},
+    {"_EMC2_emc_alloc_predict_cpp", (DL_FUNC) &_EMC2_emc_alloc_predict_cpp, 4},
     {"_EMC2_emc_alloc_saturation_cpp", (DL_FUNC) &_EMC2_emc_alloc_saturation_cpp, 3},
     {"_EMC2_emc_alloc_range_parts_cpp", (DL_FUNC) &_EMC2_emc_alloc_range_parts_cpp, 2},
     {"_EMC2_emc_alloc_within_share_cpp", (DL_FUNC) &_EMC2_emc_alloc_within_share_cpp, 1},
     {"_EMC2_emc_alloc_unit_summary_cpp", (DL_FUNC) &_EMC2_emc_alloc_unit_summary_cpp, 1},
-    {"_EMC2_emc_alloc_candidate_cpp", (DL_FUNC) &_EMC2_emc_alloc_candidate_cpp, 7},
+    {"_EMC2_emc_alloc_candidate_cpp", (DL_FUNC) &_EMC2_emc_alloc_candidate_cpp, 6},
     {"_EMC2_emc_alloc_rho_cpp", (DL_FUNC) &_EMC2_emc_alloc_rho_cpp, 2},
     {"_EMC2_emc_alloc_lsd_draws_cpp", (DL_FUNC) &_EMC2_emc_alloc_lsd_draws_cpp, 2},
-    {"_EMC2_emc_alloc_pool_factors_cpp", (DL_FUNC) &_EMC2_emc_alloc_pool_factors_cpp, 4},
-    {"_EMC2_emc_alloc_record_particle_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_particle_cpp, 8},
-    {"_EMC2_emc_alloc_record_subjects_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_subjects_cpp, 5},
-    {"_EMC2_emc_alloc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_alloc_record_tasks_cpp, 4},
     {"_EMC2_emc_hmc_record_tasks_cpp", (DL_FUNC) &_EMC2_emc_hmc_record_tasks_cpp, 2},
     {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 25},
     {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 18},
@@ -4978,7 +4845,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_collapsed_fit_subject_cpp", (DL_FUNC) &_EMC2_emc_collapsed_fit_subject_cpp, 2},
     {"_EMC2_emc_covariance_ok_cpp", (DL_FUNC) &_EMC2_emc_covariance_ok_cpp, 1},
     {"_EMC2_emc_collapsed_to_phi_cpp", (DL_FUNC) &_EMC2_emc_collapsed_to_phi_cpp, 3},
-    {"_EMC2_emc_alloc_quad_diag_cpp", (DL_FUNC) &_EMC2_emc_alloc_quad_diag_cpp, 2},
     {"_EMC2_collapsed_surrogate_cpp", (DL_FUNC) &_EMC2_collapsed_surrogate_cpp, 2},
     {"_EMC2_collapsed_trajectories_cpp", (DL_FUNC) &_EMC2_collapsed_trajectories_cpp, 6},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
