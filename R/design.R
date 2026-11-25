@@ -2530,7 +2530,8 @@ plot.emc.design <- function(x, p_vector, data = NULL, factors = NULL, plot_facto
   if(is.null(x$model()$c_name)) stop("Current design type not supported for plotting")
   type <- ifelse(x$model()$c_name == "DDM", "DDM",
                  ifelse(grepl("^LNR", x$model()$c_name), "LNR", "race"))
-  within_noise <- ifelse(x$model()$c_name == "LBA", FALSE, TRUE)
+  # Ballistic accumulators (LBA, BAw and BTAw families) have no within-trial noise.
+  within_noise <- !grepl("^(LBA|BAw|BTAw)", x$model()$c_name)
   # Split only relevant for DDM
   dots <- add_defaults(list(...), split = "R", within_noise = within_noise, plot_legend = TRUE)
   if(type != "DDM"){
